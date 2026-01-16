@@ -1,6 +1,7 @@
 name: CI
 
-on: pull_request
+'on':
+  pull_request: {}
 
 jobs:
   cargo-fmt:
@@ -162,4 +163,3 @@ jobs:
           file_or_dir: .
           config_file: .yamllint.yml
           strict: true
-          
