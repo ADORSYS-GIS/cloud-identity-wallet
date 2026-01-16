@@ -1,0 +1,17 @@
+name: "Setup Rust with Caching"
+description: "Install Rust toolchain and configure caching for faster CI runs"
+
+inputs:
+  components:
+    description: "Rust components to install (comma-separated: rustfmt, clippy)"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: ${{ inputs.components }}
+        cache: true
