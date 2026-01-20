@@ -1,6 +1,6 @@
 # Architecture
 
-Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html)/[HSM](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html).
+Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html)/HSM.
 
 ## High-level component diagram
 
