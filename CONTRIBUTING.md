@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to Cloud Identity Wallet! The project aims to implement a cloud-hosted, SSI/EUDI-aligned wallet with OIDC4VCI and OIDC4VP.
+Thanks for your interest in contributing to Cloud Identity Wallet! The project aims to implement a cloud-hosted, SSI/EUDI-aligned wallet with OpenID4VCI and OpenID4VP.
 
 ## Code of Conduct
 Be respectful and inclusive. Harassment and abuse are not tolerated.
@@ -28,7 +28,7 @@ Be respectful and inclusive. Harassment and abuse are not tolerated.
 ## Testing
 - Unit tests close to the code under test.
 - Integration tests under `tests/` exercising public interfaces.
-- Add protocol flow tests for OIDC4VCI and OIDC4VP as they are implemented.
+- Add protocol flow tests for OpenID4VCI and OpenID4VP as they are implemented.
 
 ## Documentation
 - Update `README.md` and `docs/architecture.md` when adding or changing components or flows.

@@ -1,6 +1,6 @@
 # Architecture
 
-Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OIDC4VCI for issuance and OIDC4VP for presentation, with custodial key management backed by KMS/HSM.
+Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS](https://en.wikipedia.org/wiki/Key_management)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
 
 ## High-level component diagram
 
@@ -18,7 +18,7 @@ Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned wit
 
 ## Key management design
 
-Custodial keys are protected by KMS/HSM. Wallet keys and Data Encryption Keys (DEKs) are wrapped at rest and unwrapped at use-time.
+Custodial keys are protected by [KMS](https://en.wikipedia.org/wiki/Key_management)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module). Wallet keys and Data Encryption Keys (DEKs) are wrapped at rest and unwrapped at use-time.
 
 ![Key management design](./Arch-images/key_management_design.png)
 
@@ -26,7 +26,7 @@ Key ideas:
 - **Key Manager API** mediates signing and verification.
 - **Key Cache** with eviction policy minimizes unwrapping operations.
 - **Secure Storage** contains only wrapped wallet keys and DEKs.
-- **KMS/HSM** holds the master key used to wrap/unwrap DEKs; wallet service never learns the master key.
+- **[KMS](https://en.wikipedia.org/wiki/Key_management)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module)** holds the master key used to wrap/unwrap DEKs; wallet service never learns the master key.
 
 ## Protocol flows
 
@@ -64,4 +64,4 @@ Summary:
 
 ## Future work
 - Incremental Rust implementation of the wallet service, adapters, and storage.
-- Conformance tests against OIDC4VCI/OIDC4VP reference suites.
+- Conformance tests against OIDC4VCI/OpenID4VP reference suites.
