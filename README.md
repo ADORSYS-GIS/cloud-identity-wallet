@@ -21,12 +21,7 @@ High-level component view:
 ## Getting started
 
 ### Prerequisites
-- Rust toolchain via rustup (stable)
-
-Install Rust (if needed):
-
-https://rust-lang.org/tools/install/
-
+Requires the Rust toolchain (stable via rustup). Install via https://rust-lang.org/tools/install/
 
 ### Clone
 
