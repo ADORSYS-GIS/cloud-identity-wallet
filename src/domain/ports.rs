@@ -1,0 +1,3 @@
+/*
+   This module specifies the API by which external modules interact with the wallet domain.
+*/
