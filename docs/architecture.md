@@ -4,9 +4,10 @@ Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned wit
 
 ## High-level component diagram
 
-![Component view](./Arch-images/communication_flow.png)
+![Component view](./assets/communication_flow.png)
 
 ### Components
+
 - **UI**: End-user web/mobile interface to accept offers, review disclosures, and consent.
 - **API Gateway**: Public HTTPS entrypoint, authentication, rate limiting, request routing.
 - **Wallet Core Domain**: Business logic for offers, credential storage, presentation building, lifecycle.
@@ -20,7 +21,7 @@ Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned wit
 
 Custodial keys are protected by KMS/HSM. Wallet keys and Data Encryption Keys (DEKs) are wrapped at rest and unwrapped at use-time.
 
-![Key management design](./Arch-images/key_management_design.png)
+![Key management design](./assets/key_management_design.png)
 
 Key ideas:
 - **Key Manager API** mediates signing and verification.
@@ -32,7 +33,7 @@ Key ideas:
 
 ### Issuance – Authorization Code (OIDC4VCI)
 
-![Issuance: authorization code](./Arch-images/authorization_code_flow.png)
+![Issuance: authorization code](./assets/authorization_code_flow.png)
 
 Summary:
 - Resolve credential offer and issuer metadata.
@@ -41,7 +42,7 @@ Summary:
 
 ### Issuance – Pre‑Authorized Code (OIDC4VCI)
 
-![Issuance: pre-authorized code](./Arch-images/pre-authorized_code_flow.png)
+![Issuance: pre-authorized code](./assets/pre-authorized_code_flow.png)
 
 Summary:
 - Resolve out-of-band `credential_offer` and issuer metadata.
@@ -50,18 +51,20 @@ Summary:
 
 ### Presentation – OIDC4VP
 
-![Verification flow](./Arch-images/proposed_verification_flow.png)
+![Verification flow](./assets/proposed_verification_flow.png)
 
 Summary:
 - Verifier presents a `request_uri` to an Authorization Request Object (JWT).
 - Wallet builds a verifiable presentation and returns a VP Token in the authorization response.
 
 ## Security and privacy
+
 - Minimize disclosure; support selective disclosure-friendly credential formats.
 - Explicit consent surfaces and audit trails for issuance/presentation.
 - Per-user isolation, rate limiting, and telemetry.
 - Secrets at rest are wrapped; in memory handled using secret types with zeroize.
 
 ## Future work
+
 - Incremental Rust implementation of the wallet service, adapters, and storage.
 - Conformance tests against OpenID4VCI/OpenID4VP reference suites.
