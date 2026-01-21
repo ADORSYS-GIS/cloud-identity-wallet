@@ -4,7 +4,7 @@ mod responses;
 use tokio::net::TcpListener;
 
 use crate::config::Config;
-use crate::server::handlers::health::health_check;
+use crate::server::handlers::{health_check, home};
 use axum::http::Method;
 use axum::{Router, routing::get};
 use color_eyre::eyre::{Context, Result};
@@ -45,6 +45,7 @@ impl Server {
         let state = AppState {};
 
         let router = Router::new()
+            .route("/", get(home))
             .route("/health", get(health_check))
             .layer(cors_layer)
             .layer(trace_layer)
