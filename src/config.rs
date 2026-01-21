@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use config::{Config as ConfigLib, ConfigError, Environment};
+use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -19,12 +19,8 @@ impl Config {
         Self::load_with_sources(None)
     }
 
-    pub fn load_with_sources(
-        env_vars: Option<HashMap<String, String>>,
-    ) -> Result<Self, ConfigError> {
-        let mut builder = ConfigLib::builder()
-            .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)?;
+    fn load_with_sources(env_vars: Option<HashMap<String, String>>) -> Result<Self, ConfigError> {
+        let mut builder = Self::set_defaults()?;
         // If env_vars is provided, we use it instead of system environment
         // This is to avoid systems variables pollution across tests
         if let Some(vars) = env_vars {
@@ -42,6 +38,14 @@ impl Config {
         }
 
         builder.build()?.try_deserialize()
+    }
+
+    /// Set default values for the configuration.
+    /// This is used when no environment variables or config file are provided
+    fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
+        ConfigLib::builder()
+            .set_default("server.host", "127.0.0.1")?
+            .set_default("server.port", 3000)
     }
 }
 
