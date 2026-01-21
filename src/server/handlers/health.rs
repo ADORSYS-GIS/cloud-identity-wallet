@@ -11,6 +11,6 @@ pub mod tests {
     #[tokio::test]
     async fn test_health_check() {
         let response = health_check().await;
-        assert_eq!(response, axum::http::StatusCode::OK);
+        assert_eq!(response, StatusCode::OK);
     }
 }
