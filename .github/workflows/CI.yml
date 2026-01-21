@@ -1,6 +1,6 @@
 name: CI
 
-'on':
+"on":
   pull_request: {}
 
 jobs:
@@ -147,7 +147,7 @@ jobs:
       - name: Markdown Lint
         uses: DavidAnson/markdownlint-cli2-action@v18
         with:
-          globs: '**/*.md'
+          globs: "**/*.md"
 
   yaml-lint:
     name: YAML Lint and Format Check
