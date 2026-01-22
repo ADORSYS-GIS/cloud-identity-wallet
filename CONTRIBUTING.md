@@ -8,9 +8,11 @@ Be respectful and inclusive. Harassment and abuse are not tolerated.
 
 ## Getting Started
 
-1. Fork the repository and create a feature branch: `git checkout -b feat/short-description`.
+1. Fork the repository and create a topic branch: `git checkout -b <type>/<short-description>` (e.g., `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test`).
 2. Ensure you have the Rust toolchain installed via rustup (stable).
 3. Run formatting and lints locally before pushing.
+
+Feature requests: please open an issue to discuss scope/design before implementation.
 
 ## Development workflow
 
