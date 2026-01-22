@@ -1,6 +1,6 @@
 # Architecture
 
-Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS]( https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/)/HSM.
+Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS]( https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
 
 ## High-level component diagram
 
@@ -8,7 +8,7 @@ Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned wit
 
 ### Components
 
-- **UI**: End-user web/mobile interface to accept offers, review disclosures, consent; display credentials; and manage credential lifecycle (view, store, update, delete).
+- **UI**: End-user web/mobile interface to accept offers, review disclosures, consent; display credentials; and manage credential lifecycle (view, delete).
 - **API Gateway**: Public HTTP endpoints, authentication, rate limiting, request routing.
 - **Wallet Core Domain**: Business logic for offers, credential storage, presentation building, lifecycle.
 - **OpenID4VCI Adapter**: Outbound client to Issuers for credential issuance.

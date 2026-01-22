@@ -8,7 +8,7 @@ Be respectful and inclusive. Harassment and abuse are not tolerated.
 
 ## Getting Started
 
-1. Fork the repository and create a topic branch: `git checkout -b <type>/<short-description>` (e.g., `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test`).
+git 1. Fork the repository and create a topic branch: `git checkout -b <type>/<short-description>` (e.g., `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test`).
 2. Ensure you have the Rust toolchain installed via rustup (stable).
 3. Run formatting and lints locally before pushing.
 
