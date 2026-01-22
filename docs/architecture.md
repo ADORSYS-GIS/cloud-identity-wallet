@@ -1,6 +1,6 @@
 # Architecture
 
-Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS](https://en.wikipedia.org/wiki/Key_management)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
+Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS]( https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/)/HSM.
 
 ## High-level component diagram
 
@@ -8,12 +8,12 @@ Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned wit
 
 ### Components
 
-- **UI**: End-user web/mobile interface to accept offers, review disclosures, and consent.
-- **API Gateway**: Public HTTPS entrypoint, authentication, rate limiting, request routing.
+- **UI**: End-user web/mobile interface to accept offers, review disclosures, consent; display credentials; and manage credential lifecycle (view, store, update, delete).
+- **API Gateway**: Public HTTP endpoints, authentication, rate limiting, request routing.
 - **Wallet Core Domain**: Business logic for offers, credential storage, presentation building, lifecycle.
 - **OpenID4VCI Adapter**: Outbound client to Issuers for credential issuance.
 - **OpenID4VP Adapter**: Outbound client to Verifiers for presentation/verification.
-- **Crypto & Key Management**: Abstractions over KMS/HSM for signing and key lifecycle.
+- **Crypto & Key Management**: Abstractions over KMS/HSM for signing/encryption and key lifecycle.
 - **Encrypted Storage**: Encrypted database/object store for credentials and metadata.
 - **Event Bus / Audit Log**: Append-only auditing and integration hooks.
 
@@ -51,7 +51,7 @@ Summary:
 
 ### Presentation – OIDC4VP
 
-![Verification flow](./assets/proposed_verification_flow.png)
+![Verification flow](./assets/verification_flow.png)
 
 Summary:
 - Verifier presents a `request_uri` to an Authorization Request Object (JWT).
