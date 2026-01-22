@@ -22,8 +22,8 @@ Be respectful and inclusive. Harassment and abuse are not tolerated.
 ## Rust idioms and project conventions
 
 - Use `cargo fmt --all` and `cargo clippy --all-targets --all-features -- -D warnings`.
-- Error handling: prefer `thiserror` for error types and `anyhow` for app-level errors.
-- Avoid `unwrap()`/`expect()` in production code; bubble errors with context (`anyhow::Context`).
+- Error handling: use a consistent, robust strategy; define clear error types where appropriate and propagate errors with helpful context.
+- Avoid `unwrap()`/`expect()` as much as possible.
 - Prefer explicit types and `From/Into` for conversions; derive `Debug` for structs/enums.
 - Use `tracing` for structured logs; avoid `println!`.
 - Manage secrets using typed wrappers that implement `Zeroize` when applicable.
