@@ -26,7 +26,6 @@ See docs/architecture.md for details.
 - OpenID4VCI 1.0: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html
 - OpenID4VP 1.0: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html
 
-
 ## Getting started
 
 ### Prerequisites
