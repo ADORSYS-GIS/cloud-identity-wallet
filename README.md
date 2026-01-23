@@ -23,14 +23,14 @@ See docs/architecture.md for details.
 ## Documentation
 
 - See [docs/architecture.md](./docs/architecture.md) for the full design.
-- OpenID4VCI 1.0: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html
-- OpenID4VP 1.0: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html
+- OpenID4VCI 1.0: <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html>
+- OpenID4VP 1.0: <https://openid.net/specs/openid-4-verifiable-presentations-1_0.html>
 
 ## Getting started
 
 ### Prerequisites
 
-Requires the Rust toolchain (stable via rustup). Install via https://rust-lang.org/tools/install/
+Requires the Rust toolchain (stable via rustup). Install via <https://rust-lang.org/tools/install/>
 
 ### Clone
 
