@@ -1,6 +1,6 @@
 # Architecture
 
-Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS]( https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
+Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS](https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
 
 ## High-level component diagram
 
@@ -24,6 +24,7 @@ Custodial keys are protected by KMS/HSM. Wallet keys and Data Encryption Keys (D
 ![Key management design](./assets/key_management_design.png)
 
 Key ideas:
+
 - **Key Manager API** mediates signing and verification.
 - **Key Cache** with eviction policy minimizes unwrapping operations.
 - **Secure Storage** contains only wrapped wallet keys and DEKs.
@@ -36,6 +37,7 @@ Key ideas:
 ![Issuance: authorization code](./assets/authorization_code_flow.png)
 
 Summary:
+
 - Resolve credential offer and issuer metadata.
 - Run OAuth 2.0 authorization code flow to obtain access token.
 - `POST /credential` with proofs to receive credential(s); validate and store.
@@ -45,6 +47,7 @@ Summary:
 ![Issuance: pre-authorized code](./assets/pre-authorized_code_flow.png)
 
 Summary:
+
 - Resolve out-of-band `credential_offer` and issuer metadata.
 - Exchange `pre_authorized_code` (and optional `tx_code`) for access token.
 - `POST /credential`; validate and store.
@@ -54,6 +57,7 @@ Summary:
 ![Verification flow](./assets/verification_flow.png)
 
 Summary:
+
 - Verifier presents a `request_uri` to an Authorization Request Object (JWT).
 - Wallet builds a verifiable presentation and returns a VP Token in the authorization response.
 
