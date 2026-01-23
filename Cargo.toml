@@ -15,7 +15,6 @@ tower-http = { version = "0.6", features = ["trace", "cors"] }
 serde = { version = "1", features = ["derive"] }
 
 # Error handling
-thiserror = "2.0"
 color-eyre = "0.6"
 
 # Configuration
