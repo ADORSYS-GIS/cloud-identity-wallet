@@ -1,0 +1,170 @@
+name: CI
+
+"on":
+  pull_request: {}
+
+jobs:
+  cargo-fmt:
+    name: Cargo Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+
+      - name: Rustfmt Check
+        run: cargo fmt --all --check
+
+  cargo-build:
+    name: Cargo Build
+    runs-on: ubuntu-latest
+    needs: cargo-fmt
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cargo Build
+        run: cargo build --workspace --all-targets --all-features
+
+  cargo-clippy:
+    name: Cargo Clippy Check
+    runs-on: ubuntu-latest
+    needs: cargo-build
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+
+      - name: Clippy Check
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  cargo-nextest:
+    name: Cargo Nextest
+    runs-on: ubuntu-latest
+    needs: cargo-build
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Run Cargo Tests
+        run: cargo nextest run --workspace --all-targets --all-features
+
+  cargo-doc:
+    name: Cargo Documentation
+    runs-on: ubuntu-latest
+    needs: cargo-build
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Generate Documentation
+        run: cargo doc --workspace --all-features --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  cargo-machete:
+    name: Cargo Machete Check
+    runs-on: ubuntu-latest
+    needs: cargo-build
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Check for unused dependencies
+        run: cargo machete --with-metadata
+
+  cargo-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache advisory database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: ${{ runner.os }}-advisory-db-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-advisory-db-
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run Security Audit
+        run: cargo audit
+
+  markdown-lint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Markdown Lint
+        uses: DavidAnson/markdownlint-cli2-action@v22
+        with:
+          globs: "**/*.md"
+
+  yaml-lint:
+    name: YAML Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: YAML Lint
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install yamlfmt
+        run: go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+
+      - name: Run yamlfmt
+        run: yamlfmt --lint .
