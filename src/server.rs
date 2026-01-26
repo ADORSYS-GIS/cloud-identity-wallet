@@ -1,13 +1,13 @@
 mod handlers;
 mod responses;
 
-use tokio::net::TcpListener;
-
 use crate::config::Config;
 use crate::server::handlers::{health_check, home};
+
 use axum::http::Method;
 use axum::{Router, routing::get};
 use color_eyre::eyre::{Context, Result};
+use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -62,7 +62,7 @@ impl Server {
         self.listener.local_addr().unwrap().port()
     }
 
-    /// Runs the HTTPS server.
+    /// Runs the HTTP server.
     pub async fn run(self) -> Result<()> {
         tracing::info!("Server listening on {}", self.listener.local_addr()?);
         axum::serve(self.listener, self.router).await?;
