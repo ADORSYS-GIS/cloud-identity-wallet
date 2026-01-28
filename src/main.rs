@@ -1,8 +1,17 @@
-fn main() {
-    println!("Hello, wallet!");
-}
+use cloud_identity_wallet::config::Config;
+use cloud_identity_wallet::server::Server;
+use cloud_identity_wallet::telemetry;
 
-#[test]
-fn it_works() {
-    assert_eq!(2 + 2, 4);
+#[tokio::main]
+async fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    telemetry::init_tracing();
+
+    // Load configuration
+    let config = Config::load()?;
+    tracing::info!("Loaded configuration: {:?}", config);
+
+    // Create and run server
+    let server = Server::new(&config).await?;
+    server.run().await
 }
