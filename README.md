@@ -75,13 +75,13 @@ cargo run
 
 ### Testing
 
-Run the full workspace test suite:
+You can run the full test suite with:
 
 ```bash
 cargo test --workspace --all-targets --all-features
 ```
 
-For faster test execution, install [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) and run:
+Or optionally with [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) for faster test execution:
 
 ```bash
 cargo nextest run --workspace --all-targets --all-features
