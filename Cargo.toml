@@ -1,18 +1,23 @@
-[package]
-name = "cloud-identity-wallet"
+[workspace]
+resolver = "2"
+
+members = []
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
 
-[dependencies]
-# Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+[workspace.lints.clippy]
 
-# Web server framework
-axum = { version = "0.8", features = ["macros"] }
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+invalid_html_tags = "deny"
 
+[workspace.dependencies]
 # Serialization / Deserialization
-serde = { version = "1", features = ["derive"] }
+serde = "1"
 
 # Error handling
 color-eyre = "0.6"
@@ -22,7 +27,39 @@ config = "0.15"
 
 # Logging and metrics
 tracing = "0.1"
+
+[package]
+name = "cloud-identity-wallet"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+color-eyre.workspace = true
+config.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
+
+[profile.dev]
+# Speed up compilation time
+debug = 1
+
+[profile.release]
+# Maximize runtime speed
+codegen-units = 1
+lto = "fat"
+# Abort on panic
+panic = "abort"
+strip = "symbols"
