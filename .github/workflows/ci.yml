@@ -97,7 +97,7 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   check-crate-type:
-    uses: ./.github/workflows/crate_type.yaml
+    uses: ./.github/workflows/crate_type.yml
 
   cargo-test-doc:
     needs: check-crate-type
