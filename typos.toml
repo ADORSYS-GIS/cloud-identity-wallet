@@ -1,9 +1,9 @@
 [default]
 extend-ignore-identifiers-re = []
 
-[files]
-extend-exclude = []
-
 [default.extend-identifiers]
 
 [default.extend-words]
+
+[files]
+extend-exclude = []
