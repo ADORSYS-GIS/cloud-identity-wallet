@@ -2,7 +2,7 @@ use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::telemetry;
 
-#[cfg(all(not(miri), not(target_env = "msvc")))]
+#[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
