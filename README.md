@@ -1,77 +1,99 @@
 # Cloud Identity Wallet
 
-Cloud Identity Wallet is a flexible, cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI.
-It supports OpenID for Verifiable Credential Issuance (OpenID4VCI) and OpenID for Verifiable Presentations (OpenID4VP), and is designed to support multiple credential types with privacy-preserving disclosure.
+[![CI](https://github.com/ADORSYS-GIS/cloud-identity-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/ADORSYS-GIS/cloud-identity-wallet/actions/workflows/ci.yml)
+[![dependencies](https://deps.rs/repo/github/ADORSYS-GIS/cloud-identity-wallet/status.svg)](https://deps.rs/repo/github/ADORSYS-GIS/cloud-identity-wallet)
+[![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](#license)
 
-> Status: This repository currently contains architecture diagrams and documentation. Rust implementation will be added incrementally.
+**Cloud Identity Wallet** is a cloud-hosted, multi-tenant verifiable credential wallet designed for **issuers, holders, and verifiers** operating in SSI- and eIDAS-aligned ecosystems.
 
-## Features
+It implements:
 
-- **OIDC4VCI**: Authorization Code and Pre-Authorized Code issuance flows.
-- **OIDC4VP**: Presentation to verifiers using authorization requests.
-- **Custodial key management**: Server-side keys protected by KMS/HSM with encrypted storage.
-- **Audit-ready**: Event bus and audit log integration points.
+- [OpenID for Verifiable Credential Issuance (OpenID4VCI)](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html) for credential issuance
+- [OpenID for Verifiable Presentations (OpenID4VP)](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html) for credential presentation
+
+The project is designed to support a wide range of credential formats while enabling privacy-preserving disclosure and interoperability across EUDI-compatible systems.
+
+> ⚠️ **Project status**  
+> This repository is under active development. Core building blocks are being implemented incrementally and APIs may change.
+
+## Key Capabilities
+
+This project focuses on server-side wallet capabilities.
+
+### Core Wallet Features
+
+- **Multi-Tenant Architecture**  
+  Host multiple organizations and tenants in a single instance with strong data isolation.
+
+- **Modular Design**  
+  Pluggable components for credential formats, storage backends, and key management systems.
+
+- **Webhook & Audit Logging**  
+  Track credential issuance and presentation events for observability and compliance.
+
+### Standards & Interoperability
+
+- OpenID4VCI (credential issuance)
+- OpenID4VP (verifiable presentations)
+- Support for standardized credential formats:
+  - SD-JWT
+  - ISO 18013-5 (mDL / mdoc)
+  - W3C Verifiable Credentials Data Model
+
+### Privacy & Security
+
+- Privacy-preserving selective disclosure
+- Encrypted storage
+- Secure key management abstractions
+- Designed for compliance-driven environments (eIDAS / EUDI)
 
 ## Architecture Overview
 
-See docs/architecture.md for details.
+![Architecture overview](./assets/communication_flow.png)
 
-### Component Diagram
+A detailed breakdown of components, trust boundaries, and protocol flows is available in **[ARCHITECTURE.md](./docs/architecture.md)**.
 
-![Architecture overview](./docs/assets/communication_flow.png)
-
-## Documentation
-
-- See [docs/architecture.md](./docs/architecture.md) for the full design.
-- OpenID4VCI 1.0: <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html>
-- OpenID4VP 1.0: <https://openid.net/specs/openid-4-verifiable-presentations-1_0.html>
-
-## Getting started
+## Build and Test
 
 ### Prerequisites
 
-Requires the Rust toolchain (stable via rustup). Install via <https://rust-lang.org/tools/install/>
+- [Rust & Cargo](https://www.rust-lang.org/tools/install) (latest stable version)
+- An optional alternative linker for faster builds (see [linking guide](./docs/linking.md))
 
-### Clone
+### Setup
 
 ```bash
 git clone https://github.com/ADORSYS-GIS/cloud-identity-wallet.git
 cd cloud-identity-wallet
 ```
 
-### Build, Run, Test
-
-The commands below reflect the intended developer workflow once code is present. They will be updated as the implementation lands.
+### Running the application
 
 ```bash
-# Build
-
-cargo build
-
-# Run (example)
-
-cargo run --bin wallet
-
-# Tests
-
-cargo test
-
-# Lints & formatting
-
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
+cargo run
 ```
 
-## Repository structure
+### Testing
 
-- `docs/assets/` – documentation images and diagrams
-- `docs/` – additional documentation (see `docs/architecture.md`)
-- `README.md` – this file
+You can run the full test suite with:
+
+```bash
+cargo test --workspace --all-targets --all-features
+```
+
+Or optionally with [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) for faster test execution:
+
+```bash
+cargo nextest run --workspace --all-targets --all-features
+```
 
 ## Contributing
 
-We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines and Rust idioms used in this project.
+Contributions are welcome and encouraged. Before contributing, please review the [architecture documentation](./docs/architecture.md), which provides an overview of our architectural design. Also refer to the [contributing guide](./CONTRIBUTING.md) for more details.  
+Discussions around standards compliance, interoperability, and extensibility are especially welcome.
 
 ## License
 
-TBD
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

@@ -1,16 +1,16 @@
 # Architecture
 
-Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements OpenID4VCI for issuance and OpenID4VP for presentation, with custodial key management backed by [KMS](https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/)/[HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
+Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned with SSI/eIDAS/EUDI. It implements [OpenID4VCI](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html) for issuance and [OpenID4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html) for presentation, with custodial key management backed by [KMS](https://www.thesslstore.com/blog/what-is-a-key-management-service-key-management-services-explained/) / [HSM](https://en.wikipedia.org/wiki/Hardware_security_module).
 
 ## High-level component diagram
 
-![Component view](./assets/communication_flow.png)
+![Component view](../assets/communication_flow.png)
 
 ### Components
 
-- **UI**: End-user web/mobile interface to accept offers, review disclosures, consent; display credentials; and manage credential lifecycle (view, delete).
-- **API Gateway**: Public HTTP endpoints, authentication, rate limiting, request routing.
-- **Wallet Core Domain**: Business logic for offers, credential storage, presentation building, lifecycle.
+- **UI (External)**: End-user web/mobile interface to accept offers, review disclosures, consent; display credentials; and manage credential lifecycle.
+- **API Gateway**: Public HTTP endpoints, authentication, request routing.
+- **Wallet Core Domain**: Business logic for offers, credential storage, presentation building.
 - **OpenID4VCI Adapter**: Outbound client to Issuers for credential issuance.
 - **OpenID4VP Adapter**: Outbound client to Verifiers for presentation/verification.
 - **Crypto & Key Management**: Abstractions over KMS/HSM for signing/encryption and key lifecycle.
@@ -21,12 +21,12 @@ Cloud Identity Wallet is a cloud-hosted verifiable credential wallet aligned wit
 
 Custodial keys are protected by KMS/HSM. Wallet keys and Data Encryption Keys (DEKs) are wrapped at rest and unwrapped at use-time.
 
-![Key management design](./assets/key_management_design.png)
+![Key management design](../assets/key_management_design.png)
 
 Key ideas:
 
-- **Key Manager API** mediates signing and verification.
-- **Key Cache** with eviction policy minimizes unwrapping operations.
+- **Key Manager API** mediates signing, verification, encryption, and decryption operations.
+- **Key Cache** with eviction policy minimizes unwrapping operations and increases throughput.
 - **Secure Storage** contains only wrapped wallet keys and DEKs.
 - **KMS/HSM** holds the master key used to wrap/unwrap DEKs; wallet service never learns the master key.
 
@@ -34,7 +34,7 @@ Key ideas:
 
 ### Issuance – Authorization Code (OIDC4VCI)
 
-![Issuance: authorization code](./assets/authorization_code_flow.png)
+![Issuance: authorization code](../assets/authorization_code_flow.png)
 
 Summary:
 
@@ -44,7 +44,7 @@ Summary:
 
 ### Issuance – Pre‑Authorized Code (OIDC4VCI)
 
-![Issuance: pre-authorized code](./assets/pre-authorized_code_flow.png)
+![Issuance: pre-authorized code](../assets/pre-authorized_code_flow.png)
 
 Summary:
 
@@ -54,7 +54,7 @@ Summary:
 
 ### Presentation – OIDC4VP
 
-![Verification flow](./assets/verification_flow.png)
+![Verification flow](../assets/verification_flow.png)
 
 Summary:
 
@@ -66,7 +66,7 @@ Summary:
 - Minimize disclosure; support selective disclosure-friendly credential formats.
 - Explicit consent surfaces and audit trails for issuance/presentation.
 - Per-user isolation, rate limiting, and telemetry.
-- Secrets at rest are wrapped; in memory handled using secret types with zeroize.
+- Secrets at rest are wrapped; in memory handled using secret types with secure erasure.
 
 ## Future work
 
