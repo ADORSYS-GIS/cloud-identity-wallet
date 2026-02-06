@@ -159,12 +159,11 @@ impl KafkaEventBus {
                             Err(e) => {
                                 error!("Failed to deserialize event: {}", e);
 
-                                if enable_dlq {
-                                    if let Err(dlq_err) =
+                                if enable_dlq
+                                    && let Err(dlq_err) =
                                         Self::send_to_dlq(&producer, &dlq_topic, payload).await
-                                    {
-                                        error!("Failed to send to DLQ: {}", dlq_err);
-                                    }
+                                {
+                                    error!("Failed to send to DLQ: {}", dlq_err);
                                 }
                             }
                         }
