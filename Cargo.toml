@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal"] }
 
 # Web server framework
 axum = { version = "0.8", features = ["macros"] }
