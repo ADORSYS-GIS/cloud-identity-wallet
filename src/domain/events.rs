@@ -155,7 +155,7 @@ pub struct CredentialIssuedEvent {
     pub credential: String, // SD-JWT VC or other format
     pub credential_type: String,
     pub notification_id: Option<String>,
-    pub transaction_id: Option<String>
+    pub transaction_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -183,7 +183,7 @@ pub struct CredentialDeletedEvent {
     pub metadata: EventMetadata,
     pub credential_id: String,
     pub notification_id: String,
-    pub event: String, 
+    pub event: String,
 }
 
 // ============================================================================
@@ -219,7 +219,7 @@ pub struct PresentationSubmittedEvent {
     pub metadata: EventMetadata,
     pub request_id: String,
     pub presentation_submission_id: String,
-    pub vp_token: String, 
+    pub vp_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn test_event_metadata_creation() {
         let metadata = EventMetadata::new("corr-123".to_string(), "wallet-456".to_string());
-        
+
         assert_eq!(metadata.correlation_id, "corr-123");
         assert_eq!(metadata.wallet_id, "wallet-456");
         assert_eq!(metadata.schema_version, "1.0.0");
@@ -301,7 +301,7 @@ mod tests {
 
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: WalletEvent = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(event, deserialized);
     }
 
