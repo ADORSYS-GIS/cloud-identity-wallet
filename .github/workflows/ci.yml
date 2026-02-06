@@ -32,6 +32,11 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libsasl2-dev
+
       - name: Cargo Build
         run: cargo build --workspace --all-targets --all-features
 
@@ -49,6 +54,11 @@ jobs:
         with:
           components: clippy
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libsasl2-dev
+
       - name: Clippy Check
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -63,6 +73,11 @@ jobs:
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libsasl2-dev
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -83,6 +98,11 @@ jobs:
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libsasl2-dev
 
       - name: Generate Documentation
         run: cargo doc --workspace --all-features --no-deps --document-private-items
