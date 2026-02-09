@@ -70,7 +70,7 @@ impl NotificationHandler {
             }
 
             attempts += 1;
-            if attempts > self.max_retries {
+            if attempts >= self.max_retries {
                 return Err(EventError::HandlerError(format!(
                     "Failed to send notification after {} attempts",
                     self.max_retries
