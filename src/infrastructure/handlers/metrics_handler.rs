@@ -2,22 +2,43 @@ use crate::domain::events::WalletEvent;
 use crate::domain::ports::{EventError, EventHandler, EventType};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::RwLock;
 use tracing::debug;
 
-/// Metrics handler that tracks event counts and latency
+/// Metrics handler that tracks event counts and latency.
 pub struct MetricsHandler {
-    event_counts: Arc<RwLock<HashMap<String, AtomicU64>>>,
-    total_events: Arc<AtomicU64>,
+    event_counts: HashMap<EventType, AtomicU64>,
+    total_events: AtomicU64,
 }
 
 impl MetricsHandler {
     pub fn new() -> Self {
+        let mut event_counts = HashMap::new();
+
+        // Pre-initialize with all known event types to prevent unbounded growth
+        let all_types = [
+            EventType::CredentialOfferSent,
+            EventType::CredentialOfferReceived,
+            EventType::CredentialIssued,
+            EventType::CredentialAcknowledged,
+            EventType::CredentialStored,
+            EventType::CredentialDeleted,
+            EventType::PresentationRequestSent,
+            EventType::PresentationRequestReceived,
+            EventType::PresentationSubmitted,
+            EventType::PresentationVerified,
+            EventType::KeyCreated,
+            EventType::KeyRotated,
+            EventType::KeyRevoked,
+        ];
+
+        for &event_type in &all_types {
+            event_counts.insert(event_type, AtomicU64::new(0));
+        }
+
         Self {
-            event_counts: Arc::new(RwLock::new(HashMap::new())),
-            total_events: Arc::new(AtomicU64::new(0)),
+            event_counts,
+            total_events: AtomicU64::new(0),
         }
     }
 
@@ -25,19 +46,20 @@ impl MetricsHandler {
         self.total_events.load(Ordering::Relaxed)
     }
 
-    pub async fn event_count_by_type(&self, event_type: &str) -> u64 {
-        let counts = self.event_counts.read().await;
-        counts
-            .get(event_type)
-            .map(|c| c.load(Ordering::Relaxed))
+    /// Get event count by type name (string lookup for backward compatibility)
+    pub fn event_count_by_type(&self, event_type: &str) -> u64 {
+        self.event_counts
+            .iter()
+            .find(|(k, _)| k.as_str() == event_type)
+            .map(|(_, v)| v.load(Ordering::Relaxed))
             .unwrap_or(0)
     }
 
-    pub async fn all_event_counts(&self) -> HashMap<String, u64> {
-        let counts = self.event_counts.read().await;
-        counts
+    /// Get all event counts as a HashMap<String, u64>
+    pub fn all_event_counts(&self) -> HashMap<String, u64> {
+        self.event_counts
             .iter()
-            .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
+            .map(|(k, v)| (k.as_str().to_string(), v.load(Ordering::Relaxed)))
             .collect()
     }
 }
@@ -70,20 +92,18 @@ impl EventHandler for MetricsHandler {
     }
 
     async fn handle(&self, event: &WalletEvent) -> Result<(), EventError> {
-        let event_type = event.event_type_name().to_string();
+        let event_type = event.event_type();
 
         // Increment total count
         self.total_events.fetch_add(1, Ordering::Relaxed);
 
-        // Increment event type count
-        let mut counts = self.event_counts.write().await;
-        counts
-            .entry(event_type.clone())
-            .or_insert_with(|| AtomicU64::new(0))
-            .fetch_add(1, Ordering::Relaxed);
+        // Increment event type count (lockless since map is pre-initialized)
+        if let Some(counter) = self.event_counts.get(&event_type) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
 
         debug!(
-            event_type = %event_type,
+            event_type = %event.event_type_name(),
             total_events = self.total_events.load(Ordering::Relaxed),
             "Metrics updated"
         );
@@ -126,8 +146,8 @@ mod tests {
         handler.handle(&event1).await.unwrap();
 
         assert_eq!(handler.total_events(), 3);
-        assert_eq!(handler.event_count_by_type("CredentialIssued").await, 2);
-        assert_eq!(handler.event_count_by_type("KeyCreated").await, 1);
+        assert_eq!(handler.event_count_by_type("CredentialIssued"), 2);
+        assert_eq!(handler.event_count_by_type("KeyCreated"), 1);
     }
 
     #[tokio::test]
@@ -144,7 +164,7 @@ mod tests {
 
         handler.handle(&event).await.unwrap();
 
-        let all_counts = handler.all_event_counts().await;
+        let all_counts = handler.all_event_counts();
         assert_eq!(all_counts.get("CredentialIssued"), Some(&1));
     }
 }

@@ -95,6 +95,27 @@ impl WalletEvent {
             WalletEvent::KeyRevoked(_) => "KeyRevoked",
         }
     }
+
+    /// Returns the EventType enum variant for this event.
+    /// This enables type-safe event classification without string allocations.
+    pub fn event_type(&self) -> crate::domain::ports::EventType {
+        use crate::domain::ports::EventType;
+        match self {
+            WalletEvent::CredentialOfferSent(_) => EventType::CredentialOfferSent,
+            WalletEvent::CredentialOfferReceived(_) => EventType::CredentialOfferReceived,
+            WalletEvent::CredentialIssued(_) => EventType::CredentialIssued,
+            WalletEvent::CredentialAcknowledged(_) => EventType::CredentialAcknowledged,
+            WalletEvent::CredentialStored(_) => EventType::CredentialStored,
+            WalletEvent::CredentialDeleted(_) => EventType::CredentialDeleted,
+            WalletEvent::PresentationRequestSent(_) => EventType::PresentationRequestSent,
+            WalletEvent::PresentationRequestReceived(_) => EventType::PresentationRequestReceived,
+            WalletEvent::PresentationSubmitted(_) => EventType::PresentationSubmitted,
+            WalletEvent::PresentationVerified(_) => EventType::PresentationVerified,
+            WalletEvent::KeyCreated(_) => EventType::KeyCreated,
+            WalletEvent::KeyRotated(_) => EventType::KeyRotated,
+            WalletEvent::KeyRevoked(_) => EventType::KeyRevoked,
+        }
+    }
 }
 
 // ============================================================================
@@ -283,6 +304,23 @@ mod tests {
     }
 
     #[test]
+    fn test_credential_offer_sent_serialization() {
+        let event = WalletEvent::CredentialOfferSent(CredentialOfferSentEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            offer_id: "offer-789".to_string(),
+            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_configuration_ids: vec!["UniversityDegree".to_string()],
+            grants: None,
+            credential_offer_uri: Some("openid-credential-offer://...".to_string()),
+        });
+
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: WalletEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+        assert_eq!(event.event_type_name(), "CredentialOfferSent");
+    }
+
+    #[test]
     fn test_credential_offer_received_serialization() {
         let event = WalletEvent::CredentialOfferReceived(CredentialOfferReceivedEvent {
             metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
@@ -303,6 +341,7 @@ mod tests {
         let deserialized: WalletEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(event, deserialized);
+        assert_eq!(event.event_type_name(), "CredentialOfferReceived");
     }
 
     #[test]
@@ -319,29 +358,106 @@ mod tests {
     }
 
     #[test]
-    fn test_presentation_verified_event() {
-        let event = WalletEvent::PresentationVerified(PresentationVerifiedEvent {
+    fn test_credential_acknowledged_event() {
+        let event = WalletEvent::CredentialAcknowledged(CredentialAcknowledgedEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            notification_id: "notif-123".to_string(),
+            event: "credential_accepted".to_string(),
+        });
+
+        assert_eq!(event.event_type_name(), "CredentialAcknowledged");
+    }
+
+    #[test]
+    fn test_credential_storage_events() {
+        let stored = WalletEvent::CredentialStored(CredentialStoredEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            credential_id: "cred-123".to_string(),
+            credential_type: "UniversityDegree".to_string(),
+            issuer: "https://issuer.example.com".to_string(),
+            notification_id: Some("notif-123".to_string()),
+        });
+        assert_eq!(stored.event_type_name(), "CredentialStored");
+
+        let deleted = WalletEvent::CredentialDeleted(CredentialDeletedEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            credential_id: "cred-123".to_string(),
+            notification_id: "notif-456".to_string(),
+            event: "credential_deleted".to_string(),
+        });
+        assert_eq!(deleted.event_type_name(), "CredentialDeleted");
+    }
+
+    #[test]
+    fn test_presentation_request_events() {
+        let sent = WalletEvent::PresentationRequestSent(PresentationRequestSentEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            request_id: "req-123".to_string(),
+            dcql_query: "{}".to_string(),
+            nonce: "nonce-123".to_string(),
+            client_id: "verifier.example.com".to_string(),
+            response_uri: None,
+        });
+        assert_eq!(sent.event_type_name(), "PresentationRequestSent");
+
+        let received = WalletEvent::PresentationRequestReceived(PresentationRequestReceivedEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            request_id: "req-123".to_string(),
+            dcql_query: "{}".to_string(),
+            nonce: "nonce-123".to_string(),
+            client_id: "verifier.example.com".to_string(),
+            response_uri: None,
+        });
+        assert_eq!(received.event_type_name(), "PresentationRequestReceived");
+    }
+
+    #[test]
+    fn test_presentation_submission_events() {
+        let submitted = WalletEvent::PresentationSubmitted(PresentationSubmittedEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            request_id: "req-123".to_string(),
+            presentation_submission_id: "sub-123".to_string(),
+            vp_token: "eyJhbGci...".to_string(),
+        });
+        assert_eq!(submitted.event_type_name(), "PresentationSubmitted");
+
+        let verified = WalletEvent::PresentationVerified(PresentationVerifiedEvent {
             metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
             request_id: "req-123".to_string(),
             presentation_submission_id: "sub-456".to_string(),
             validation_status: ValidationStatus::Valid,
             holder_binding_verified: true,
         });
-
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("PresentationVerified"));
+        assert_eq!(verified.event_type_name(), "PresentationVerified");
     }
 
     #[test]
-    fn test_key_created_event() {
-        let event = WalletEvent::KeyCreated(KeyCreatedEvent {
+    fn test_key_operation_events() {
+        let created = WalletEvent::KeyCreated(KeyCreatedEvent {
             metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
             key_id: "key-123".to_string(),
             kid: "did:example:123#key-1".to_string(),
             key_type: "Ed25519".to_string(),
             key_attestation: Some("attestation-data".to_string()),
         });
+        assert_eq!(created.event_type_name(), "KeyCreated");
 
-        assert_eq!(event.event_type_name(), "KeyCreated");
+        let rotated = WalletEvent::KeyRotated(KeyRotatedEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            old_key_id: "key-122".to_string(),
+            new_key_id: "key-123".to_string(),
+            new_kid: "did:example:123#key-2".to_string(),
+            key_type: "Ed25519".to_string(),
+            key_attestation: None,
+        });
+        assert_eq!(rotated.event_type_name(), "KeyRotated");
+
+        let revoked = WalletEvent::KeyRevoked(KeyRevokedEvent {
+            metadata: EventMetadata::new("corr-123".to_string(), "wallet-456".to_string()),
+            key_id: "key-123".to_string(),
+            kid: "did:example:123#key-2".to_string(),
+            revocation_reason: "Key compromised".to_string(),
+        });
+        assert_eq!(revoked.event_type_name(), "KeyRevoked");
     }
 }

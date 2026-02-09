@@ -3,23 +3,29 @@ use crate::domain::ports::{EventError, EventHandler, EventType};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
 
-/// Security monitoring handler that detects suspicious patterns
+/// Security monitoring handler that detects suspicious patterns.
 pub struct SecurityMonitoringHandler {
     // Track failed proof attempts by wallet_id
     failed_proofs: Arc<RwLock<HashMap<String, u32>>>,
-    // Track nonce usage to detect replay attacks
-    used_nonces: Arc<RwLock<HashMap<String, bool>>>,
+    // Track nonce usage with TTL to detect replay attacks
+    used_nonces: moka::future::Cache<String, bool>,
     max_failed_proofs: u32,
 }
 
 impl SecurityMonitoringHandler {
     pub fn new(max_failed_proofs: u32) -> Self {
+        let used_nonces = moka::future::Cache::builder()
+            .max_capacity(100_000)
+            .time_to_live(Duration::from_secs(15 * 60))
+            .build();
+
         Self {
             failed_proofs: Arc::new(RwLock::new(HashMap::new())),
-            used_nonces: Arc::new(RwLock::new(HashMap::new())),
+            used_nonces,
             max_failed_proofs,
         }
     }
@@ -67,15 +73,17 @@ impl SecurityMonitoringHandler {
         };
 
         if let Some(nonce_value) = nonce {
-            let mut nonces = self.used_nonces.write().await;
-            if nonces.contains_key(nonce_value) {
+            // Check if nonce was already used (cache hit = replay attack)
+            if self.used_nonces.get(nonce_value).await.is_some() {
                 error!(
                     nonce = %nonce_value,
                     "SECURITY ALERT: Nonce reuse detected - potential replay attack"
                 );
                 return Err(EventError::HandlerError("Nonce reuse detected".to_string()));
             }
-            nonces.insert(nonce_value.clone(), true);
+
+            // Mark nonce as used (will auto-expire after 15 minutes)
+            self.used_nonces.insert(nonce_value.clone(), true).await;
         }
 
         Ok(())
