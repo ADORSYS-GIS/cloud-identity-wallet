@@ -136,12 +136,12 @@ async fn test_event_bus_batch_publish() {
 
     bus.publish_batch(events.clone()).await.unwrap();
 
-    for i in 0..2 {
+    for (i, event) in events.iter().enumerate() {
         let received = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
-            .expect(&format!("Timeout waiting for event {}", i))
+            .unwrap_or_else(|_| panic!("Timeout waiting for event {}", i))
             .expect("Stream closed");
-        assert_eq!(received, events[i]);
+        assert_eq!(&received, event);
     }
 }
 
