@@ -1,0 +1,15 @@
+[advisories]
+ignore = [] # advisory IDs to ignore
+
+informational_warnings = ["unmaintained"]
+severity_threshold = "low"
+
+# Output Configuration
+[output]
+deny = ["unmaintained"] # exit on error if unmaintained dependencies are found
+format = "terminal"     # "terminal" (human readable report) or "json"
+quiet = false           # Only print information on error
+
+[yanked]
+enabled = true      # Warn for yanked crates in Cargo.lock
+update_index = true # Auto-update the crates.io index
