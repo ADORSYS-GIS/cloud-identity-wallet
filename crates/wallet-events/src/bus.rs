@@ -149,7 +149,7 @@ impl KafkaEventBus {
                         // Deserialize and send to channel
                         match serde_json::from_slice::<WalletEvent>(m.value) {
                             Ok(event) => {
-                                if let Err(_) = tx.send(event) {
+                                if tx.send(event).is_err() {
                                     return;
                                 }
                             }
@@ -187,7 +187,7 @@ impl KafkaEventBus {
 
 #[async_trait]
 impl EventPublisher for KafkaEventBus {
-    async fn publish(&self, event: &(impl DomainEvent + Sync)) -> Result<(), EventError> {
+    async fn publish(&self, event: &impl DomainEvent) -> Result<(), EventError> {
         let topic = self.route_to_topic(event.topic_category());
         let payload = serde_json::to_vec(event).map_err(|e| {
             EventError::SerializationError(format!("Failed to serialize event: {}", e))
@@ -201,7 +201,7 @@ impl EventPublisher for KafkaEventBus {
             let mut p = producer.lock().map_err(|e| {
                 EventError::PublishError(format!("Failed to acquire producer lock: {}", e))
             })?;
-            Self::send_sync(&mut *p, &topic_clone, &key, &payload)
+            Self::send_sync(&mut p, &topic_clone, &key, &payload)
         })
         .await
         .map_err(|e| EventError::PublishError(format!("Join error: {}", e)))??;
@@ -394,7 +394,7 @@ mod tests {
                 .producer
                 .lock()
                 .expect("Failed to acquire producer lock");
-            KafkaEventBus::send_sync(&mut *p, &topic, &event.wallet_id(), &payload)
+            KafkaEventBus::send_sync(&mut p, &topic, &event.wallet_id(), &payload)
                 .expect("Failed to send message");
         }
 
@@ -415,10 +415,17 @@ mod tests {
         }
 
         let topic = format!("test.multi.{}", uuid::Uuid::new_v4());
-        let bus = KafkaEventBus::new(KafkaEventBusConfig::default()).unwrap();
+        let bus =
+            KafkaEventBus::new(KafkaEventBusConfig::default()).expect("Failed to create event bus");
 
-        let mut stream1 = bus.subscribe::<WalletEvent>(&topic).await.unwrap();
-        let mut stream2 = bus.subscribe::<WalletEvent>(&topic).await.unwrap();
+        let mut stream1 = bus
+            .subscribe::<WalletEvent>(&topic)
+            .await
+            .expect("Failed to subscribe stream1");
+        let mut stream2 = bus
+            .subscribe::<WalletEvent>(&topic)
+            .await
+            .expect("Failed to subscribe stream2");
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -431,22 +438,26 @@ mod tests {
         let event = WalletEvent::new("corr-3".to_string(), "wallet-3".to_string(), payload);
 
         {
-            let payload = serde_json::to_vec(&event).unwrap();
-            let mut p = bus.producer.lock().unwrap();
-            KafkaEventBus::send_sync(&mut *p, &topic, &event.wallet_id(), &payload).unwrap();
+            let payload = serde_json::to_vec(&event).expect("Failed to serialize event");
+            let mut p = bus
+                .producer
+                .lock()
+                .expect("Failed to acquire producer lock");
+            KafkaEventBus::send_sync(&mut p, &topic, &event.wallet_id(), &payload)
+                .expect("Failed to send message");
         }
 
         let r1 = tokio::time::timeout(Duration::from_secs(10), stream1.next())
             .await
             .expect("S1 timeout")
-            .unwrap()
-            .unwrap();
+            .expect("S1 stream error")
+            .expect("S1 event error");
 
         let r2 = tokio::time::timeout(Duration::from_secs(10), stream2.next())
             .await
             .expect("S2 timeout")
-            .unwrap()
-            .unwrap();
+            .expect("S2 stream error")
+            .expect("S2 event error");
 
         assert_eq!(r1.event_id(), event.event_id());
         assert_eq!(r2.event_id(), event.event_id());
@@ -490,10 +501,13 @@ mod tests {
             topic_prefix: "test".to_string(),
             ..Default::default()
         };
-        let bus = KafkaEventBus::new(config).unwrap();
+        let bus = KafkaEventBus::new(config).expect("Failed to create event bus");
 
         let topic = "test.custom.category";
-        let mut stream = bus.subscribe::<CustomEvent>(topic).await.unwrap();
+        let mut stream = bus
+            .subscribe::<CustomEvent>(topic)
+            .await
+            .expect("Failed to subscribe");
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
