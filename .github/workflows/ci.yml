@@ -32,11 +32,6 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libsasl2-dev
-
       - name: Cargo Build
         run: cargo build --workspace --all-targets --all-features
 
