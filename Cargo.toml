@@ -53,20 +53,10 @@ edition.workspace = true
 # Workspace dependencies
 tokio.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 color-eyre.workspace = true
-thiserror.workspace = true
 config.workspace = true
 tracing.workspace = true
-tokio-stream.workspace = true
-async-trait.workspace = true
-uuid.workspace = true
-chrono.workspace = true
 reqwest.workspace = true
-moka.workspace = true
-
-# Local crates
-wallet-events = { path = "crates/wallet-events" }
 
 # Application specific
 axum = { version = "0.8", features = ["macros"] }
