@@ -235,31 +235,59 @@ impl EventSubscriber for KafkaEventBus {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         std::thread::spawn(move || {
-            let mut consumer = Consumer::from_hosts(hosts)
+            let mut consumer = match Consumer::from_hosts(hosts)
                 .with_topic(topic_name)
                 .with_group(group_id)
                 .with_fallback_offset(FetchOffset::Earliest)
+                .with_offset_storage(Some(GroupOffsetStorage::Kafka))
                 .create()
-                .unwrap();
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(EventError::ConfigurationError(format!(
+                        "Failed to create consumer: {}",
+                        e
+                    ))));
+                    return;
+                }
+            };
 
             loop {
-                for ms in consumer.poll().unwrap().iter() {
-                    for m in ms.messages() {
-                        match serde_json::from_slice::<T>(m.value) {
-                            Ok(event) => {
-                                if tx.send(Ok(event)).is_err() {
-                                    return;
+                match consumer.poll() {
+                    Ok(message_sets) => {
+                        for ms in message_sets.iter() {
+                            for m in ms.messages() {
+                                match serde_json::from_slice::<T>(m.value) {
+                                    Ok(event) => {
+                                        if tx.send(Ok(event)).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Err(EventError::SerializationError(
+                                            format!("{}", e),
+                                        )));
+                                    }
                                 }
                             }
-                            Err(e) => {
-                                let _ =
-                                    tx.send(Err(EventError::SerializationError(format!("{}", e))));
-                            }
+                            let _ = consumer.consume_messageset(ms);
+                        }
+                        if let Err(e) = consumer.commit_consumed() {
+                            let _ = tx.send(Err(EventError::PublishError(format!(
+                                "Commit failed: {}",
+                                e
+                            ))));
                         }
                     }
-                    let _ = consumer.consume_messageset(ms);
+                    Err(e) => {
+                        // If topic doesn't exist yet, we wait and retry
+                        eprintln!(
+                            "[Subscriber] Kafka poll error: {}. Topic might not be ready yet. Retrying...",
+                            e
+                        );
+                        std::thread::sleep(Duration::from_millis(2000));
+                    }
                 }
-                consumer.commit_consumed().unwrap();
             }
         });
 

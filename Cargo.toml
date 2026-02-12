@@ -1,22 +1,29 @@
 [workspace]
+resolver = "2"
 members = ["crates/wallet-events"]
 
-[package]
-name = "cloud-identity-wallet"
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
 
-[dependencies]
+[workspace.lints.clippy]
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+invalid_html_tags = "deny"
+
+[workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
-
-# Web server framework
-axum = { version = "0.8", features = ["macros"] }
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
 
 # Serialization / Deserialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
 
 # Error handling
 color-eyre = "0.6"
@@ -27,25 +34,59 @@ config = "0.15"
 
 # Logging and metrics
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# Kafka event bus
-tokio-stream = "0.1"
-
-# Event handling
-async-trait = "0.1"
-
-# UUID for event IDs
+# Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
-
-# Time handling
-chrono = { version = "0.4", features = ["serde"] }
+moka = { version = "0.12", features = ["future"] }
 
 # HTTP Client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
-# Time-based cache for security nonce tracking
-moka = { version = "0.12", features = ["future"] }
+[package]
+name = "cloud-identity-wallet"
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+color-eyre.workspace = true
+thiserror.workspace = true
+config.workspace = true
+tracing.workspace = true
+tokio-stream.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+moka.workspace = true
+
+# Local crates
 wallet-events = { path = "crates/wallet-events" }
 
+# Application specific
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
+
 [dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }
+
+[profile.dev]
+# Speed up compilation time
+debug = 1
+
+[profile.release]
+# Maximize runtime speed
+codegen-units = 1
+lto = "fat"
+# Abort on panic
+panic = "abort"
+strip = "symbols"
