@@ -1,7 +1,14 @@
-name: CI
+name: "CI"
 
-"on":
-  pull_request: {}
+on:
+  merge_group:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   cargo-fmt:
@@ -104,6 +111,25 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  check-crate-type:
+    uses: ./.github/workflows/crate_type.yml
+
+  cargo-test-doc:
+    needs: check-crate-type
+    if: ${{ needs.check-crate-type.outputs.is_lib == 'true' }}
+    name: Cargo test doc
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cargo test doc
+        run: cargo test --doc --workspace --all-features
+
   cargo-machete:
     name: Cargo Machete Check
     runs-on: ubuntu-latest
@@ -124,32 +150,40 @@ jobs:
       - name: Check for unused dependencies
         run: cargo machete --with-metadata
 
-  cargo-audit:
-    name: Security Audit
+  cargo-deny:
+    uses: ./.github/workflows/cargo_deny.yml
+
+  typos-cli:
+    name: typos
     runs-on: ubuntu-latest
 
     steps:
       - name: Fetch Repository
         uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Cache advisory database
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/advisory-db
-          key: ${{ runner.os }}-advisory-db-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-advisory-db-
-
-      - name: Install cargo-audit
+      - name: Install Typos
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit
+          tool: typos-cli
 
-      - name: Run Security Audit
-        run: cargo audit
+      - name: run typos
+        run: typos
+
+  tombi-toml-lint:
+    name: Tombi TOML Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Repository
+        uses: actions/checkout@v6
+
+      - name: Install Taplo
+        uses: tombi-toml/setup-tombi@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate TOML files
+        run: tombi lint
 
   markdown-lint:
     name: Markdown Lint

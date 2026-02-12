@@ -1,17 +1,17 @@
 [package]
 name = "wallet-events"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-async-trait = "0.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-uuid = { version = "1.0", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-tokio-stream = "0.1"
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+tokio.workspace = true
 futures = "0.3"
 kafka = "0.10"
-tokio = { version = "1", features = ["sync", "rt", "macros", "net", "time"] }
-tracing = "0.1"
