@@ -198,7 +198,9 @@ impl EventPublisher for KafkaEventBus {
         let topic_clone = topic.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut p = producer.lock().unwrap();
+            let mut p = producer.lock().map_err(|e| {
+                EventError::PublishError(format!("Failed to acquire producer lock: {}", e))
+            })?;
             Self::send_sync(&mut *p, &topic_clone, &key, &payload)
         })
         .await
@@ -329,7 +331,7 @@ mod tests {
         }
 
         let config = KafkaEventBusConfig::default();
-        let bus = KafkaEventBus::new(config).unwrap();
+        let bus = KafkaEventBus::new(config).expect("Failed to create event bus");
 
         let payload =
             WalletEventPayload::CredentialOfferSent(crate::events::CredentialOfferSentPayload {
@@ -366,9 +368,12 @@ mod tests {
             topic_prefix: "test".to_string(),
             ..Default::default()
         };
-        let bus = KafkaEventBus::new(config).unwrap();
+        let bus = KafkaEventBus::new(config).expect("Failed to create event bus");
 
-        let mut stream = bus.subscribe::<WalletEvent>(&topic).await.unwrap();
+        let mut stream = bus
+            .subscribe::<WalletEvent>(&topic)
+            .await
+            .expect("Failed to subscribe");
 
         // Small delay to ensure consumer group is joined
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -384,9 +389,13 @@ mod tests {
 
         // We use send_sync directly to the specific topic to test subscription
         {
-            let payload = serde_json::to_vec(&event).unwrap();
-            let mut p = bus.producer.lock().unwrap();
-            KafkaEventBus::send_sync(&mut *p, &topic, &event.wallet_id(), &payload).unwrap();
+            let payload = serde_json::to_vec(&event).expect("Failed to serialize event");
+            let mut p = bus
+                .producer
+                .lock()
+                .expect("Failed to acquire producer lock");
+            KafkaEventBus::send_sync(&mut *p, &topic, &event.wallet_id(), &payload)
+                .expect("Failed to send message");
         }
 
         let received = tokio::time::timeout(Duration::from_secs(10), stream.next())
