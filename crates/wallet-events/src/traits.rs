@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures::Stream;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::pin::Pin;
 use thiserror::Error;
 
@@ -34,7 +34,7 @@ pub trait DomainEvent: Serialize + Send + Sync + 'static {
 
 #[async_trait]
 pub trait EventPublisher: Send + Sync {
-    async fn publish(&self, event: &(impl DomainEvent + Sync)) -> Result<(), EventError>;
+    async fn publish(&self, event: &impl DomainEvent) -> Result<(), EventError>;
     async fn publish_batch<E: DomainEvent + Sync>(&self, events: &[E]) -> Result<(), EventError>;
 }
 
