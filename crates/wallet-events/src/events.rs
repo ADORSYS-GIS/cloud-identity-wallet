@@ -1,6 +1,6 @@
 use crate::traits::DomainEvent;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// Common metadata for all wallet events
@@ -9,7 +9,7 @@ pub struct EventMetadata {
     /// Unique identifier for this event
     pub event_id: Uuid,
     /// Timestamp when the event occurred
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: OffsetDateTime,
     /// Correlation ID to link related events across flows
     pub correlation_id: String,
     /// Wallet instance identifier
@@ -22,7 +22,7 @@ impl EventMetadata {
     pub fn new(correlation_id: String, wallet_id: String) -> Self {
         Self {
             event_id: Uuid::new_v4(),
-            timestamp: Utc::now(),
+            timestamp: OffsetDateTime::now_utc(),
             correlation_id,
             wallet_id,
             schema_version: "1.0.0".to_string(),
