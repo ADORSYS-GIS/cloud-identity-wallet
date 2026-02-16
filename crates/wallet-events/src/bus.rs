@@ -62,7 +62,7 @@ impl KafkaEventBus {
             .with_required_acks(acks)
             .create()
             .map_err(|e| {
-                EventError::ConfigurationError(format!("Failed to create producer: {}", e))
+                EventError::ConfigurationError(format!("Failed to create producer: {e}"))
             })?;
 
         Ok(Self {
@@ -91,7 +91,7 @@ impl KafkaEventBus {
         let record = Record::from_key_value(topic, key, payload);
         producer
             .send(&record)
-            .map_err(|e| EventError::PublishError(format!("Failed to send message: {}", e)))
+            .map_err(|e| EventError::PublishError(format!("Failed to send message: {e}")))
     }
 
     pub async fn start_consuming(&self) -> Result<(), EventError> {
@@ -130,7 +130,7 @@ impl KafkaEventBus {
             let mut consumer = match builder.create() {
                 Ok(c) => c,
                 Err(e) => {
-                    error!("Failed to create consumer: {}", e);
+                    error!("Failed to create consumer: {e}");
                     return;
                 }
             };
@@ -139,7 +139,7 @@ impl KafkaEventBus {
                 let message_sets = match consumer.poll() {
                     Ok(ms) => ms,
                     Err(e) => {
-                        error!("Failed to poll Kafka: {}", e);
+                        error!("Failed to poll Kafka: {e}");
                         continue;
                     }
                 };
@@ -154,7 +154,7 @@ impl KafkaEventBus {
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to deserialize: {}", e);
+                                error!("Failed to deserialize: {e}");
                             }
                         }
                     }
@@ -162,7 +162,7 @@ impl KafkaEventBus {
                 }
 
                 if let Err(e) = consumer.commit_consumed() {
-                    error!("Failed to commit consumed: {}", e);
+                    error!("Failed to commit consumed: {e}");
                 }
             }
         });
@@ -175,7 +175,7 @@ impl KafkaEventBus {
                 let handlers_read = handlers.read().await;
                 for handler in handlers_read.iter() {
                     if let Err(e) = handler.handle(&event).await {
-                        error!("Handler handling failed: {}", e);
+                        error!("Handler handling failed: {e}");
                     }
                 }
             }
@@ -190,7 +190,7 @@ impl EventPublisher for KafkaEventBus {
     async fn publish(&self, event: &impl DomainEvent) -> Result<(), EventError> {
         let topic = self.route_to_topic(event.topic_category());
         let payload = serde_json::to_vec(event).map_err(|e| {
-            EventError::SerializationError(format!("Failed to serialize event: {}", e))
+            EventError::SerializationError(format!("Failed to serialize event: {e}"))
         })?;
         let key = event.wallet_id();
 
@@ -199,12 +199,12 @@ impl EventPublisher for KafkaEventBus {
 
         tokio::task::spawn_blocking(move || {
             let mut p = producer.lock().map_err(|e| {
-                EventError::PublishError(format!("Failed to acquire producer lock: {}", e))
+                EventError::PublishError(format!("Failed to acquire producer lock: {e}"))
             })?;
             Self::send_sync(&mut p, &topic_clone, &key, &payload)
         })
         .await
-        .map_err(|e| EventError::PublishError(format!("Join error: {}", e)))??;
+        .map_err(|e| EventError::PublishError(format!("Join error: {e}")))??;
 
         debug!("Published event {} to topic {}", event.event_type(), topic);
         Ok(())
@@ -247,8 +247,7 @@ impl EventSubscriber for KafkaEventBus {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx.send(Err(EventError::ConfigurationError(format!(
-                        "Failed to create consumer: {}",
-                        e
+                        "Failed to create consumer: {e}"
                     ))));
                     return;
                 }
@@ -267,7 +266,7 @@ impl EventSubscriber for KafkaEventBus {
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Err(EventError::SerializationError(
-                                            format!("{}", e),
+                                            format!("{e}"),
                                         )));
                                     }
                                 }
@@ -275,17 +274,14 @@ impl EventSubscriber for KafkaEventBus {
                             let _ = consumer.consume_messageset(ms);
                         }
                         if let Err(e) = consumer.commit_consumed() {
-                            let _ = tx.send(Err(EventError::PublishError(format!(
-                                "Commit failed: {}",
-                                e
-                            ))));
+                            let _ = tx
+                                .send(Err(EventError::PublishError(format!("Commit failed: {e}"))));
                         }
                     }
                     Err(e) => {
                         // If topic doesn't exist yet, we wait and retry
                         eprintln!(
-                            "[Subscriber] Kafka poll error: {}. Topic might not be ready yet. Retrying...",
-                            e
+                            "[Subscriber] Kafka poll error: {e}. Topic might not be ready yet. Retrying..."
                         );
                         std::thread::sleep(Duration::from_millis(2000));
                     }
