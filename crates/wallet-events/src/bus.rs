@@ -78,7 +78,7 @@ impl KafkaEventBus {
     }
 
     fn route_to_topic(&self, category: &str) -> String {
-        format!("{}.{}", self.config.topic_prefix, category)
+        format!("{}.{category}", self.config.topic_prefix)
     }
 
     // Helper to publish synchronously
@@ -206,7 +206,7 @@ impl EventPublisher for KafkaEventBus {
         .await
         .map_err(|e| EventError::PublishError(format!("Join error: {e}")))??;
 
-        debug!("Published event {} to topic {}", event.event_type(), topic);
+        debug!("Published event {} to topic {topic}", event.event_type());
         Ok(())
     }
 
