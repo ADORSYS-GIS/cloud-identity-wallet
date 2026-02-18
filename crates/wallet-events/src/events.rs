@@ -1,7 +1,71 @@
-use crate::traits::DomainEvent;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventType(pub String);
+
+impl EventType {
+    pub const CREDENTIAL_OFFER_SENT: &str = "credential.offer.sent";
+    pub const CREDENTIAL_OFFER_RECEIVED: &str = "credential.offer.received";
+    pub const CREDENTIAL_ISSUED: &str = "credential.issued";
+    pub const CREDENTIAL_ACKNOWLEDGED: &str = "credential.acknowledged";
+    pub const CREDENTIAL_STORED: &str = "credential.stored";
+    pub const CREDENTIAL_DELETED: &str = "credential.deleted";
+    pub const PRESENTATION_REQUEST_SENT: &str = "presentation.request.sent";
+    pub const PRESENTATION_REQUEST_RECEIVED: &str = "presentation.request.received";
+    pub const PRESENTATION_SUBMITTED: &str = "presentation.submitted";
+    pub const PRESENTATION_VERIFIED: &str = "presentation.verified";
+    pub const KEY_CREATED: &str = "key.created";
+    pub const KEY_ROTATED: &str = "key.rotated";
+    pub const KEY_REVOKED: &str = "key.revoked";
+
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Unified event model with fixed metadata and flexible payload
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    pub id: Uuid,
+    pub event_type: EventType,
+    pub version: String,
+    pub timestamp: OffsetDateTime,
+    pub payload: Value,
+    /// Additional metadata (extensible key-value pairs)
+    pub metadata: HashMap<String, Value>,
+}
+
+impl Event {
+    pub fn new(event_type: EventType, payload: Value) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            event_type,
+            version: "1.0.0".to_string(),
+            timestamp: OffsetDateTime::now_utc(),
+            payload,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+}
 
 /// Common metadata for all wallet events
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -52,7 +116,7 @@ impl WalletEvent {
     }
 
     pub fn event_type(&self) -> EventType {
-        self.payload.event_type()
+        self.payload.event_type_v2()
     }
 
     pub fn topic_category(&self) -> &'static str {
@@ -94,39 +158,21 @@ pub enum WalletEventPayload {
 impl WalletEventPayload {
     pub fn event_type_name(&self) -> &'static str {
         match self {
-            WalletEventPayload::CredentialOfferSent(_) => "CredentialOfferSent",
-            WalletEventPayload::CredentialOfferReceived(_) => "CredentialOfferReceived",
-            WalletEventPayload::CredentialIssued(_) => "CredentialIssued",
-            WalletEventPayload::CredentialAcknowledged(_) => "CredentialAcknowledged",
-            WalletEventPayload::CredentialStored(_) => "CredentialStored",
-            WalletEventPayload::CredentialDeleted(_) => "CredentialDeleted",
-            WalletEventPayload::PresentationRequestSent(_) => "PresentationRequestSent",
-            WalletEventPayload::PresentationRequestReceived(_) => "PresentationRequestReceived",
-            WalletEventPayload::PresentationSubmitted(_) => "PresentationSubmitted",
-            WalletEventPayload::PresentationVerified(_) => "PresentationVerified",
-            WalletEventPayload::KeyCreated(_) => "KeyCreated",
-            WalletEventPayload::KeyRotated(_) => "KeyRotated",
-            WalletEventPayload::KeyRevoked(_) => "KeyRevoked",
-        }
-    }
-
-    pub fn event_type(&self) -> EventType {
-        match self {
-            WalletEventPayload::CredentialOfferSent(_) => EventType::CredentialOfferSent,
-            WalletEventPayload::CredentialOfferReceived(_) => EventType::CredentialOfferReceived,
-            WalletEventPayload::CredentialIssued(_) => EventType::CredentialIssued,
-            WalletEventPayload::CredentialAcknowledged(_) => EventType::CredentialAcknowledged,
-            WalletEventPayload::CredentialStored(_) => EventType::CredentialStored,
-            WalletEventPayload::CredentialDeleted(_) => EventType::CredentialDeleted,
-            WalletEventPayload::PresentationRequestSent(_) => EventType::PresentationRequestSent,
+            WalletEventPayload::CredentialOfferSent(_) => EventType::CREDENTIAL_OFFER_SENT,
+            WalletEventPayload::CredentialOfferReceived(_) => EventType::CREDENTIAL_OFFER_RECEIVED,
+            WalletEventPayload::CredentialIssued(_) => EventType::CREDENTIAL_ISSUED,
+            WalletEventPayload::CredentialAcknowledged(_) => EventType::CREDENTIAL_ACKNOWLEDGED,
+            WalletEventPayload::CredentialStored(_) => EventType::CREDENTIAL_STORED,
+            WalletEventPayload::CredentialDeleted(_) => EventType::CREDENTIAL_DELETED,
+            WalletEventPayload::PresentationRequestSent(_) => EventType::PRESENTATION_REQUEST_SENT,
             WalletEventPayload::PresentationRequestReceived(_) => {
-                EventType::PresentationRequestReceived
+                EventType::PRESENTATION_REQUEST_RECEIVED
             }
-            WalletEventPayload::PresentationSubmitted(_) => EventType::PresentationSubmitted,
-            WalletEventPayload::PresentationVerified(_) => EventType::PresentationVerified,
-            WalletEventPayload::KeyCreated(_) => EventType::KeyCreated,
-            WalletEventPayload::KeyRotated(_) => EventType::KeyRotated,
-            WalletEventPayload::KeyRevoked(_) => EventType::KeyRevoked,
+            WalletEventPayload::PresentationSubmitted(_) => EventType::PRESENTATION_SUBMITTED,
+            WalletEventPayload::PresentationVerified(_) => EventType::PRESENTATION_VERIFIED,
+            WalletEventPayload::KeyCreated(_) => EventType::KEY_CREATED,
+            WalletEventPayload::KeyRotated(_) => EventType::KEY_ROTATED,
+            WalletEventPayload::KeyRevoked(_) => EventType::KEY_REVOKED,
         }
     }
 
@@ -150,67 +196,65 @@ impl WalletEventPayload {
     }
 }
 
-/// Event type discriminator for filtering
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum EventType {
-    CredentialOfferSent,
-    CredentialOfferReceived,
-    CredentialIssued,
-    CredentialAcknowledged,
-    CredentialStored,
-    CredentialDeleted,
-    PresentationRequestSent,
-    PresentationRequestReceived,
-    PresentationSubmitted,
-    PresentationVerified,
-    KeyCreated,
-    KeyRotated,
-    KeyRevoked,
+impl TryFrom<WalletEvent> for Event {
+    type Error = serde_json::Error;
+
+    fn try_from(wallet_event: WalletEvent) -> Result<Self, Self::Error> {
+        let payload = serde_json::to_value(&wallet_event.payload)?;
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "correlation_id".to_string(),
+            Value::String(wallet_event.metadata.correlation_id),
+        );
+        metadata.insert(
+            "wallet_id".to_string(),
+            Value::String(wallet_event.metadata.wallet_id),
+        );
+
+        Ok(Event {
+            id: wallet_event.metadata.event_id,
+            event_type: wallet_event.payload.event_type_v2(),
+            version: wallet_event.metadata.schema_version,
+            timestamp: wallet_event.metadata.timestamp,
+            payload,
+            metadata,
+        })
+    }
 }
 
-impl EventType {
-    pub fn as_str(&self) -> &'static str {
+impl WalletEventPayload {
+    pub fn event_type_v2(&self) -> EventType {
         match self {
-            EventType::CredentialOfferSent => "CredentialOfferSent",
-            EventType::CredentialOfferReceived => "CredentialOfferReceived",
-            EventType::CredentialIssued => "CredentialIssued",
-            EventType::CredentialAcknowledged => "CredentialAcknowledged",
-            EventType::CredentialStored => "CredentialStored",
-            EventType::CredentialDeleted => "CredentialDeleted",
-            EventType::PresentationRequestSent => "PresentationRequestSent",
-            EventType::PresentationRequestReceived => "PresentationRequestReceived",
-            EventType::PresentationSubmitted => "PresentationSubmitted",
-            EventType::PresentationVerified => "PresentationVerified",
-            EventType::KeyCreated => "KeyCreated",
-            EventType::KeyRotated => "KeyRotated",
-            EventType::KeyRevoked => "KeyRevoked",
+            WalletEventPayload::CredentialOfferSent(_) => {
+                EventType::new(EventType::CREDENTIAL_OFFER_SENT)
+            }
+            WalletEventPayload::CredentialOfferReceived(_) => {
+                EventType::new(EventType::CREDENTIAL_OFFER_RECEIVED)
+            }
+            WalletEventPayload::CredentialIssued(_) => EventType::new(EventType::CREDENTIAL_ISSUED),
+            WalletEventPayload::CredentialAcknowledged(_) => {
+                EventType::new(EventType::CREDENTIAL_ACKNOWLEDGED)
+            }
+            WalletEventPayload::CredentialStored(_) => EventType::new(EventType::CREDENTIAL_STORED),
+            WalletEventPayload::CredentialDeleted(_) => {
+                EventType::new(EventType::CREDENTIAL_DELETED)
+            }
+            WalletEventPayload::PresentationRequestSent(_) => {
+                EventType::new(EventType::PRESENTATION_REQUEST_SENT)
+            }
+            WalletEventPayload::PresentationRequestReceived(_) => {
+                EventType::new(EventType::PRESENTATION_REQUEST_RECEIVED)
+            }
+            WalletEventPayload::PresentationSubmitted(_) => {
+                EventType::new(EventType::PRESENTATION_SUBMITTED)
+            }
+            WalletEventPayload::PresentationVerified(_) => {
+                EventType::new(EventType::PRESENTATION_VERIFIED)
+            }
+            WalletEventPayload::KeyCreated(_) => EventType::new(EventType::KEY_CREATED),
+            WalletEventPayload::KeyRotated(_) => EventType::new(EventType::KEY_ROTATED),
+            WalletEventPayload::KeyRevoked(_) => EventType::new(EventType::KEY_REVOKED),
         }
-    }
-}
-
-impl DomainEvent for WalletEvent {
-    fn event_type(&self) -> &str {
-        self.payload.event_type().as_str()
-    }
-
-    fn topic_category(&self) -> &str {
-        self.payload.topic_category()
-    }
-
-    fn event_id(&self) -> String {
-        self.metadata.event_id.to_string()
-    }
-
-    fn correlation_id(&self) -> String {
-        self.metadata.correlation_id.clone()
-    }
-
-    fn wallet_id(&self) -> String {
-        self.metadata.wallet_id.clone()
-    }
-
-    fn schema_version(&self) -> String {
-        self.metadata.schema_version.clone()
     }
 }
 

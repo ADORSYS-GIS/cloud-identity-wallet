@@ -1,6 +1,6 @@
+use crate::events::Event;
 use async_trait::async_trait;
 use futures::Stream;
-use serde::{Serialize, de::DeserializeOwned};
 use std::pin::Pin;
 use thiserror::Error;
 
@@ -22,36 +22,23 @@ pub enum EventError {
 
 pub type EventStream<T> = Pin<Box<dyn Stream<Item = Result<T, EventError>> + Send>>;
 
-/// Trait for domain events
-pub trait DomainEvent: Serialize + Send + Sync + 'static {
-    fn event_type(&self) -> &str;
-    fn topic_category(&self) -> &str;
-    fn event_id(&self) -> String;
-    fn correlation_id(&self) -> String;
-    fn wallet_id(&self) -> String;
-    fn schema_version(&self) -> String;
+/// Unified interface for publishing events
+#[async_trait]
+pub trait Publisher: Send + Sync {
+    async fn publish(&self, event: &Event) -> Result<(), EventError>;
+    async fn publish_batch(&self, events: &[Event]) -> Result<(), EventError>;
 }
 
+/// Unified interface for consuming events
 #[async_trait]
-pub trait EventPublisher: Send + Sync {
-    async fn publish(&self, event: &impl DomainEvent) -> Result<(), EventError>;
-    async fn publish_batch<E: DomainEvent + Sync>(&self, events: &[E]) -> Result<(), EventError>;
+pub trait Consumer: Send + Sync {
+    async fn subscribe(&self, topic: &str) -> Result<EventStream<Event>, EventError>;
 }
 
+/// Interface for handling events
 #[async_trait]
-pub trait EventSubscriber: Send + Sync {
-    async fn subscribe<T: DomainEvent + DeserializeOwned + Send>(
-        &self,
-        topic: &str,
-    ) -> Result<EventStream<T>, EventError>;
-}
-
-#[async_trait]
-pub trait EventHandler<T: DomainEvent>: Send + Sync {
-    async fn handle(&self, event: &T) -> Result<(), EventError>;
-
-    fn event_types(&self) -> Vec<&'static str>;
-
+pub trait Handler: Send + Sync {
+    async fn handle(&self, event: &Event) -> Result<(), EventError>;
     fn name(&self) -> &'static str {
         "UnnamedHandler"
     }
