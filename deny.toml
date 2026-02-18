@@ -63,6 +63,5 @@ allow = [
   "Zlib",
   "Unicode-3.0",
   "CC0-1.0",
-  "OpenSSL",
 ]
 exceptions = []

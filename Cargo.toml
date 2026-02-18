@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+
 members = ["crates/wallet-events"]
 
 [workspace.package]
@@ -15,32 +16,17 @@ broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
 [workspace.dependencies]
-# Async runtime
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
-tokio-stream = "0.1"
-async-trait = "0.1"
-
 # Serialization / Deserialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+serde = "1"
 
 # Error handling
 color-eyre = "0.6"
-thiserror = "2"
 
 # Configuration
 config = "0.15"
 
 # Logging and metrics
 tracing = "0.1"
-
-# Utilities
-uuid = { version = "1", features = ["v4", "serde"] }
-moka = { version = "0.12", features = ["future"] }
-
-# HTTP Client
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [package]
 name = "cloud-identity-wallet"
@@ -50,24 +36,21 @@ readme.workspace = true
 edition.workspace = true
 
 [dependencies]
-# Workspace dependencies
-tokio.workspace = true
-serde.workspace = true
-color-eyre.workspace = true
-config.workspace = true
-tracing.workspace = true
-reqwest.workspace = true
-
-# Application specific
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+color-eyre.workspace = true
+config.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
 
 [dev-dependencies]
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 [profile.dev]
 # Speed up compilation time
