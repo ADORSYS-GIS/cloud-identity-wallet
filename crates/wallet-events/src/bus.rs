@@ -185,7 +185,13 @@ impl KafkaEventBus {
 #[async_trait]
 impl EventPublisher for KafkaEventBus {
     async fn publish(&self, event: &Event) -> Result<(), EventError> {
-        let topic = format!("{}.{}", self.config.topic_prefix, event.event_type.as_str());
+        let topic_suffix = event
+            .metadata
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| event.event_type.as_str());
+
+        let topic = format!("{}.{}", self.config.topic_prefix, topic_suffix);
         let payload = serde_json::to_vec(event).map_err(|e| {
             EventError::SerializationError(format!("Failed to serialize event: {e}"))
         })?;

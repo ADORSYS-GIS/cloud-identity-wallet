@@ -210,6 +210,10 @@ impl TryFrom<WalletEvent> for Event {
             "wallet_id".to_string(),
             Value::String(wallet_event.metadata.wallet_id),
         );
+        metadata.insert(
+            "category".to_string(),
+            Value::String(wallet_event.payload.topic_category().to_string()),
+        );
 
         Ok(Event {
             id: wallet_event.metadata.event_id,
