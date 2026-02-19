@@ -99,13 +99,14 @@ impl KafkaEventBus {
             .map(|s| s.to_string())
             .collect();
 
+        let prefix = &self.config.topic_prefix;
         let topics = vec![
-            "wallet.credential.offers".to_string(),
-            "wallet.credential.issuance".to_string(),
-            "wallet.credential.storage".to_string(),
-            "wallet.presentation.requests".to_string(),
-            "wallet.presentation.submissions".to_string(),
-            "wallet.key.operations".to_string(),
+            format!("{}.credential.offers", prefix),
+            format!("{}.credential.issuance", prefix),
+            format!("{}.credential.storage", prefix),
+            format!("{}.presentation.requests", prefix),
+            format!("{}.presentation.submissions", prefix),
+            format!("{}.key.operations", prefix),
         ];
 
         // We clone what we need for the blocking task
