@@ -69,8 +69,8 @@ impl RetryStrategy {
     }
 
     /// Check if we should retry after a given attempt
-    pub fn should_retry(&self, attempt: u32) -> bool {
-        attempt < self.max_attempts
+    pub fn should_retry(&self, current_attempt: u32) -> bool {
+        current_attempt + 1 < self.max_attempts
     }
 
     /// Check if an HTTP status code should trigger a retry
@@ -158,7 +158,7 @@ mod tests {
 
         assert!(strategy.should_retry(0));
         assert!(strategy.should_retry(1));
-        assert!(strategy.should_retry(2));
+        assert!(!strategy.should_retry(2)); // 2 + 1 = 3, 3 < 3 is false
         assert!(!strategy.should_retry(3));
         assert!(!strategy.should_retry(4));
     }
