@@ -48,6 +48,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
 color-eyre.workspace = true
 config.workspace = true
 tracing.workspace = true
