@@ -1,7 +1,8 @@
 use crate::events::Event;
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, future::BoxFuture};
 use std::pin::Pin;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -26,20 +27,32 @@ pub type EventStream<T> = Pin<Box<dyn Stream<Item = Result<T, EventError>> + Sen
 #[async_trait]
 pub trait Publisher: Send + Sync {
     async fn publish(&self, event: &Event) -> Result<(), EventError>;
-    async fn publish_batch(&self, events: &[Event]) -> Result<(), EventError>;
+    async fn publish_batch(&self, events: &[Event]) -> Result<(), EventError> {
+        for event in events {
+            self.publish(event).await?;
+        }
+        Ok(())
+    }
 }
+
+/// Configuration for event subscription
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptionConfig {
+    /// List of topics to subscribe to
+    pub topics: Vec<String>,
+}
+
+/// Callback for handling consumed events
+pub type EventHandler =
+    Arc<dyn Fn(Event) -> BoxFuture<'static, Result<(), EventError>> + Send + Sync>;
 
 /// Unified interface for consuming events
 #[async_trait]
 pub trait Consumer: Send + Sync {
-    async fn subscribe(&self, topic: &str) -> Result<EventStream<Event>, EventError>;
-}
-
-/// Interface for handling events
-#[async_trait]
-pub trait Handler: Send + Sync {
-    async fn handle(&self, event: &Event) -> Result<(), EventError>;
-    fn name(&self) -> &'static str {
-        "UnnamedHandler"
-    }
+    /// Subscribe to events based on config and handle them via callback
+    async fn subscribe(
+        &self,
+        config: SubscriptionConfig,
+        handler: EventHandler,
+    ) -> Result<(), EventError>;
 }
