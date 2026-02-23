@@ -8,10 +8,6 @@ use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-// ============================================================================
-// AuditEventType
-// ============================================================================
-
 /// All loggable protocol stages.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -92,10 +88,6 @@ impl std::fmt::Display for AuditEventType {
     }
 }
 
-// ============================================================================
-// AuditStatus
-// ============================================================================
-
 /// Outcome of the audited operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "detail", rename_all = "snake_case")]
@@ -104,10 +96,6 @@ pub enum AuditStatus {
     Pending,
     Failure { reason: String },
 }
-
-// ============================================================================
-// CorrelationIds
-// ============================================================================
 
 /// OID4VCI / OID4VP correlation identifiers that link related protocol steps.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,10 +119,6 @@ impl CorrelationIds {
         self.client_id.is_none()
     }
 }
-
-// ============================================================================
-// AuditLogEntry
-// ============================================================================
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuditLogEntry {
@@ -196,10 +180,6 @@ impl AuditLogEntry {
     }
 }
 
-// ============================================================================
-// AuditQuery
-// ============================================================================
-
 /// Filter criteria for querying stored audit log entries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuditQuery {
@@ -251,9 +231,6 @@ impl AuditQuery {
     }
 }
 
-// ============================================================================
-// AuditStore trait
-// ===========================================================================
 #[async_trait]
 pub trait AuditStore: Send + Sync {
     /// Append a new entry to the audit log.
@@ -266,9 +243,6 @@ pub trait AuditStore: Send + Sync {
     async fn count(&self) -> Result<usize, EventError>;
 }
 
-// ============================================================================
-// InMemoryAuditStore
-// ============================================================================
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryAuditStore {
     entries: Arc<Mutex<Vec<AuditLogEntry>>>,
@@ -329,10 +303,6 @@ impl AuditStore for InMemoryAuditStore {
             .len())
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

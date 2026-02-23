@@ -2,17 +2,13 @@
 use crate::{
     audit_log::{AuditEventType, AuditLogEntry, AuditStatus, AuditStore, CorrelationIds},
     events::Event,
-    traits::{EventError, Handler},
+    traits::EventError,
 };
-use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-// ============================================================================
-// EventLogger
-// ============================================================================
 pub struct EventLogger {
     store: Arc<dyn AuditStore>,
 }
@@ -156,11 +152,9 @@ impl EventLogger {
             _ => AuditStatus::Success,
         }
     }
-}
 
-#[async_trait]
-impl Handler for EventLogger {
-    async fn handle(&self, event: &Event) -> Result<(), EventError> {
+    /// Handle an event by logging it to the audit store.
+    pub async fn handle(&self, event: &Event) -> Result<(), EventError> {
         let entry = Self::map_event(event);
 
         debug!(
@@ -177,21 +171,17 @@ impl Handler for EventLogger {
         })
     }
 
-    fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         "EventLogger"
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         audit_log::{AuditQuery, AuditStatus, InMemoryAuditStore},
-        events::{Event, EventType, WalletEvent, WalletEventPayload},
+        events::{Event, EventType},
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -207,21 +197,16 @@ mod tests {
     }
 
     fn credential_issued_event() -> Event {
-        let payload =
-            WalletEventPayload::CredentialIssued(crate::events::CredentialIssuedPayload {
-                credential: "REDACTED_CREDENTIAL_BYTES".to_string(), // intentionally opaque
-                credential_type: "UniversityDegree".to_string(),
-                notification_id: Some("notif-42".to_string()),
-                transaction_id: Some("txn-99".to_string()),
-            });
-        let wallet_event = WalletEvent::new(
-            "corr-abc".to_string(),
-            "wallet-unit-test".to_string(),
-            payload,
-        );
-        wallet_event
-            .try_into()
-            .expect("Failed to convert WalletEvent → Event")
+        Event::new(
+            EventType::new("credential.issued"),
+            json!({
+                "credential": "REDACTED_CREDENTIAL_BYTES",
+                "credential_type": "UniversityDegree",
+            }),
+        )
+        .with_metadata("wallet_id", "wallet-unit-test")
+        .with_metadata("notification_id", "notif-42")
+        .with_metadata("transaction_id", "txn-99")
     }
 
     fn anonymous_presentation_event() -> Event {
