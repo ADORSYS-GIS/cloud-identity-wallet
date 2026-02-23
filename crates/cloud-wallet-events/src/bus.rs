@@ -1,51 +1,55 @@
 use crate::events::Event;
 use crate::traits::{
-    Consumer as EventConsumer, EventError, EventStream, Handler as EventHandler,
-    Publisher as EventPublisher,
+    Consumer as EventConsumer, EventError, EventHandler, Publisher as EventPublisher,
+    SubscriptionConfig,
 };
+
 use async_trait::async_trait;
 use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
 use kafka::producer::{Producer, Record, RequiredAcks};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tracing::{debug, error};
 
 #[derive(Debug, Clone)]
-pub struct KafkaEventBusConfig {
+pub struct KafkaPublisherConfig {
     pub bootstrap_servers: String,
     pub topic_prefix: String,
-    pub consumer_group_id: String,
     pub producer_acks: String,
-    pub producer_retries: u32,
-    pub enable_dlq: bool,
-    pub dlq_topic: String,
-    pub transactional_id: Option<String>,
 }
 
-impl Default for KafkaEventBusConfig {
+impl Default for KafkaPublisherConfig {
     fn default() -> Self {
         Self {
             bootstrap_servers: "localhost:9092".to_string(),
             topic_prefix: "wallet".to_string(),
-            consumer_group_id: "wallet-event-handlers".to_string(),
             producer_acks: "all".to_string(),
-            producer_retries: 3,
-            enable_dlq: true,
-            dlq_topic: "wallet.dlq".to_string(),
-            transactional_id: None,
         }
     }
 }
 
-pub struct KafkaEventBus {
-    config: KafkaEventBusConfig,
-    producer: Arc<Mutex<Producer>>,
-    handlers: Arc<RwLock<Vec<Arc<dyn EventHandler>>>>,
+#[derive(Debug, Clone)]
+pub struct KafkaConsumerConfig {
+    pub bootstrap_servers: String,
+    pub consumer_group_id: String,
 }
 
-impl KafkaEventBus {
-    pub fn new(config: KafkaEventBusConfig) -> Result<Self, EventError> {
+impl Default for KafkaConsumerConfig {
+    fn default() -> Self {
+        Self {
+            bootstrap_servers: "localhost:9092".to_string(),
+            consumer_group_id: "wallet-event-handlers".to_string(),
+        }
+    }
+}
+
+pub struct KafkaPublisher {
+    config: KafkaPublisherConfig,
+    producer: Arc<Mutex<Producer>>,
+}
+
+impl KafkaPublisher {
+    pub fn new(config: KafkaPublisherConfig) -> Result<Self, EventError> {
         let hosts: Vec<String> = config
             .bootstrap_servers
             .split(',')
@@ -69,17 +73,11 @@ impl KafkaEventBus {
         Ok(Self {
             config,
             producer: Arc::new(Mutex::new(producer)),
-            handlers: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
-    pub async fn register_handler(&self, handler: Arc<dyn EventHandler>) {
-        let mut handlers = self.handlers.write().await;
-        handlers.push(handler);
-    }
-
-    // Helper to publish synchronously
-    fn send_sync(
+    /// Helper for tests or internal use to send raw bytes to a topic
+    pub fn send_sync(
         producer: &mut Producer,
         topic: &str,
         key: &str,
@@ -90,109 +88,28 @@ impl KafkaEventBus {
             .send(&record)
             .map_err(|e| EventError::PublishError(format!("Failed to send message: {e}")))
     }
+}
 
-    pub async fn start_consuming(&self) -> Result<(), EventError> {
-        let hosts: Vec<String> = self
-            .config
-            .bootstrap_servers
-            .split(',')
-            .map(|s| s.to_string())
-            .collect();
+pub struct KafkaConsumer {
+    config: KafkaConsumerConfig,
+}
 
-        let prefix = &self.config.topic_prefix;
-        let topics = vec![
-            format!("{}.credential.offers", prefix),
-            format!("{}.credential.issuance", prefix),
-            format!("{}.credential.storage", prefix),
-            format!("{}.presentation.requests", prefix),
-            format!("{}.presentation.submissions", prefix),
-            format!("{}.key.operations", prefix),
-        ];
-
-        // We clone what we need for the blocking task
-        let group_id = self.config.consumer_group_id.clone();
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
-
-        // Spawn blocking consumer loop
-        std::thread::spawn(move || {
-            let mut builder = Consumer::from_hosts(hosts)
-                .with_group(group_id)
-                .with_fallback_offset(FetchOffset::Earliest)
-                .with_offset_storage(Some(GroupOffsetStorage::Kafka));
-
-            for topic in &topics {
-                builder = builder.with_topic(topic.to_string());
-            }
-
-            let mut consumer = match builder.create() {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to create consumer: {e}");
-                    return;
-                }
-            };
-
-            loop {
-                let message_sets = match consumer.poll() {
-                    Ok(ms) => ms,
-                    Err(e) => {
-                        error!("Failed to poll Kafka: {e}");
-                        continue;
-                    }
-                };
-
-                for ms in message_sets.iter() {
-                    for m in ms.messages() {
-                        // Deserialize and send to channel
-                        match serde_json::from_slice::<Event>(m.value) {
-                            Ok(event) => {
-                                if tx.send(event).is_err() {
-                                    return;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to deserialize: {e}");
-                            }
-                        }
-                    }
-                    let _ = consumer.consume_messageset(ms);
-                }
-
-                if let Err(e) = consumer.commit_consumed() {
-                    error!("Failed to commit consumed: {e}");
-                }
-            }
-        });
-
-        let handlers = self.handlers.clone();
-
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                debug!("Received event: {}", event.event_type.as_str());
-                let handlers_read = handlers.read().await;
-                for handler in handlers_read.iter() {
-                    if let Err(e) = handler.handle(&event).await {
-                        error!("Handler handling failed: {e}");
-                    }
-                }
-            }
-        });
-
-        Ok(())
+impl KafkaConsumer {
+    pub fn new(config: KafkaConsumerConfig) -> Self {
+        Self { config }
     }
 }
 
 #[async_trait]
-impl EventPublisher for KafkaEventBus {
+impl EventPublisher for KafkaPublisher {
     async fn publish(&self, event: &Event) -> Result<(), EventError> {
-        let topic_suffix = event
+        let category = event
             .metadata
             .get("category")
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| event.event_type.as_str());
 
-        let topic = format!("{}.{}", self.config.topic_prefix, topic_suffix);
+        let topic = format!("{}.{}", self.config.topic_prefix, category);
         let payload = serde_json::to_vec(event).map_err(|e| {
             EventError::SerializationError(format!("Failed to serialize event: {e}"))
         })?;
@@ -216,19 +133,16 @@ impl EventPublisher for KafkaEventBus {
         );
         Ok(())
     }
-
-    async fn publish_batch(&self, events: &[Event]) -> Result<(), EventError> {
-        for event in events {
-            self.publish(event).await?;
-        }
-        Ok(())
-    }
 }
 
 // Minimal implementation for Subscriber trait
 #[async_trait]
-impl EventConsumer for KafkaEventBus {
-    async fn subscribe(&self, topic: &str) -> Result<EventStream<Event>, EventError> {
+impl EventConsumer for KafkaConsumer {
+    async fn subscribe(
+        &self,
+        config: SubscriptionConfig,
+        handler: EventHandler,
+    ) -> Result<(), EventError> {
         let hosts: Vec<String> = self
             .config
             .bootstrap_servers
@@ -236,23 +150,25 @@ impl EventConsumer for KafkaEventBus {
             .map(|s| s.to_string())
             .collect();
         let group_id = format!("{}-{}", self.config.consumer_group_id, uuid::Uuid::new_v4());
-        let topic_name = topic.to_string();
+        let topics = config.topics.clone();
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
 
+        // Blocking polling thread
         std::thread::spawn(move || {
-            let mut consumer = match Consumer::from_hosts(hosts)
-                .with_topic(topic_name)
+            let mut builder = Consumer::from_hosts(hosts)
                 .with_group(group_id)
                 .with_fallback_offset(FetchOffset::Earliest)
-                .with_offset_storage(Some(GroupOffsetStorage::Kafka))
-                .create()
-            {
+                .with_offset_storage(Some(GroupOffsetStorage::Kafka));
+
+            for topic in topics {
+                builder = builder.with_topic(topic);
+            }
+
+            let mut consumer = match builder.create() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(Err(EventError::ConfigurationError(format!(
-                        "Failed to create consumer: {e}"
-                    ))));
+                    error!("Failed to create consumer: {e}");
                     return;
                 }
             };
@@ -264,45 +180,46 @@ impl EventConsumer for KafkaEventBus {
                             for m in ms.messages() {
                                 match serde_json::from_slice::<Event>(m.value) {
                                     Ok(event) => {
-                                        if tx.send(Ok(event)).is_err() {
+                                        if tx.send(event).is_err() {
                                             return;
                                         }
                                     }
-                                    Err(e) => {
-                                        let _ = tx.send(Err(EventError::SerializationError(
-                                            format!("{e}"),
-                                        )));
-                                    }
+                                    Err(e) => error!("Failed to deserialize: {e}"),
                                 }
                             }
                             let _ = consumer.consume_messageset(ms);
                         }
                         if let Err(e) = consumer.commit_consumed() {
-                            let _ = tx
-                                .send(Err(EventError::PublishError(format!("Commit failed: {e}"))));
+                            error!("Commit failed: {e}");
                         }
                     }
                     Err(e) => {
-                        // If topic doesn't exist yet, we wait and retry
-                        eprintln!(
-                            "[Subscriber] Kafka poll error: {e}. Topic might not be ready yet. Retrying..."
-                        );
+                        error!("Kafka poll error: {e}");
                         std::thread::sleep(Duration::from_millis(2000));
                     }
                 }
             }
         });
 
-        let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
-        Ok(Box::pin(stream))
+        // Async handler task
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let Err(e) = handler(event).await {
+                    error!("Handler error: {e}");
+                }
+            }
+        });
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{Event, EventType, WalletEvent, WalletEventPayload};
-    use futures::StreamExt;
+    use crate::events::{Event, EventType};
+    use serde_json::json;
+
     use std::time::Duration;
 
     async fn wait_for_kafka() -> bool {
@@ -319,8 +236,10 @@ mod tests {
 
     #[test]
     fn test_kafka_config_default() {
-        let config = KafkaEventBusConfig::default();
-        assert_eq!(config.bootstrap_servers, "localhost:9092");
+        let p_config = KafkaPublisherConfig::default();
+        assert_eq!(p_config.bootstrap_servers, "localhost:9092");
+        let c_config = KafkaConsumerConfig::default();
+        assert_eq!(c_config.bootstrap_servers, "localhost:9092");
     }
 
     #[tokio::test]
@@ -330,29 +249,31 @@ mod tests {
             return;
         }
 
-        let config = KafkaEventBusConfig::default();
-        let bus = KafkaEventBus::new(config).expect("Failed to create event bus");
+        let config = KafkaPublisherConfig::default();
+        let publisher = KafkaPublisher::new(config).expect("Failed to create publisher");
 
-        let payload =
-            WalletEventPayload::CredentialOfferSent(crate::events::CredentialOfferSentPayload {
-                offer_id: "offer-1".to_string(),
-                credential_issuer: "issuer-1".to_string(),
-                credential_configuration_ids: vec!["conf-1".to_string()],
-                grants: None,
-                credential_offer_uri: None,
-            });
+        let payload = json!({
+            "key_id": "key-1",
+            "kid": "kid-1",
+            "key_type": "EC",
+            "key_attestation": null,
+        });
 
-        let wallet_event = WalletEvent::new("corr-1".to_string(), "wallet-1".to_string(), payload);
-        let event: Event = wallet_event.try_into().expect("Failed to convert to Event");
+        let event = Event::new(EventType::new(EventType::KEY_CREATED), payload)
+            .with_metadata("wallet_id", "wallet-1")
+            .with_metadata("correlation_id", "corr-1")
+            .with_metadata("category", "key.operations");
 
         // Test single publish
-        bus.publish(&event)
+        publisher
+            .publish(&event)
             .await
             .expect("Failed to publish single event");
 
         // Test batch publish
         let events = vec![event.clone(), event.clone()];
-        bus.publish_batch(&events)
+        publisher
+            .publish_batch(&events)
             .await
             .expect("Failed to publish batch");
     }
@@ -365,43 +286,62 @@ mod tests {
         }
 
         let topic = format!("test.topic.{}", uuid::Uuid::new_v4());
-        let config = KafkaEventBusConfig {
+        let p_config = KafkaPublisherConfig {
             topic_prefix: "test".to_string(),
             ..Default::default()
         };
-        let bus = KafkaEventBus::new(config).expect("Failed to create event bus");
+        let c_config = KafkaConsumerConfig::default();
+        let publisher = KafkaPublisher::new(p_config).expect("Failed to create publisher");
+        let consumer = KafkaConsumer::new(c_config);
 
-        let mut stream = bus.subscribe(&topic).await.expect("Failed to subscribe");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let config = SubscriptionConfig {
+            topics: vec![topic.clone()],
+        };
+        consumer
+            .subscribe(
+                config,
+                Arc::new(move |event| {
+                    let tx = tx.clone();
+                    Box::pin(async move {
+                        tx.send(event)
+                            .map_err(|e| EventError::HandlerError(e.to_string()))
+                    })
+                }),
+            )
+            .await
+            .expect("Failed to subscribe");
 
         // Small delay to ensure consumer group is joined
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let payload = WalletEventPayload::KeyCreated(crate::events::KeyCreatedPayload {
-            key_id: "key-1".to_string(),
-            kid: "kid-1".to_string(),
-            key_type: "EC".to_string(),
-            key_attestation: None,
+        let payload = json!({
+            "key_id": "key-1",
+            "kid": "kid-1",
+            "key_type": "EC",
+            "key_attestation": null,
         });
 
-        let wallet_event = WalletEvent::new("corr-2".to_string(), "wallet-2".to_string(), payload);
-        let event: Event = wallet_event.try_into().expect("Failed to convert to Event");
+        let event = Event::new(EventType::new(EventType::KEY_CREATED), payload)
+            .with_metadata("wallet_id", "wallet-2")
+            .with_metadata("correlation_id", "corr-2")
+            .with_metadata("category", "key.operations");
 
         // We use send_sync directly to the specific topic to test subscription
         {
             let payload = serde_json::to_vec(&event).expect("Failed to serialize event");
-            let mut p = bus
+            let mut p = publisher
                 .producer
                 .lock()
                 .expect("Failed to acquire producer lock");
-            KafkaEventBus::send_sync(&mut p, &topic, "wallet-2", &payload)
+            KafkaPublisher::send_sync(&mut p, &topic, "wallet-2", &payload)
                 .expect("Failed to send message");
         }
 
-        let received = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        let received = tokio::time::timeout(Duration::from_secs(10), rx.recv())
             .await
             .expect("Timeout waiting for event")
-            .expect("Stream closed")
-            .expect("Error in stream");
+            .expect("Stream closed");
 
         assert_eq!(received.id, event.id);
         assert_eq!(received.event_type.as_str(), event.event_type.as_str());
@@ -415,50 +355,77 @@ mod tests {
         }
 
         let topic = format!("test.multi.{}", uuid::Uuid::new_v4());
-        let bus =
-            KafkaEventBus::new(KafkaEventBusConfig::default()).expect("Failed to create event bus");
+        let publisher = KafkaPublisher::new(KafkaPublisherConfig::default())
+            .expect("Failed to create publisher");
+        let consumer = KafkaConsumer::new(KafkaConsumerConfig::default());
 
-        let mut stream1 = bus
-            .subscribe(&topic)
+        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel();
+        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
+
+        let config = SubscriptionConfig {
+            topics: vec![topic.clone()],
+        };
+
+        consumer
+            .subscribe(
+                config.clone(),
+                Arc::new(move |event| {
+                    let tx = tx1.clone();
+                    Box::pin(async move {
+                        tx.send(event)
+                            .map_err(|e| EventError::HandlerError(e.to_string()))
+                    })
+                }),
+            )
             .await
             .expect("Failed to subscribe stream1");
-        let mut stream2 = bus
-            .subscribe(&topic)
+
+        consumer
+            .subscribe(
+                config,
+                Arc::new(move |event| {
+                    let tx = tx2.clone();
+                    Box::pin(async move {
+                        tx.send(event)
+                            .map_err(|e| EventError::HandlerError(e.to_string()))
+                    })
+                }),
+            )
             .await
             .expect("Failed to subscribe stream2");
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let payload = WalletEventPayload::KeyRevoked(crate::events::KeyRevokedPayload {
-            key_id: "key-2".to_string(),
-            kid: "kid-2".to_string(),
-            revocation_reason: "compromised".to_string(),
+        let payload = json!({
+            "key_id": "key-2",
+            "kid": "kid-2",
+            "revocation_reason": "compromised",
         });
 
-        let wallet_event = WalletEvent::new("corr-3".to_string(), "wallet-3".to_string(), payload);
-        let event: Event = wallet_event.try_into().expect("Failed to convert to Event");
+        let event = Event::new(EventType::new(EventType::KEY_REVOKED), payload)
+            .with_metadata("wallet_id", "wallet-3")
+            .with_metadata("correlation_id", "corr-3")
+            .with_metadata("category", "key.operations");
 
         {
             let payload = serde_json::to_vec(&event).expect("Failed to serialize event");
-            let mut p = bus
+            let mut p = publisher
                 .producer
                 .lock()
                 .expect("Failed to acquire producer lock");
-            KafkaEventBus::send_sync(&mut p, &topic, "wallet-3", &payload)
+            KafkaPublisher::send_sync(&mut p, &topic, "wallet-3", &payload)
                 .expect("Failed to send message");
         }
 
-        let r1 = tokio::time::timeout(Duration::from_secs(10), stream1.next())
+        let r1 = tokio::time::timeout(Duration::from_secs(10), rx1.recv())
             .await
             .expect("S1 timeout")
-            .expect("S1 stream error")
-            .expect("S1 event error");
+            .expect("S1 stream error");
 
-        let r2 = tokio::time::timeout(Duration::from_secs(10), stream2.next())
+        let r2 = tokio::time::timeout(Duration::from_secs(10), rx2.recv())
             .await
             .expect("S2 timeout")
-            .expect("S2 stream error")
-            .expect("S2 event error");
+            .expect("S2 stream error");
 
         assert_eq!(r1.id, event.id);
         assert_eq!(r2.id, event.id);
@@ -471,14 +438,32 @@ mod tests {
             return;
         }
 
-        let config = KafkaEventBusConfig {
+        let p_config = KafkaPublisherConfig {
             topic_prefix: "test".to_string(),
             ..Default::default()
         };
-        let bus = KafkaEventBus::new(config).expect("Failed to create event bus");
+        let c_config = KafkaConsumerConfig::default();
+        let publisher = KafkaPublisher::new(p_config).expect("Failed to create publisher");
+        let consumer = KafkaConsumer::new(c_config);
 
         let topic = "test.custom.category";
-        let mut stream = bus.subscribe(topic).await.expect("Failed to subscribe");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let s_config = SubscriptionConfig {
+            topics: vec![topic.to_string()],
+        };
+        consumer
+            .subscribe(
+                s_config,
+                Arc::new(move |event| {
+                    let tx = tx.clone();
+                    Box::pin(async move {
+                        tx.send(event)
+                            .map_err(|e| EventError::HandlerError(e.to_string()))
+                    })
+                }),
+            )
+            .await
+            .expect("Failed to subscribe");
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -488,15 +473,15 @@ mod tests {
         )
         .with_metadata("cid", "corr-custom");
 
-        bus.publish(&event)
+        publisher
+            .publish(&event)
             .await
             .expect("Should publish custom event");
 
-        let received = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        let received = tokio::time::timeout(Duration::from_secs(10), rx.recv())
             .await
             .expect("S1 timeout")
-            .expect("Stream closed")
-            .expect("Error in stream");
+            .expect("Stream closed");
 
         assert_eq!(
             received.metadata.get("cid").unwrap().as_str().unwrap(),
