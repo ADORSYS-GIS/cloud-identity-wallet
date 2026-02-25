@@ -59,7 +59,7 @@ impl Event {
         self
     }
 
-    pub fn payload(&self) -> &serde_json::Value {
-        &self.payload
+    pub fn payload<T: for<'de> Deserialize<'de>>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_value(self.payload.clone())
     }
 }
