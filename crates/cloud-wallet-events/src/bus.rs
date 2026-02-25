@@ -231,13 +231,12 @@ impl EventConsumer for KafkaConsumer {
                             }
                             let _ = consumer.consume_messageset(ms);
                         }
-                        if let Err(e) = consumer.commit_consumed() {
-                            if tx
+                        if let Err(e) = consumer.commit_consumed()
+                            && tx
                                 .send(Err(EventError::PublishError(format!("Commit failed: {e}"))))
                                 .is_err()
-                            {
-                                return;
-                            }
+                        {
+                            return;
                         }
                     }
                     Err(e) => {
