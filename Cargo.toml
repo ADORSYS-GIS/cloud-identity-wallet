@@ -40,7 +40,7 @@ uuid = "1"
 chrono = "0.4"
 
 # Database
-sqlx = "0.8"
+sqlx = { version = "0.8", default-features = false }
 
 # Async trait support
 async-trait = "0.1"

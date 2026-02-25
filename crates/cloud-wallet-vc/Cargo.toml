@@ -23,7 +23,7 @@ chrono = { workspace = true, features = ["serde"] }
 tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread"] }
 
 # Optional: PostgreSQL persistence
-sqlx = { workspace = true, features = ["postgres", "uuid", "chrono", "runtime-tokio-rustls"], optional = true }
+sqlx = { workspace = true, features = ["postgres", "uuid", "chrono", "runtime-tokio-rustls"], optional = true, default-features = false }
 
 # Optional: MongoDB persistence
 mongodb = { version = "3.1", optional = true }
