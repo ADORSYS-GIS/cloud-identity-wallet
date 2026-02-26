@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = []
+members = ["crates/cloud-wallet-events"]
 
 [workspace.package]
 version = "0.1.0"
