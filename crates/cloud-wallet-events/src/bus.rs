@@ -114,17 +114,11 @@ impl KafkaPublisher {
     /// `"credential"` from `"credential.stored"`).
     fn topic_for(&self, event: &Event) -> String {
         let category = event
-            .metadata
-            .get("category")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| {
-                event
-                    .event_type
-                    .as_str()
-                    .split('.')
-                    .next()
-                    .unwrap_or("default")
-            });
+            .event_type
+            .as_str()
+            .split('.')
+            .next()
+            .unwrap_or("default");
         format!("{}.{}", self.config.topic_prefix, category)
     }
 }
