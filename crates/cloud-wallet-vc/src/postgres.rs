@@ -32,6 +32,12 @@ impl PostgresCredentialRepository {
             .map_err(storage_err)?;
         Ok(Self { pool })
     }
+
+    /// Create a repository from configuration.
+    pub async fn from_config(config: &crate::config::PostgresConfig) -> Result<Self, StoreError> {
+        let pool = PgPool::connect(&config.url).await.map_err(storage_err)?;
+        Self::new(pool).await
+    }
 }
 
 /// Map a `sqlx` Postgres row to a [`Credential`] domain object.
@@ -299,8 +305,10 @@ mod tests {
 
     async fn setup_repo() -> Option<PostgresCredentialRepository> {
         let db_url = env::var("DATABASE_URL").ok()?;
-        let pool = sqlx::PgPool::connect(&db_url).await.ok()?;
-        PostgresCredentialRepository::new(pool).await.ok()
+        let config = crate::config::PostgresConfig { url: db_url };
+        PostgresCredentialRepository::from_config(&config)
+            .await
+            .ok()
     }
 
     #[tokio::test]

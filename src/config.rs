@@ -6,12 +6,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
+    pub database: DatabaseConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
 }
 
 impl Config {
@@ -45,7 +51,11 @@ impl Config {
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)
+            .set_default("server.port", 3000)?
+            .set_default(
+                "database.url",
+                "postgres://postgres:postgres@localhost:5432/postgres",
+            )
     }
 }
 
