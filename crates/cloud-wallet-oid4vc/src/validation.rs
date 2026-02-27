@@ -1,8 +1,8 @@
 use jsonschema::Validator;
 
-use crate::domain::errors::ValidationError;
-use crate::domain::models::Credential;
-use crate::domain::schema::CredentialConfiguration;
+use crate::errors::ValidationError;
+use crate::models::Credential;
+use crate::schema::CredentialConfiguration;
 
 /// Structural self-validation that a type can perform without external context.
 pub trait Validate {
@@ -70,7 +70,7 @@ impl SchemaValidator {
         let claims = credential.format.claims();
         let errors: Vec<String> = validator
             .iter_errors(claims)
-            .map(|e| format!("{} (path: {})", e, e.instance_path()))
+            .map(|e| format!("{e} (path: {})", e.instance_path()))
             .collect();
 
         if errors.is_empty() {
@@ -90,10 +90,10 @@ mod tests {
     use serde_json::json;
     use time::{Duration, OffsetDateTime};
 
-    use crate::domain::models::{
+    use crate::models::{
         Credential, CredentialFormat, CredentialStatus, SdJwtCredential, W3cVcJwtCredential,
     };
-    use crate::domain::schema::{
+    use crate::schema::{
         CredentialConfiguration, CredentialDefinition, CredentialFormatIdentifier,
     };
 
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn validate_trait_catches_blank_issuer() {
         let cred = Credential {
-            id: crate::domain::models::CredentialId::new(),
+            id: crate::models::CredentialId::new(),
             issuer: "  ".to_owned(),
             subject: "user-1234".to_owned(),
             issued_at: OffsetDateTime::now_utc(),
@@ -259,7 +259,7 @@ mod tests {
         let config = CredentialConfiguration {
             format: CredentialFormatIdentifier::JwtVcJson,
             credential_definition: CredentialDefinition::JwtVcJson {
-                credential_definition: crate::domain::schema::JwtVcCredentialDefinition {
+                credential_definition: crate::schema::JwtVcCredentialDefinition {
                     types: vec!["VerifiableCredential".to_owned()],
                 },
                 claims_schema: Some(schema),
