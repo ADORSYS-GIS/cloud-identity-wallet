@@ -280,7 +280,7 @@ name = "cloud-identity-wallet"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cloud-wallet-oid4vc",
+ "cloud-wallet-openid4vc",
  "color-eyre",
  "config",
  "reqwest 0.13.2",
@@ -293,7 +293,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cloud-wallet-oid4vc"
+name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
  "jsonschema",

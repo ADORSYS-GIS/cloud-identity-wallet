@@ -1,5 +1,5 @@
 [package]
-name = "cloud-wallet-oid4vc"
+name = "cloud-wallet-openid4vc"
 version.workspace = true
 license.workspace = true
 readme.workspace = true
