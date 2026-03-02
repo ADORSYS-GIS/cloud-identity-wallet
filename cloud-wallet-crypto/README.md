@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Encrypt data with AES-256-GCM
     let key = Key::generate(Algorithm::AesGcm256)?;
     let mut nonce = [0u8; 12];
-    rand::generate(&mut nonce)?;
+    rand::fill_bytes(&mut nonce)?;
     let mut data = *b"Secret message";
     let tag = key.encrypt(&nonce, b"metadata", &mut data)?;
 
@@ -65,22 +65,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use cloud_wallet_crypto::aead::{Algorithm, Key};
 use cloud_wallet_crypto::rand;
 
-// Generate a key
-let key = Key::generate(Algorithm::AesGcm256)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Generate a key
+    let key = Key::generate(Algorithm::AesGcm256)?;
 
-// Prepare data
-let plaintext = b"Secret message";
-let mut nonce = [0u8; 12];
-rand::generate(&mut nonce)?;
-let aad = b"additional authenticated data";
+    // Prepare data
+    let plaintext = b"Secret message";
+    let mut nonce = [0u8; 12];
+    rand::fill_bytes(&mut nonce)?;
+    let aad = b"additional authenticated data";
 
-// Encrypt in-place
-let mut buffer = plaintext.to_vec();
-let tag = key.encrypt(&nonce, aad, &mut buffer)?;
-// buffer now contains ciphertext, tag contains authentication tag
+    // Encrypt in-place
+    let mut buffer = plaintext.to_vec();
+    key.encrypt_append_tag(&nonce, aad, &mut buffer)?;
+    // buffer now contains ciphertext + authentication tag
 
-// Decrypt
-let plaintext = key.decrypt(&nonce, aad, &mut buffer)?;
+    // Decrypt
+    let plaintext = key.decrypt(&nonce, aad, &mut buffer)?;
+    Ok(())
+}
 ```
 
 **⚠️ Nonce Reuse Warning:** Never reuse a nonce with the same key. Each encryption must use a unique nonce.
@@ -92,33 +95,39 @@ let plaintext = key.decrypt(&nonce, aad, &mut buffer)?;
 ```rust
 use cloud_wallet_crypto::ecdsa::{KeyPair, Curve};
 
-// Generate P-256 key pair
-let keypair = KeyPair::generate(Curve::P256)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Generate P-256 key pair
+    let keypair = KeyPair::generate(Curve::P256)?;
 
-// Sign with SHA-256 (returns 64-byte fixed signature)
-let message = b"Document to sign";
-let signature = keypair.sign_sha256(message)?;
+    // Sign with SHA-256 (returns 64-byte fixed signature)
+    let message = b"Document to sign";
+    let signature = keypair.sign_sha256(message)?;
 
-// Verify
-keypair.public_key().verify_sha256(message, &signature)?;
+    // Verify
+    keypair.public_key().verify_sha256(message, &signature)?;
 
-// Serialize keys
-let pkcs8_der = keypair.to_pkcs8_der();
-let spki_der = keypair.public_key().to_spki_der();
+    // Serialize keys
+    let pkcs8_der = keypair.to_pkcs8_der();
+    let spki_der = keypair.public_key().to_spki_der();
+    Ok(())
+}
 ```
 
 #### Ed25519 (Fastest signatures)
 
 ```rust
-use cloud_wallet_crypto::ed25519::KeyPair;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use cloud_wallet_crypto::ed25519::KeyPair;
 
-let keypair = KeyPair::generate()?;
+    let keypair = KeyPair::generate()?;
 
-// Sign (deterministic, no nonce needed)
-let signature = keypair.sign(b"message");
+    // Sign (deterministic, no nonce needed)
+    let signature = keypair.sign(b"message");
 
-// Verify
-keypair.public_key().verify(b"message", &signature)?;
+    // Verify
+    keypair.public_key().verify(b"message", &signature)?;
+    Ok(())
+}
 ```
 
 #### RSA (Widest compatibility)
@@ -126,30 +135,33 @@ keypair.public_key().verify(b"message", &signature)?;
 ```rust
 use cloud_wallet_crypto::rsa::{KeyPair, RsaKeySize};
 
-// Generate 4096-bit key
-let keypair = KeyPair::generate(RsaKeySize::Rsa4096)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Generate 4096-bit key
+    let keypair = KeyPair::generate(RsaKeySize::Rsa4096)?;
 
-// Sign with PKCS#1 v1.5 padding
-let mut signature = vec![0u8; 512]; // RSA-4096 = 512 bytes
-let sig = keypair.sign_pkcs1_sha256(b"message", &mut signature)?;
+    // Sign with PKCS#1 v1.5 padding
+    let mut signature = vec![0u8; 512]; // RSA-4096 = 512 bytes
+    let sig = keypair.sign_pkcs1_sha256(b"message", &mut signature)?;
 
-// Verify
-keypair.public_key().verify_pkcs1_sha256(b"message", sig)?;
+    // Verify
+    keypair.public_key().verify_pkcs1_sha256(b"message", sig)?;
+    Ok(())
+}
 ```
 
 ### Cryptographic Hashing
 
 ```rust
-use cloud_wallet_crypto::digest::HashAlg;
+use cloud_wallet_crypto::digest::{HashAlg, Hasher};
 
 // One-shot hashing
 let digest = HashAlg::Sha256.hash(b"data to hash");
 
 // Streaming API for large data
-let mut hasher = HashAlg::Sha256.start();
+let mut hasher = Hasher::new(HashAlg::Sha256);
 hasher.update(b"part 1");
 hasher.update(b"part 2");
-let digest = hasher.finish();
+let digest = hasher.finalize();
 
 // Verify digest
 assert_eq!(digest.as_ref().len(), 32); // SHA-256 = 32 bytes
@@ -165,25 +177,28 @@ use cloud_wallet_crypto::{
     jwk::{Jwk, Parameters, Algorithm, Signing},
 };
 
-// Generate key and convert to JWK
-let keypair = KeyPair::generate(Curve::P256)?;
-let mut jwk = Jwk::try_from(&keypair)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Generate key and convert to JWK
+    let keypair = KeyPair::generate(Curve::P256)?;
+    let mut jwk = Jwk::try_from(&keypair)?;
 
-// Add metadata
-jwk.prm = Parameters {
-    kid: Some("signing-key".to_string()),
-    alg: Some(Algorithm::Signing(Signing::Es256)),
-    ..Default::default()
-};
+    // Add metadata
+    jwk.prm = Parameters {
+        kid: Some("signing-key".to_string()),
+        alg: Some(Algorithm::Signing(Signing::Es256)),
+        ..Default::default()
+    };
 
-// Serialize to JSON
-let json = serde_json::to_string_pretty(&jwk)?;
+    // Serialize to JSON
+    let json = serde_json::to_string_pretty(&jwk)?;
 
-// Parse from JSON
-let parsed: Jwk = serde_json::from_str(&json)?;
+    // Parse from JSON
+    let parsed: Jwk = serde_json::from_str(&json)?;
 
-// Convert back to verifying key
-let verifying_key = cloud_wallet_crypto::ecdsa::VerifyingKey::try_from(&parsed)?;
+    // Convert back to verifying key
+    let verifying_key = cloud_wallet_crypto::ecdsa::VerifyingKey::try_from(&parsed)?;
+    Ok(())
+}
 ```
 
 ## Contributing
