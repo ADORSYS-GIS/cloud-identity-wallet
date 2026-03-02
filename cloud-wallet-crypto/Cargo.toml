@@ -1,0 +1,30 @@
+[package]
+name = "cloud-wallet-crypto"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aws-lc-rs = "1.15"
+base64ct = { version = "1.8", features = ["alloc"], optional = true }
+color-eyre.workspace = true
+num-bigint = { version = "0.4", optional = true }
+pkcs8 = { version = "0.10", features = ["std"] }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_with = { version = "3", optional = true }
+simple_asn1 = { version = "0.6", optional = true }
+subtle = "2.6"
+thiserror.workspace = true
+url = { version = "2", features = ["serde"], optional = true }
+zeroize = "1.8"
+
+[dev-dependencies]
+hex = "0.4"
+hex-literal = "1"
+serde_json = "1.0"
+
+[features]
+jwk = ["base64ct", "num-bigint", "serde", "serde_with", "simple_asn1", "url"]
+
+[lints]
+workspace = true
