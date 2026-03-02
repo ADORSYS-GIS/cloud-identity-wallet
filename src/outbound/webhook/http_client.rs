@@ -43,7 +43,6 @@ impl From<reqwest::Error> for HttpClientError {
 /// HTTP client wrapper for webhook delivery
 pub struct WebhookHttpClient {
     client: Client,
-    timeout: Duration,
 }
 
 impl WebhookHttpClient {
@@ -60,7 +59,7 @@ impl WebhookHttpClient {
             .build()
             .map_err(|e| HttpClientError::RequestFailed(e.to_string()))?;
 
-        Ok(Self { client, timeout })
+        Ok(Self { client })
     }
 
     /// Send a webhook POST request
@@ -143,38 +142,17 @@ impl WebhookHttpClient {
             WebhookAuth::BearerToken { token } => {
                 request = request.header("Authorization", format!("Bearer {}", token));
             }
-            WebhookAuth::Basic { username, password } => {
-                request = request.basic_auth(username, Some(password));
-            }
         }
 
         Ok(request)
     }
 
-    /// Read response body with size limit
+    /// Read response body
     async fn read_response_body(&self, response: Response) -> Result<String, HttpClientError> {
-        // Limit response body size to 1MB
-        const MAX_BODY_SIZE: usize = 1024 * 1024;
-
-        let bytes = response.bytes().await.map_err(|e| {
+        let body = response.text().await.map_err(|e| {
             HttpClientError::RequestFailed(format!("Failed to read response body: {e}"))
         })?;
-
-        if bytes.len() > MAX_BODY_SIZE {
-            warn!(
-                size = bytes.len(),
-                max_size = MAX_BODY_SIZE,
-                "Response body too large, truncating"
-            );
-        }
-
-        let body = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BODY_SIZE)]).to_string();
         Ok(body)
-    }
-
-    /// Get configured timeout
-    pub fn timeout(&self) -> Duration {
-        self.timeout
     }
 }
 
@@ -184,16 +162,7 @@ mod tests {
 
     #[test]
     fn test_http_client_creation() -> Result<(), HttpClientError> {
-        let client = WebhookHttpClient::new()?;
-        assert_eq!(client.timeout(), Duration::from_secs(30));
-        Ok(())
-    }
-
-    #[test]
-    fn test_http_client_with_custom_timeout() -> Result<(), HttpClientError> {
-        let timeout = Duration::from_secs(10);
-        let client = WebhookHttpClient::with_timeout(timeout)?;
-        assert_eq!(client.timeout(), timeout);
+        let _client = WebhookHttpClient::new()?;
         Ok(())
     }
 

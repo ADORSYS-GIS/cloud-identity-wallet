@@ -4,7 +4,6 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use super::schemas::{DeliveryState, DeliveryStatus};
-use time::{Duration, OffsetDateTime};
 
 /// In-memory queue for webhook deliveries
 #[derive(Debug, Clone)]
@@ -14,9 +13,6 @@ pub struct DeliveryQueue {
 
     /// Delivery status history (kept for a limited time)
     history: Arc<RwLock<HashMap<String, Vec<DeliveryStatus>>>>,
-
-    /// Maximum history entries to keep per event
-    max_history_per_event: usize,
 }
 
 /// A queued webhook delivery
@@ -67,16 +63,6 @@ impl DeliveryQueue {
         Self {
             pending: Arc::new(RwLock::new(VecDeque::new())),
             history: Arc::new(RwLock::new(HashMap::new())),
-            max_history_per_event: 100,
-        }
-    }
-
-    /// Create a queue with custom history limit
-    pub fn with_history_limit(max_history_per_event: usize) -> Self {
-        Self {
-            pending: Arc::new(RwLock::new(VecDeque::new())),
-            history: Arc::new(RwLock::new(HashMap::new())),
-            max_history_per_event,
         }
     }
 
@@ -89,13 +75,6 @@ impl DeliveryQueue {
             "Enqueuing delivery"
         );
         pending.push_back(delivery);
-    }
-
-    /// Enqueue multiple deliveries
-    pub async fn enqueue_batch(&self, deliveries: Vec<QueuedDelivery>) {
-        let mut pending = self.pending.write().await;
-        info!(count = deliveries.len(), "Enqueuing batch of deliveries");
-        pending.extend(deliveries);
     }
 
     /// Dequeue the next delivery
@@ -153,11 +132,6 @@ impl DeliveryQueue {
         let entries = history.entry(key).or_insert_with(Vec::new);
 
         entries.push(status);
-
-        // Limit history size
-        if entries.len() > self.max_history_per_event {
-            entries.drain(0..(entries.len() - self.max_history_per_event));
-        }
     }
 
     /// Get delivery history for an event
@@ -192,59 +166,6 @@ impl DeliveryQueue {
         }
 
         counts
-    }
-
-    /// Get all pending deliveries for a subscription
-    pub async fn get_pending_for_subscription(&self, subscription_id: &str) -> Vec<QueuedDelivery> {
-        let pending = self.pending.read().await;
-        pending
-            .iter()
-            .filter(|d| d.subscription_id == subscription_id)
-            .cloned()
-            .collect()
-    }
-
-    /// Remove deliveries for a specific subscription
-    pub async fn remove_subscription_deliveries(&self, subscription_id: &str) {
-        let mut pending = self.pending.write().await;
-        let original_len = pending.len();
-
-        pending.retain(|d| d.subscription_id != subscription_id);
-
-        let removed = original_len - pending.len();
-        if removed > 0 {
-            info!(
-                subscription_id = %subscription_id,
-                removed_count = removed,
-                "Removed deliveries for subscription"
-            );
-        }
-    }
-
-    /// Clean up old history entries
-    pub async fn cleanup_history(&self, max_age_hours: u64) {
-        let mut history = self.history.write().await;
-        let cutoff = OffsetDateTime::now_utc() - Duration::hours(max_age_hours as i64);
-
-        let mut removed_count = 0;
-
-        history.retain(|_, statuses| {
-            statuses.retain(|status| status.timestamp > cutoff);
-            if statuses.is_empty() {
-                removed_count += 1;
-                false
-            } else {
-                true
-            }
-        });
-
-        if removed_count > 0 {
-            info!(
-                removed_count = removed_count,
-                max_age_hours = max_age_hours,
-                "Cleaned up old delivery history"
-            );
-        }
     }
 }
 
@@ -328,20 +249,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_enqueue_batch() {
-        let queue = DeliveryQueue::new();
-
-        let deliveries = vec![
-            create_test_delivery(),
-            create_test_delivery(),
-            create_test_delivery(),
-        ];
-
-        queue.enqueue_batch(deliveries).await;
-        assert_eq!(queue.size().await, 3);
-    }
-
-    #[tokio::test]
     async fn test_clear_queue() {
         let queue = DeliveryQueue::new();
 
@@ -382,21 +289,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_history_limit() {
-        let queue = DeliveryQueue::with_history_limit(5);
-
-        // Record 10 statuses
-        for i in 0..10 {
-            let status = DeliveryStatus::pending("sub-123".to_string(), "evt-456".to_string())
-                .in_progress(i);
-            queue.record_status(status).await;
-        }
-
-        let history = queue.get_history("sub-123", "evt-456").await;
-        assert_eq!(history.len(), 5); // Should be capped at 5
-    }
-
-    #[tokio::test]
     async fn test_count_by_state() {
         let queue = DeliveryQueue::new();
 
@@ -429,89 +321,5 @@ mod tests {
 
         assert_eq!(counts.get(&DeliveryState::Succeeded), Some(&2));
         assert_eq!(counts.get(&DeliveryState::Failed), Some(&1));
-    }
-
-    #[tokio::test]
-    async fn test_get_pending_for_subscription() {
-        let queue = DeliveryQueue::new();
-
-        let d1 = QueuedDelivery::new(
-            "sub-1".to_string(),
-            "evt-1".to_string(),
-            "test".to_string(),
-            "{}".to_string(),
-            "url".to_string(),
-        );
-
-        let d2 = QueuedDelivery::new(
-            "sub-2".to_string(),
-            "evt-2".to_string(),
-            "test".to_string(),
-            "{}".to_string(),
-            "url".to_string(),
-        );
-
-        let d3 = QueuedDelivery::new(
-            "sub-1".to_string(),
-            "evt-3".to_string(),
-            "test".to_string(),
-            "{}".to_string(),
-            "url".to_string(),
-        );
-
-        queue.enqueue(d1).await;
-        queue.enqueue(d2).await;
-        queue.enqueue(d3).await;
-
-        let sub1_pending = queue.get_pending_for_subscription("sub-1").await;
-        assert_eq!(sub1_pending.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_remove_subscription_deliveries() {
-        let queue = DeliveryQueue::new();
-
-        let d1 = QueuedDelivery::new(
-            "sub-1".to_string(),
-            "evt-1".to_string(),
-            "test".to_string(),
-            "{}".to_string(),
-            "url".to_string(),
-        );
-
-        let d2 = QueuedDelivery::new(
-            "sub-2".to_string(),
-            "evt-2".to_string(),
-            "test".to_string(),
-            "{}".to_string(),
-            "url".to_string(),
-        );
-
-        queue.enqueue(d1).await;
-        queue.enqueue(d2.clone()).await;
-
-        assert_eq!(queue.size().await, 2);
-
-        queue.remove_subscription_deliveries("sub-1").await;
-
-        assert_eq!(queue.size().await, 1);
-
-        let remaining = queue.dequeue().await;
-        assert!(matches!(remaining, Some(d) if d == d2));
-    }
-
-    #[tokio::test]
-    async fn test_cleanup_history() {
-        let queue = DeliveryQueue::new();
-
-        // Record a status
-        let status = DeliveryStatus::pending("sub-123".to_string(), "evt-456".to_string());
-        queue.record_status(status).await;
-
-        // Clean up entries older than 0 hours (should remove all)
-        queue.cleanup_history(0).await;
-
-        let history = queue.get_history("sub-123", "evt-456").await;
-        assert_eq!(history.len(), 0);
     }
 }

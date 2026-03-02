@@ -26,22 +26,6 @@ impl RetryStrategy {
         Self::new(5, 100)
     }
 
-    /// Create aggressive retry strategy (more attempts, shorter delays)
-    pub fn aggressive() -> Self {
-        Self::new(10, 50)
-    }
-
-    /// Create conservative retry strategy (fewer attempts, longer delays)
-    pub fn conservative() -> Self {
-        Self::new(3, 500)
-    }
-
-    /// Set maximum delay cap
-    pub fn with_max_delay(mut self, max_delay_ms: u64) -> Self {
-        self.max_delay_ms = max_delay_ms;
-        self
-    }
-
     /// Get maximum number of attempts
     pub fn max_attempts(&self) -> u32 {
         self.max_attempts
@@ -90,13 +74,6 @@ impl RetryStrategy {
             _ => false,
         }
     }
-
-    /// Get all retry delays for visualization/testing
-    pub fn get_all_delays(&self) -> Vec<Duration> {
-        (0..self.max_attempts)
-            .filter_map(|attempt| self.next_delay(attempt))
-            .collect()
-    }
 }
 
 impl Default for RetryStrategy {
@@ -122,34 +99,6 @@ mod tests {
         assert_eq!(strategy.next_delay(3), Some(Duration::from_millis(400)));
         assert_eq!(strategy.next_delay(4), Some(Duration::from_millis(800)));
         assert_eq!(strategy.next_delay(5), None); // Exceeded max attempts
-    }
-
-    #[test]
-    fn test_exponential_backoff() {
-        let strategy = RetryStrategy::new(10, 100);
-
-        let delays = strategy.get_all_delays();
-
-        // Verify exponential growth
-        assert_eq!(delays[0], Duration::from_millis(0));
-        assert_eq!(delays[1], Duration::from_millis(100));
-        assert_eq!(delays[2], Duration::from_millis(200));
-        assert_eq!(delays[3], Duration::from_millis(400));
-        assert_eq!(delays[4], Duration::from_millis(800));
-        assert_eq!(delays[5], Duration::from_millis(1600));
-    }
-
-    #[test]
-    fn test_max_delay_cap() {
-        let strategy = RetryStrategy::new(10, 1000).with_max_delay(5000);
-
-        // Without cap: 1000, 2000, 4000, 8000, 16000...
-        // With 5000 cap: 1000, 2000, 4000, 5000, 5000...
-        assert_eq!(strategy.next_delay(1), Some(Duration::from_millis(1000)));
-        assert_eq!(strategy.next_delay(2), Some(Duration::from_millis(2000)));
-        assert_eq!(strategy.next_delay(3), Some(Duration::from_millis(4000)));
-        assert_eq!(strategy.next_delay(4), Some(Duration::from_millis(5000))); // Capped
-        assert_eq!(strategy.next_delay(5), Some(Duration::from_millis(5000))); // Capped
     }
 
     #[test]
@@ -190,24 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn test_aggressive_strategy() {
-        let strategy = RetryStrategy::aggressive();
-
-        assert_eq!(strategy.max_attempts(), 10);
-        assert_eq!(strategy.next_delay(1), Some(Duration::from_millis(50)));
-        assert_eq!(strategy.next_delay(2), Some(Duration::from_millis(100)));
-    }
-
-    #[test]
-    fn test_conservative_strategy() {
-        let strategy = RetryStrategy::conservative();
-
-        assert_eq!(strategy.max_attempts(), 3);
-        assert_eq!(strategy.next_delay(1), Some(Duration::from_millis(500)));
-        assert_eq!(strategy.next_delay(2), Some(Duration::from_millis(1000)));
-    }
-
-    #[test]
     fn test_overflow_protection() {
         // Test that very large attempt numbers don't panic
         let strategy = RetryStrategy::new(100, 1000);
@@ -220,17 +151,5 @@ mod tests {
         if let Some(d) = delay {
             assert_eq!(d, Duration::from_millis(30_000));
         }
-    }
-
-    #[test]
-    fn test_get_all_delays() {
-        let strategy = RetryStrategy::new(4, 100);
-        let delays = strategy.get_all_delays();
-
-        assert_eq!(delays.len(), 4);
-        assert_eq!(delays[0], Duration::from_millis(0));
-        assert_eq!(delays[1], Duration::from_millis(100));
-        assert_eq!(delays[2], Duration::from_millis(200));
-        assert_eq!(delays[3], Duration::from_millis(400));
     }
 }

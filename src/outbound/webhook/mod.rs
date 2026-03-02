@@ -23,5 +23,5 @@ pub use event_listener::{EventListener, ListenerError};
 pub use hmac_signer::{HmacSigner, format_signature_header, parse_signature_header};
 pub use http_client::{HttpClientError, WebhookHttpClient};
 pub use retry_strategy::RetryStrategy;
-pub use schemas::{DeliveryState, DeliveryStatus, WebhookPayload, WebhookResponse};
+pub use schemas::{DeliveryState, DeliveryStatus, WebhookPayload};
 pub use subscription::{WebhookAuth, WebhookSubscription};

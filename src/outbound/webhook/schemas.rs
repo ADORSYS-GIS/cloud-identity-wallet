@@ -17,13 +17,6 @@ pub struct WebhookPayload {
     pub correlation_id: String,
 
     pub data: Value,
-
-    #[serde(default = "default_schema_version")]
-    pub schema_version: String,
-}
-
-fn default_schema_version() -> String {
-    "1.0.0".to_string()
 }
 
 impl WebhookPayload {
@@ -43,72 +36,12 @@ impl WebhookPayload {
             wallet_id,
             correlation_id,
             data,
-            schema_version: default_schema_version(),
         }
     }
 
     /// Serialize to JSON string
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
-    }
-
-    /// Serialize to pretty JSON string
-    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
-    }
-
-    /// Get event type without namespace (e.g., "credential.stored" -> "stored")
-    pub fn event_name(&self) -> &str {
-        self.event_type
-            .split('.')
-            .next_back()
-            .unwrap_or(&self.event_type)
-    }
-
-    /// Get event namespace (e.g., "credential.stored" -> "credential")
-    pub fn event_namespace(&self) -> Option<&str> {
-        self.event_type.split('.').next()
-    }
-}
-
-/// Response expected from webhook endpoint
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WebhookResponse {
-    pub acknowledged: bool,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub processing_id: Option<String>,
-}
-
-impl WebhookResponse {
-    /// Create a simple acknowledgment response
-    pub fn acknowledged() -> Self {
-        Self {
-            acknowledged: true,
-            message: None,
-            processing_id: None,
-        }
-    }
-
-    /// Create acknowledgment with message
-    pub fn with_message(message: String) -> Self {
-        Self {
-            acknowledged: true,
-            message: Some(message),
-            processing_id: None,
-        }
-    }
-
-    /// Create acknowledgment with processing ID
-    pub fn with_processing_id(processing_id: String) -> Self {
-        Self {
-            acknowledged: true,
-            message: None,
-            processing_id: Some(processing_id),
-        }
     }
 }
 
@@ -232,7 +165,6 @@ mod tests {
         assert_eq!(payload.event_id, "evt-123");
         assert_eq!(payload.event_type, "credential.stored");
         assert_eq!(payload.wallet_id, "wallet-456");
-        assert_eq!(payload.schema_version, "1.0.0");
     }
 
     #[test]
@@ -252,58 +184,6 @@ mod tests {
         assert_eq!(payload.event_id, deserialized.event_id);
         assert_eq!(payload.event_type, deserialized.event_type);
         Ok(())
-    }
-
-    #[test]
-    fn test_event_name_extraction() {
-        let payload = WebhookPayload::new(
-            "evt-123".to_string(),
-            "credential.stored".to_string(),
-            OffsetDateTime::now_utc(),
-            "wallet-456".to_string(),
-            "corr-789".to_string(),
-            json!({}),
-        );
-
-        assert_eq!(payload.event_name(), "stored");
-        assert_eq!(payload.event_namespace(), Some("credential"));
-    }
-
-    #[test]
-    fn test_event_name_without_namespace() {
-        let payload = WebhookPayload::new(
-            "evt-123".to_string(),
-            "simple_event".to_string(),
-            OffsetDateTime::now_utc(),
-            "wallet-456".to_string(),
-            "corr-789".to_string(),
-            json!({}),
-        );
-
-        assert_eq!(payload.event_name(), "simple_event");
-        assert_eq!(payload.event_namespace(), Some("simple_event"));
-    }
-
-    #[test]
-    fn test_webhook_response_acknowledged() {
-        let response = WebhookResponse::acknowledged();
-        assert!(response.acknowledged);
-        assert!(response.message.is_none());
-        assert!(response.processing_id.is_none());
-    }
-
-    #[test]
-    fn test_webhook_response_with_message() {
-        let response = WebhookResponse::with_message("Received successfully".to_string());
-        assert!(response.acknowledged);
-        assert_eq!(response.message, Some("Received successfully".to_string()));
-    }
-
-    #[test]
-    fn test_webhook_response_with_processing_id() {
-        let response = WebhookResponse::with_processing_id("proc-123".to_string());
-        assert!(response.acknowledged);
-        assert_eq!(response.processing_id, Some("proc-123".to_string()));
     }
 
     #[test]

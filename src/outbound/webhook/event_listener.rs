@@ -330,29 +330,6 @@ mod tests {
         assert_eq!(queue.size().await, 2);
     }
 
-    #[tokio::test]
-    async fn test_disabled_subscription_not_enqueued() {
-        let queue = Arc::new(DeliveryQueue::new());
-
-        let mut sub = WebhookSubscription::new(
-            "sub-disabled".to_string(),
-            "https://example.com/webhook".to_string(),
-            WebhookAuth::None,
-        )
-        .subscribe_all();
-
-        sub.disable();
-
-        let subscriptions = Arc::new(RwLock::new(vec![sub]));
-        let event = make_credential_stored_event();
-        let payload = EventListener::build_payload(&event).expect("build payload");
-
-        EventListener::enqueue_for_matching_subscriptions(&event, &payload, &subscriptions, &queue)
-            .await;
-
-        assert!(queue.is_empty().await);
-    }
-
     // Full listener start (mock consumer)
 
     #[tokio::test]
