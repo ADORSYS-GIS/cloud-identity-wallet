@@ -12,8 +12,8 @@
 //! - SHA-256, SHA-384, SHA-512 (SHA-2 family)
 //! - SHA3-256, SHA3-384, SHA3-512 (SHA-3 family)
 //!
-//! ⚠️ Not all curve/hash combinations are valid. Unsupported combinations
-//! will return [`ErrorKind::UnsupportedAlgorithm`].
+//! > **⚠️ Warning**: Not all curve/hash combinations are valid. Unsupported combinations
+//! > will return [`ErrorKind::UnsupportedAlgorithm`].
 //!
 //! # Signature Encodings
 //!
@@ -284,7 +284,7 @@ impl KeyPair {
             .map_err(|_| key_gen_error(&curve.to_string()))?;
 
         // Extract public key as SPKI
-        let spki_der: PublicKeyX509Der = keypair
+        let spki_der: PublicKeyX509Der<'_> = keypair
             .public_key()
             .as_der()
             .map_err(|_| serialize_error("Failed to extract public key DER"))?;
