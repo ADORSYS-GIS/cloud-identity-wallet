@@ -24,6 +24,7 @@ hex-literal = "1"
 serde_json = "1.0"
 
 [features]
+fips = ["aws-lc-rs/fips"]
 jwk = ["base64ct", "num-bigint", "serde", "serde_with", "simple_asn1", "url"]
 
 [lints]
