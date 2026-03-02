@@ -8,34 +8,17 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 /// Drains the delivery queue and sends webhooks with retry logic.
-///
-/// `DeliveryService` is designed to run as a long-lived background task.
-/// Call [`DeliveryService::start`] to launch the processing loop inside a
-/// `tokio::spawn`.
-///
-/// Responsibilities:
-/// 1. Dequeue deliveries produced by the [`EventListener`].
-/// 2. Look up the matching `WebhookSubscription` for its URL and auth config.
-/// 3. Call the endpoint with [`WebhookHttpClient`].
-/// 4. On failure, consult the [`RetryStrategy`] and either re-enqueue or
-///    record a permanent failure.
-/// 5. Record all attempt outcomes in `DeliveryQueue::record_status`.
 pub struct DeliveryService {
-    /// Shared delivery queue – same instance as the `EventListener` writes to.
     delivery_queue: Arc<DeliveryQueue>,
 
-    /// Shared, mutable subscription list.
     subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
 
-    /// HTTP client reused across all requests.
     http_client: Arc<WebhookHttpClient>,
 
-    /// Retry configuration applied to every delivery.
     retry_strategy: RetryStrategy,
 }
 
 impl DeliveryService {
-    /// Create a `DeliveryService` with the default retry strategy.
     pub fn new(
         delivery_queue: Arc<DeliveryQueue>,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -58,9 +41,6 @@ impl DeliveryService {
     }
 
     /// Start the processing loop.
-    ///
-    /// Returns immediately; the actual work happens inside a `tokio::spawn`.
-    /// The spawned task runs until the process exits.
     pub fn start(self: Arc<Self>) {
         info!("Webhook delivery service starting");
 
@@ -100,9 +80,6 @@ impl DeliveryService {
     }
 
     /// Process a single delivery attempt.
-    ///
-    /// Looks up the subscription, sends the HTTP request, records the status,
-    /// and re-enqueues on retryable failure.
     async fn process_delivery(
         delivery: QueuedDelivery,
         queue: Arc<DeliveryQueue>,
@@ -173,12 +150,7 @@ impl DeliveryService {
                 let status_code = extract_status_code(&e);
 
                 // Decide whether to retry.
-                let should_retry = match status_code {
-                    Some(code) => retry_strategy.should_retry_status(code),
-                    None => retry_strategy.should_retry(attempt), // Network errors always retry
-                };
-
-                if should_retry && retry_strategy.should_retry(attempt) {
+                if retry_strategy.should_retry(attempt) {
                     // Calculate next retry delay.
                     let delay = retry_strategy.next_delay(attempt + 1);
                     let next_retry_at = delay.map(|d| time::OffsetDateTime::now_utc() + d);
@@ -324,11 +296,11 @@ mod tests {
     #[tokio::test]
     async fn test_failed_delivery_is_requeued() {
         let queue = Arc::new(DeliveryQueue::new());
-        let sub = make_sub("sub-retry", "http://127.0.0.1:19999"); // Nothing listening here
+        let sub = make_sub("sub-retry", "http://127.0.0.1:19999");
         let subs = Arc::new(RwLock::new(vec![sub]));
 
         // Use a strategy with 3 max attempts so the first failure re-queues
-        let strategy = RetryStrategy::new(3, 1); // 1 ms base delay
+        let strategy = RetryStrategy::new(3, 1);
 
         let delivery = make_delivery("sub-retry", "evt-retry", "http://127.0.0.1:19999");
 
