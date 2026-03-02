@@ -59,6 +59,9 @@ pub enum CredentialDefinition {
         doctype: String,
 
         #[serde(skip_serializing_if = "Option::is_none")]
+        claims_namespace: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
         claims_schema: Option<serde_json::Value>,
     },
 
@@ -107,6 +110,17 @@ impl CredentialConfiguration {
         }
     }
 
+    /// For `mso_mdoc` configurations, returns the namespace that
+    /// `claims_schema` applies to, if one is specified.
+    pub fn mdoc_claims_namespace(&self) -> Option<&str> {
+        match &self.credential_definition {
+            CredentialDefinition::MsoMdoc {
+                claims_namespace, ..
+            } => claims_namespace.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Returns the format identifier string for this configuration.
     pub fn format_identifier(&self) -> &CredentialFormatIdentifier {
         &self.format
@@ -152,6 +166,7 @@ mod tests {
             format: CredentialFormatIdentifier::MsoMdoc,
             credential_definition: CredentialDefinition::MsoMdoc {
                 doctype: "org.iso.18013.5.1.mDL".to_owned(),
+                claims_namespace: None,
                 claims_schema: None,
             },
             cryptographic_binding_methods_supported: vec!["jwk".to_owned()],
