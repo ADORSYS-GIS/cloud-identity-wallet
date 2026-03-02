@@ -473,7 +473,7 @@ impl KeyPair {
     pub fn to_pkcs8_der<'a>(&self, output: &'a mut [u8]) -> Result<&'a [u8]> {
         use aws_lc_rs::encoding::Pkcs8V1Der;
 
-        let pkcs8: Pkcs8V1Der = self
+        let pkcs8: Pkcs8V1Der<'_> = self
             .material
             .keypair
             .as_der()
@@ -656,7 +656,7 @@ impl VerifyingKey {
     pub fn to_spki_der<'a>(&self, output: &'a mut [u8]) -> Result<&'a [u8]> {
         use aws_lc_rs::encoding::PublicKeyX509Der;
 
-        let spki_der: PublicKeyX509Der = self.key.as_der().map_err(|_| {
+        let spki_der: PublicKeyX509Der<'_> = self.key.as_der().map_err(|_| {
             serialize_error("Failed to serialize to SubjectPublicKeyInfo structure")
         })?;
 

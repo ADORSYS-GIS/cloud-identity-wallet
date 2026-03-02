@@ -121,7 +121,7 @@ impl KeyPair {
             signature::Ed25519KeyPair::generate().map_err(|_| key_gen_error("Ed25519"))?;
 
         // Extract public key as SPKI
-        let spki_der: PublicKeyX509Der = keypair
+        let spki_der: PublicKeyX509Der<'_> = keypair
             .public_key()
             .as_der()
             .map_err(|_| parse_error("Failed to extract public key DER"))?;

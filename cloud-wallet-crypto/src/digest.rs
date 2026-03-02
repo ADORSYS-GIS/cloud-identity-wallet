@@ -80,6 +80,7 @@ pub enum HashAlg {
 /// hasher.update(b"hello, world");
 /// let hash = hasher.finalize();
 /// ```
+#[derive(Clone)]
 pub struct Hasher {
     algorithm: HashAlg,
     context: HashContext,
@@ -111,6 +112,14 @@ impl Hasher {
     /// Returns the hash algorithm used by this hasher.
     pub fn algorithm(&self) -> HashAlg {
         self.algorithm
+    }
+}
+
+impl std::fmt::Debug for Hasher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hasher")
+            .field("algorithm", &self.algorithm)
+            .finish()
     }
 }
 
