@@ -6,4 +6,7 @@ extend-ignore-identifiers-re = []
 [default.extend-words]
 
 [files]
-extend-exclude = []
+extend-exclude = [
+  "./cloud-wallet-crypto/src/jwk.rs",
+  "./cloud-wallet-crypto/src/jwk/tests.rs"
+]
