@@ -1,7 +1,8 @@
 # Cloud Wallet Cryptographic Library
 
 [![CI](https://github.com/ADORSYS-GIS/cloud-identity-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/ADORSYS-GIS/cloud-identity-wallet/actions/workflows/ci.yml)
-[![dependencies](https://deps.rs/repo/github/ADORSYS-GIS/cloud-identity-wallet/status.svg)](https://deps.rs/repo/github/ADORSYS-GIS/cloud-identity-wallet)
+[![GitHub](https://img.shields.io/badge/repo-cloud--wallet--crypto-blue)](https://github.com/ADORSYS-GIS/cloud-identity-wallet)
+[![Rust](https://img.shields.io/badge/msrv-1.92-blue)](https://github.com/ADORSYS-GIS/cloud-identity-wallet)
 [![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](#license)
 
 A high-level cryptographic library providing clean and easy-to-use APIs for common cryptographic operations. Built on [AWS-LC](https://github.com/aws/aws-lc) via [aws-lc-rs](https://github.com/aws/aws-lc-rs), offering FIPS-validated cryptography.
@@ -14,9 +15,22 @@ It is aimed at use with the [cloud-identity-wallet](https://github.com/ADORSYS-G
 
 Enables support for JSON Web Keys (JWK), including serialization and deserialization of cryptographic keys.
 
+```toml
+[dependencies]
+cloud-wallet-crypto = { version = "0.1", features = ["jwk"] }
+```
+
 **`fips`**
 
 Enables support for FIPS-validated cryptography (backed by AWS-LC).
+
+```toml
+[dependencies]
+cloud-wallet-crypto = { version = "0.1", features = ["fips"] }
+```
+
+When building with the `fips` feature enabled, **`cmake`**, **`go`** and potentially **`bindgen`** are required.
+See [Building](https://github.com/aws/aws-lc-rs/tree/main/aws-lc-rs#build) for more details.
 
 ## Quick Start
 
@@ -26,6 +40,8 @@ Add this to your `Cargo.toml`:
 [dependencies]
 cloud-wallet-crypto = "0.1"
 ```
+
+A C compiler (e.g. **`clang`** or **`gcc`** ) is required for building the library. See [Building](https://github.com/aws/aws-lc-rs/tree/main/aws-lc-rs#build) for more information.
 
 ### Basic Example
 
@@ -52,7 +68,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Hash data with SHA-256
     let digest = HashAlg::Sha256.hash(b"hello world");
-    
     Ok(())
 }
 ```
@@ -86,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**⚠️ Nonce Reuse Warning:** Never reuse a nonce with the same key. Each encryption must use a unique nonce.
+> **⚠️ Warning**: Never reuse a nonce with the same key. Each encryption must use a unique nonce.
 
 ### Digital Signatures
 
