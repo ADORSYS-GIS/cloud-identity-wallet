@@ -328,7 +328,6 @@ dependencies = [
  "aws-lc-rs",
  "base64ct",
  "color-eyre",
- "hex",
  "hex-literal",
  "num-bigint",
  "pkcs8",
