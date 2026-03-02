@@ -254,6 +254,38 @@ pub enum ErrorKind {
     #[error("Failed to generate random bytes")]
     RandomGeneration,
 
+    /// An error that occurred while generating a key.
+    #[error("Failed to generate key")]
+    KeyGeneration,
+
+    /// An error that occurred while parsing a key.
+    #[error("Failed to parse key")]
+    KeyParsing,
+
+    /// The algorithm is not supported.
+    #[error("Unsupported algorithm")]
+    UnsupportedAlgorithm,
+
+    /// The length of the data is insufficient
+    #[error("The length is insufficient")]
+    WrongLength,
+
+    /// Error related to signature operations.
+    #[error("Signature error")]
+    Signature,
+
+    /// Error related to encryption operations.
+    #[error("Encryption error")]
+    Encryption,
+
+    /// Error related to decryption operations.
+    #[error("Decryption error")]
+    Decryption,
+
+    /// Error related to serialization.
+    #[error("Serialization error")]
+    Serialization,
+
     /// An error that doesn't fit into any other error kind.
     #[error("Other error")]
     Other,
