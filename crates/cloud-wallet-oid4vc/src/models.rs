@@ -37,7 +37,7 @@ pub enum CredentialStatus {
     Suspended,
 }
 
-/// Payload for a stored SD-JWT VC credential
+// Format-specific payload types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdJwtCredential {
     pub token: String,
@@ -55,6 +55,7 @@ pub struct W3cVcJwtCredential {
     #[serde(rename = "type")]
     pub credential_type: Vec<String>,
 
+    /// The `credentialSubject` claims.
     pub credential_subject: serde_json::Value,
 }
 
@@ -65,7 +66,14 @@ pub struct MsoMdocCredential {
 
     pub namespaces: std::collections::HashMap<String, serde_json::Value>,
 
+    /// The issuer-signed MSO, base64url-encoded.
     pub issuer_signed: String,
+}
+
+impl MsoMdocCredential {
+    pub fn claims_for_namespace(&self, namespace: &str) -> Option<&serde_json::Value> {
+        self.namespaces.get(namespace)
+    }
 }
 
 /// The format-specific payload of a stored credential.
@@ -95,17 +103,13 @@ impl CredentialFormat {
         }
     }
 
-    /// Returns the credential's claims as a `serde_json::Value` for schema
-    /// validation purposes.
-    pub fn claims(&self) -> &serde_json::Value {
+    /// Returns the claims for SD-JWT and W3C VC formats.
+    /// [`MsoMdocCredential::claims_for_namespace`]
+    pub fn claims(&self) -> Option<&serde_json::Value> {
         match self {
-            CredentialFormat::VcSdJwt(c) => &c.claims,
-            CredentialFormat::JwtVcJson(c) => &c.credential_subject,
-            CredentialFormat::MsoMdoc(c) => c
-                .namespaces
-                .values()
-                .next()
-                .unwrap_or(&serde_json::Value::Null),
+            CredentialFormat::VcSdJwt(c) => Some(&c.claims),
+            CredentialFormat::JwtVcJson(c) => Some(&c.credential_subject),
+            CredentialFormat::MsoMdoc(_) => None,
         }
     }
 }
@@ -443,12 +447,40 @@ mod tests {
     #[test]
     fn sd_jwt_claims_accessible() {
         let format = sd_jwt_format();
-        assert_eq!(format.claims()["given_name"], "Alice");
+        let claims = format
+            .claims()
+            .expect("SD-JWT format should return Some claims");
+        assert_eq!(claims["given_name"], "Alice");
     }
 
     #[test]
     fn w3c_claims_accessible() {
         let format = w3c_format();
-        assert_eq!(format.claims()["degree"], "BSc");
+        let claims = format
+            .claims()
+            .expect("W3C VC format should return Some claims");
+        assert_eq!(claims["degree"], "BSc");
+    }
+
+    #[test]
+    fn mdoc_claims_returns_none_from_format() {
+        // claims() on mdoc is intentionally None — use claims_for_namespace() instead
+        let format = mdoc_format();
+        assert!(format.claims().is_none());
+    }
+
+    #[test]
+    fn mdoc_claims_for_namespace_returns_correct_namespace() {
+        let format = mdoc_format();
+        if let CredentialFormat::MsoMdoc(mdoc) = &format {
+            let claims = mdoc
+                .claims_for_namespace("org.iso.18013.5.1")
+                .expect("namespace should be present");
+            assert_eq!(claims["family_name"], "Smith");
+            assert!(
+                mdoc.claims_for_namespace("org.iso.18013.5.1.aamva")
+                    .is_none()
+            );
+        }
     }
 }
