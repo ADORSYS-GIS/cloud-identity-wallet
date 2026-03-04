@@ -1,12 +1,3 @@
-// Webhook delivery module
-//
-// Independent components (no dependency on wallet-events):
-//   delivery_queue, hmac_signer, http_client, retry_strategy, schemas, subscription
-//
-// Integration components (depend on wallet-events / Ticket 1):
-//   event_listener  – subscribes to the event bus and enqueues deliveries
-//   delivery_service – drains the queue and sends HTTP webhooks
-
 pub mod delivery_queue;
 pub mod delivery_service;
 pub mod event_listener;
@@ -16,7 +7,7 @@ pub mod retry_strategy;
 pub mod schemas;
 pub mod subscription;
 
-// Re-export commonly used types
+// Commonly used re-exports
 pub use delivery_queue::{DeliveryQueue, QueuedDelivery};
 pub use delivery_service::{DeliveryService, DeliveryServiceError};
 pub use event_listener::{EventListener, ListenerError};

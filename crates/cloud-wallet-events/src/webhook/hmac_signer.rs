@@ -110,7 +110,6 @@ mod tests {
 
         let (signature, timestamp) = signer.sign(payload).map_err(|e| e.to_string())?;
 
-        // Verification should succeed
         signer.verify(payload, &signature, timestamp, 300)?;
         Ok(())
     }
@@ -136,7 +135,6 @@ mod tests {
 
         let (signature, timestamp) = signer1.sign(payload)?;
 
-        // Verification with different secret should fail
         let result = signer2.verify(payload, &signature, timestamp, 300);
         assert!(result.is_err());
         Ok(())
@@ -150,7 +148,6 @@ mod tests {
 
         let (signature, timestamp) = signer.sign(original)?;
 
-        // Verification with modified payload should fail
         let result = signer.verify(modified, &signature, timestamp, 300);
         assert!(result.is_err());
         Ok(())
@@ -161,11 +158,9 @@ mod tests {
         let signer = HmacSigner::new("test-secret".to_string());
         let payload = r#"{"event":"test"}"#;
 
-        // Create signature with old timestamp (1 hour ago)
         let old_timestamp = signer.current_timestamp()? - 3600;
         let signature = signer.sign_with_timestamp(payload, old_timestamp);
 
-        // Verification should fail (max age = 5 minutes = 300 seconds)
         let result = signer.verify(payload, &signature, old_timestamp, 300);
         assert!(matches!(result, Err(e) if e.contains("Timestamp too old")));
         Ok(())
@@ -176,7 +171,6 @@ mod tests {
         let signer = HmacSigner::new("test-secret".to_string());
         let payload = r#"{"event":"test"}"#;
 
-        // Create signature with future timestamp (1 hour from now)
         let future_timestamp = signer.current_timestamp()? + 3600;
         let signature = signer.sign_with_timestamp(payload, future_timestamp);
 
@@ -192,8 +186,6 @@ mod tests {
         let timestamp = 1707574200u64;
 
         let signature = signer.sign_with_timestamp(payload, timestamp);
-
-        // Signature should be deterministic
         let signature2 = signer.sign_with_timestamp(payload, timestamp);
         assert_eq!(signature, signature2);
     }
@@ -247,7 +239,6 @@ mod tests {
         let signer = HmacSigner::new("test-secret".to_string());
         let (signature, _) = signer.sign("test")?;
 
-        // Should be valid hex (64 characters for SHA256)
         assert_eq!(signature.len(), 64);
         assert!(signature.chars().all(|c| c.is_ascii_hexdigit()));
         Ok(())
@@ -261,11 +252,9 @@ mod tests {
         let old_timestamp = signer.current_timestamp().map_err(|e| e.to_string())? - 100;
         let signature = signer.sign_with_timestamp(payload, old_timestamp);
 
-        // Should fail with 60 second max age
         let result = signer.verify(payload, &signature, old_timestamp, 60);
         assert!(result.is_err());
 
-        // Should succeed with 200 second max age
         signer.verify(payload, &signature, old_timestamp, 200)?;
         Ok(())
     }
@@ -275,11 +264,9 @@ mod tests {
         let signer = HmacSigner::new("test-secret".to_string());
         let payload = "test";
 
-        // 30 seconds in the future (within 60 second tolerance)
         let future_timestamp = signer.current_timestamp().map_err(|e| e.to_string())? + 30;
         let signature = signer.sign_with_timestamp(payload, future_timestamp);
 
-        // Should succeed (within clock skew tolerance)
         signer.verify(payload, &signature, future_timestamp, 300)?;
         Ok(())
     }

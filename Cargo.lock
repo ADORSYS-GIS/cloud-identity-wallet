@@ -232,24 +232,16 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 name = "cloud-identity-wallet"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "axum",
  "color-eyre",
  "config",
- "hex",
- "hmac",
  "reqwest",
  "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
  "tikv-jemallocator",
- "time",
  "tokio",
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "wallet-events",
 ]
 
 [[package]]
@@ -2493,13 +2485,18 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "hex",
+ "hmac",
  "kafka",
  "parking_lot",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

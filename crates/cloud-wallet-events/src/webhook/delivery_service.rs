@@ -1,8 +1,8 @@
-use crate::outbound::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
-use crate::outbound::webhook::http_client::{HttpClientError, WebhookHttpClient};
-use crate::outbound::webhook::retry_strategy::RetryStrategy;
-use crate::outbound::webhook::schemas::DeliveryStatus;
-use crate::outbound::webhook::subscription::WebhookSubscription;
+use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
+use crate::webhook::http_client::{HttpClientError, WebhookHttpClient};
+use crate::webhook::retry_strategy::RetryStrategy;
+use crate::webhook::schemas::DeliveryStatus;
+use crate::webhook::subscription::WebhookSubscription;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -50,7 +50,6 @@ impl DeliveryService {
         });
     }
 
-    /// Inner processing loop – poll the queue and dispatch deliveries.
     async fn run_loop(&self) {
         loop {
             match self.delivery_queue.dequeue().await {
@@ -72,7 +71,6 @@ impl DeliveryService {
                     });
                 }
                 None => {
-                    // Queue is empty; back off briefly before polling again.
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
@@ -80,7 +78,7 @@ impl DeliveryService {
     }
 
     /// Process a single delivery attempt.
-    async fn process_delivery(
+    pub(crate) async fn process_delivery(
         delivery: QueuedDelivery,
         queue: Arc<DeliveryQueue>,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -109,7 +107,6 @@ impl DeliveryService {
         let auth = match auth {
             Some(a) => a,
             None => {
-                // Subscription was removed between enqueue and delivery.
                 warn!(
                     subscription_id = %sub_id,
                     "Subscription not found – dropping delivery"
@@ -121,12 +118,10 @@ impl DeliveryService {
             }
         };
 
-        // Record that the attempt has started.
         let in_progress =
             DeliveryStatus::pending(sub_id.clone(), event_id.clone()).in_progress(attempt + 1);
         queue.record_status(in_progress).await;
 
-        // Send the HTTP POST.
         let result = http_client
             .send_webhook(&delivery.url, &delivery.payload, &auth)
             .await;
@@ -149,9 +144,7 @@ impl DeliveryService {
             Err(e) => {
                 let status_code = extract_status_code(&e);
 
-                // Decide whether to retry.
                 if retry_strategy.should_retry(attempt) {
-                    // Calculate next retry delay.
                     let delay = retry_strategy.next_delay(attempt + 1);
                     let next_retry_at = delay.map(|d| time::OffsetDateTime::now_utc() + d);
 
@@ -171,7 +164,6 @@ impl DeliveryService {
                     );
                     queue.record_status(status).await;
 
-                    // Wait then re-enqueue.
                     if let Some(d) = delay {
                         tokio::time::sleep(d).await;
                     }
@@ -194,21 +186,12 @@ impl DeliveryService {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Extract an HTTP status code from a `HttpClientError`, if available.
 fn extract_status_code(err: &HttpClientError) -> Option<u16> {
     match err {
         HttpClientError::ResponseError { status, .. } => Some(status.as_u16()),
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
 
 /// Errors that can occur during `DeliveryService` initialisation.
 #[derive(Debug, thiserror::Error)]
@@ -217,25 +200,21 @@ pub enum DeliveryServiceError {
     Initialisation(String),
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::outbound::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
-    use crate::outbound::webhook::retry_strategy::RetryStrategy;
-    use crate::outbound::webhook::schemas::DeliveryState;
-    use crate::outbound::webhook::subscription::{WebhookAuth, WebhookSubscription};
+    use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
+    use crate::webhook::http_client::HttpClientError;
+    use crate::webhook::retry_strategy::RetryStrategy;
+    use crate::webhook::schemas::DeliveryState;
+    use crate::webhook::subscription::{WebhookAuth, WebhookSubscription};
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    // Helper: build a simple subscription
+
     fn make_sub(id: &str, url: &str) -> WebhookSubscription {
         WebhookSubscription::new(id.to_string(), url.to_string(), WebhookAuth::None).subscribe_all()
     }
 
-    // Helper: build a basic queued delivery
     fn make_delivery(sub_id: &str, event_id: &str, url: &str) -> QueuedDelivery {
         QueuedDelivery::new(
             sub_id.to_string(),
@@ -246,10 +225,6 @@ mod tests {
         )
     }
 
-    // ------------------------------------------------------------------
-    // Initialisation
-    // ------------------------------------------------------------------
-
     #[tokio::test]
     async fn test_service_creation() {
         let queue = Arc::new(DeliveryQueue::new());
@@ -258,14 +233,9 @@ mod tests {
         assert!(service.is_ok());
     }
 
-    // ------------------------------------------------------------------
-    // Subscription lookup
-    // ------------------------------------------------------------------
-
     #[tokio::test]
     async fn test_delivery_dropped_when_subscription_removed() {
         let queue = Arc::new(DeliveryQueue::new());
-        // No subscriptions registered
         let subs = Arc::new(RwLock::new(vec![]));
 
         let delivery = make_delivery("sub-gone", "evt-1", "https://example.com");
@@ -279,7 +249,6 @@ mod tests {
         )
         .await;
 
-        // Should record a permanent failure and nothing re-queued
         assert!(queue.is_empty().await);
         let status = queue
             .get_latest_status("sub-gone", "evt-1")
@@ -289,36 +258,28 @@ mod tests {
         assert!(status.error.unwrap().contains("Subscription removed"));
     }
 
-    // ------------------------------------------------------------------
-    // Retry behaviour – unreachable endpoint
-    // ------------------------------------------------------------------
-
     #[tokio::test]
     async fn test_failed_delivery_is_requeued() {
         let queue = Arc::new(DeliveryQueue::new());
         let sub = make_sub("sub-retry", "http://127.0.0.1:19999");
         let subs = Arc::new(RwLock::new(vec![sub]));
 
-        // Use a strategy with 3 max attempts so the first failure re-queues
         let strategy = RetryStrategy::new(3, 1);
-
         let delivery = make_delivery("sub-retry", "evt-retry", "http://127.0.0.1:19999");
 
         DeliveryService::process_delivery(
             delivery,
             queue.clone(),
-            subs.clone(),
+            subs,
             Arc::new(WebhookHttpClient::new().unwrap()),
             strategy,
         )
         .await;
 
-        // Delivery should have been re-queued (attempt 0 → attempt 1)
         assert_eq!(queue.size().await, 1);
         let requeued = queue.dequeue().await.unwrap();
         assert_eq!(requeued.attempt, 1);
 
-        // Status should be Failed (not Permanent)
         let status = queue
             .get_latest_status("sub-retry", "evt-retry")
             .await
@@ -332,9 +293,7 @@ mod tests {
         let sub = make_sub("sub-perm", "http://127.0.0.1:19998");
         let subs = Arc::new(RwLock::new(vec![sub]));
 
-        // Strategy with 1 max attempt – no retries
         let strategy = RetryStrategy::new(1, 1);
-
         let delivery = make_delivery("sub-perm", "evt-perm", "http://127.0.0.1:19998");
 
         DeliveryService::process_delivery(
@@ -346,7 +305,6 @@ mod tests {
         )
         .await;
 
-        // Nothing should be re-queued
         assert!(queue.is_empty().await);
 
         let status = queue
@@ -355,10 +313,6 @@ mod tests {
             .expect("status recorded");
         assert_eq!(status.status, DeliveryState::PermanentFailure);
     }
-
-    // ------------------------------------------------------------------
-    // extract_status_code
-    // ------------------------------------------------------------------
 
     #[test]
     fn test_extract_status_code_response_error() {

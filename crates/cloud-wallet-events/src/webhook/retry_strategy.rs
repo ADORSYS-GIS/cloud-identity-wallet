@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-/// Retry strategy for webhook delivery
-/// Failed deliveries are retried with increasing delays between attempts.
+/// Retry strategy for webhook delivery.
+///
+/// Failed deliveries are retried with exponential backoff between attempts.
 #[derive(Debug, Clone)]
 pub struct RetryStrategy {
     max_attempts: u32,
@@ -21,7 +22,7 @@ impl RetryStrategy {
         }
     }
 
-    /// Create default retry strategy
+    /// Create default retry strategy (5 attempts, 100 ms base delay)
     pub fn default_strategy() -> Self {
         Self::new(5, 100)
     }
@@ -31,46 +32,44 @@ impl RetryStrategy {
         self.max_attempts
     }
 
-    /// Calculate delay before next retry attempt
+    /// Calculate delay before the next retry attempt.
+    ///
+    /// Returns `None` when `attempt >= max_attempts` (no more retries).
+    /// The first attempt (`attempt == 0`) is immediate (`Duration::ZERO`).
+    /// Subsequent attempts use `2^(attempt-1) * base_delay_ms`, capped at
+    /// `max_delay_ms`.
     pub fn next_delay(&self, attempt: u32) -> Option<Duration> {
         if attempt >= self.max_attempts {
             return None;
         }
 
         if attempt == 0 {
-            // First attempt is immediate
             return Some(Duration::from_millis(0));
         }
 
-        // Exponential backoff: 2^(attempt-1)
         let multiplier = 2_u64.saturating_pow(attempt - 1);
         let delay_ms = self.base_delay_ms.saturating_mul(multiplier);
-
-        // Cap at max delay
         let capped_delay = delay_ms.min(self.max_delay_ms);
 
         Some(Duration::from_millis(capped_delay))
     }
 
-    /// Check if we should retry after a given attempt
+    /// Return `true` if another attempt should be made after `current_attempt`.
     pub fn should_retry(&self, current_attempt: u32) -> bool {
         current_attempt + 1 < self.max_attempts
     }
 
-    /// Check if an HTTP status code should trigger a retry
+    /// Return `true` if the given HTTP status code should trigger a retry.
     pub fn should_retry_status(&self, status_code: u16) -> bool {
         match status_code {
-            // Success - don't retry
+            // Success – never retry
             200..=299 => false,
-
-            // Client errors - don't retry
+            // Retryable client errors
             408 | 429 => true,
+            // Other 4xx – don't retry
             400..=499 => false,
-
-            // Server errors - retry
+            // Server errors – always retry
             500..=599 => true,
-
-            // Other codes - don't retry
             _ => false,
         }
     }
@@ -92,13 +91,12 @@ mod tests {
 
         assert_eq!(strategy.max_attempts(), 5);
 
-        // Test delays: 0ms, 100ms, 200ms, 400ms, 800ms
         assert_eq!(strategy.next_delay(0), Some(Duration::from_millis(0)));
         assert_eq!(strategy.next_delay(1), Some(Duration::from_millis(100)));
         assert_eq!(strategy.next_delay(2), Some(Duration::from_millis(200)));
         assert_eq!(strategy.next_delay(3), Some(Duration::from_millis(400)));
         assert_eq!(strategy.next_delay(4), Some(Duration::from_millis(800)));
-        assert_eq!(strategy.next_delay(5), None); // Exceeded max attempts
+        assert_eq!(strategy.next_delay(5), None);
     }
 
     #[test]
@@ -107,7 +105,7 @@ mod tests {
 
         assert!(strategy.should_retry(0));
         assert!(strategy.should_retry(1));
-        assert!(!strategy.should_retry(2)); // 2 + 1 = 3, 3 < 3 is false
+        assert!(!strategy.should_retry(2));
         assert!(!strategy.should_retry(3));
         assert!(!strategy.should_retry(4));
     }
@@ -116,22 +114,18 @@ mod tests {
     fn test_should_retry_status() {
         let strategy = RetryStrategy::default();
 
-        // Success - don't retry
         assert!(!strategy.should_retry_status(200));
         assert!(!strategy.should_retry_status(201));
         assert!(!strategy.should_retry_status(204));
 
-        // Client errors - don't retry (except special cases)
         assert!(!strategy.should_retry_status(400));
         assert!(!strategy.should_retry_status(401));
         assert!(!strategy.should_retry_status(403));
         assert!(!strategy.should_retry_status(404));
 
-        // Special client errors - DO retry
-        assert!(strategy.should_retry_status(408)); // Timeout
-        assert!(strategy.should_retry_status(429)); // Rate limit
+        assert!(strategy.should_retry_status(408));
+        assert!(strategy.should_retry_status(429));
 
-        // Server errors - retry
         assert!(strategy.should_retry_status(500));
         assert!(strategy.should_retry_status(502));
         assert!(strategy.should_retry_status(503));
@@ -140,14 +134,11 @@ mod tests {
 
     #[test]
     fn test_overflow_protection() {
-        // Test that very large attempt numbers don't panic
         let strategy = RetryStrategy::new(100, 1000);
 
-        // This would overflow without saturating_* operations
         let delay = strategy.next_delay(50);
         assert!(delay.is_some());
 
-        // Should be capped at max_delay_ms
         if let Some(d) = delay {
             assert_eq!(d, Duration::from_millis(30_000));
         }

@@ -28,7 +28,7 @@ pub struct QueuedDelivery {
 
     pub attempt: u32,
 
-    /// Webhook URL
+    /// Webhook endpoint URL
     pub url: String,
 }
 
@@ -106,14 +106,12 @@ impl DeliveryQueue {
 
     /// Get queue size
     pub async fn size(&self) -> usize {
-        let pending = self.pending.read().await;
-        pending.len()
+        self.pending.read().await.len()
     }
 
     /// Check if queue is empty
     pub async fn is_empty(&self) -> bool {
-        let pending = self.pending.read().await;
-        pending.is_empty()
+        self.pending.read().await.is_empty()
     }
 
     /// Clear all pending deliveries
@@ -127,18 +125,14 @@ impl DeliveryQueue {
     /// Record delivery status in history
     pub async fn record_status(&self, status: DeliveryStatus) {
         let mut history = self.history.write().await;
-
         let key = format!("{}:{}", status.subscription_id, status.event_id);
-        let entries = history.entry(key).or_insert_with(Vec::new);
-
-        entries.push(status);
+        history.entry(key).or_insert_with(Vec::new).push(status);
     }
 
     /// Get delivery history for an event
     pub async fn get_history(&self, subscription_id: &str, event_id: &str) -> Vec<DeliveryStatus> {
         let history = self.history.read().await;
         let key = format!("{subscription_id}:{event_id}");
-
         history.get(&key).cloned().unwrap_or_default()
     }
 
@@ -148,11 +142,13 @@ impl DeliveryQueue {
         subscription_id: &str,
         event_id: &str,
     ) -> Option<DeliveryStatus> {
-        let history = self.get_history(subscription_id, event_id).await;
-        history.last().cloned()
+        self.get_history(subscription_id, event_id)
+            .await
+            .into_iter()
+            .last()
     }
 
-    /// Count deliveries by state
+    /// Count deliveries by state for a subscription
     pub async fn count_by_state(&self, subscription_id: &str) -> HashMap<DeliveryState, usize> {
         let history = self.history.read().await;
         let mut counts: HashMap<DeliveryState, usize> = HashMap::new();
@@ -264,10 +260,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_and_get_history() {
         let queue = DeliveryQueue::new();
-
         let status = DeliveryStatus::pending("sub-123".to_string(), "evt-456".to_string());
 
-        queue.record_status(status.clone()).await;
+        queue.record_status(status).await;
 
         let history = queue.get_history("sub-123", "evt-456").await;
         assert_eq!(history.len(), 1);
@@ -282,7 +277,7 @@ mod tests {
         let status2 = status1.clone().in_progress(1).succeeded(200, 100);
 
         queue.record_status(status1).await;
-        queue.record_status(status2.clone()).await;
+        queue.record_status(status2).await;
 
         let latest = queue.get_latest_status("sub-123", "evt-456").await;
         assert!(matches!(latest, Some(s) if s.status == DeliveryState::Succeeded));
@@ -292,7 +287,6 @@ mod tests {
     async fn test_count_by_state() {
         let queue = DeliveryQueue::new();
 
-        // Record various states
         queue
             .record_status(
                 DeliveryStatus::pending("sub-123".to_string(), "evt-1".to_string())

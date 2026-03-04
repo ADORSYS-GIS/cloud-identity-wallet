@@ -55,14 +55,16 @@ impl WebhookHttpClient {
     pub fn with_timeout(timeout: Duration) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .timeout(timeout)
-            .user_agent(format!("CloudIdentityWallet/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("WalletEvents/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| HttpClientError::RequestFailed(e.to_string()))?;
 
         Ok(Self { client })
     }
 
-    /// Send a webhook POST request
+    /// Send a webhook POST request.
+    ///
+    /// Returns `(status_code, response_time_ms, body)` on success.
     pub async fn send_webhook(
         &self,
         url: &str,
@@ -73,16 +75,13 @@ impl WebhookHttpClient {
 
         let start = Instant::now();
 
-        // Build request
         let mut request = self
             .client
             .post(url)
             .header("Content-Type", "application/json");
 
-        // Add authentication headers
         request = self.add_auth_headers(request, payload, auth)?;
 
-        // Send request
         let response = request
             .body(payload.to_string())
             .send()
@@ -104,10 +103,8 @@ impl WebhookHttpClient {
             "Webhook response received"
         );
 
-        // Read response body
         let body = self.read_response_body(response).await?;
 
-        // Check if request was successful
         if !status.is_success() {
             return Err(HttpClientError::ResponseError {
                 status,
@@ -118,7 +115,6 @@ impl WebhookHttpClient {
         Ok((status_code, response_time_ms, body))
     }
 
-    /// Add authentication headers to request
     fn add_auth_headers(
         &self,
         mut request: reqwest::RequestBuilder,
@@ -126,9 +122,7 @@ impl WebhookHttpClient {
         auth: &WebhookAuth,
     ) -> Result<reqwest::RequestBuilder, HttpClientError> {
         match auth {
-            WebhookAuth::None => {
-                // No authentication
-            }
+            WebhookAuth::None => {}
             WebhookAuth::HmacSha256 { secret } => {
                 let signer = HmacSigner::new(secret.clone());
                 let (signature, timestamp) = signer
@@ -147,12 +141,10 @@ impl WebhookHttpClient {
         Ok(request)
     }
 
-    /// Read response body
     async fn read_response_body(&self, response: Response) -> Result<String, HttpClientError> {
-        let body = response.text().await.map_err(|e| {
+        response.text().await.map_err(|e| {
             HttpClientError::RequestFailed(format!("Failed to read response body: {e}"))
-        })?;
-        Ok(body)
+        })
     }
 }
 
@@ -164,13 +156,6 @@ mod tests {
     fn test_http_client_creation() -> Result<(), HttpClientError> {
         let _client = WebhookHttpClient::new()?;
         Ok(())
-    }
-
-    #[test]
-    fn test_error_conversion_from_reqwest() {
-        fn _test_compile(_err: reqwest::Error) -> HttpClientError {
-            HttpClientError::RequestFailed("test".to_string())
-        }
     }
 
     #[test]

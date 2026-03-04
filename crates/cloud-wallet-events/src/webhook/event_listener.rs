@@ -1,10 +1,12 @@
-use crate::outbound::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
-use crate::outbound::webhook::schemas::WebhookPayload;
-use crate::outbound::webhook::subscription::WebhookSubscription;
+use crate::EventError;
+use crate::events::Event;
+use crate::traits::{Consumer, EventHandler, SubscriptionConfig};
+use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
+use crate::webhook::schemas::WebhookPayload;
+use crate::webhook::subscription::WebhookSubscription;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
-use wallet_events::{Consumer, Event, EventError, EventHandler, SubscriptionConfig};
 
 /// Bridges the event bus to the webhook delivery queue.
 pub struct EventListener {
@@ -41,7 +43,6 @@ impl EventListener {
         let subscriptions = self.subscriptions.clone();
         let delivery_queue = self.delivery_queue.clone();
 
-        // Create the event handler callback
         let handler: EventHandler = Arc::new(move |event: Event| {
             let subscriptions = subscriptions.clone();
             let delivery_queue = delivery_queue.clone();
@@ -60,7 +61,6 @@ impl EventListener {
         Ok(())
     }
 
-    /// Handle a single event from the consumer.
     async fn handle_event(
         event: Event,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -73,7 +73,6 @@ impl EventListener {
             "Received event"
         );
 
-        // Build the JSON payload once for all matching subscriptions.
         let payload = match Self::build_payload(&event) {
             Ok(p) => p,
             Err(e) => {
@@ -93,7 +92,7 @@ impl EventListener {
     }
 
     /// Serialise an `Event` into a `WebhookPayload` JSON string.
-    fn build_payload(event: &Event) -> Result<String, String> {
+    pub(crate) fn build_payload(event: &Event) -> Result<String, String> {
         let payload = WebhookPayload::new(
             event.id.to_string(),
             event.event_type.as_str().to_string(),
@@ -117,7 +116,7 @@ impl EventListener {
     }
 
     /// Fan out one event to every matching subscription.
-    async fn enqueue_for_matching_subscriptions(
+    pub(crate) async fn enqueue_for_matching_subscriptions(
         event: &Event,
         payload_json: &str,
         subscriptions: &Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -170,14 +169,16 @@ pub enum ListenerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::outbound::webhook::delivery_queue::DeliveryQueue;
-    use crate::outbound::webhook::schemas::WebhookPayload;
-    use crate::outbound::webhook::subscription::{WebhookAuth, WebhookSubscription};
+    use crate::error::EventError;
+    use crate::events::{Event, EventType};
+    use crate::traits::{Consumer, EventHandler, SubscriptionConfig};
+    use crate::webhook::delivery_queue::DeliveryQueue;
+    use crate::webhook::schemas::WebhookPayload;
+    use crate::webhook::subscription::{WebhookAuth, WebhookSubscription};
     use async_trait::async_trait;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use wallet_events::{Consumer, Event, EventError, EventHandler, EventType, SubscriptionConfig};
 
     struct MockConsumer {
         events: Vec<Event>,
@@ -223,10 +224,6 @@ mod tests {
         .with_metadata("correlation_id", "corr-key")
     }
 
-    // ------------------------------------------------------------------
-    // build_payload
-    // ------------------------------------------------------------------
-
     #[test]
     fn test_build_payload_serialises_correctly() {
         let event = make_credential_stored_event();
@@ -247,8 +244,6 @@ mod tests {
         let payload: WebhookPayload = serde_json::from_str(&json).expect("parse payload");
         assert_eq!(payload.event_type, EventType::KEY_CREATED);
     }
-
-    // enqueue_for_matching_subscriptions
 
     #[tokio::test]
     async fn test_enqueue_matching_subscription() {
@@ -326,11 +321,8 @@ mod tests {
         EventListener::enqueue_for_matching_subscriptions(&event, &payload, &subscriptions, &queue)
             .await;
 
-        // sub-1 and sub-2 match; sub-3 does not
         assert_eq!(queue.size().await, 2);
     }
-
-    // Full listener start (mock consumer)
 
     #[tokio::test]
     async fn test_listener_processes_events_end_to_end() {
@@ -354,7 +346,6 @@ mod tests {
         let listener = EventListener::new(consumer, subscriptions, queue.clone());
         listener.start().await.expect("listener start");
 
-        // The MockConsumer immediately invokes the handler, so no sleep needed
         assert_eq!(queue.size().await, 1);
 
         let delivery = queue.dequeue().await.unwrap();
