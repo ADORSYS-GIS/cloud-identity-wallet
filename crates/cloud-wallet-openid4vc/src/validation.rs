@@ -1,3 +1,4 @@
+use crate::errors::ValidationError;
 #[cfg(feature = "schema-validation")]
 use crate::schema::CredentialConfiguration;
 
@@ -156,6 +157,7 @@ mod tests {
         use crate::schema::{
             CredentialConfiguration, CredentialDefinition, CredentialFormatIdentifier,
         };
+        use crate::validation::SchemaValidator;
 
         fn w3c_credential(subject: serde_json::Value) -> Result<Credential, ValidationError> {
             Credential::new(
@@ -194,7 +196,7 @@ mod tests {
 
         fn config_with_schema(schema: serde_json::Value) -> CredentialConfiguration {
             CredentialConfiguration {
-                format: CredentialFormatIdentifier::VcSdJwt,
+                format: CredentialFormatIdentifier::DcSdJwt,
                 credential_definition: CredentialDefinition::SdJwt {
                     vct: "https://credentials.example.com/identity".to_owned(),
                     claims_schema: Some(schema),
@@ -208,7 +210,7 @@ mod tests {
 
         fn config_without_schema() -> CredentialConfiguration {
             CredentialConfiguration {
-                format: CredentialFormatIdentifier::VcSdJwt,
+                format: CredentialFormatIdentifier::DcSdJwt,
                 credential_definition: CredentialDefinition::SdJwt {
                     vct: "https://credentials.example.com/identity".to_owned(),
                     claims_schema: None,
