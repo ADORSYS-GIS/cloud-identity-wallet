@@ -112,6 +112,6 @@ The diagrams and review comments imply the following component model.
 
 ## Key references mentioned in the issue
 
-- OpenID4VCI spec: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html
-- EU Digital Identity Wallet RFCs: https://github.com/EWC-consortium/eudi-wallet-rfcs
-- EU context (Business Wallets proposal): https://digital-strategy.ec.europa.eu/en/library/proposal-regulation-establishment-european-business-wallets
+- OpenID4VCI spec: <<https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html>>
+- EU Digital Identity Wallet RFCs: <<https://github.com/EWC-consortium/eudi-wallet-rfcs>>
+- EU context (Business Wallets proposal): <<https://digital-strategy.ec.europa.eu/en/library/proposal-regulation-establishment-european-business-wallets>>

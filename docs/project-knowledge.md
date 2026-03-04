@@ -27,10 +27,10 @@ This document provides essential context for reviewing PRs in the Cloud Identity
 
 ### Key Crates
 
-| Crate | Purpose |
-|-------|---------|
-| `cloud-identity-wallet` | Main application (Axum-based API) |
-| `cloud-wallet-events` | Event handling for credential lifecycle |
+| Crate                   | Purpose                                 |
+|-------------------------|-----------------------------------------|
+| `cloud-identity-wallet` | Main application (Axum-based API)       |
+| `cloud-wallet-events`   | Event handling for credential lifecycle |
 
 ### Dependencies of Note
 
@@ -44,22 +44,25 @@ This document provides essential context for reviewing PRs in the Cloud Identity
 
 ### OpenID4VCI (Credential Issuance)
 
-**Spec**: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html
+**Spec**: <<https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html>>
 
 **Supported Flows**:
+
 - Authorization Code Flow
 - Pre-Authorized Code Flow
 
 **Key Concepts**:
+
 - Credential Offer: Can contain multiple credentials; UI should allow user selection
 - Nonce Endpoint: Nonce requested at dedicated endpoint, not at credential-offer dereference time
 - Access Token: UI obtains/handles token (mediated through wallet backend)
 
 ### OpenID4VP (Verifiable Presentations)
 
-**Spec**: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html
+**Spec**: <<https://openid.net/specs/openid-4-verifiable-presentations-1_0.html>>
 
 **Key Concepts**:
+
 - Presentation Request handling
 - User selects credentials/data to present
 - Generate presentation/proof and return to verifier
@@ -68,20 +71,22 @@ This document provides essential context for reviewing PRs in the Cloud Identity
 
 ### Supported Formats
 
-| Format ID | Description |
-|-----------|-------------|
-| `vc+sd-jwt` | SD-JWT based verifiable credentials (selective disclosure) |
-| `mso_mdoc` | ISO 18013-5 mobile documents (mDL/mdoc) |
-| `jwt_vc_json` | JWT-based verifiable credentials (JSON claims) |
+| Format ID     | Description                                                       |
+|---------------|-------------------------------------------------------------------|
+| `vc+sd-jwt`   | SD-JWT based verifiable credentials (selective disclosure)        |
+| `mso_mdoc`    | ISO 18013-5 mobile documents (mDL/mdoc)                           |
+| `jwt_vc_json` | JWT-based verifiable credentials (JSON claims)                    |
 
 ### Format-Specific Validation
 
 #### mso_mdoc (ISO mdoc)
+
 - **Namespace-aware claims**: Claims extracted per namespace (e.g., `org.iso.18013-5.1`)
 - **Schema validation**: Uses JSON Schema with feature gate `schema-validation`
 - **Claims structure**: Different from JWT-based formats
 
 #### vc+sd-jwt
+
 - Selective disclosure capabilities
 - Holder binding support
 
@@ -95,6 +100,7 @@ This document provides essential context for reviewing PRs in the Cloud Identity
 ### Component Model
 
 **In Scope**:
+
 - Wallet Backend API
 - OpenID4VCI Adapter (issuance)
 - OID4VP Adapter (presentation)
@@ -104,6 +110,7 @@ This document provides essential context for reviewing PRs in the Cloud Identity
 - Key Management
 
 **Out of Scope**:
+
 - External Issuers
 - External Verifiers
 - Revocation/Status Lists hosting
@@ -151,8 +158,8 @@ This document provides essential context for reviewing PRs in the Cloud Identity
 
 ### Relevant Standards
 
-- **EU Digital Identity Wallet RFCs**: https://github.com/EWC-consortium/eudi-wallet-rfcs
-- **EU Business Wallets**: https://digital-strategy.ec.europa.eu/en/library/proposal-regulation-establishment-european-business-wallets
+- **EU Digital Identity Wallet RFCs**: <<https://github.com/EWC-consortium/eudi-wallet-rfcs>>
+- **EU Business Wallets**: <<https://digital-strategy.ec.europa.eu/en/library/proposal-regulation-establishment-european-business-wallets>>
 
 ### Compliance Considerations
 
