@@ -216,7 +216,7 @@ impl Key {
     /// Returns an error if random number generation fails (rare).
     pub fn generate(alg: Algorithm) -> Result<Self> {
         let key_len = alg.key_len();
-        let mut buff = [0u8; MAX_KEY_LENGTH];
+        let mut buff = zeroize::Zeroizing::new([0u8; MAX_KEY_LENGTH]);
         crate::rand::fill_bytes(&mut buff[..key_len])?;
         let inner = Secret::from(&buff[..key_len]);
         Ok(Self { alg, inner })
