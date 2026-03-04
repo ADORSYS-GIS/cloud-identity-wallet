@@ -16,8 +16,6 @@ broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
 [workspace.dependencies]
-# Internal crates
-cloud-wallet-openid4vc = { path = "crates/cloud-wallet-openid4vc" }
 
 # Serialization / Deserialization
 serde = "1"
@@ -46,7 +44,6 @@ readme.workspace = true
 edition.workspace = true
 
 [dependencies]
-cloud-wallet-openid4vc.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }
