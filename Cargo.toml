@@ -46,7 +46,6 @@ config.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
-# Application specific
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
 
