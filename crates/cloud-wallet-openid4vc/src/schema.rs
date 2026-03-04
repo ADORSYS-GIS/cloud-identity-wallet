@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialFormatIdentifier {
-    /// IETF SD-JWT VC — wire value `"vc+sd-jwt"`
-    #[serde(rename = "vc+sd-jwt")]
-    VcSdJwt,
+    /// IETF SD-JWT VC — wire value `"dc+sd-jwt"` (formerly `"vc+sd-jwt"`)
+    #[serde(rename = "dc+sd-jwt")]
+    DcSdJwt,
 
     /// ISO 18013-5 mdoc — wire value `"mso_mdoc"`
     #[serde(rename = "mso_mdoc")]
@@ -134,7 +134,7 @@ mod tests {
 
     fn sd_jwt_config() -> CredentialConfiguration {
         CredentialConfiguration {
-            format: CredentialFormatIdentifier::VcSdJwt,
+            format: CredentialFormatIdentifier::DcSdJwt,
             credential_definition: CredentialDefinition::SdJwt {
                 vct: "https://credentials.example.com/identity_credential".to_owned(),
                 claims_schema: Some(json!({
@@ -207,8 +207,8 @@ mod tests {
     #[test]
     fn format_identifier_serializes_to_spec_wire_values() -> Result<(), serde_json::Error> {
         assert_eq!(
-            serde_json::to_string(&CredentialFormatIdentifier::VcSdJwt)?,
-            r#""vc+sd-jwt""#
+            serde_json::to_string(&CredentialFormatIdentifier::DcSdJwt)?,
+            r#""dc+sd-jwt""#
         );
         assert_eq!(
             serde_json::to_string(&CredentialFormatIdentifier::MsoMdoc)?,
@@ -223,8 +223,8 @@ mod tests {
 
     #[test]
     fn format_identifier_deserializes_from_spec_wire_values() -> Result<(), serde_json::Error> {
-        let sd: CredentialFormatIdentifier = serde_json::from_str(r#""vc+sd-jwt""#)?;
-        assert_eq!(sd, CredentialFormatIdentifier::VcSdJwt);
+        let sd: CredentialFormatIdentifier = serde_json::from_str(r#""dc+sd-jwt""#)?;
+        assert_eq!(sd, CredentialFormatIdentifier::DcSdJwt);
 
         let mdoc: CredentialFormatIdentifier = serde_json::from_str(r#""mso_mdoc""#)?;
         assert_eq!(mdoc, CredentialFormatIdentifier::MsoMdoc);
@@ -256,7 +256,6 @@ mod tests {
             ..
         } = &config.credential_definition
         else {
-            // This would indicate a bug in the test fixture itself
             return;
         };
         assert!(
@@ -278,7 +277,7 @@ mod tests {
         let config = sd_jwt_config();
         let json = serde_json::to_string(&config)?;
         let restored: CredentialConfiguration = serde_json::from_str(&json)?;
-        assert_eq!(restored.format, CredentialFormatIdentifier::VcSdJwt);
+        assert_eq!(restored.format, CredentialFormatIdentifier::DcSdJwt);
         assert_eq!(restored.scope, Some("identity_credential".to_owned()));
         Ok(())
     }
@@ -307,7 +306,6 @@ mod tests {
     fn none_fields_are_omitted_from_serialization() -> Result<(), serde_json::Error> {
         let config = mdoc_config();
         let json_val = serde_json::to_value(&config)?;
-        // scope is None, should not appear in JSON
         assert!(json_val.get("scope").is_none());
         Ok(())
     }
