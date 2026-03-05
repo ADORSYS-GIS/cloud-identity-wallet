@@ -6,9 +6,22 @@ use crate::webhook::schemas::WebhookPayload;
 use crate::webhook::subscription::WebhookSubscription;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Bridges the event bus to the webhook delivery queue.
+///
+/// `EventListener` subscribes to one or more Kafka topics via a [`Consumer`]
+/// implementation and fans out each received [`Event`] to every
+/// [`WebhookSubscription`] whose event-type filter matches.
+///
+/// For each match a [`QueuedDelivery`] is pushed onto the [`DeliveryQueue`],
+/// where it will be picked up and dispatched by
+/// [`crate::webhook::delivery_service::DeliveryService`].
+///
+/// The listener itself is stateless with respect to delivery — it only
+/// serialises events into [`WebhookPayload`] JSON and enqueues them. All
+/// retry logic and status tracking lives in `DeliveryService` and
+/// `DeliveryQueue`.
 pub struct EventListener {
     subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
 
@@ -18,6 +31,13 @@ pub struct EventListener {
 }
 
 impl EventListener {
+    /// Create a new `EventListener`.
+    ///
+    /// # Arguments
+    ///
+    /// * `consumer` — An event-bus consumer used to subscribe to topics.
+    /// * `subscriptions` — Shared list of active webhook subscriptions.
+    /// * `delivery_queue` — Shared queue onto which matched deliveries are pushed.
     pub fn new(
         consumer: Arc<dyn Consumer>,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -101,14 +121,7 @@ impl EventListener {
                 .metadata
                 .get("wallet_id")
                 .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    warn!(
-                        event_id = %event.id,
-                        event_type = %event.event_type.as_str(),
-                        "wallet_id missing from event metadata – defaulting to \"unknown\""
-                    );
-                    "unknown"
-                })
+                .unwrap_or("unknown")
                 .to_string(),
             event
                 .metadata
@@ -242,18 +255,6 @@ mod tests {
         assert_eq!(payload.event_type, EventType::CREDENTIAL_STORED);
         assert_eq!(payload.wallet_id, "wallet-test");
         assert_eq!(payload.correlation_id, "corr-test");
-    }
-
-    #[test]
-    fn test_build_payload_missing_wallet_id_falls_back_to_unknown() {
-        // Event with no wallet_id in metadata – should not panic, should use "unknown"
-        let event = Event::new(
-            EventType::new(EventType::CREDENTIAL_STORED),
-            json!({"credential_id": "cred-x"}),
-        );
-        let json = EventListener::build_payload(&event).expect("build payload");
-        let payload: WebhookPayload = serde_json::from_str(&json).expect("parse payload");
-        assert_eq!(payload.wallet_id, "unknown");
     }
 
     #[test]

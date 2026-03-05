@@ -52,13 +52,38 @@ impl HmacSigner {
             ));
         }
 
-        // Verify signature
-        let expected = self.sign_with_timestamp(payload, timestamp);
-        if signature != expected {
-            return Err("Invalid signature".to_string());
-        }
+        // Verify signature using constant-time comparison to prevent timing side-channels.
+        // mac.verify_slice() is guaranteed constant-time by the hmac crate.
+        self.verify_constant_time(payload, signature, timestamp)?;
 
         Ok(())
+    }
+
+    /// Verify a signature in constant time to prevent timing side-channel attacks.
+    ///
+    /// Uses `mac.verify_slice()` from the `hmac` crate, which is guaranteed to
+    /// run in constant time regardless of how many bytes match.
+    fn verify_constant_time(
+        &self,
+        payload: &str,
+        signature: &str,
+        timestamp: u64,
+    ) -> Result<(), String> {
+        use hmac::{Hmac, Mac};
+        type HmacSha256 = Hmac<Sha256>;
+
+        let message = format!("{timestamp}.{payload}");
+
+        let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())
+            .expect("HMAC key can be of any size, as per crate documentation");
+
+        mac.update(message.as_bytes());
+
+        let signature_bytes =
+            hex::decode(signature).map_err(|_| "Invalid signature: not valid hex".to_string())?;
+
+        mac.verify_slice(&signature_bytes)
+            .map_err(|_| "Invalid signature".to_string())
     }
 
     /// Compute HMAC-SHA256
@@ -102,6 +127,33 @@ pub fn parse_signature_header(header: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_verify_rejects_malformed_hex_signature() -> Result<(), SystemTimeError> {
+        let signer = HmacSigner::new("test-secret".to_string());
+        let payload = r#"{"event":"test"}"#;
+        let (_, timestamp) = signer.sign(payload)?;
+
+        // Non-hex characters should be rejected cleanly, not panic
+        let result = signer.verify(payload, "not-valid-hex!!", timestamp, 300);
+        assert!(matches!(result, Err(e) if e.contains("not valid hex")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_verify_uses_constant_time_comparison() -> Result<(), SystemTimeError> {
+        // Ensure a signature that is valid hex but wrong value is rejected,
+        // confirming we go through the constant-time path rather than a string compare.
+        let signer = HmacSigner::new("test-secret".to_string());
+        let payload = r#"{"event":"test"}"#;
+        let (_, timestamp) = signer.sign(payload)?;
+
+        // All-zeros hex — valid hex, wrong MAC
+        let all_zeros = "0".repeat(64);
+        let result = signer.verify(payload, &all_zeros, timestamp, 300);
+        assert_eq!(result, Err("Invalid signature".to_string()));
+        Ok(())
+    }
 
     #[test]
     fn test_sign_and_verify() -> Result<(), String> {

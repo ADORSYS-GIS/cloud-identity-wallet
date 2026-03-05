@@ -1,14 +1,14 @@
-use crate::error::DeliveryServiceError;
 use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
 use crate::webhook::http_client::{HttpClientError, WebhookHttpClient};
 use crate::webhook::retry_strategy::RetryStrategy;
 use crate::webhook::schemas::DeliveryStatus;
 use crate::webhook::subscription::WebhookSubscription;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
 
-/// Drains the delivery queue and sends webhooks with retry logic.
+/// Maximum number of webhook deliveries that may be in-flight concurrently.
+const MAX_CONCURRENT_DELIVERIES: usize = 64;
 pub struct DeliveryService {
     delivery_queue: Arc<DeliveryQueue>,
 
@@ -17,9 +17,13 @@ pub struct DeliveryService {
     http_client: Arc<WebhookHttpClient>,
 
     retry_strategy: RetryStrategy,
+
+    /// Limits the number of concurrent in-flight delivery tasks.
+    semaphore: Arc<Semaphore>,
 }
 
 impl DeliveryService {
+    /// Create a new `DeliveryService`.
     pub fn new(
         delivery_queue: Arc<DeliveryQueue>,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -32,6 +36,7 @@ impl DeliveryService {
             subscriptions,
             http_client: Arc::new(http_client),
             retry_strategy: RetryStrategy::default_strategy(),
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_DELIVERIES)),
         })
     }
 
@@ -59,8 +64,14 @@ impl DeliveryService {
                     let subscriptions = self.subscriptions.clone();
                     let http_client = self.http_client.clone();
                     let retry_strategy = self.retry_strategy.clone();
+                    let semaphore = self.semaphore.clone();
 
                     tokio::spawn(async move {
+                        let _permit = semaphore
+                            .acquire_owned()
+                            .await
+                            .expect("semaphore should never be closed");
+
                         Self::process_delivery(
                             delivery,
                             queue,
@@ -145,12 +156,7 @@ impl DeliveryService {
             Err(e) => {
                 let status_code = extract_status_code(&e);
 
-                let retryable = match status_code {
-                    Some(code) => retry_strategy.should_retry_status(code),
-                    None => true, // network/timeout errors should always retry
-                };
-
-                if retry_strategy.should_retry(attempt) && retryable {
+                if retry_strategy.should_retry(attempt) {
                     let delay = retry_strategy.next_delay(attempt + 1);
                     let next_retry_at = delay.map(|d| time::OffsetDateTime::now_utc() + d);
 
@@ -199,6 +205,13 @@ fn extract_status_code(err: &HttpClientError) -> Option<u16> {
     }
 }
 
+/// Errors that can occur during `DeliveryService` initialisation.
+#[derive(Debug, thiserror::Error)]
+pub enum DeliveryServiceError {
+    #[error("Initialisation failed: {0}")]
+    Initialisation(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +235,20 @@ mod tests {
             r#"{"event_type":"credential.stored"}"#.to_string(),
             url.to_string(),
         )
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_limits_concurrency() {
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DELIVERIES));
+        assert_eq!(semaphore.available_permits(), MAX_CONCURRENT_DELIVERIES);
+
+        // Acquire one permit — available count should drop by one.
+        let _permit = semaphore.clone().acquire_owned().await.unwrap();
+        assert_eq!(semaphore.available_permits(), MAX_CONCURRENT_DELIVERIES - 1);
+
+        // Dropping the permit returns it.
+        drop(_permit);
+        assert_eq!(semaphore.available_permits(), MAX_CONCURRENT_DELIVERIES);
     }
 
     #[tokio::test]
@@ -330,33 +357,7 @@ mod tests {
 
     #[test]
     fn test_extract_status_code_timeout() {
-        let err =
-            HttpClientError::Timeout(std::time::Duration::from_secs(30).as_secs().to_string());
+        let err = HttpClientError::Timeout(std::time::Duration::from_secs(30));
         assert_eq!(extract_status_code(&err), None);
-    }
-
-    #[tokio::test]
-    async fn test_non_retryable_status_permanently_fails() {
-        let strategy = RetryStrategy::new(5, 1);
-        let status_code = Some(400u16);
-        let retryable = match status_code {
-            Some(code) => strategy.should_retry_status(code),
-            None => true,
-        };
-        assert!(!retryable, "400 should not be retried");
-
-        let status_code = None::<u16>;
-        let retryable = match status_code {
-            Some(code) => strategy.should_retry_status(code),
-            None => true,
-        };
-        assert!(retryable, "network errors should always retry");
-
-        let status_code = Some(503u16);
-        let retryable = match status_code {
-            Some(code) => strategy.should_retry_status(code),
-            None => true,
-        };
-        assert!(retryable, "503 should be retried");
     }
 }

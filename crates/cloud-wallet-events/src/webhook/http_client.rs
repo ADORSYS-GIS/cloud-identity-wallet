@@ -1,4 +1,3 @@
-use crate::error::SignatureError;
 use reqwest::{Client, Response, StatusCode};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -13,8 +12,8 @@ pub enum HttpClientError {
     #[error("HTTP request failed: {0}")]
     RequestFailed(String),
 
-    #[error("Request timed out: {0}")]
-    Timeout(String),
+    #[error("Request timeout after {0:?}")]
+    Timeout(Duration),
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -25,14 +24,14 @@ pub enum HttpClientError {
     #[error("Response error: status={status}, body={body}")]
     ResponseError { status: StatusCode, body: String },
 
-    #[error(transparent)]
-    Signature(#[from] SignatureError),
+    #[error("Failed to sign request: {0}")]
+    SignatureError(String),
 }
 
 impl From<reqwest::Error> for HttpClientError {
     fn from(err: reqwest::Error) -> Self {
         if err.is_timeout() {
-            HttpClientError::Timeout(err.to_string())
+            HttpClientError::Timeout(Duration::from_secs(30))
         } else if err.is_connect() {
             HttpClientError::NetworkError(err.to_string())
         } else {
@@ -41,18 +40,31 @@ impl From<reqwest::Error> for HttpClientError {
     }
 }
 
-/// HTTP client wrapper for webhook delivery
+/// HTTP client wrapper for webhook delivery.
+///
+/// Wraps a [`reqwest::Client`] with webhook-specific behaviour:
+/// - Sets the `Content-Type: application/json` header on every request.
+/// - Adds authentication headers based on the subscription's [`WebhookAuth`]
+///   configuration (HMAC-SHA256 signature or Bearer token).
+/// - Enforces a configurable request timeout (default 30 seconds).
+/// - Sets a `WalletEvents/<version>` `User-Agent` header for server-side
+///   identification.
+///
+/// Returns `(status_code, response_time_ms, body)` on a successful (2xx)
+/// response, or an [`HttpClientError`] variant for all failure cases.
 pub struct WebhookHttpClient {
     client: Client,
 }
 
 impl WebhookHttpClient {
-    /// Create a new HTTP client with default timeout (30 seconds)
+    /// Create a new HTTP client with the default 30-second request timeout.
     pub fn new() -> Result<Self, HttpClientError> {
         Self::with_timeout(Duration::from_secs(30))
     }
 
-    /// Create a new HTTP client with custom timeout
+    /// Create a new HTTP client with a custom request timeout.
+    ///
+    /// The timeout applies to the full round-trip: connection + send + receive.
     pub fn with_timeout(timeout: Duration) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .timeout(timeout)
@@ -128,7 +140,7 @@ impl WebhookHttpClient {
                 let signer = HmacSigner::new(secret.clone());
                 let (signature, timestamp) = signer
                     .sign(payload)
-                    .map_err(|e| SignatureError::SigningFailed(e.to_string()))?;
+                    .map_err(|e| HttpClientError::SignatureError(e.to_string()))?;
 
                 request = request
                     .header("X-Webhook-Signature", format_signature_header(&signature))
@@ -161,8 +173,8 @@ mod tests {
 
     #[test]
     fn test_http_client_error_display() {
-        let err = HttpClientError::Timeout("operation timed out".to_string());
-        assert!(err.to_string().contains("timed out"));
+        let err = HttpClientError::Timeout(Duration::from_secs(30));
+        assert_eq!(err.to_string(), "Request timeout after 30s");
 
         let err = HttpClientError::InvalidUrl("invalid".to_string());
         assert_eq!(err.to_string(), "Invalid URL: invalid");
@@ -170,10 +182,11 @@ mod tests {
         let err = HttpClientError::NetworkError("connection refused".to_string());
         assert_eq!(err.to_string(), "Network error: connection refused");
 
-        let err = HttpClientError::Signature(SignatureError::SigningFailed(
-            "time went backwards".to_string(),
-        ));
-        assert!(err.to_string().contains("time went backwards"));
+        let err = HttpClientError::SignatureError("time went backwards".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Failed to sign request: time went backwards"
+        );
     }
 
     #[test]
