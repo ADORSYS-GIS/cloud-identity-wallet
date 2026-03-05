@@ -200,9 +200,13 @@ impl Credential {
     }
 
     /// Suspends this credential.
-    pub fn suspend(&mut self) {
-        if self.status != CredentialStatus::Revoked {
-            self.status = CredentialStatus::Suspended;
+    pub fn suspend(&mut self) -> Result<(), CredentialError> {
+        match self.status {
+            CredentialStatus::Revoked => Err(CredentialError::Revoked),
+            CredentialStatus::Active | CredentialStatus::Suspended => {
+                self.status = CredentialStatus::Suspended;
+                Ok(())
+            }
         }
     }
 
@@ -373,18 +377,23 @@ mod tests {
     }
 
     #[test]
-    fn suspend_on_revoked_is_no_op() -> Result<(), ValidationError> {
+    fn cannot_suspend_revoked() -> Result<(), ValidationError> {
         let mut cred = valid_credential(sd_jwt_payload())?;
         cred.revoke();
-        cred.suspend();
-        assert_eq!(cred.status, CredentialStatus::Revoked);
+        let err = cred
+            .suspend()
+            .expect_err("expected an error suspending a revoked credential");
+        assert!(
+            matches!(err, CredentialError::Revoked),
+            "unexpected error variant: {err:?}"
+        );
         Ok(())
     }
 
     #[test]
     fn suspend_and_reactivate() -> Result<(), Box<dyn std::error::Error>> {
         let mut cred = valid_credential(sd_jwt_payload())?;
-        cred.suspend();
+        cred.suspend()?;
         assert_eq!(cred.status, CredentialStatus::Suspended);
         cred.reactivate()?;
         assert_eq!(cred.status, CredentialStatus::Active);

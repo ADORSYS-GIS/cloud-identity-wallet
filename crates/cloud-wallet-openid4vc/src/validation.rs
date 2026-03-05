@@ -1,6 +1,9 @@
+#[cfg(feature = "schema-validation")]
 use crate::errors::ValidationError;
 #[cfg(feature = "schema-validation")]
-use crate::schema::CredentialConfiguration;
+use crate::models::{Credential, CredentialPayload};
+#[cfg(feature = "schema-validation")]
+use crate::schema::CredentialValidationConfig;
 
 /// Structural self-validation that a type can perform without external context.
 pub trait Validatable {
@@ -9,7 +12,7 @@ pub trait Validatable {
 }
 
 /// Validates a credential's claims against the JSON Schema defined in a
-/// [`CredentialConfiguration`].
+/// [`CredentialValidationConfig`].
 #[cfg(feature = "schema-validation")]
 pub struct SchemaValidator;
 
@@ -17,8 +20,8 @@ pub struct SchemaValidator;
 impl SchemaValidator {
     /// Validates `credential`'s claims against the schema in `config`.
     pub fn validate_claims(
-        credential: &crate::models::Credential,
-        config: &CredentialConfiguration,
+        credential: &Credential,
+        config: &CredentialValidationConfig,
     ) -> Result<(), ValidationError> {
         let Some(schema_value) = config.claims_schema() else {
             return Ok(());
@@ -29,7 +32,7 @@ impl SchemaValidator {
 
     /// Pre-compiles the JSON Schema from a configuration for reuse.
     pub fn compile_for(
-        config: &CredentialConfiguration,
+        config: &CredentialValidationConfig,
     ) -> Result<Option<jsonschema::Validator>, ValidationError> {
         match config.claims_schema() {
             Some(schema) => Self::compile(schema).map(Some),
@@ -39,8 +42,8 @@ impl SchemaValidator {
 
     /// Validates `credential` using a pre-compiled [`jsonschema::Validator`].
     pub fn validate_with_compiled(
-        credential: &crate::models::Credential,
-        config: &CredentialConfiguration,
+        credential: &Credential,
+        config: &CredentialValidationConfig,
         validator: &jsonschema::Validator,
     ) -> Result<(), ValidationError> {
         Self::run(validator, credential, config)
@@ -54,11 +57,9 @@ impl SchemaValidator {
 
     fn run(
         validator: &jsonschema::Validator,
-        credential: &crate::models::Credential,
-        config: &CredentialConfiguration,
+        credential: &Credential,
+        config: &CredentialValidationConfig,
     ) -> Result<(), ValidationError> {
-        use crate::models::CredentialPayload;
-
         let claims = match &credential.credential {
             CredentialPayload::MsoMdoc(mdoc) => {
                 let Some(ns) = config.mdoc_claims_namespace() else {
@@ -66,7 +67,7 @@ impl SchemaValidator {
                 };
                 mdoc.claims(ns)
                     .ok_or_else(|| ValidationError::SchemaMismatch {
-                        schema_id: format!("{:?}", config.format),
+                        schema_id: config.credential_configuration_id.clone(),
                         details: format!("namespace '{ns}' not present in mdoc credential"),
                     })?
             }
@@ -74,7 +75,7 @@ impl SchemaValidator {
                 .credential
                 .claims()
                 .ok_or_else(|| ValidationError::SchemaMismatch {
-                    schema_id: format!("{:?}", config.format),
+                    schema_id: config.credential_configuration_id.clone(),
                     details: "no claims available for validation".to_owned(),
                 })?,
         };
@@ -88,7 +89,7 @@ impl SchemaValidator {
             Ok(())
         } else {
             Err(ValidationError::SchemaMismatch {
-                schema_id: format!("{:?}", config.format),
+                schema_id: config.credential_configuration_id.clone(),
                 details: errors.join("\n"),
             })
         }
@@ -101,7 +102,9 @@ mod tests {
     use serde_json::json;
     use time::{Duration, OffsetDateTime};
 
-    use crate::models::{Credential, CredentialPayload, CredentialStatus, SdJwtCredential};
+    use crate::models::{
+        Credential, CredentialPayload, CredentialStatus, SdJwtCredential, new_credential_id,
+    };
 
     fn sd_jwt_credential(claims: serde_json::Value) -> Result<Credential, ValidationError> {
         Credential::new(
@@ -132,7 +135,7 @@ mod tests {
     fn validate_trait_catches_blank_issuer() {
         use crate::validation::Validatable;
         let cred = Credential {
-            id: crate::models::new_credential_id(),
+            id: new_credential_id(),
             issuer: "  ".to_owned(),
             subject: "user-1234".to_owned(),
             issued_at: OffsetDateTime::now_utc(),
@@ -154,9 +157,7 @@ mod tests {
     mod schema_validator_tests {
         use super::*;
         use crate::models::{MsoMdocCredential, W3cVcJwtCredential};
-        use crate::schema::{
-            CredentialConfiguration, CredentialDefinition, CredentialFormatIdentifier,
-        };
+        use crate::schema::CredentialValidationConfig;
         use crate::validation::SchemaValidator;
 
         fn w3c_credential(subject: serde_json::Value) -> Result<Credential, ValidationError> {
@@ -194,31 +195,19 @@ mod tests {
             )
         }
 
-        fn config_with_schema(schema: serde_json::Value) -> CredentialConfiguration {
-            CredentialConfiguration {
-                format: CredentialFormatIdentifier::DcSdJwt,
-                credential_definition: CredentialDefinition::SdJwt {
-                    vct: "https://credentials.example.com/identity".to_owned(),
-                    claims_schema: Some(schema),
-                },
-                cryptographic_binding_methods_supported: vec![],
-                credential_signing_alg_values_supported: vec![],
-                display: vec![],
-                scope: None,
+        fn config_with_schema(schema: serde_json::Value) -> CredentialValidationConfig {
+            CredentialValidationConfig {
+                credential_configuration_id: "identity_credential".to_owned(),
+                claims_schema: Some(schema),
+                mdoc_claims_namespace: None,
             }
         }
 
-        fn config_without_schema() -> CredentialConfiguration {
-            CredentialConfiguration {
-                format: CredentialFormatIdentifier::DcSdJwt,
-                credential_definition: CredentialDefinition::SdJwt {
-                    vct: "https://credentials.example.com/identity".to_owned(),
-                    claims_schema: None,
-                },
-                cryptographic_binding_methods_supported: vec![],
-                credential_signing_alg_values_supported: vec![],
-                display: vec![],
-                scope: None,
+        fn config_without_schema() -> CredentialValidationConfig {
+            CredentialValidationConfig {
+                credential_configuration_id: "identity_credential".to_owned(),
+                claims_schema: None,
+                mdoc_claims_namespace: None,
             }
         }
 
@@ -252,18 +241,11 @@ mod tests {
         fn mdoc_config_with_namespace(
             namespace: &str,
             schema: serde_json::Value,
-        ) -> CredentialConfiguration {
-            CredentialConfiguration {
-                format: CredentialFormatIdentifier::MsoMdoc,
-                credential_definition: CredentialDefinition::MsoMdoc {
-                    doctype: "org.iso.18013.5.1.mDL".to_owned(),
-                    claims_namespace: Some(namespace.to_owned()),
-                    claims_schema: Some(schema),
-                },
-                cryptographic_binding_methods_supported: vec![],
-                credential_signing_alg_values_supported: vec![],
-                display: vec![],
-                scope: None,
+        ) -> CredentialValidationConfig {
+            CredentialValidationConfig {
+                credential_configuration_id: "mdl_credential".to_owned(),
+                claims_schema: Some(schema),
+                mdoc_claims_namespace: Some(namespace.to_owned()),
             }
         }
 
@@ -344,18 +326,10 @@ mod tests {
                 },
                 "required": ["degree", "institution"]
             });
-            let config = CredentialConfiguration {
-                format: CredentialFormatIdentifier::JwtVcJson,
-                credential_definition: CredentialDefinition::JwtVcJson {
-                    credential_definition: crate::schema::JwtVcCredentialDefinition {
-                        types: vec!["VerifiableCredential".to_owned()],
-                    },
-                    claims_schema: Some(schema),
-                },
-                cryptographic_binding_methods_supported: vec![],
-                credential_signing_alg_values_supported: vec![],
-                display: vec![],
-                scope: None,
+            let config = CredentialValidationConfig {
+                credential_configuration_id: "university_degree".to_owned(),
+                claims_schema: Some(schema),
+                mdoc_claims_namespace: None,
             };
 
             let valid = w3c_credential(json!({ "degree": "BSc", "institution": "Uni" }))?;
@@ -421,17 +395,10 @@ mod tests {
 
         #[test]
         fn mdoc_without_namespace_in_config_passes() -> Result<(), Box<dyn std::error::Error>> {
-            let config = CredentialConfiguration {
-                format: CredentialFormatIdentifier::MsoMdoc,
-                credential_definition: CredentialDefinition::MsoMdoc {
-                    doctype: "org.iso.18013.5.1.mDL".to_owned(),
-                    claims_namespace: None,
-                    claims_schema: Some(mdl_schema()),
-                },
-                cryptographic_binding_methods_supported: vec![],
-                credential_signing_alg_values_supported: vec![],
-                display: vec![],
-                scope: None,
+            let config = CredentialValidationConfig {
+                credential_configuration_id: "mdl_credential".to_owned(),
+                claims_schema: Some(mdl_schema()),
+                mdoc_claims_namespace: None, // no namespace — validator skips mdoc claims
             };
             let cred = mdoc_credential("org.iso.18013.5.1", json!({}))?;
             assert!(SchemaValidator::validate_claims(&cred, &config).is_ok());
