@@ -330,7 +330,8 @@ mod tests {
 
     #[test]
     fn test_extract_status_code_timeout() {
-        let err = HttpClientError::Timeout(std::time::Duration::from_secs(30).as_secs().to_string());
+        let err =
+            HttpClientError::Timeout(std::time::Duration::from_secs(30).as_secs().to_string());
         assert_eq!(extract_status_code(&err), None);
     }
 
