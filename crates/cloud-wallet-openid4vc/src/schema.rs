@@ -44,26 +44,6 @@ pub struct LogoImage {
     pub alt_text: Option<String>,
 }
 
-/// Format-specific parameters for a credential configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum CredentialDefinition {
-    SdJwt {
-        vct: String,
-    },
-
-    MsoMdoc {
-        doctype: String,
-
-        #[serde(skip_serializing_if = "Option::is_none")]
-        claims_namespace: Option<String>,
-    },
-
-    JwtVcJson {
-        credential_definition: JwtVcCredentialDefinition,
-    },
-}
-
 /// Wallet-internal validation settings paired with a [`CredentialConfiguration`].
 #[derive(Debug, Clone)]
 pub struct CredentialValidationConfig {
@@ -77,19 +57,10 @@ pub struct CredentialValidationConfig {
     pub mdoc_claims_namespace: Option<String>,
 }
 
-/// The `credential_definition` object for `jwt_vc_json` format profiles.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JwtVcCredentialDefinition {
-    #[serde(rename = "type")]
-    pub types: Vec<String>,
-}
-
 /// Issuer's description of a particular kind of credential it can issue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialConfiguration {
     pub format: CredentialFormatIdentifier,
-
-    pub credential_definition: CredentialDefinition,
 
     #[serde(default)]
     pub cryptographic_binding_methods_supported: Vec<String>,
@@ -131,9 +102,6 @@ mod tests {
     fn sd_jwt_config() -> CredentialConfiguration {
         CredentialConfiguration {
             format: CredentialFormatIdentifier::DcSdJwt,
-            credential_definition: CredentialDefinition::SdJwt {
-                vct: "https://credentials.example.com/identity_credential".to_owned(),
-            },
             cryptographic_binding_methods_supported: vec!["jwk".to_owned()],
             credential_signing_alg_values_supported: vec!["ES256".to_owned()],
             display: vec![CredentialDisplay {
@@ -167,30 +135,8 @@ mod tests {
     fn mdoc_config() -> CredentialConfiguration {
         CredentialConfiguration {
             format: CredentialFormatIdentifier::MsoMdoc,
-            credential_definition: CredentialDefinition::MsoMdoc {
-                doctype: "org.iso.18013.5.1.mDL".to_owned(),
-                claims_namespace: None,
-            },
             cryptographic_binding_methods_supported: vec!["jwk".to_owned()],
             credential_signing_alg_values_supported: vec!["ES256".to_owned()],
-            display: vec![],
-            scope: None,
-        }
-    }
-
-    fn jwt_vc_config() -> CredentialConfiguration {
-        CredentialConfiguration {
-            format: CredentialFormatIdentifier::JwtVcJson,
-            credential_definition: CredentialDefinition::JwtVcJson {
-                credential_definition: JwtVcCredentialDefinition {
-                    types: vec![
-                        "VerifiableCredential".to_owned(),
-                        "UniversityDegreeCredential".to_owned(),
-                    ],
-                },
-            },
-            cryptographic_binding_methods_supported: vec!["did:key".to_owned()],
-            credential_signing_alg_values_supported: vec!["EdDSA".to_owned()],
             display: vec![],
             scope: None,
         }
@@ -256,28 +202,6 @@ mod tests {
             "claims_schema must not appear in serialized CredentialConfiguration"
         );
         Ok(())
-    }
-
-    #[test]
-    fn jwt_vc_config_has_correct_types() {
-        let config = jwt_vc_config();
-        let CredentialDefinition::JwtVcJson {
-            credential_definition,
-            ..
-        } = &config.credential_definition
-        else {
-            return;
-        };
-        assert!(
-            credential_definition
-                .types
-                .contains(&"VerifiableCredential".to_owned())
-        );
-        assert!(
-            credential_definition
-                .types
-                .contains(&"UniversityDegreeCredential".to_owned())
-        );
     }
 
     // Round-trip serialization
