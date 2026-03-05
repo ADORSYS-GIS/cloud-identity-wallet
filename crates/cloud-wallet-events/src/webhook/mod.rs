@@ -9,7 +9,7 @@ pub mod subscription;
 
 // Commonly used re-exports
 pub use delivery_queue::{DeliveryQueue, QueuedDelivery};
-pub use delivery_service::{DeliveryService, DeliveryServiceError};
+pub use delivery_service::DeliveryService;
 pub use event_listener::{EventListener, ListenerError};
 pub use hmac_signer::{HmacSigner, format_signature_header, parse_signature_header};
 pub use http_client::{HttpClientError, WebhookHttpClient};

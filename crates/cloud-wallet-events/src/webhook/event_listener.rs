@@ -6,7 +6,7 @@ use crate::webhook::schemas::WebhookPayload;
 use crate::webhook::subscription::WebhookSubscription;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Bridges the event bus to the webhook delivery queue.
 pub struct EventListener {
@@ -101,7 +101,14 @@ impl EventListener {
                 .metadata
                 .get("wallet_id")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
+                .unwrap_or_else(|| {
+                    warn!(
+                        event_id = %event.id,
+                        event_type = %event.event_type.as_str(),
+                        "wallet_id missing from event metadata – defaulting to \"unknown\""
+                    );
+                    "unknown"
+                })
                 .to_string(),
             event
                 .metadata
@@ -235,6 +242,18 @@ mod tests {
         assert_eq!(payload.event_type, EventType::CREDENTIAL_STORED);
         assert_eq!(payload.wallet_id, "wallet-test");
         assert_eq!(payload.correlation_id, "corr-test");
+    }
+
+    #[test]
+    fn test_build_payload_missing_wallet_id_falls_back_to_unknown() {
+        // Event with no wallet_id in metadata – should not panic, should use "unknown"
+        let event = Event::new(
+            EventType::new(EventType::CREDENTIAL_STORED),
+            json!({"credential_id": "cred-x"}),
+        );
+        let json = EventListener::build_payload(&event).expect("build payload");
+        let payload: WebhookPayload = serde_json::from_str(&json).expect("parse payload");
+        assert_eq!(payload.wallet_id, "unknown");
     }
 
     #[test]

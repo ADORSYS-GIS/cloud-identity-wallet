@@ -1,3 +1,4 @@
+use crate::error::SignatureError;
 use reqwest::{Client, Response, StatusCode};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -12,8 +13,8 @@ pub enum HttpClientError {
     #[error("HTTP request failed: {0}")]
     RequestFailed(String),
 
-    #[error("Request timeout after {0:?}")]
-    Timeout(Duration),
+    #[error("Request timed out: {0}")]
+    Timeout(String),
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -24,14 +25,14 @@ pub enum HttpClientError {
     #[error("Response error: status={status}, body={body}")]
     ResponseError { status: StatusCode, body: String },
 
-    #[error("Failed to sign request: {0}")]
-    SignatureError(String),
+    #[error(transparent)]
+    Signature(#[from] SignatureError),
 }
 
 impl From<reqwest::Error> for HttpClientError {
     fn from(err: reqwest::Error) -> Self {
         if err.is_timeout() {
-            HttpClientError::Timeout(Duration::from_secs(30))
+            HttpClientError::Timeout(err.to_string())
         } else if err.is_connect() {
             HttpClientError::NetworkError(err.to_string())
         } else {
@@ -127,7 +128,7 @@ impl WebhookHttpClient {
                 let signer = HmacSigner::new(secret.clone());
                 let (signature, timestamp) = signer
                     .sign(payload)
-                    .map_err(|e| HttpClientError::SignatureError(e.to_string()))?;
+                    .map_err(|e| SignatureError::SigningFailed(e.to_string()))?;
 
                 request = request
                     .header("X-Webhook-Signature", format_signature_header(&signature))
@@ -160,8 +161,8 @@ mod tests {
 
     #[test]
     fn test_http_client_error_display() {
-        let err = HttpClientError::Timeout(Duration::from_secs(30));
-        assert_eq!(err.to_string(), "Request timeout after 30s");
+        let err = HttpClientError::Timeout("operation timed out".to_string());
+        assert!(err.to_string().contains("timed out"));
 
         let err = HttpClientError::InvalidUrl("invalid".to_string());
         assert_eq!(err.to_string(), "Invalid URL: invalid");
@@ -169,11 +170,10 @@ mod tests {
         let err = HttpClientError::NetworkError("connection refused".to_string());
         assert_eq!(err.to_string(), "Network error: connection refused");
 
-        let err = HttpClientError::SignatureError("time went backwards".to_string());
-        assert_eq!(
-            err.to_string(),
-            "Failed to sign request: time went backwards"
-        );
+        let err = HttpClientError::Signature(SignatureError::SigningFailed(
+            "time went backwards".to_string(),
+        ));
+        assert!(err.to_string().contains("time went backwards"));
     }
 
     #[test]

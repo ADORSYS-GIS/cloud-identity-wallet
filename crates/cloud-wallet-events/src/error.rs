@@ -16,3 +16,17 @@ pub enum EventError {
     #[error("Handler error: {0}")]
     HandlerError(String),
 }
+
+/// Errors that can occur during `DeliveryService` initialisation.
+#[derive(Debug, Error)]
+pub enum DeliveryServiceError {
+    #[error("Initialisation failed: {0}")]
+    Initialisation(String),
+}
+
+/// Errors that can occur when signing a webhook request.
+#[derive(Debug, Error)]
+pub enum SignatureError {
+    #[error("Failed to sign request: {0}")]
+    SigningFailed(String),
+}

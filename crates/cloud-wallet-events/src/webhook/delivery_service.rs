@@ -1,3 +1,4 @@
+use crate::error::DeliveryServiceError;
 use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
 use crate::webhook::http_client::{HttpClientError, WebhookHttpClient};
 use crate::webhook::retry_strategy::RetryStrategy;
@@ -144,7 +145,12 @@ impl DeliveryService {
             Err(e) => {
                 let status_code = extract_status_code(&e);
 
-                if retry_strategy.should_retry(attempt) {
+                let retryable = match status_code {
+                    Some(code) => retry_strategy.should_retry_status(code),
+                    None => true, // network/timeout errors should always retry
+                };
+
+                if retry_strategy.should_retry(attempt) && retryable {
                     let delay = retry_strategy.next_delay(attempt + 1);
                     let next_retry_at = delay.map(|d| time::OffsetDateTime::now_utc() + d);
 
@@ -191,13 +197,6 @@ fn extract_status_code(err: &HttpClientError) -> Option<u16> {
         HttpClientError::ResponseError { status, .. } => Some(status.as_u16()),
         _ => None,
     }
-}
-
-/// Errors that can occur during `DeliveryService` initialisation.
-#[derive(Debug, thiserror::Error)]
-pub enum DeliveryServiceError {
-    #[error("Initialisation failed: {0}")]
-    Initialisation(String),
 }
 
 #[cfg(test)]
@@ -331,7 +330,32 @@ mod tests {
 
     #[test]
     fn test_extract_status_code_timeout() {
-        let err = HttpClientError::Timeout(std::time::Duration::from_secs(30));
+        let err = HttpClientError::Timeout(std::time::Duration::from_secs(30).as_secs().to_string());
         assert_eq!(extract_status_code(&err), None);
+    }
+
+    #[tokio::test]
+    async fn test_non_retryable_status_permanently_fails() {
+        let strategy = RetryStrategy::new(5, 1);
+        let status_code = Some(400u16);
+        let retryable = match status_code {
+            Some(code) => strategy.should_retry_status(code),
+            None => true,
+        };
+        assert!(!retryable, "400 should not be retried");
+
+        let status_code = None::<u16>;
+        let retryable = match status_code {
+            Some(code) => strategy.should_retry_status(code),
+            None => true,
+        };
+        assert!(retryable, "network errors should always retry");
+
+        let status_code = Some(503u16);
+        let retryable = match status_code {
+            Some(code) => strategy.should_retry_status(code),
+            None => true,
+        };
+        assert!(retryable, "503 should be retried");
     }
 }
