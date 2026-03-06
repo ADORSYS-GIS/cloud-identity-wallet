@@ -1,14 +1,7 @@
-[package]
-name = "cloud-identity-wallet"
-version.workspace = true
-edition.workspace = true
-readme.workspace = true
-license.workspace = true
-exclude = ["/.github/*", "/assets/*", "/docs/*"]
-
 [workspace]
 resolver = "2"
-members = ["cloud-wallet-crypto", "cloud-wallet-events"]
+
+members = ["cloud-wallet-events", "cloud-wallet-openid4vc", "cloud-wallet-crypto"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,15 +10,25 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-# Error handling
-color-eyre = "0.6"
-# Configuration
-config = "0.15"
 # Serialization / Deserialization
 serde = "1"
+serde_json = "1"
+
+# Error handling
+color-eyre = "0.6"
 thiserror = "2"
+
+# Configuration
+config = "0.15"
+
 # Logging and metrics
 tracing = "0.1"
+
+# IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date/Time
+time = { version = "0.3", features = ["macros", "serde-well-known"] }
 
 [workspace.lints.clippy]
 
@@ -35,6 +38,16 @@ missing_docs = "warn"
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
+
+# ── Root application package ──────────────────────────────────────────────────
+
+[package]
+name = "cloud-identity-wallet"
+version.workspace = true
+edition.workspace = true
+readme.workspace = true
+license.workspace = true
+exclude = ["/.github/*", "/assets/*", "/docs/*"]
 
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
@@ -47,7 +60,7 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
