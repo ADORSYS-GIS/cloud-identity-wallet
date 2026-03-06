@@ -1,3 +1,5 @@
+use reqwest::StatusCode;
+use std::time::Duration;
 use thiserror::Error;
 
 /// Errors that can occur in the event bus system.
@@ -29,4 +31,45 @@ pub enum DeliveryServiceError {
 pub enum SignatureError {
     #[error("Failed to sign request: {0}")]
     SigningFailed(String),
+}
+
+/// Errors that can occur in the `EventListener`.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenerError {
+    #[error("Failed to subscribe: {reason}")]
+    SubscribeFailed { reason: String },
+}
+
+/// Error type for HTTP client operations
+#[derive(Debug, Error)]
+pub enum HttpClientError {
+    #[error("HTTP request failed: {0}")]
+    RequestFailed(String),
+
+    #[error("Request timeout after {0:?}")]
+    Timeout(Duration),
+
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    #[error("Response error: status={status}, body={body}")]
+    ResponseError { status: StatusCode, body: String },
+
+    #[error("Failed to sign request: {0}")]
+    SignatureError(String),
+}
+
+impl From<reqwest::Error> for HttpClientError {
+    fn from(err: reqwest::Error) -> Self {
+        if err.is_timeout() {
+            HttpClientError::Timeout(Duration::from_secs(30))
+        } else if err.is_connect() {
+            HttpClientError::NetworkError(err.to_string())
+        } else {
+            HttpClientError::RequestFailed(err.to_string())
+        }
+    }
 }

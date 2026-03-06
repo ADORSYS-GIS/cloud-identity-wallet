@@ -1,9 +1,9 @@
-use crate::EventError;
 use crate::events::Event;
 use crate::traits::{Consumer, EventHandler, SubscriptionConfig};
 use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
 use crate::webhook::schemas::WebhookPayload;
 use crate::webhook::subscription::WebhookSubscription;
+use crate::{EventError, ListenerError};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
@@ -179,12 +179,7 @@ impl EventListener {
     }
 }
 
-/// Errors that can occur in the `EventListener`.
-#[derive(Debug, thiserror::Error)]
-pub enum ListenerError {
-    #[error("Failed to subscribe: {reason}")]
-    SubscribeFailed { reason: String },
-}
+
 
 #[cfg(test)]
 mod tests {

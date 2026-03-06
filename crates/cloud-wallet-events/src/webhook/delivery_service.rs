@@ -1,5 +1,6 @@
+use crate::error::HttpClientError;
 use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
-use crate::webhook::http_client::{HttpClientError, WebhookHttpClient};
+use crate::webhook::http_client::WebhookHttpClient;
 use crate::webhook::retry_strategy::RetryStrategy;
 use crate::webhook::schemas::DeliveryStatus;
 use crate::webhook::subscription::WebhookSubscription;
@@ -215,8 +216,8 @@ pub enum DeliveryServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::HttpClientError;
     use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
-    use crate::webhook::http_client::HttpClientError;
     use crate::webhook::retry_strategy::RetryStrategy;
     use crate::webhook::schemas::DeliveryState;
     use crate::webhook::subscription::{WebhookAuth, WebhookSubscription};

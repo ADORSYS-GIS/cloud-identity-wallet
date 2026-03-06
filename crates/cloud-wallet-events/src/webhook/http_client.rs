@@ -1,57 +1,12 @@
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Response};
 use std::time::{Duration, Instant};
-use thiserror::Error;
+use crate::error::HttpClientError;
 use tracing::{debug, warn};
 
 use super::hmac_signer::{HmacSigner, format_signature_header};
 use super::subscription::WebhookAuth;
 
-/// Error type for HTTP client operations
-#[derive(Debug, Error)]
-pub enum HttpClientError {
-    #[error("HTTP request failed: {0}")]
-    RequestFailed(String),
-
-    #[error("Request timeout after {0:?}")]
-    Timeout(Duration),
-
-    #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
-
-    #[error("Network error: {0}")]
-    NetworkError(String),
-
-    #[error("Response error: status={status}, body={body}")]
-    ResponseError { status: StatusCode, body: String },
-
-    #[error("Failed to sign request: {0}")]
-    SignatureError(String),
-}
-
-impl From<reqwest::Error> for HttpClientError {
-    fn from(err: reqwest::Error) -> Self {
-        if err.is_timeout() {
-            HttpClientError::Timeout(Duration::from_secs(30))
-        } else if err.is_connect() {
-            HttpClientError::NetworkError(err.to_string())
-        } else {
-            HttpClientError::RequestFailed(err.to_string())
-        }
-    }
-}
-
 /// HTTP client wrapper for webhook delivery.
-///
-/// Wraps a [`reqwest::Client`] with webhook-specific behaviour:
-/// - Sets the `Content-Type: application/json` header on every request.
-/// - Adds authentication headers based on the subscription's [`WebhookAuth`]
-///   configuration (HMAC-SHA256 signature or Bearer token).
-/// - Enforces a configurable request timeout (default 30 seconds).
-/// - Sets a `WalletEvents/<version>` `User-Agent` header for server-side
-///   identification.
-///
-/// Returns `(status_code, response_time_ms, body)` on a successful (2xx)
-/// response, or an [`HttpClientError`] variant for all failure cases.
 pub struct WebhookHttpClient {
     client: Client,
 }
@@ -164,6 +119,8 @@ impl WebhookHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::StatusCode;
+    use crate::error::HttpClientError;
 
     #[test]
     fn test_http_client_creation() -> Result<(), HttpClientError> {
