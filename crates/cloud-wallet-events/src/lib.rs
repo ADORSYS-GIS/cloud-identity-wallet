@@ -2,6 +2,7 @@ pub mod bus;
 pub mod error;
 pub mod events;
 pub mod traits;
+pub mod webhook;
 
 pub use bus::*;
 pub use error::*;

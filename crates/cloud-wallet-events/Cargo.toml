@@ -15,3 +15,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync",
 futures = "0.3"
 kafka = "0.10"
 parking_lot = "0.12"
+
+# Webhook delivery dependencies
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+reqwest = { version = "0.13", features = ["json"] }
+tracing = { workspace = true }
