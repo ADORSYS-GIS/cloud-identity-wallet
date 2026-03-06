@@ -1,85 +1,65 @@
+[package]
+name = "cloud-identity-wallet"
+version.workspace = true
+edition.workspace = true
+readme.workspace = true
+license.workspace = true
+exclude = ["/.github/*", "/assets/*", "/docs/*"]
+
 [workspace]
 resolver = "2"
-
-members = ["crates/cloud-wallet-vc"]
+members = ["cloud-wallet-crypto", "cloud-wallet-events"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
 readme = "README.md"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Error handling
+color-eyre = "0.6"
+# Configuration
+config = "0.15"
+# Serialization / Deserialization
+serde = "1"
+thiserror = "2"
+# Logging and metrics
+tracing = "0.1"
 
 [workspace.lints.clippy]
+
+[workspace.lints.rust]
+missing_docs = "warn"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
-[workspace.dependencies]
-# Serialization / Deserialization
-serde = "1"
-serde_json = "1"
-
-# Error handling
-color-eyre = "0.6"
-thiserror = "2"
-
-# Configuration
-config = "0.15"
-
-# Async runtime
-tokio = "1"
-
-# Logging and metrics
-tracing = "0.1"
-
-# Identifiers
-uuid = "1"
-
-# Time
-chrono = "0.4"
-
-# Database
-sqlx = { version = "0.8", default-features = false }
-
-# Async trait support
-async-trait = "0.1"
-
-# Workspace crates
-cloud-wallet-vc = { path = "./crates/cloud-wallet-vc" }
-
-[package]
-name = "cloud-identity-wallet"
-version.workspace = true
-license.workspace = true
-readme.workspace = true
-edition.workspace = true
-
 [dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 axum = { version = "0.8", features = ["macros"] }
-tower-http = { version = "0.6", features = ["trace", "cors"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-
 color-eyre.workspace = true
 config.workspace = true
-tracing.workspace = true
 serde = { workspace = true, features = ["derive"] }
-
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
 
 [profile.dev]
 # Speed up compilation time
 debug = 1
 
 [profile.release]
-# Maximize runtime speed
-codegen-units = 1
+strip = "symbols"
 lto = "fat"
 # Abort on panic
 panic = "abort"
-strip = "symbols"
+# Maximize runtime speed
+codegen-units = 1
