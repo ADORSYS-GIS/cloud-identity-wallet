@@ -136,7 +136,7 @@ impl fmt::Debug for Error {
     }
 }
 
-/// The category of an [`Error`].
+/// The category of an [`struct@Error`].
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Error)]
 #[non_exhaustive]
 pub enum ErrorKind {
