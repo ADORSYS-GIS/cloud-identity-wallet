@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
 
 /// Maximum number of webhook deliveries that may be in-flight concurrently.
-const MAX_CONCURRENT_DELIVERIES: usize = 64;
+pub const MAX_CONCURRENT_DELIVERIES: usize = 64;
 
 /// Background service that drains the [`DeliveryQueue`] and sends webhooks.
 ///
