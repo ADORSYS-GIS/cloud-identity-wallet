@@ -20,9 +20,9 @@ pub const MAX_CONCURRENT_DELIVERIES: usize = 64;
 /// Each delivery task:
 /// 1. Looks up the matching [`WebhookSubscription`] to obtain auth credentials.
 /// 2. POSTs the payload to the subscription URL via [`WebhookHttpClient`].
-/// 3. On success, records a [`DeliveryState::Succeeded`] status.
+/// 3. On success, records a [`crate::webhook::schemas::DeliveryState::Succeeded`] status.
 /// 4. On failure, checks [`RetryStrategy`] and either requeues with backoff or
-///    records a [`DeliveryState::PermanentFailure`] status.
+///    records a [`crate::webhook::schemas::DeliveryState::PermanentFailure`] status.
 pub struct DeliveryService {
     delivery_queue: Arc<DeliveryQueue>,
 
