@@ -295,11 +295,13 @@ dependencies = [
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
+ "color-eyre",
  "jsonschema",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "time",
+ "url",
  "uuid",
 ]
 
@@ -2699,6 +2701,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]
