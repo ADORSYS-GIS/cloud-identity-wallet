@@ -1,29 +1,62 @@
-use reqwest::{Client, Response};
+use reqwest::{Client, Response, StatusCode};
 use std::time::{Duration, Instant};
-use crate::error::HttpClientError;
-use tracing::{debug, warn};
+use thiserror::Error;
 
 use super::hmac_signer::{HmacSigner, format_signature_header};
 use super::subscription::WebhookAuth;
 
-/// HTTP client wrapper for webhook delivery.
+/// Default HTTP timeout applied when constructing a client via [`WebhookHttpClient::new`].
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Error type for HTTP client operations
+#[derive(Debug, Error)]
+pub enum HttpClientError {
+    #[error("HTTP request failed: {0}")]
+    RequestFailed(String),
+
+    #[error("Request timeout after {0:?}")]
+    Timeout(Duration),
+
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    #[error("Response error: status={status}, body={body}")]
+    ResponseError { status: StatusCode, body: String },
+
+    #[error("Failed to sign request: {0}")]
+    SignatureError(String),
+}
+
+impl From<reqwest::Error> for HttpClientError {
+    fn from(err: reqwest::Error) -> Self {
+        if err.is_timeout() {
+            HttpClientError::Timeout(DEFAULT_TIMEOUT)
+        } else if err.is_connect() {
+            HttpClientError::NetworkError(err.to_string())
+        } else {
+            HttpClientError::RequestFailed(err.to_string())
+        }
+    }
+}
+
+/// HTTP client wrapper for webhook delivery
 pub struct WebhookHttpClient {
     client: Client,
 }
 
 impl WebhookHttpClient {
-    /// Create a new HTTP client with the default 30-second request timeout.
+    /// Create a new HTTP client with the default timeout ([`DEFAULT_TIMEOUT`]).
     pub fn new() -> Result<Self, HttpClientError> {
-        Self::with_timeout(Duration::from_secs(30))
+        Self::with_timeout(DEFAULT_TIMEOUT)
     }
 
-    /// Create a new HTTP client with a custom request timeout.
-    ///
-    /// The timeout applies to the full round-trip: connection + send + receive.
+    /// Create a new HTTP client with a custom timeout.
     pub fn with_timeout(timeout: Duration) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .timeout(timeout)
-            .user_agent(format!("WalletEvents/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| HttpClientError::RequestFailed(e.to_string()))?;
 
@@ -39,8 +72,6 @@ impl WebhookHttpClient {
         payload: &str,
         auth: &WebhookAuth,
     ) -> Result<(u16, u64, String), HttpClientError> {
-        debug!(url = %url, "Sending webhook");
-
         let start = Instant::now();
 
         let mut request = self
@@ -54,22 +85,11 @@ impl WebhookHttpClient {
             .body(payload.to_string())
             .send()
             .await
-            .map_err(|e| {
-                warn!(url = %url, error = %e, "Webhook request failed");
-                HttpClientError::from(e)
-            })?;
+            .map_err(HttpClientError::from)?;
 
-        let elapsed = start.elapsed();
-        let response_time_ms = elapsed.as_millis() as u64;
+        let response_time_ms = start.elapsed().as_millis() as u64;
         let status = response.status();
         let status_code = status.as_u16();
-
-        debug!(
-            url = %url,
-            status = %status_code,
-            response_time_ms = %response_time_ms,
-            "Webhook response received"
-        );
 
         let body = self.read_response_body(response).await?;
 
@@ -92,17 +112,22 @@ impl WebhookHttpClient {
         match auth {
             WebhookAuth::None => {}
             WebhookAuth::HmacSha256 { secret } => {
-                let signer = HmacSigner::new(secret.clone());
+                use secrecy::ExposeSecret;
+                let signer =
+                    HmacSigner::new(secrecy::SecretSlice::from(secret.expose_secret().to_vec()));
                 let (signature, timestamp) = signer
                     .sign(payload)
-                    .map_err(|e| HttpClientError::SignatureError(e.to_string()))?;
+                    .map_err(HttpClientError::SignatureError)?;
 
-                request = request
-                    .header("X-Webhook-Signature", format_signature_header(&signature))
-                    .header("X-Webhook-Timestamp", timestamp.to_string());
+                request = request.header(
+                    "X-iGrant-Signature",
+                    format_signature_header(&signature, timestamp),
+                );
             }
             WebhookAuth::BearerToken { token } => {
-                request = request.header("Authorization", format!("Bearer {}", token));
+                use secrecy::ExposeSecret;
+                let token_str = String::from_utf8_lossy(token.expose_secret());
+                request = request.header("Authorization", format!("Bearer {token_str}"));
             }
         }
 
@@ -119,8 +144,6 @@ impl WebhookHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::StatusCode;
-    use crate::error::HttpClientError;
 
     #[test]
     fn test_http_client_creation() -> Result<(), HttpClientError> {
@@ -130,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_http_client_error_display() {
-        let err = HttpClientError::Timeout(Duration::from_secs(30));
+        let err = HttpClientError::Timeout(DEFAULT_TIMEOUT);
         assert_eq!(err.to_string(), "Request timeout after 30s");
 
         let err = HttpClientError::InvalidUrl("invalid".to_string());

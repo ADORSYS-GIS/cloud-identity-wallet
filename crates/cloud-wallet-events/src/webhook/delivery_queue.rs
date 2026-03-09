@@ -1,11 +1,21 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
 
 use super::schemas::{DeliveryState, DeliveryStatus};
 
-/// In-memory queue for webhook deliveries
+/// In-memory queue for webhook deliveries.
+///
+/// `DeliveryQueue` serves two purposes:
+///
+/// 1. Pending queue — a FIFO `VecDeque` of [`QueuedDelivery`] items waiting
+///    to be dispatched by [`crate::webhook::delivery_service::DeliveryService`].
+/// 2. Status history — a per-`(subscription_id, event_id)` log of every
+///    [`DeliveryStatus`] transition recorded during delivery attempts, used for
+///    observability and debugging.
+///
+/// All operations are async and internally synchronised with a `RwLock`, making
+/// the queue safe to share across tasks via `Arc<DeliveryQueue>`.
 #[derive(Debug, Clone)]
 pub struct DeliveryQueue {
     /// Pending deliveries waiting to be sent
@@ -15,7 +25,14 @@ pub struct DeliveryQueue {
     history: Arc<RwLock<HashMap<String, Vec<DeliveryStatus>>>>,
 }
 
-/// A queued webhook delivery
+/// A single webhook delivery waiting to be sent or retried.
+///
+/// Created by [`crate::webhook::event_listener::EventListener`] when an event
+/// matches a subscription, and consumed by
+/// [`crate::webhook::delivery_service::DeliveryService`]. The `attempt` counter
+/// is incremented by [`DeliveryQueue::requeue`] on each retry so
+/// `DeliveryService` can determine backoff delay and when max attempts are
+/// exhausted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedDelivery {
     pub subscription_id: String,
@@ -69,39 +86,18 @@ impl DeliveryQueue {
     /// Enqueue a delivery
     pub async fn enqueue(&self, delivery: QueuedDelivery) {
         let mut pending = self.pending.write().await;
-        debug!(
-            event_id = %delivery.event_id,
-            subscription_id = %delivery.subscription_id,
-            "Enqueuing delivery"
-        );
         pending.push_back(delivery);
     }
 
     /// Dequeue the next delivery
     pub async fn dequeue(&self) -> Option<QueuedDelivery> {
         let mut pending = self.pending.write().await;
-        let delivery = pending.pop_front();
-
-        if let Some(ref d) = delivery {
-            debug!(
-                event_id = %d.event_id,
-                subscription_id = %d.subscription_id,
-                "Dequeued delivery"
-            );
-        }
-
-        delivery
+        pending.pop_front()
     }
 
     /// Re-queue a delivery for retry
     pub async fn requeue(&self, delivery: QueuedDelivery) {
-        let updated = delivery.next_attempt();
-        debug!(
-            event_id = %updated.event_id,
-            attempt = %updated.attempt,
-            "Re-queuing delivery for retry"
-        );
-        self.enqueue(updated).await;
+        self.enqueue(delivery.next_attempt()).await;
     }
 
     /// Get queue size
@@ -116,10 +112,7 @@ impl DeliveryQueue {
 
     /// Clear all pending deliveries
     pub async fn clear(&self) {
-        let mut pending = self.pending.write().await;
-        let count = pending.len();
-        pending.clear();
-        info!(cleared_count = count, "Cleared delivery queue");
+        self.pending.write().await.clear();
     }
 
     /// Record delivery status in history

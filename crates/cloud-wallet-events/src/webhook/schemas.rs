@@ -1,45 +1,57 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-/// Webhook payload sent to external systems
+/// Webhook payload delivered to external endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebhookPayload {
-    pub event_id: String,
+    /// Unique identifier for this individual delivery attempt.
+    #[serde(rename = "deliveryID")]
+    pub delivery_id: String,
 
-    pub event_type: String,
+    /// Identifier of the webhook subscription (configuration) that matched.
+    #[serde(rename = "webhookID")]
+    pub webhook_id: String,
 
-    #[serde(with = "time::serde::rfc3339")]
+    /// ISO 8601 timestamp of when the event occurred.
+    #[serde(rename = "timestamp", with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
 
-    pub wallet_id: String,
+    /// Event type identifier (e.g. `"openid.credential.offer_sent"`).
+    #[serde(rename = "type")]
+    pub event_type: String,
 
-    pub correlation_id: String,
-
+    /// Event-specific payload data.
     pub data: Value,
 }
 
 impl WebhookPayload {
-    /// Create a new webhook payload
+    /// Create a new webhook payload.
     pub fn new(
-        event_id: String,
-        event_type: String,
+        delivery_id: String,
+        webhook_id: String,
         timestamp: OffsetDateTime,
+        event_type: String,
         wallet_id: String,
         correlation_id: String,
-        data: Value,
+        mut data: Value,
     ) -> Self {
+        // Inject context fields into data so they are always present for receivers.
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("wallet_id".to_string(), json!(wallet_id));
+            obj.insert("correlation_id".to_string(), json!(correlation_id));
+        }
+
         Self {
-            event_id,
-            event_type,
+            delivery_id,
+            webhook_id,
             timestamp,
-            wallet_id,
-            correlation_id,
+            event_type,
             data,
         }
     }
 
-    /// Serialize to JSON string
+    /// Serialize to JSON string.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }
@@ -151,9 +163,10 @@ mod tests {
     #[test]
     fn test_webhook_payload_creation() {
         let payload = WebhookPayload::new(
-            "evt-123".to_string(),
-            "credential.stored".to_string(),
+            "delivery-123".to_string(),
+            "sub-456".to_string(),
             OffsetDateTime::now_utc(),
+            "openid.credential.offer_sent".to_string(),
             "wallet-456".to_string(),
             "corr-789".to_string(),
             json!({
@@ -162,26 +175,47 @@ mod tests {
             }),
         );
 
-        assert_eq!(payload.event_id, "evt-123");
-        assert_eq!(payload.event_type, "credential.stored");
-        assert_eq!(payload.wallet_id, "wallet-456");
+        assert_eq!(payload.delivery_id, "delivery-123");
+        assert_eq!(payload.webhook_id, "sub-456");
+        assert_eq!(payload.event_type, "openid.credential.offer_sent");
+        assert_eq!(payload.data["wallet_id"], "wallet-456");
+        assert_eq!(payload.data["correlation_id"], "corr-789");
+        assert_eq!(payload.data["credential_id"], "cred-123");
     }
 
     #[test]
     fn test_webhook_payload_serialization() -> Result<(), serde_json::Error> {
         let payload = WebhookPayload::new(
-            "evt-123".to_string(),
-            "credential.stored".to_string(),
+            "delivery-123".to_string(),
+            "sub-456".to_string(),
             OffsetDateTime::now_utc(),
+            "openid.credential.offer_sent".to_string(),
             "wallet-456".to_string(),
             "corr-789".to_string(),
             json!({"test": "data"}),
         );
 
-        let json = payload.to_json()?;
-        let deserialized: WebhookPayload = serde_json::from_str(&json)?;
+        let json_str = payload.to_json()?;
+        let parsed: Value = serde_json::from_str(&json_str)?;
 
-        assert_eq!(payload.event_id, deserialized.event_id);
+        // Field names must follow the reference schema
+        assert!(parsed.get("deliveryID").is_some());
+        assert!(parsed.get("webhookID").is_some());
+        assert!(parsed.get("timestamp").is_some());
+        assert!(parsed.get("type").is_some());
+        assert!(parsed.get("data").is_some());
+
+        // Legacy top-level fields must not be present
+        assert!(parsed.get("event_id").is_none());
+        assert!(parsed.get("wallet_id").is_none());
+        assert!(parsed.get("correlation_id").is_none());
+
+        // wallet_id and correlation_id must be inside data
+        assert!(parsed["data"].get("wallet_id").is_some());
+        assert!(parsed["data"].get("correlation_id").is_some());
+
+        let deserialized: WebhookPayload = serde_json::from_str(&json_str)?;
+        assert_eq!(payload.delivery_id, deserialized.delivery_id);
         assert_eq!(payload.event_type, deserialized.event_type);
         Ok(())
     }

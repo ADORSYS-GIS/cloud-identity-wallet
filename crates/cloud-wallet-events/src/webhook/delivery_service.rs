@@ -1,15 +1,28 @@
-use crate::error::HttpClientError;
 use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
-use crate::webhook::http_client::WebhookHttpClient;
+use crate::webhook::http_client::{HttpClientError, WebhookHttpClient};
 use crate::webhook::retry_strategy::RetryStrategy;
 use crate::webhook::schemas::DeliveryStatus;
 use crate::webhook::subscription::WebhookSubscription;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
-use tracing::{debug, error, info, warn};
 
 /// Maximum number of webhook deliveries that may be in-flight concurrently.
 const MAX_CONCURRENT_DELIVERIES: usize = 64;
+
+/// Background service that drains the [`DeliveryQueue`] and sends webhooks.
+///
+/// `DeliveryService` runs a single long-lived loop (started via [`Self::start`])
+/// that pops [`QueuedDelivery`] items from the queue and spawns a Tokio task for
+/// each one. Concurrency is bounded by an internal [`Semaphore`] capped at
+/// [`MAX_CONCURRENT_DELIVERIES`] so the service cannot exhaust system resources
+/// under burst load.
+///
+/// Each delivery task:
+/// 1. Looks up the matching [`WebhookSubscription`] to obtain auth credentials.
+/// 2. POSTs the payload to the subscription URL via [`WebhookHttpClient`].
+/// 3. On success, records a [`DeliveryState::Succeeded`] status.
+/// 4. On failure, checks [`RetryStrategy`] and either requeues with backoff or
+///    records a [`DeliveryState::PermanentFailure`] status.
 pub struct DeliveryService {
     delivery_queue: Arc<DeliveryQueue>,
 
@@ -24,7 +37,6 @@ pub struct DeliveryService {
 }
 
 impl DeliveryService {
-    /// Create a new `DeliveryService`.
     pub fn new(
         delivery_queue: Arc<DeliveryQueue>,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
@@ -49,8 +61,6 @@ impl DeliveryService {
 
     /// Start the processing loop.
     pub fn start(self: Arc<Self>) {
-        info!("Webhook delivery service starting");
-
         let service = self.clone();
         tokio::spawn(async move {
             service.run_loop().await;
@@ -68,6 +78,9 @@ impl DeliveryService {
                     let semaphore = self.semaphore.clone();
 
                     tokio::spawn(async move {
+                        // Acquire a permit before doing any work. The permit is held
+                        // for the lifetime of the task and released on drop, ensuring
+                        // at most MAX_CONCURRENT_DELIVERIES tasks run at once.
                         let _permit = semaphore
                             .acquire_owned()
                             .await
@@ -102,13 +115,6 @@ impl DeliveryService {
         let sub_id = &delivery.subscription_id;
         let event_id = &delivery.event_id;
 
-        debug!(
-            subscription_id = %sub_id,
-            event_id = %event_id,
-            attempt = attempt,
-            "Processing delivery"
-        );
-
         // Look up the subscription to get auth details.
         let auth = {
             let subs = subscriptions.read().await;
@@ -120,10 +126,6 @@ impl DeliveryService {
         let auth = match auth {
             Some(a) => a,
             None => {
-                warn!(
-                    subscription_id = %sub_id,
-                    "Subscription not found – dropping delivery"
-                );
                 let status = DeliveryStatus::pending(sub_id.clone(), event_id.clone())
                     .permanent_failure("Subscription removed".to_string());
                 queue.record_status(status).await;
@@ -141,15 +143,6 @@ impl DeliveryService {
 
         match result {
             Ok((status_code, response_time_ms, _body)) => {
-                info!(
-                    subscription_id = %sub_id,
-                    event_id = %event_id,
-                    attempt = attempt + 1,
-                    status_code = status_code,
-                    response_time_ms = response_time_ms,
-                    "Webhook delivered successfully"
-                );
-
                 let status = DeliveryStatus::pending(sub_id.clone(), event_id.clone())
                     .succeeded(status_code, response_time_ms);
                 queue.record_status(status).await;
@@ -160,15 +153,6 @@ impl DeliveryService {
                 if retry_strategy.should_retry(attempt) {
                     let delay = retry_strategy.next_delay(attempt + 1);
                     let next_retry_at = delay.map(|d| time::OffsetDateTime::now_utc() + d);
-
-                    warn!(
-                        subscription_id = %sub_id,
-                        event_id = %event_id,
-                        attempt = attempt + 1,
-                        max_attempts = retry_strategy.max_attempts(),
-                        error = %e,
-                        "Webhook delivery failed – will retry"
-                    );
 
                     let status = DeliveryStatus::pending(sub_id.clone(), event_id.clone()).failed(
                         status_code,
@@ -182,14 +166,6 @@ impl DeliveryService {
                     }
                     queue.requeue(delivery).await;
                 } else {
-                    error!(
-                        subscription_id = %sub_id,
-                        event_id = %event_id,
-                        attempt = attempt + 1,
-                        error = %e,
-                        "Webhook delivery permanently failed"
-                    );
-
                     let status = DeliveryStatus::pending(sub_id.clone(), event_id.clone())
                         .permanent_failure(format!("Failed after {} attempt(s): {e}", attempt + 1));
                     queue.record_status(status).await;
@@ -216,8 +192,8 @@ pub enum DeliveryServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::HttpClientError;
     use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
+    use crate::webhook::http_client::HttpClientError;
     use crate::webhook::retry_strategy::RetryStrategy;
     use crate::webhook::schemas::DeliveryState;
     use crate::webhook::subscription::{WebhookAuth, WebhookSubscription};

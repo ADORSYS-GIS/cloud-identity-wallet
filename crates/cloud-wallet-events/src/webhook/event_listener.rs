@@ -1,64 +1,46 @@
+use crate::EventError;
 use crate::events::Event;
 use crate::traits::{Consumer, EventHandler, SubscriptionConfig};
 use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
 use crate::webhook::schemas::WebhookPayload;
 use crate::webhook::subscription::WebhookSubscription;
-use crate::{EventError, ListenerError};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
 
 /// Bridges the event bus to the webhook delivery queue.
 ///
-/// `EventListener` subscribes to one or more Kafka topics via a [`Consumer`]
-/// implementation and fans out each received [`Event`] to every
-/// [`WebhookSubscription`] whose event-type filter matches.
-///
-/// For each match a [`QueuedDelivery`] is pushed onto the [`DeliveryQueue`],
-/// where it will be picked up and dispatched by
-/// [`crate::webhook::delivery_service::DeliveryService`].
-///
-/// The listener itself is stateless with respect to delivery — it only
-/// serialises events into [`WebhookPayload`] JSON and enqueues them. All
-/// retry logic and status tracking lives in `DeliveryService` and
-/// `DeliveryQueue`.
+/// Topics to subscribe to are supplied by the caller at construction time,
+/// keeping this library free of any domain-specific hardcoding.
 pub struct EventListener {
     subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
 
     delivery_queue: Arc<DeliveryQueue>,
 
     consumer: Arc<dyn Consumer>,
+
+    /// Event-bus topics this listener will subscribe to.
+    topics: Vec<String>,
 }
 
 impl EventListener {
     /// Create a new `EventListener`.
-    ///
-    /// # Arguments
-    ///
-    /// * `consumer` — An event-bus consumer used to subscribe to topics.
-    /// * `subscriptions` — Shared list of active webhook subscriptions.
-    /// * `delivery_queue` — Shared queue onto which matched deliveries are pushed.
     pub fn new(
         consumer: Arc<dyn Consumer>,
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
         delivery_queue: Arc<DeliveryQueue>,
+        topics: Vec<String>,
     ) -> Self {
         Self {
             subscriptions,
             delivery_queue,
             consumer,
+            topics,
         }
     }
 
-    /// Start listening on all wallet topics.
+    /// Start listening on the configured topics.
     pub async fn start(&self) -> Result<(), ListenerError> {
-        let topics = vec![
-            "wallet.credential".to_string(),
-            "wallet.presentation".to_string(),
-            "wallet.key".to_string(),
-        ];
-
-        info!(topic_count = topics.len(), "Starting event listener");
+        let topics = self.topics.clone();
 
         let subscriptions = self.subscriptions.clone();
         let delivery_queue = self.delivery_queue.clone();
@@ -77,7 +59,6 @@ impl EventListener {
                 reason: e.to_string(),
             })?;
 
-        info!("Event listener started");
         Ok(())
     }
 
@@ -86,49 +67,33 @@ impl EventListener {
         subscriptions: Arc<RwLock<Vec<WebhookSubscription>>>,
         delivery_queue: Arc<DeliveryQueue>,
     ) -> Result<(), EventError> {
-        let event_type = event.event_type.as_str();
-        debug!(
-            event_type = %event_type,
-            event_id = %event.id,
-            "Received event"
-        );
-
-        let payload = match Self::build_payload(&event) {
-            Ok(p) => p,
-            Err(e) => {
-                error!(
-                    event_id = %event.id,
-                    error = %e,
-                    "Failed to serialise event into webhook payload – skipping"
-                );
-                return Err(EventError::SerializationError(e));
-            }
-        };
-
-        Self::enqueue_for_matching_subscriptions(&event, &payload, &subscriptions, &delivery_queue)
-            .await;
-
+        Self::enqueue_for_matching_subscriptions(&event, &subscriptions, &delivery_queue).await;
         Ok(())
     }
 
     /// Serialise an `Event` into a `WebhookPayload` JSON string.
-    pub(crate) fn build_payload(event: &Event) -> Result<String, String> {
+    pub(crate) fn build_payload(event: &Event, subscription_id: &str) -> Result<String, String> {
+        let wallet_id = event
+            .metadata
+            .get("wallet_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let correlation_id = event
+            .metadata
+            .get("correlation_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&event.id.to_string())
+            .to_string();
+
         let payload = WebhookPayload::new(
             event.id.to_string(),
-            event.event_type.as_str().to_string(),
+            subscription_id.to_string(),
             event.timestamp,
-            event
-                .metadata
-                .get("wallet_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string(),
-            event
-                .metadata
-                .get("correlation_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&event.id.to_string())
-                .to_string(),
+            event.event_type.as_str().to_string(),
+            wallet_id,
+            correlation_id,
             event.payload.clone(),
         );
 
@@ -138,48 +103,42 @@ impl EventListener {
     /// Fan out one event to every matching subscription.
     pub(crate) async fn enqueue_for_matching_subscriptions(
         event: &Event,
-        payload_json: &str,
         subscriptions: &Arc<RwLock<Vec<WebhookSubscription>>>,
         delivery_queue: &Arc<DeliveryQueue>,
     ) {
         let event_type = event.event_type.as_str();
 
         let subs = subscriptions.read().await;
-        let mut enqueued = 0usize;
 
         for sub in subs.iter() {
             if !sub.matches_event(event_type) {
                 continue;
             }
 
+            let payload_json = match Self::build_payload(event, &sub.id) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
             let delivery = QueuedDelivery::new(
                 sub.id.clone(),
                 event.id.to_string(),
                 event_type.to_string(),
-                payload_json.to_string(),
+                payload_json,
                 sub.url.clone(),
             );
 
             delivery_queue.enqueue(delivery).await;
-            enqueued += 1;
-
-            debug!(
-                subscription_id = %sub.id,
-                event_type = %event_type,
-                "Delivery enqueued"
-            );
-        }
-
-        if enqueued == 0 {
-            debug!(
-                event_type = %event_type,
-                "No subscriptions matched – event dropped"
-            );
         }
     }
 }
 
-
+/// Errors that can occur in the `EventListener`.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenerError {
+    #[error("Failed to subscribe: {reason}")]
+    SubscribeFailed { reason: String },
+}
 
 #[cfg(test)]
 mod tests {
@@ -242,22 +201,34 @@ mod tests {
     #[test]
     fn test_build_payload_serialises_correctly() {
         let event = make_credential_stored_event();
-        let json = EventListener::build_payload(&event).expect("build payload");
+        let json = EventListener::build_payload(&event, "sub-1").expect("build payload");
 
         let payload: WebhookPayload = serde_json::from_str(&json).expect("parse payload");
 
-        assert_eq!(payload.event_id, event.id.to_string());
+        assert_eq!(payload.delivery_id, event.id.to_string());
+        assert_eq!(payload.webhook_id, "sub-1");
         assert_eq!(payload.event_type, EventType::CREDENTIAL_STORED);
-        assert_eq!(payload.wallet_id, "wallet-test");
-        assert_eq!(payload.correlation_id, "corr-test");
+        assert_eq!(payload.data["wallet_id"], "wallet-test");
+        assert_eq!(payload.data["correlation_id"], "corr-test");
     }
 
     #[test]
     fn test_build_payload_key_event() {
         let event = make_key_created_event();
-        let json = EventListener::build_payload(&event).expect("build payload");
+        let json = EventListener::build_payload(&event, "sub-1").expect("build payload");
         let payload: WebhookPayload = serde_json::from_str(&json).expect("parse payload");
         assert_eq!(payload.event_type, EventType::KEY_CREATED);
+    }
+
+    #[test]
+    fn test_build_payload_missing_wallet_id_falls_back_to_unknown() {
+        let event = Event::new(
+            EventType::new(EventType::CREDENTIAL_STORED),
+            json!({"credential_id": "cred-x"}),
+        );
+        let json = EventListener::build_payload(&event, "sub-1").expect("build payload");
+        let payload: WebhookPayload = serde_json::from_str(&json).expect("parse payload");
+        assert_eq!(payload.data["wallet_id"], "unknown");
     }
 
     #[tokio::test]
@@ -271,17 +242,19 @@ mod tests {
         .subscribe_to(vec![EventType::CREDENTIAL_STORED.to_string()]);
 
         let subscriptions = Arc::new(RwLock::new(vec![sub]));
-
         let event = make_credential_stored_event();
-        let payload = EventListener::build_payload(&event).expect("build payload");
 
-        EventListener::enqueue_for_matching_subscriptions(&event, &payload, &subscriptions, &queue)
-            .await;
+        EventListener::enqueue_for_matching_subscriptions(&event, &subscriptions, &queue).await;
 
         assert_eq!(queue.size().await, 1);
         let delivery = queue.dequeue().await.unwrap();
         assert_eq!(delivery.subscription_id, "sub-1");
         assert_eq!(delivery.event_type, EventType::CREDENTIAL_STORED);
+
+        // Payload must use the reference schema field names
+        let payload: WebhookPayload =
+            serde_json::from_str(&delivery.payload).expect("parse payload");
+        assert_eq!(payload.webhook_id, "sub-1");
     }
 
     #[tokio::test]
@@ -296,10 +269,8 @@ mod tests {
 
         let subscriptions = Arc::new(RwLock::new(vec![sub]));
         let event = make_credential_stored_event();
-        let payload = EventListener::build_payload(&event).expect("build payload");
 
-        EventListener::enqueue_for_matching_subscriptions(&event, &payload, &subscriptions, &queue)
-            .await;
+        EventListener::enqueue_for_matching_subscriptions(&event, &subscriptions, &queue).await;
 
         assert!(queue.is_empty().await);
     }
@@ -331,12 +302,48 @@ mod tests {
 
         let subscriptions = Arc::new(RwLock::new(vec![sub1, sub2, sub3]));
         let event = make_credential_stored_event();
-        let payload = EventListener::build_payload(&event).expect("build payload");
 
-        EventListener::enqueue_for_matching_subscriptions(&event, &payload, &subscriptions, &queue)
-            .await;
+        EventListener::enqueue_for_matching_subscriptions(&event, &subscriptions, &queue).await;
 
         assert_eq!(queue.size().await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_each_subscription_gets_its_own_webhook_id() {
+        // Each delivery must carry the matching subscription's ID as webhookID
+        let queue = Arc::new(DeliveryQueue::new());
+
+        let sub1 = WebhookSubscription::new(
+            "sub-a".to_string(),
+            "https://a.example.com/webhook".to_string(),
+            WebhookAuth::None,
+        )
+        .subscribe_all();
+
+        let sub2 = WebhookSubscription::new(
+            "sub-b".to_string(),
+            "https://b.example.com/webhook".to_string(),
+            WebhookAuth::None,
+        )
+        .subscribe_all();
+
+        let subscriptions = Arc::new(RwLock::new(vec![sub1, sub2]));
+        let event = make_credential_stored_event();
+
+        EventListener::enqueue_for_matching_subscriptions(&event, &subscriptions, &queue).await;
+
+        assert_eq!(queue.size().await, 2);
+
+        let d1 = queue.dequeue().await.unwrap();
+        let d2 = queue.dequeue().await.unwrap();
+
+        let p1: WebhookPayload = serde_json::from_str(&d1.payload).unwrap();
+        let p2: WebhookPayload = serde_json::from_str(&d2.payload).unwrap();
+
+        let ids: std::collections::HashSet<_> =
+            [p1.webhook_id.as_str(), p2.webhook_id.as_str()].into();
+        assert!(ids.contains("sub-a"));
+        assert!(ids.contains("sub-b"));
     }
 
     #[tokio::test]
@@ -357,8 +364,9 @@ mod tests {
 
         let subscriptions = Arc::new(RwLock::new(vec![sub]));
         let queue = Arc::new(DeliveryQueue::new());
+        let topics = vec!["wallet.credential".to_string()];
 
-        let listener = EventListener::new(consumer, subscriptions, queue.clone());
+        let listener = EventListener::new(consumer, subscriptions, queue.clone(), topics);
         listener.start().await.expect("listener start");
 
         assert_eq!(queue.size().await, 1);
@@ -366,5 +374,43 @@ mod tests {
         let delivery = queue.dequeue().await.unwrap();
         assert_eq!(delivery.event_id, event_id);
         assert_eq!(delivery.subscription_id, "sub-e2e");
+    }
+
+    #[tokio::test]
+    async fn test_listener_subscribes_to_caller_supplied_topics() {
+        // The listener must pass exactly the topics given by the caller to the consumer.
+        struct TopicCapturingConsumer {
+            captured: std::sync::Mutex<Vec<String>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Consumer for TopicCapturingConsumer {
+            async fn subscribe(
+                &self,
+                config: SubscriptionConfig,
+                _handler: EventHandler,
+            ) -> Result<(), EventError> {
+                *self.captured.lock().unwrap() = config.topics;
+                Ok(())
+            }
+        }
+
+        let consumer = Arc::new(TopicCapturingConsumer {
+            captured: std::sync::Mutex::new(vec![]),
+        });
+
+        let topics = vec!["custom.topic.a".to_string(), "custom.topic.b".to_string()];
+
+        let listener = EventListener::new(
+            consumer.clone(),
+            Arc::new(RwLock::new(vec![])),
+            Arc::new(DeliveryQueue::new()),
+            topics.clone(),
+        );
+
+        listener.start().await.expect("listener start");
+
+        let captured = consumer.captured.lock().unwrap().clone();
+        assert_eq!(captured, topics);
     }
 }

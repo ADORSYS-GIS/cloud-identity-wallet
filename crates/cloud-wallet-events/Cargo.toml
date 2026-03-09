@@ -20,5 +20,5 @@ parking_lot = "0.12"
 hex = "0.4"
 hmac = "0.12"
 sha2 = "0.10"
+secrecy = "0.10"
 reqwest = { version = "0.13", features = ["json"] }
-tracing = { workspace = true }
