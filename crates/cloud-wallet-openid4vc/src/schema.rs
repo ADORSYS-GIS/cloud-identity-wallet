@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-/// The credential format identifier string as defined by OpenID4VCI Appendix A.
+/// The credential format identifier string as defined by [OpenID4VCI Appendix A].
+///
+/// [OpenID4VCI Appendix A]: (https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-A)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialFormatIdentifier {
@@ -18,6 +20,12 @@ pub enum CredentialFormatIdentifier {
 }
 
 /// Display metadata for a credential configuration (§12.2.4 `display` array).
+///
+/// See <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-12.2.4>.
+///
+/// Note: the spec recommends that `background_color` and `text_color` values conform to
+/// CSS Color Module Level 3. Enforcement via the `validator` crate is deferred to a
+/// follow-up ticket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialDisplay {
     pub name: String,
@@ -26,25 +34,48 @@ pub struct CredentialDisplay {
     pub locale: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub logo: Option<LogoImage>,
+    pub logo: Option<Logo>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<Image>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>,
 }
 
 /// A logo image reference within [`CredentialDisplay`].
+///
+/// Defined in OpenID4VCI §12.2.4.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogoImage {
-    pub uri: String,
+pub struct Logo {
+    /// A URI pointing to the logo image.
+    pub uri: url::Url,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alt_text: Option<String>,
 }
 
+/// A background image reference within [`CredentialDisplay`].
+///
+/// Defined in OpenID4VCI §12.2.4.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Image {
+    /// A URI pointing to the background image.
+    pub uri: url::Url,
+}
+
 /// Wallet-internal validation settings paired with a [`CredentialConfiguration`].
+///
+/// Never serialized to or from issuer metadata. Populated by the wallet's own
+/// configuration layer and keyed by `credential_configuration_id`. The
+/// `claims_schema` field holds a JSON Schema used to validate credential claims
+/// at issuance or presentation time — a wallet extension beyond the spec.
 #[derive(Debug, Clone)]
 pub struct CredentialValidationConfig {
     /// Key into the issuer's `credential_configurations_supported` map.
@@ -108,7 +139,9 @@ mod tests {
                 name: "Identity Credential".to_owned(),
                 locale: Some("en-US".to_owned()),
                 logo: None,
+                description: Some("An identity credential issued by Example Corp.".to_owned()),
                 background_color: Some("#12107c".to_owned()),
+                background_image: None,
                 text_color: Some("#FFFFFF".to_owned()),
             }],
             scope: Some("identity_credential".to_owned()),
@@ -232,7 +265,15 @@ mod tests {
         let display = &json_val["display"][0];
         assert_eq!(display["name"], "Identity Credential");
         assert_eq!(display["locale"], "en-US");
+        assert_eq!(
+            display["description"],
+            "An identity credential issued by Example Corp."
+        );
         assert_eq!(display["background_color"], "#12107c");
+        assert_eq!(display["text_color"], "#FFFFFF");
+        // None fields must be omitted
+        assert!(display.get("logo").is_none());
+        assert!(display.get("background_image").is_none());
         Ok(())
     }
 

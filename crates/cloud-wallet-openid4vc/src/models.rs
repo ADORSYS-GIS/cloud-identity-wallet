@@ -2,22 +2,50 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::errors::{CredentialError, ValidationError};
+use crate::errors::{Error, ErrorKind};
 use crate::schema::CredentialFormatIdentifier;
 use crate::validation::Validatable;
 
 /// Unique identifier for a [`Credential`] stored in the wallet.
 ///
-/// Represented as a UUID string for broad compatibility with storage backends
-/// and external systems that may not natively handle UUID types.
-pub type CredentialId = String;
+/// Wraps a UUID string. All instances are guaranteed to carry a valid UUIDv4
+/// at construction time. Use [`CredentialId::new`] to generate a fresh identifier.
+/// `TryFrom<&str>` and `Display` can be added when parsing from external sources
+/// is required.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialId(String);
 
-/// Generates a new random [`CredentialId`].
-pub fn new_credential_id() -> CredentialId {
-    Uuid::new_v4().to_string()
+impl CredentialId {
+    /// Generates a new random UUIDv4-based credential identifier.
+    pub fn new() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
 }
 
-/// Lifecycle status of a stored [`Credential`].
+impl Default for CredentialId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for CredentialId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<str> for CredentialId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Lifecycle status of a [`Credential`] as tracked by the wallet.
+///
+/// This is a wallet-internal model. The OpenID4VCI specification does not define
+/// a status enum directly; status information is communicated by the issuer via
+/// mechanisms such as the Token Status List (draft-ietf-oauth-status-list).
+/// These variants represent the wallet's local view of a credential's usability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialStatus {
@@ -27,7 +55,6 @@ pub enum CredentialStatus {
 }
 
 // Format-specific payload types
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdJwtCredential {
     pub token: String,
@@ -37,7 +64,12 @@ pub struct SdJwtCredential {
     pub claims: serde_json::Value,
 }
 
-/// Payload for a stored W3C VC JWT credential
+/// Payload for a W3C Verifiable Credential secured as a JWT.
+///
+/// Defined by the W3C VC Data Model and referenced in OpenID4VCI Appendix A.3
+/// (`jwt_vc_json` format profile).
+/// See <https://www.w3.org/TR/vc-data-model/> and
+/// <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-A.3>.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct W3cVcJwtCredential {
     pub token: String,
@@ -49,7 +81,11 @@ pub struct W3cVcJwtCredential {
     pub credential_subject: serde_json::Value,
 }
 
-/// Payload for a stored ISO mdoc credential
+/// Payload for an ISO/IEC 18013-5 mdoc (mobile driving licence) credential.
+///
+/// Defined by ISO/IEC 18013-5 and referenced in OpenID4VCI Appendix A.2
+/// (`mso_mdoc` format profile).
+/// See <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-A.2>.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MsoMdocCredential {
     pub doc_type: String,
@@ -68,7 +104,12 @@ impl MsoMdocCredential {
     }
 }
 
-/// The full credential token and its format-specific payload.
+/// The format-specific payload of a credential stored in the wallet.
+///
+/// This is a wallet-internal discriminated union over the three format profiles
+/// supported by OpenID4VCI: `dc+sd-jwt` (Appendix A.3), `mso_mdoc` (Appendix A.2),
+/// and `jwt_vc_json` (Appendix A.3).
+/// See <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-A>.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "format", rename_all = "snake_case")]
 pub enum CredentialPayload {
@@ -106,7 +147,12 @@ impl CredentialPayload {
     }
 }
 
-/// A verifiable credential stored in the wallet.
+/// The wallet's internal record for a stored verifiable credential.
+///
+/// This type is not a wire format and does not correspond directly to any
+/// single object defined by OpenID4VCI. It combines identity metadata
+/// (issuer, subject, validity period), lifecycle status, and the
+/// format-specific payload into a single wallet-managed record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credential {
     pub id: CredentialId,
@@ -142,9 +188,9 @@ impl Credential {
         expires_at: Option<OffsetDateTime>,
         credential_configuration_id: impl Into<String>,
         credential: CredentialPayload,
-    ) -> Result<Self, ValidationError> {
+    ) -> Result<Self, Error> {
         let credential = Self {
-            id: new_credential_id(),
+            id: CredentialId::new(),
             issuer: issuer.into(),
             subject: subject.into(),
             issued_at,
@@ -158,26 +204,29 @@ impl Credential {
     }
 
     /// Validates structural invariants that require no external context.
-    pub fn validate_structure(&self) -> Result<(), ValidationError> {
+    pub fn validate_structure(&self) -> Result<(), Error> {
         if self.issuer.trim().is_empty() {
-            return Err(ValidationError::InvalidCredential {
-                reason: "issuer must not be empty".to_owned(),
-            });
+            return Err(Error::message(
+                ErrorKind::InvalidCredential,
+                "issuer must not be empty",
+            ));
         }
         if self.subject.trim().is_empty() {
-            return Err(ValidationError::InvalidCredential {
-                reason: "subject must not be empty".to_owned(),
-            });
+            return Err(Error::message(
+                ErrorKind::InvalidCredential,
+                "subject must not be empty",
+            ));
         }
         if let Some(expires) = self.expires_at
             && expires <= self.issued_at
         {
-            return Err(ValidationError::InvalidCredential {
-                reason: format!(
+            return Err(Error::message(
+                ErrorKind::InvalidCredential,
+                format!(
                     "expires_at ({expires}) must be strictly after issued_at ({})",
                     self.issued_at
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -194,15 +243,25 @@ impl Credential {
             .unwrap_or(false)
     }
 
-    /// Revokes this credential.
+    /// Marks this credential as revoked in the wallet's local record.
+    ///
+    /// Revocation is initiated by the issuer (e.g. via a status list update).
+    /// This method reflects that status in the wallet's internal model.
+    /// Revocation is terminal and cannot be undone.
     pub fn revoke(&mut self) {
         self.status = CredentialStatus::Revoked;
     }
 
-    /// Suspends this credential.
-    pub fn suspend(&mut self) -> Result<(), CredentialError> {
+    /// Marks this credential as suspended in the wallet's local record.
+    ///
+    /// Suspension is initiated by the issuer (e.g. via a status list update).
+    /// This method reflects that status in the wallet's internal model.
+    /// Returns an error with [`ErrorKind::CredentialRevoked`] if the credential is already revoked,
+    /// since revocation is a terminal state that cannot be superseded.
+    /// Calling this on an already-suspended credential is a no-op.
+    pub fn suspend(&mut self) -> Result<(), Error> {
         match self.status {
-            CredentialStatus::Revoked => Err(CredentialError::Revoked),
+            CredentialStatus::Revoked => Err(ErrorKind::CredentialRevoked.into()),
             CredentialStatus::Active | CredentialStatus::Suspended => {
                 self.status = CredentialStatus::Suspended;
                 Ok(())
@@ -211,9 +270,9 @@ impl Credential {
     }
 
     /// Reactivates a suspended or active credential.
-    pub fn reactivate(&mut self) -> Result<(), CredentialError> {
+    pub fn reactivate(&mut self) -> Result<(), Error> {
         match self.status {
-            CredentialStatus::Revoked => Err(CredentialError::Revoked),
+            CredentialStatus::Revoked => Err(ErrorKind::CredentialRevoked.into()),
             CredentialStatus::Active | CredentialStatus::Suspended => {
                 self.status = CredentialStatus::Active;
                 Ok(())
@@ -223,7 +282,7 @@ impl Credential {
 }
 
 impl Validatable for Credential {
-    type Error = ValidationError;
+    type Error = Error;
 
     fn validate(&self) -> Result<(), Self::Error> {
         self.validate_structure()
@@ -268,7 +327,7 @@ mod tests {
         })
     }
 
-    fn valid_credential(credential: CredentialPayload) -> Result<Credential, ValidationError> {
+    fn valid_credential(credential: CredentialPayload) -> Result<Credential, Error> {
         Credential::new(
             "https://issuer.example.com",
             "user-1234",
@@ -282,16 +341,16 @@ mod tests {
     // Construction
 
     #[test]
-    fn credential_created_with_active_status() -> Result<(), ValidationError> {
+    fn credential_created_with_active_status() -> Result<(), Error> {
         let cred = valid_credential(sd_jwt_payload())?;
         assert_eq!(cred.status, CredentialStatus::Active);
         Ok(())
     }
 
     #[test]
-    fn credential_id_is_non_empty_uuid_string() -> Result<(), ValidationError> {
+    fn credential_id_is_non_empty_uuid_string() -> Result<(), Error> {
         let cred = valid_credential(sd_jwt_payload())?;
-        assert!(uuid::Uuid::parse_str(&cred.id).is_ok());
+        assert!(uuid::Uuid::parse_str(cred.id.as_ref()).is_ok());
         Ok(())
     }
 
@@ -308,7 +367,7 @@ mod tests {
         .expect_err("expected an error for a blank issuer");
 
         assert!(
-            matches!(&err, ValidationError::InvalidCredential { reason } if reason.contains("issuer")),
+            err.kind() == ErrorKind::InvalidCredential && err.to_string().contains("issuer"),
             "unexpected error: {err}"
         );
     }
@@ -326,7 +385,7 @@ mod tests {
         .expect_err("expected an error for a blank subject");
 
         assert!(
-            matches!(&err, ValidationError::InvalidCredential { reason } if reason.contains("subject")),
+            err.kind() == ErrorKind::InvalidCredential && err.to_string().contains("subject"),
             "unexpected error: {err}"
         );
     }
@@ -345,7 +404,7 @@ mod tests {
         .expect_err("expected an error when expires_at is before issued_at");
 
         assert!(
-            matches!(&err, ValidationError::InvalidCredential { reason } if reason.contains("expires_at")),
+            err.kind() == ErrorKind::InvalidCredential && err.to_string().contains("expires_at"),
             "unexpected error: {err}"
         );
     }
@@ -367,7 +426,7 @@ mod tests {
 
     // Status transitions
     #[test]
-    fn revoke_is_idempotent() -> Result<(), ValidationError> {
+    fn revoke_is_idempotent() -> Result<(), Error> {
         let mut cred = valid_credential(sd_jwt_payload())?;
         cred.revoke();
         assert_eq!(cred.status, CredentialStatus::Revoked);
@@ -377,14 +436,14 @@ mod tests {
     }
 
     #[test]
-    fn cannot_suspend_revoked() -> Result<(), ValidationError> {
+    fn cannot_suspend_revoked() -> Result<(), Error> {
         let mut cred = valid_credential(sd_jwt_payload())?;
         cred.revoke();
         let err = cred
             .suspend()
             .expect_err("expected an error suspending a revoked credential");
         assert!(
-            matches!(err, CredentialError::Revoked),
+            err.kind() == ErrorKind::CredentialRevoked,
             "unexpected error variant: {err:?}"
         );
         Ok(())
@@ -410,14 +469,14 @@ mod tests {
     }
 
     #[test]
-    fn cannot_reactivate_revoked() -> Result<(), ValidationError> {
+    fn cannot_reactivate_revoked() -> Result<(), Error> {
         let mut cred = valid_credential(sd_jwt_payload())?;
         cred.revoke();
         let err = cred
             .reactivate()
             .expect_err("expected an error reactivating a revoked credential");
         assert!(
-            matches!(err, CredentialError::Revoked),
+            err.kind() == ErrorKind::CredentialRevoked,
             "unexpected error variant: {err}"
         );
         Ok(())
@@ -443,7 +502,7 @@ mod tests {
     // All three formats construct and serialize
 
     #[test]
-    fn all_three_formats_construct() -> Result<(), ValidationError> {
+    fn all_three_formats_construct() -> Result<(), Error> {
         assert!(valid_credential(sd_jwt_payload())?.is_usable());
         assert!(valid_credential(w3c_payload())?.is_usable());
         assert!(valid_credential(mdoc_payload())?.is_usable());
@@ -465,7 +524,7 @@ mod tests {
 
     // Expiry
     #[test]
-    fn expired_credential_is_not_usable() -> Result<(), ValidationError> {
+    fn expired_credential_is_not_usable() -> Result<(), Error> {
         let mut cred = Credential::new(
             "https://issuer.example.com",
             "user-1234",

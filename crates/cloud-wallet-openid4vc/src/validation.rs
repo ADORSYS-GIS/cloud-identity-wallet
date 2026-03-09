@@ -1,5 +1,5 @@
 #[cfg(feature = "schema-validation")]
-use crate::errors::ValidationError;
+use crate::errors::{Error, ErrorKind};
 #[cfg(feature = "schema-validation")]
 use crate::models::{Credential, CredentialPayload};
 #[cfg(feature = "schema-validation")]
@@ -22,7 +22,7 @@ impl SchemaValidator {
     pub fn validate_claims(
         credential: &Credential,
         config: &CredentialValidationConfig,
-    ) -> Result<(), ValidationError> {
+    ) -> Result<(), Error> {
         let Some(schema_value) = config.claims_schema() else {
             return Ok(());
         };
@@ -33,7 +33,7 @@ impl SchemaValidator {
     /// Pre-compiles the JSON Schema from a configuration for reuse.
     pub fn compile_for(
         config: &CredentialValidationConfig,
-    ) -> Result<Option<jsonschema::Validator>, ValidationError> {
+    ) -> Result<Option<jsonschema::Validator>, Error> {
         match config.claims_schema() {
             Some(schema) => Self::compile(schema).map(Some),
             None => Ok(None),
@@ -45,39 +45,43 @@ impl SchemaValidator {
         credential: &Credential,
         config: &CredentialValidationConfig,
         validator: &jsonschema::Validator,
-    ) -> Result<(), ValidationError> {
+    ) -> Result<(), Error> {
         Self::run(validator, credential, config)
     }
 
-    fn compile(schema: &serde_json::Value) -> Result<jsonschema::Validator, ValidationError> {
-        jsonschema::validator_for(schema).map_err(|e| ValidationError::InvalidJsonSchema {
-            reason: e.to_string(),
-        })
+    fn compile(schema: &serde_json::Value) -> Result<jsonschema::Validator, Error> {
+        jsonschema::validator_for(schema).map_err(|e| Error::new(ErrorKind::InvalidSchema, e))
     }
 
     fn run(
         validator: &jsonschema::Validator,
         credential: &Credential,
         config: &CredentialValidationConfig,
-    ) -> Result<(), ValidationError> {
+    ) -> Result<(), Error> {
         let claims = match &credential.credential {
             CredentialPayload::MsoMdoc(mdoc) => {
                 let Some(ns) = config.mdoc_claims_namespace() else {
                     return Ok(());
                 };
-                mdoc.claims(ns)
-                    .ok_or_else(|| ValidationError::SchemaMismatch {
-                        schema_id: config.credential_configuration_id.clone(),
-                        details: format!("namespace '{ns}' not present in mdoc credential"),
-                    })?
+                mdoc.claims(ns).ok_or_else(|| {
+                    Error::message(
+                        ErrorKind::SchemaMismatch,
+                        format!(
+                            "namespace '{ns}' not present in mdoc credential — config: {}",
+                            config.credential_configuration_id
+                        ),
+                    )
+                })?
             }
-            _ => credential
-                .credential
-                .claims()
-                .ok_or_else(|| ValidationError::SchemaMismatch {
-                    schema_id: config.credential_configuration_id.clone(),
-                    details: "no claims available for validation".to_owned(),
-                })?,
+            _ => credential.credential.claims().ok_or_else(|| {
+                Error::message(
+                    ErrorKind::SchemaMismatch,
+                    format!(
+                        "no claims available for validation — config: {}",
+                        config.credential_configuration_id
+                    ),
+                )
+            })?,
         };
 
         let errors: Vec<String> = validator
@@ -88,25 +92,29 @@ impl SchemaValidator {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(ValidationError::SchemaMismatch {
-                schema_id: config.credential_configuration_id.clone(),
-                details: errors.join("\n"),
-            })
+            Err(Error::message(
+                ErrorKind::SchemaMismatch,
+                format!(
+                    "schema violations for config '{}':\n{}",
+                    config.credential_configuration_id,
+                    errors.join("\n")
+                ),
+            ))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::errors::ValidationError;
+    use crate::errors::Error;
     use serde_json::json;
     use time::{Duration, OffsetDateTime};
 
     use crate::models::{
-        Credential, CredentialPayload, CredentialStatus, SdJwtCredential, new_credential_id,
+        Credential, CredentialId, CredentialPayload, CredentialStatus, SdJwtCredential,
     };
 
-    fn sd_jwt_credential(claims: serde_json::Value) -> Result<Credential, ValidationError> {
+    fn sd_jwt_credential(claims: serde_json::Value) -> Result<Credential, Error> {
         Credential::new(
             "https://issuer.example.com",
             "user-1234",
@@ -135,7 +143,7 @@ mod tests {
     fn validate_trait_catches_blank_issuer() {
         use crate::validation::Validatable;
         let cred = Credential {
-            id: new_credential_id(),
+            id: CredentialId::new(),
             issuer: "  ".to_owned(),
             subject: "user-1234".to_owned(),
             issued_at: OffsetDateTime::now_utc(),
@@ -156,11 +164,12 @@ mod tests {
     #[cfg(feature = "schema-validation")]
     mod schema_validator_tests {
         use super::*;
+        use crate::errors::ErrorKind;
         use crate::models::{MsoMdocCredential, W3cVcJwtCredential};
         use crate::schema::CredentialValidationConfig;
         use crate::validation::SchemaValidator;
 
-        fn w3c_credential(subject: serde_json::Value) -> Result<Credential, ValidationError> {
+        fn w3c_credential(subject: serde_json::Value) -> Result<Credential, Error> {
             Credential::new(
                 "https://issuer.example.com",
                 "user-1234",
@@ -178,7 +187,7 @@ mod tests {
         fn mdoc_credential(
             namespace: &str,
             claims: serde_json::Value,
-        ) -> Result<Credential, ValidationError> {
+        ) -> Result<Credential, Error> {
             let mut namespaces = std::collections::HashMap::new();
             namespaces.insert(namespace.to_owned(), claims);
             Credential::new(
@@ -266,8 +275,7 @@ mod tests {
                 .expect_err("expected a schema mismatch for missing family_name");
 
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("family_name")),
+                err.kind() == ErrorKind::SchemaMismatch && err.to_string().contains("family_name"),
                 "unexpected error: {err}"
             );
             Ok(())
@@ -282,8 +290,7 @@ mod tests {
                 .expect_err("expected a schema mismatch for wrong type on given_name");
 
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("given_name")),
+                err.kind() == ErrorKind::SchemaMismatch && err.to_string().contains("given_name"),
                 "unexpected error: {err}"
             );
             Ok(())
@@ -301,8 +308,7 @@ mod tests {
                 .expect_err("expected a schema mismatch for disallowed additional property");
 
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("extra")),
+                err.kind() == ErrorKind::SchemaMismatch && err.to_string().contains("extra"),
                 "unexpected error: {err}"
             );
             Ok(())
@@ -339,8 +345,7 @@ mod tests {
             let err = SchemaValidator::validate_claims(&invalid, &config)
                 .expect_err("expected a schema mismatch for missing institution");
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("institution")),
+                err.kind() == ErrorKind::SchemaMismatch && err.to_string().contains("institution"),
                 "unexpected error: {err}"
             );
             Ok(())
@@ -367,8 +372,7 @@ mod tests {
                 .expect_err("expected a schema mismatch for missing given_name");
 
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("given_name")),
+                err.kind() == ErrorKind::SchemaMismatch && err.to_string().contains("given_name"),
                 "unexpected error: {err}"
             );
             Ok(())
@@ -386,8 +390,8 @@ mod tests {
                 .expect_err("expected a schema mismatch for absent namespace");
 
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("org.iso.18013.5.1")),
+                err.kind() == ErrorKind::SchemaMismatch
+                    && err.to_string().contains("org.iso.18013.5.1"),
                 "unexpected error: {err}"
             );
             Ok(())
@@ -419,15 +423,14 @@ mod tests {
             let err = SchemaValidator::validate_with_compiled(&invalid, &config, &validator)
                 .expect_err("expected a schema mismatch for missing family_name");
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("family_name")),
+                err.kind() == ErrorKind::SchemaMismatch && err.to_string().contains("family_name"),
                 "unexpected error: {err}"
             );
             Ok(())
         }
 
         #[test]
-        fn compile_for_config_without_schema_returns_none() -> Result<(), ValidationError> {
+        fn compile_for_config_without_schema_returns_none() -> Result<(), Error> {
             let config = config_without_schema();
             let result = SchemaValidator::compile_for(&config)?;
             assert!(result.is_none());
@@ -443,8 +446,9 @@ mod tests {
                 .expect_err("expected a schema mismatch for empty claims");
 
             assert!(
-                matches!(&err, ValidationError::SchemaMismatch { details, .. }
-                    if details.contains("given_name") && details.contains("family_name")),
+                err.kind() == ErrorKind::SchemaMismatch
+                    && err.to_string().contains("given_name")
+                    && err.to_string().contains("family_name"),
                 "expected both missing field names to be reported; got: {err}"
             );
             Ok(())
