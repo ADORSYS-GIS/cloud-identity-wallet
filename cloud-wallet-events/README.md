@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────┐
 │                  Application Layer                   │
 │                                                      │
@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Topics are derived automatically from the `topic_prefix` and the event type:
 
 | Event type | topic_prefix | Resolved topic |
-|---|---|---|
+| --- | --- | --- |
 | `credential.stored` | `wallet` | `wallet.credential` |
 | `key.created` | `wallet` | `wallet.key` |
 | _(custom category via metadata)_ | `wallet` | `wallet.<category>` |
@@ -133,7 +133,7 @@ automatically derived category.
 ## Well-known Event Types
 
 | Constant | Value | Description |
-|----------|-------|-------------|
+| --- | --- | --- |
 | `EventType::CREDENTIAL_STORED` | `"credential.stored"` | A credential was stored in the wallet |
 | `EventType::CREDENTIAL_DELETED` | `"credential.deleted"` | A credential was deleted from the wallet |
 | `EventType::PRESENTATION_SUBMITTED` | `"presentation.submitted"` | A verifiable presentation was submitted |
@@ -185,7 +185,7 @@ All operations return `Result<_, EventError>`. The variants map to distinct
 failure modes:
 
 | Variant | When it occurs |
-|---------|----------------|
+| --- | --- |
 | `PublishError` | Broker rejected the record or network write failed |
 | `SubscribeError` | Consumer failed to register with the broker |
 | `SerializationError` | JSON encode/decode of an event failed |
