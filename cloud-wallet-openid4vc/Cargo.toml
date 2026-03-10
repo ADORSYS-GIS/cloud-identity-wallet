@@ -30,3 +30,7 @@ cloud-wallet-crypto = { path = "../cloud-wallet-crypto", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[example]]
+name = "live_credential_storage"
+required-features = ["postgres", "encryption"]
