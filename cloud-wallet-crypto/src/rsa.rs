@@ -256,8 +256,8 @@ impl KeyPair {
     ///
     /// # Errors
     ///
-    /// - `ErrorKind::KeyParsing` if the input is not valid PKCS#8
-    /// - `ErrorKind::UnsupportedAlgorithm` if the key size is not supported
+    /// `ErrorKind::KeyParsing` if the input is not valid PKCS#8 of
+    /// if the key size is not supported
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
         let keypair =
             RsaKeyPair::from_pkcs8(der).map_err(|_| parse_error("Failed to parse RSA key"))?;
@@ -473,7 +473,7 @@ impl KeyPair {
     pub fn to_pkcs8_der<'a>(&self, output: &'a mut [u8]) -> Result<&'a [u8]> {
         use aws_lc_rs::encoding::Pkcs8V1Der;
 
-        let pkcs8: Pkcs8V1Der = self
+        let pkcs8: Pkcs8V1Der<'_> = self
             .material
             .keypair
             .as_der()
@@ -656,7 +656,7 @@ impl VerifyingKey {
     pub fn to_spki_der<'a>(&self, output: &'a mut [u8]) -> Result<&'a [u8]> {
         use aws_lc_rs::encoding::PublicKeyX509Der;
 
-        let spki_der: PublicKeyX509Der = self.key.as_der().map_err(|_| {
+        let spki_der: PublicKeyX509Der<'_> = self.key.as_der().map_err(|_| {
             serialize_error("Failed to serialize to SubjectPublicKeyInfo structure")
         })?;
 
@@ -692,7 +692,10 @@ fn get_key_size(key_pair: &RsaKeyPair) -> Result<RsaKeySize> {
         3072 => Ok(RsaKeySize::Rsa3072),
         4096 => Ok(RsaKeySize::Rsa4096),
         8192 => Ok(RsaKeySize::Rsa8192),
-        _ => Err(ErrorKind::UnsupportedAlgorithm.into()),
+        _ => Err(Error::message(
+            ErrorKind::KeyParsing,
+            format!("RSA key size {key_size_bits} is not supported"),
+        )),
     }
 }
 
