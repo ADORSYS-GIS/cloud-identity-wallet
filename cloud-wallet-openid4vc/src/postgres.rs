@@ -387,7 +387,7 @@ mod tests {
     use super::*;
     use crate::{
         encrypted_repository::EncryptingRepository,
-        encryption::{Kek, StoredCredential},
+        encryption::Kek,
         models::{Credential, CredentialPayload, SdJwtCredential},
         repository::CredentialRepository,
     };
