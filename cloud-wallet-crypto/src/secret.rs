@@ -148,6 +148,7 @@ impl<T: Zeroize + Clone> Clone for Secret<T> {
 }
 
 #[cfg(feature = "jwk")]
+#[cfg_attr(docsrs, doc(cfg(feature = "jwk")))]
 impl Serialize for Secret<u8> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -165,6 +166,7 @@ impl Serialize for Secret<u8> {
 }
 
 #[cfg(feature = "jwk")]
+#[cfg_attr(docsrs, doc(cfg(feature = "jwk")))]
 impl<'de> Deserialize<'de> for Secret<u8> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
