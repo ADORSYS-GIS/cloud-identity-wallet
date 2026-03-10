@@ -256,8 +256,8 @@ impl KeyPair {
     ///
     /// # Errors
     ///
-    /// - `ErrorKind::KeyParsing` if the input is not valid PKCS#8
-    /// - `ErrorKind::UnsupportedAlgorithm` if the key size is not supported
+    /// `ErrorKind::KeyParsing` if the input is not valid PKCS#8 of
+    /// if the key size is not supported
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
         let keypair =
             RsaKeyPair::from_pkcs8(der).map_err(|_| parse_error("Failed to parse RSA key"))?;
@@ -692,7 +692,10 @@ fn get_key_size(key_pair: &RsaKeyPair) -> Result<RsaKeySize> {
         3072 => Ok(RsaKeySize::Rsa3072),
         4096 => Ok(RsaKeySize::Rsa4096),
         8192 => Ok(RsaKeySize::Rsa8192),
-        _ => Err(ErrorKind::UnsupportedAlgorithm.into()),
+        _ => Err(Error::message(
+            ErrorKind::KeyParsing,
+            format!("RSA key size {key_size_bits} is not supported"),
+        )),
     }
 }
 
