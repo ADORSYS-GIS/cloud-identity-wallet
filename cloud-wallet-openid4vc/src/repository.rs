@@ -46,12 +46,11 @@ impl CredentialFilter {
         {
             return false;
         }
-        if let Some(active_at) = self.active_at {
-            if let Some(expires) = credential.expires_at
-                && expires <= active_at
-            {
-                return false;
-            }
+        if let Some(active_at) = self.active_at
+            && let Some(expires) = credential.expires_at
+            && expires <= active_at
+        {
+            return false;
         }
         true
     }

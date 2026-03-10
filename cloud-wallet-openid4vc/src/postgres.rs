@@ -104,7 +104,7 @@ fn row_to_stored(row: &sqlx::postgres::PgRow) -> Result<StoredCredential, sqlx::
 /// PostgreSQL-backed credential storage (encrypted).
 ///
 /// Implements `CredentialRepository<StoredCredential>` — the inner layer.
-/// Wrap with [`EncryptingRepository`] to expose the plaintext interface.
+/// Wrap with [`crate::encrypted_repository::EncryptingRepository`] to expose the plaintext interface.
 pub struct PostgresCredentialRepository {
     pool: PgPool,
 }
@@ -324,23 +324,21 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+/// The format-specific columns extracted from a [`StoredCredential`].
+/// `(format_str, vct, doc_type, credential_type_json, encrypted_bytes)`
+type TypeParts = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<u8>,
+);
 
 /// Extract the columns that differ per format from a [`StoredCredential`].
 ///
 /// Returns `(format_str, vct, doc_type, credential_type_json, encrypted_bytes)`.
 /// Columns not applicable to the current format are `None`.
-fn stored_payload_parts(
-    cred: &StoredCredential,
-) -> Result<
-    (
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Vec<u8>,
-    ),
-    StoreError,
-> {
+fn stored_payload_parts(cred: &StoredCredential) -> Result<TypeParts, StoreError> {
     match &cred.encrypted_payload {
         EncryptedPayload::DcSdJwt {
             vct,

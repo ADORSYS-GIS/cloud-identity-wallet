@@ -143,32 +143,31 @@ impl StoredCredential {
     ///
     /// Filtering operates entirely on plaintext metadata — no decryption needed.
     pub fn matches_filter(&self, filter: &CredentialFilter) -> bool {
-        if let Some(ref issuer) = filter.issuer {
-            if &self.issuer != issuer {
-                return false;
-            }
+        if let Some(ref issuer) = filter.issuer
+            && &self.issuer != issuer
+        {
+            return false;
         }
-        if let Some(ref subject) = filter.subject {
-            if &self.subject != subject {
-                return false;
-            }
+        if let Some(ref subject) = filter.subject
+            && &self.subject != subject
+        {
+            return false;
         }
-        if let Some(ref status) = filter.status {
-            if &self.status != status {
-                return false;
-            }
+        if let Some(ref status) = filter.status
+            && &self.status != status
+        {
+            return false;
         }
-        if let Some(ref cfg_id) = filter.credential_configuration_id {
-            if &self.credential_configuration_id != cfg_id {
-                return false;
-            }
+        if let Some(ref cfg_id) = filter.credential_configuration_id
+            && &self.credential_configuration_id != cfg_id
+        {
+            return false;
         }
-        if let Some(active_at) = filter.active_at {
-            if let Some(expires) = self.expires_at {
-                if expires <= active_at {
-                    return false;
-                }
-            }
+        if let Some(active_at) = filter.active_at
+            && let Some(expires) = self.expires_at
+            && expires <= active_at
+        {
+            return false;
         }
         true
     }
@@ -388,7 +387,7 @@ fn aead_seal(key: &Key, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, StoreEr
 }
 
 /// AES-256-GCM open. Input: `nonce (12 B) ‖ ciphertext ‖ tag (16 B)`.
-fn aead_open<'a>(key: &Key, blob: &'a mut Vec<u8>, aad: &[u8]) -> Result<&'a [u8], StoreError> {
+fn aead_open<'a>(key: &Key, blob: &'a mut [u8], aad: &[u8]) -> Result<&'a [u8], StoreError> {
     if blob.len() < NONCE_LENGTH {
         return Err(StoreError::Decryption(
             "blob too short to contain nonce".into(),
