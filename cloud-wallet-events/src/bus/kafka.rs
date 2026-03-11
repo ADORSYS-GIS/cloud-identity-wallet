@@ -17,9 +17,12 @@
 //! # Quick start
 //!
 //! ```rust,no_run
-//! use wallet_events::{
+//! use wallet_events::bus::kafka::{
 //!     KafkaPublisher, KafkaPublisherConfig, KafkaConsumer, KafkaConsumerConfig,
-//!     ProducerAcks, Event, EventType, SubscriptionConfig, EventHandler,
+//!     ProducerAcks,
+//! };
+//! use wallet_events::{
+//!     Event, EventType, SubscriptionConfig, EventHandler,
 //!     Publisher, Consumer,
 //! };
 //! use serde_json::json;
@@ -109,7 +112,7 @@ impl From<ProducerAcks> for RequiredAcks {
 /// # Example
 ///
 /// ```
-/// use wallet_events::{KafkaPublisherConfig, ProducerAcks};
+/// use wallet_events::bus::kafka::{KafkaPublisherConfig, ProducerAcks};
 ///
 /// let config = KafkaPublisherConfig {
 ///     bootstrap_servers: "broker1:9092,broker2:9092".into(),
@@ -150,7 +153,7 @@ pub struct KafkaPublisherConfig {
 /// # Example
 ///
 /// ```
-/// use wallet_events::KafkaConsumerConfig;
+/// use wallet_events::bus::kafka::KafkaConsumerConfig;
 ///
 /// let config = KafkaConsumerConfig {
 ///     bootstrap_servers: "broker1:9092,broker2:9092".into(),
@@ -187,8 +190,8 @@ pub struct KafkaConsumerConfig {
 /// # Example
 ///
 /// ```rust,no_run
-/// use wallet_events::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks, Publisher,
-///                     Event, EventType};
+/// use wallet_events::bus::kafka::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks};
+/// use wallet_events::{Publisher, Event, EventType};
 /// use serde_json::json;
 ///
 /// #[tokio::main]
@@ -238,7 +241,7 @@ impl KafkaPublisher {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wallet_events::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks};
+    /// use wallet_events::bus::kafka::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks};
     ///
     /// let publisher = KafkaPublisher::new(KafkaPublisherConfig {
     ///     bootstrap_servers: "localhost:9092".into(),
@@ -295,8 +298,8 @@ impl KafkaPublisher {
 /// # Example
 ///
 /// ```rust,no_run
-/// use wallet_events::{KafkaConsumer, KafkaConsumerConfig, Consumer,
-///                     SubscriptionConfig, EventHandler};
+/// use wallet_events::bus::kafka::{KafkaConsumer, KafkaConsumerConfig};
+/// use wallet_events::{Consumer, SubscriptionConfig, EventHandler};
 /// use std::sync::Arc;
 ///
 /// #[tokio::main]
@@ -343,7 +346,7 @@ impl KafkaConsumer {
     /// # Example
     ///
     /// ```
-    /// use wallet_events::{KafkaConsumer, KafkaConsumerConfig};
+    /// use wallet_events::bus::kafka::{KafkaConsumer, KafkaConsumerConfig};
     ///
     /// let consumer = KafkaConsumer::new(KafkaConsumerConfig {
     ///     bootstrap_servers: "localhost:9092".into(),

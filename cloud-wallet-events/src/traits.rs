@@ -113,7 +113,7 @@ pub struct SubscriptionConfig {
     /// produced by [`KafkaPublisher`]. Pass the same prefix and desired
     /// categories here to receive the matching events.
     ///
-    /// [`KafkaPublisher`]: crate::bus::KafkaPublisher
+    /// [`KafkaPublisher`]: crate::bus::kafka::KafkaPublisher
     pub topics: Vec<String>,
 }
 

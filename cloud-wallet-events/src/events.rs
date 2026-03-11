@@ -142,7 +142,7 @@ pub struct Event {
     /// - `"category"` — overrides the Kafka topic category derived from
     ///   `event_type` (see [`KafkaPublisher`]).
     ///
-    /// [`KafkaPublisher`]: crate::bus::KafkaPublisher
+    /// [`KafkaPublisher`]: crate::bus::kafka::KafkaPublisher
     pub metadata: HashMap<String, Value>,
 }
 
