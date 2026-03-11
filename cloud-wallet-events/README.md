@@ -27,9 +27,8 @@ wallet-events = { path = "../cloud-wallet-events" }
 ### Publish an event
 
 ```rust,no_run
-use wallet_events::{
-    KafkaPublisher, KafkaPublisherConfig, ProducerAcks, Publisher, Event, EventType,
-};
+use wallet_events::bus::kafka::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks};
+use wallet_events::{Publisher, Event, EventType};
 use serde_json::json;
 
 #[tokio::main]
@@ -56,9 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Consume events
 
 ```rust,no_run
-use wallet_events::{
-    KafkaConsumer, KafkaConsumerConfig, Consumer, SubscriptionConfig, EventHandler,
-};
+use wallet_events::bus::kafka::{KafkaConsumer, KafkaConsumerConfig};
+use wallet_events::{Consumer, SubscriptionConfig, EventHandler};
 use std::sync::Arc;
 
 #[tokio::main]

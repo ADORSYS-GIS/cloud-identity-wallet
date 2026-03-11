@@ -43,8 +43,8 @@ pub enum EventError {
     /// [`KafkaConsumer`] if the provided config is not sufficient to establish
     /// a producer or consumer client.
     ///
-    /// [`KafkaPublisher`]: crate::bus::KafkaPublisher
-    /// [`KafkaConsumer`]: crate::bus::KafkaConsumer
+    /// [`KafkaPublisher`]: crate::bus::kafka::KafkaPublisher
+    /// [`KafkaConsumer`]: crate::bus::kafka::KafkaConsumer
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
 
