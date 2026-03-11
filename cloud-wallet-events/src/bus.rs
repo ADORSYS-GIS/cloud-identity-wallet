@@ -4,8 +4,7 @@
 //! [`Consumer`]: crate::traits::Consumer
 //!
 //! This module provides [`KafkaPublisher`] and [`KafkaConsumer`], powered by
-//! the `kafka` crate. Both types wrap the synchronous `kafka` client inside
-//! `tokio::task::spawn_blocking` so they integrate cleanly into an async
+//! the `kafka` crate. Both types integrate cleanly into an asynchronous
 //! runtime.
 //!
 //! # Topic naming
@@ -81,23 +80,17 @@ use std::time::Duration;
 
 /// Controls how many brokers must acknowledge a message before the produce
 /// request is considered successful.
-///
-/// Maps directly to the Kafka `acks` producer configuration option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProducerAcks {
     /// Fire-and-forget — no acknowledgement is required.
-    ///
-    /// Maximum throughput at the cost of possible message loss on broker
-    /// failure. Do not use for financial or identity-critical events.
     None,
     /// The leader broker must acknowledge the message.
     ///
-    /// Balances throughput and durability. Suitable for most wallet events.
+    /// Balances throughput and durability. Suitable for most events.
     One,
     /// All in-sync replicas must acknowledge the message.
     ///
-    /// Highest durability guarantee. Use for events that must never be lost
-    /// (e.g. key rotation, credential revocation).
+    /// Highest durability guarantee. Use for events that must never be lost.
     All,
 }
 
@@ -144,17 +137,11 @@ pub struct KafkaPublisherConfig {
     /// `"wallet.key"`.
     pub topic_prefix: String,
 
-    /// Acknowledgement level required from the broker before a send succeeds.
-    ///
-    /// See [`ProducerAcks`] for the trade-offs between durability and
-    /// throughput.
+    /// Acknowledgement level required from the broker.
     pub producer_acks: ProducerAcks,
 
     /// How long the producer waits for broker acknowledgements before timing
     /// out, in seconds.
-    ///
-    /// Increase this value in high-latency environments. A value of `5`
-    /// seconds is a reasonable default.
     pub ack_timeout_secs: u64,
 }
 
@@ -193,15 +180,9 @@ pub struct KafkaConsumerConfig {
 
 /// A Kafka-backed event publisher.
 ///
-/// `KafkaPublisher` wraps a [`kafka::producer::Producer`] behind an
-/// [`Arc<Mutex<_>>`] so it can be shared across tasks without requiring
-/// `mut` access. The blocking `send` call is offloaded to a thread pool via
-/// [`tokio::task::spawn_blocking`].
-///
 /// # Thread safety
 ///
-/// `KafkaPublisher` implements `Send + Sync` and can be placed in an `Arc`
-/// to share it between multiple Tokio tasks.
+/// `KafkaPublisher` is thread-safe and can be shared between tasks.
 ///
 /// # Example
 ///
@@ -307,19 +288,9 @@ impl KafkaPublisher {
 
 /// A Kafka-backed event consumer.
 ///
-/// `KafkaConsumer` polls the Kafka broker in a dedicated blocking thread and
-/// forwards deserialized [`Event`]s to an async [`EventHandler`] callback via
-/// an unbounded MPSC channel.
-///
-/// Each call to [`subscribe`] creates a new consumer group instance with a
-/// UUID-suffixed group ID, ensuring independent offset tracking per
-/// subscription.
-///
-/// [`subscribe`]: EventConsumer::subscribe
-///
 /// # Thread safety
 ///
-/// `KafkaConsumer` is `Send + Sync` and can be shared across tasks.
+/// `KafkaConsumer` is thread-safe and can be shared across tasks.
 ///
 /// # Example
 ///
@@ -388,10 +359,7 @@ impl KafkaConsumer {
 impl EventPublisher for KafkaPublisher {
     /// Serialize `event` to JSON and publish it to the appropriate Kafka topic.
     ///
-    /// The topic is resolved via `topic_for`. The event
-    /// `id` is used as the Kafka message key to preserve per-key ordering.
-    /// The blocking [`kafka::producer::Producer::send`] call is offloaded to
-    /// a thread-pool thread via [`tokio::task::spawn_blocking`].
+    /// The topic is resolved based on the event's type and metadata.
     ///
     /// # Errors
     ///
@@ -427,19 +395,8 @@ impl EventPublisher for KafkaPublisher {
 impl EventConsumer for KafkaConsumer {
     /// Start consuming events from the topics listed in `config`.
     ///
-    /// Internally this method:
-    ///
-    /// 1. Parses `bootstrap_servers` into individual broker addresses.
-    /// 2. Appends a random UUID to `consumer_group_id` for independent offset
-    ///    tracking.
-    /// 3. Spawns a `tokio::task::spawn_blocking` thread that polls Kafka in a
-    ///    tight loop and forwards each deserialized [`Event`] through an MPSC
-    ///    channel.
-    /// 4. Spawns an async task that reads from the channel and calls `handler`
-    ///    for every event.
-    ///
-    /// The method returns `Ok(())` once both tasks are spawned. The tasks run
-    /// until the consumer is dropped or an unrecoverable channel error occurs.
+    /// The handler is invoked for every event received from the subscribed topics.
+    /// The subscription runs until the consumer is dropped or an unrecoverable error occurs.
     ///
     /// # Errors
     ///
