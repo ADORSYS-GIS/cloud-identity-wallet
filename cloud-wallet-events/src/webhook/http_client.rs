@@ -1,46 +1,12 @@
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Response};
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
 use super::hmac_signer::{HmacSigner, format_signature_header};
 use super::subscription::WebhookAuth;
+use crate::error::HttpClientError;
 
 /// Default HTTP timeout applied when constructing a client via [`WebhookHttpClient::new`].
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Error type for HTTP client operations
-#[derive(Debug, Error)]
-pub enum HttpClientError {
-    #[error("HTTP request failed: {0}")]
-    RequestFailed(String),
-
-    #[error("Request timeout after {0:?}")]
-    Timeout(Duration),
-
-    #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
-
-    #[error("Network error: {0}")]
-    NetworkError(String),
-
-    #[error("Response error: status={status}, body={body}")]
-    ResponseError { status: StatusCode, body: String },
-
-    #[error("Failed to sign request: {0}")]
-    SignatureError(String),
-}
-
-impl From<reqwest::Error> for HttpClientError {
-    fn from(err: reqwest::Error) -> Self {
-        if err.is_timeout() {
-            HttpClientError::Timeout(DEFAULT_TIMEOUT)
-        } else if err.is_connect() {
-            HttpClientError::NetworkError(err.to_string())
-        } else {
-            HttpClientError::RequestFailed(err.to_string())
-        }
-    }
-}
 
 /// HTTP client wrapper for webhook delivery
 pub struct WebhookHttpClient {
@@ -111,23 +77,25 @@ impl WebhookHttpClient {
     ) -> Result<reqwest::RequestBuilder, HttpClientError> {
         match auth {
             WebhookAuth::None => {}
-            WebhookAuth::HmacSha256 { secret } => {
+            WebhookAuth::HmacSha256 {
+                secret,
+                header_name,
+            } => {
                 use secrecy::ExposeSecret;
-                let signer =
-                    HmacSigner::new(secrecy::SecretSlice::from(secret.expose_secret().to_vec()));
+                let signer = HmacSigner::new(secret.expose_secret().to_vec());
                 let (signature, timestamp) = signer
                     .sign(payload)
-                    .map_err(HttpClientError::SignatureError)?;
+                    .map_err(|e| HttpClientError::SignatureError(e.to_string()))?;
 
-                request = request.header(
-                    "X-iGrant-Signature",
-                    format_signature_header(&signature, timestamp),
-                );
+                let header_value = format_signature_header(&signature, timestamp)
+                    .map_err(|e| HttpClientError::SignatureError(e.to_string()))?;
+
+                request = request.header(header_name.as_str(), header_value);
             }
             WebhookAuth::BearerToken { token } => {
                 use secrecy::ExposeSecret;
-                let token_str = String::from_utf8_lossy(token.expose_secret());
-                request = request.header("Authorization", format!("Bearer {token_str}"));
+                request =
+                    request.header("Authorization", format!("Bearer {}", token.expose_secret()));
             }
         }
 
@@ -144,6 +112,7 @@ impl WebhookHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::StatusCode;
 
     #[test]
     fn test_http_client_creation() -> Result<(), HttpClientError> {

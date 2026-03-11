@@ -1,5 +1,11 @@
 use std::time::Duration;
 
+/// Default maximum backoff delay applied by [`RetryStrategy`].
+///
+/// Regardless of the exponential multiplier, no single retry delay will exceed
+/// this value. Callers can override it via [`RetryStrategy::with_max_delay`].
+pub const DEFAULT_MAX_DELAY: Duration = Duration::from_secs(30);
+
 /// Retry strategy for webhook delivery.
 ///
 /// Failed deliveries are retried with exponential backoff between attempts.
@@ -18,8 +24,14 @@ impl RetryStrategy {
         Self {
             max_attempts,
             base_delay_ms,
-            max_delay_ms: 30_000, // 30 seconds max
+            max_delay_ms: DEFAULT_MAX_DELAY.as_millis() as u64,
         }
+    }
+
+    /// Override the maximum backoff delay cap.
+    pub fn with_max_delay(mut self, max_delay: Duration) -> Self {
+        self.max_delay_ms = max_delay.as_millis() as u64;
+        self
     }
 
     /// Create default retry strategy (5 attempts, 100 ms base delay)

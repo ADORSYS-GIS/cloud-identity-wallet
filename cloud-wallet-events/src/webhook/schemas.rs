@@ -1,8 +1,21 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use time::OffsetDateTime;
 
 /// Webhook payload delivered to external endpoints.
+///
+/// Field names follow the iGrant.io OpenID4VC webhook schema:
+/// <https://docs.igrant.io/docs/openid4vc-webhooks/#webhook-payload>
+///
+/// ```json
+/// {
+///   "deliveryID": "67f770eec8426b0b55e30c2e",
+///   "webhookID":  "67f770936e45cf84e6880d25",
+///   "timestamp":  "2025-04-10T07:19:10Z",
+///   "type":       "openid.credential.offer_sent",
+///   "data":       { ... event-specific fields ... }
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WebhookPayload {
     /// Unique identifier for this individual delivery attempt.
@@ -22,26 +35,25 @@ pub struct WebhookPayload {
     pub event_type: String,
 
     /// Event-specific payload data.
+    ///
+    /// Includes all domain fields such as `wallet_id`, `correlation_id`,
+    /// and any event-specific fields from the originating domain event.
     pub data: Value,
 }
 
 impl WebhookPayload {
     /// Create a new webhook payload.
+    ///
+    /// `data` is accepted as-is. Any domain-specific field injection (e.g.
+    /// `wallet_id`, `correlation_id`) is the responsibility of the caller's
+    /// [`PayloadMapper`] implementation, keeping this struct generic.
     pub fn new(
         delivery_id: String,
         webhook_id: String,
         timestamp: OffsetDateTime,
         event_type: String,
-        wallet_id: String,
-        correlation_id: String,
-        mut data: Value,
+        data: Value,
     ) -> Self {
-        // Inject context fields into data so they are always present for receivers.
-        if let Some(obj) = data.as_object_mut() {
-            obj.insert("wallet_id".to_string(), json!(wallet_id));
-            obj.insert("correlation_id".to_string(), json!(correlation_id));
-        }
-
         Self {
             delivery_id,
             webhook_id,
@@ -167,11 +179,11 @@ mod tests {
             "sub-456".to_string(),
             OffsetDateTime::now_utc(),
             "openid.credential.offer_sent".to_string(),
-            "wallet-456".to_string(),
-            "corr-789".to_string(),
             json!({
                 "credential_id": "cred-123",
-                "credential_type": "UniversityDegree"
+                "credential_type": "UniversityDegree",
+                "wallet_id": "wallet-456",
+                "correlation_id": "corr-789"
             }),
         );
 
@@ -190,9 +202,7 @@ mod tests {
             "sub-456".to_string(),
             OffsetDateTime::now_utc(),
             "openid.credential.offer_sent".to_string(),
-            "wallet-456".to_string(),
-            "corr-789".to_string(),
-            json!({"test": "data"}),
+            json!({"test": "data", "wallet_id": "wallet-456", "correlation_id": "corr-789"}),
         );
 
         let json_str = payload.to_json()?;

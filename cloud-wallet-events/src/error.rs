@@ -62,6 +62,34 @@ pub enum HttpClientError {
     SignatureError(String),
 }
 
+/// Errors returned by [`HmacSigner`] and the signature header helpers.
+#[derive(Debug, thiserror::Error)]
+pub enum HmacSignerError {
+    #[error("Failed to initialise HMAC: {0}")]
+    InvalidKey(String),
+
+    #[error("System clock error: {0}")]
+    ClockError(String),
+
+    #[error("Timestamp out of range: {0}")]
+    TimestampOutOfRange(String),
+
+    #[error("Timestamp too old: {age}s (max: {max}s)")]
+    TimestampTooOld { age: u64, max: u64 },
+
+    #[error("Timestamp is in the future: {0}s ahead")]
+    TimestampInFuture(u64),
+
+    #[error("Invalid signature: not valid hex")]
+    InvalidHex,
+
+    #[error("Invalid signature")]
+    SignatureMismatch,
+
+    #[error("Invalid X-iGrant-Signature header format: {0}")]
+    InvalidHeaderFormat(String),
+}
+
 impl From<reqwest::Error> for HttpClientError {
     fn from(err: reqwest::Error) -> Self {
         if err.is_timeout() {

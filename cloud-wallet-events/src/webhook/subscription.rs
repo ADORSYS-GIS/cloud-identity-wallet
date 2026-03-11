@@ -1,10 +1,11 @@
-use secrecy::SecretSlice;
+use secrecy::{SecretBox, SecretSlice};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+use url::Url;
 
 /// Webhook subscription configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookSubscription {
     pub id: String,
 
@@ -15,47 +16,65 @@ pub struct WebhookSubscription {
     pub auth: WebhookAuth,
 }
 
-impl Serialize for WebhookSubscription {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("WebhookSubscription", 4)?;
-        s.serialize_field("id", &self.id)?;
-        s.serialize_field("url", &self.url)?;
-        s.serialize_field("event_types", &self.event_types)?;
-        s.serialize_field("auth", &self.auth)?;
-        s.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for WebhookSubscription {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Raw {
-            id: String,
-            url: String,
-            #[serde(default)]
-            event_types: HashSet<String>,
-            auth: WebhookAuth,
-        }
-        let raw = Raw::deserialize(deserializer)?;
-        Ok(Self {
-            id: raw.id,
-            url: raw.url,
-            event_types: raw.event_types,
-            auth: raw.auth,
-        })
-    }
+/// Error returned when constructing a [`WebhookSubscription`] with an invalid
+/// endpoint URL.
+///
+/// This is intentionally a standalone type so the caller does not need to
+/// import the full `error` module just to create a subscription.
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid webhook URL '{url}': {reason}")]
+pub struct InvalidUrlError {
+    url: String,
+    reason: String,
 }
 
 impl WebhookSubscription {
-    /// Create a new webhook subscription
-    pub fn new(id: String, url: String, auth: WebhookAuth) -> Self {
-        Self {
-            id,
+    /// Create a new webhook subscription.
+    ///
+    /// Accepts anything that converts into `String` for `id` and `url` —
+    /// `&str`, `String`, or `Cow<str>` all work without an explicit `.to_string()`.
+    ///
+    /// # URL validation
+    ///
+    /// The `url` is parsed and validated before storage:
+    /// - Must be a well-formed URL.
+    /// - Scheme must be `http` or `https`.
+    ///
+    /// Returns [`InvalidUrlError`] if either condition is not met.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let sub = WebhookSubscription::new("sub-1", "https://example.com/webhook", auth)?;
+    /// ```
+    pub fn new(
+        id: impl Into<String>,
+        url: impl Into<String>,
+        auth: WebhookAuth,
+    ) -> Result<Self, InvalidUrlError> {
+        let url = url.into();
+
+        let parsed = Url::parse(&url).map_err(|e| InvalidUrlError {
+            url: url.clone(),
+            reason: e.to_string(),
+        })?;
+
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(InvalidUrlError {
+                url: url.clone(),
+                reason: format!(
+                    "scheme '{}' is not allowed; must be http or https",
+                    parsed.scheme()
+                ),
+            });
+        }
+
+        Ok(Self {
+            id: id.into(),
             url,
             event_types: HashSet::new(),
             auth,
-        }
+        })
     }
 
     /// Subscribe to all events
@@ -64,9 +83,21 @@ impl WebhookSubscription {
         self
     }
 
-    /// Subscribe to specific event types
-    pub fn subscribe_to(mut self, event_types: Vec<String>) -> Self {
-        self.event_types = event_types.into_iter().collect();
+    /// Subscribe to specific event types.
+    ///
+    /// Accepts any iterable whose items convert into `String`, so all of
+    /// the following work without `.to_string()` boilerplate:
+    ///
+    /// ```rust,ignore
+    /// sub.subscribe_to(["credential.stored", "key.created"])
+    /// sub.subscribe_to(["credential.stored"])
+    /// sub.subscribe_to(event_type_set.iter().cloned())
+    /// ```
+    pub fn subscribe_to(
+        mut self,
+        event_types: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.event_types = event_types.into_iter().map(Into::into).collect();
         self
     }
 
@@ -82,32 +113,60 @@ impl WebhookSubscription {
 }
 
 /// Authentication method for webhook delivery.
+///
+/// Secrets are stored as `Arc<SecretSlice<u8>>` which provides three
+/// guarantees:
+/// - **No accidental logging** — `SecretSlice` has no `Debug`/`Display` impl.
+/// - **Zeroed on drop** — memory is wiped when the last `Arc` is released.
+/// - **Cheap cloning** — `Arc` means cloning a subscription shares the same
+///   allocation rather than duplicating the secret bytes.
 #[derive(Clone)]
 pub enum WebhookAuth {
     /// No authentication (not recommended for production).
     None,
 
-    /// HMAC-SHA256 signature delivered in the `X-iGrant-Signature` header.
-    HmacSha256 { secret: Arc<SecretSlice<u8>> },
+    /// HMAC-SHA256 signature delivered in a configurable request header.
+    ///
+    /// `header_name` controls which header carries the signature
+    /// (e.g. `"X-Hub-Signature-256"`, `"X-Webhook-Signature"`).
+    /// The library never assumes a fixed header name; the caller decides.
+    HmacSha256 {
+        secret: Arc<SecretSlice<u8>>,
+        /// HTTP header name that will carry the signature value.
+        header_name: String,
+    },
 
     /// Bearer token delivered in the `Authorization` header.
-    BearerToken { token: Arc<SecretSlice<u8>> },
+    ///
+    /// Bearer tokens are UTF-8 strings by definition; storing as `SecretBox<String>`
+    /// avoids the UTF-8 re-validation that would be needed when converting from
+    /// `SecretSlice<u8>` at the HTTP send boundary.
+    BearerToken { token: Arc<SecretBox<String>> },
 }
 
 impl WebhookAuth {
     /// Create HMAC-SHA256 authentication.
-    pub fn hmac_sha256(secret: impl Into<Vec<u8>>) -> Self {
+    ///
+    /// `secret` accepts anything that converts into `Vec<u8>` — `&str`,
+    /// `String`, `Vec<u8>`, or `&[u8]`.
+    ///
+    /// `header_name` is the HTTP header that will carry the signature on each
+    /// delivery request. Common values: `"X-Hub-Signature-256"`,
+    /// `"X-Webhook-Signature"`. The library ships no default — the caller
+    /// chooses the name that matches the receiving endpoint's expectations.
+    pub fn hmac_sha256(secret: impl Into<Vec<u8>>, header_name: impl Into<String>) -> Self {
         Self::HmacSha256 {
             secret: Arc::new(SecretSlice::from(secret.into())),
+            header_name: header_name.into(),
         }
     }
 
     /// Create bearer token authentication.
     ///
-    /// Same ergonomics as [`hmac_sha256`](Self::hmac_sha256).
-    pub fn bearer_token(token: impl Into<Vec<u8>>) -> Self {
+    /// Accepts any type that converts into `String` — `&str`, `String`.
+    pub fn bearer_token(token: impl Into<String>) -> Self {
         Self::BearerToken {
-            token: Arc::new(SecretSlice::from(token.into())),
+            token: Arc::new(SecretBox::new(Box::new(token.into()))),
         }
     }
 }
@@ -118,9 +177,10 @@ impl std::fmt::Debug for WebhookAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::None => write!(f, "WebhookAuth::None"),
-            Self::HmacSha256 { .. } => {
-                write!(f, "WebhookAuth::HmacSha256 {{ secret: [REDACTED] }}")
-            }
+            Self::HmacSha256 { header_name, .. } => write!(
+                f,
+                "WebhookAuth::HmacSha256 {{ header_name: {header_name:?}, secret: [REDACTED] }}"
+            ),
             Self::BearerToken { .. } => {
                 write!(f, "WebhookAuth::BearerToken {{ token: [REDACTED] }}")
             }
@@ -136,7 +196,10 @@ impl Serialize for WebhookAuth {
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
             WebhookAuth::None => map.serialize_entry("type", "none")?,
-            WebhookAuth::HmacSha256 { .. } => map.serialize_entry("type", "hmac_sha256")?,
+            WebhookAuth::HmacSha256 { header_name, .. } => {
+                map.serialize_entry("type", "hmac_sha256")?;
+                map.serialize_entry("header_name", header_name)?;
+            }
             WebhookAuth::BearerToken { .. } => map.serialize_entry("type", "bearer_token")?,
         }
         map.end()
@@ -164,11 +227,14 @@ impl<'de> Deserialize<'de> for WebhookAuth {
                 let mut secret: Option<String> = None;
                 let mut token: Option<String> = None;
 
+                let mut header_name: Option<String> = None;
+
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "type" => auth_type = Some(map.next_value()?),
                         "secret" => secret = Some(map.next_value()?),
                         "token" => token = Some(map.next_value()?),
+                        "header_name" => header_name = Some(map.next_value()?),
                         _ => {
                             map.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -179,10 +245,11 @@ impl<'de> Deserialize<'de> for WebhookAuth {
                     Some("none") => Ok(WebhookAuth::None),
                     Some("hmac_sha256") => Ok(WebhookAuth::hmac_sha256(
                         secret.unwrap_or_default().into_bytes(),
+                        header_name.unwrap_or_else(|| "X-Webhook-Signature".to_string()),
                     )),
-                    Some("bearer_token") => Ok(WebhookAuth::bearer_token(
-                        token.unwrap_or_default().into_bytes(),
-                    )),
+                    Some("bearer_token") => {
+                        Ok(WebhookAuth::bearer_token(token.unwrap_or_default()))
+                    }
                     Some(other) => Err(de::Error::unknown_variant(
                         other,
                         &["none", "hmac_sha256", "bearer_token"],
@@ -203,10 +270,11 @@ mod tests {
     #[test]
     fn test_webhook_subscription_creation() {
         let subscription = WebhookSubscription::new(
-            "sub-123".to_string(),
-            "https://api.example.com/webhook".to_string(),
-            WebhookAuth::hmac_sha256("secret"),
-        );
+            "sub-123",
+            "https://api.example.com/webhook",
+            WebhookAuth::hmac_sha256("secret", "X-Webhook-Signature"),
+        )
+        .unwrap();
 
         assert_eq!(subscription.id, "sub-123");
         assert_eq!(subscription.url, "https://api.example.com/webhook");
@@ -214,16 +282,33 @@ mod tests {
     }
 
     #[test]
+    fn test_new_rejects_invalid_url() {
+        let err = WebhookSubscription::new("sub-1", "not a url at all", WebhookAuth::None);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_new_rejects_non_http_scheme() {
+        let err = WebhookSubscription::new("sub-1", "ftp://example.com/hook", WebhookAuth::None);
+        assert!(matches!(err, Err(ref e) if e.to_string().contains("ftp")));
+    }
+
+    #[test]
+    fn test_new_accepts_str_without_to_string() {
+        // Verify impl Into<String> ergonomics — no .to_string() needed
+        let sub = WebhookSubscription::new("sub-1", "https://example.com/hook", WebhookAuth::None);
+        assert!(sub.is_ok());
+    }
+
+    #[test]
     fn test_subscribe_to_specific_events() {
         let subscription = WebhookSubscription::new(
-            "sub-123".to_string(),
-            "https://api.example.com/webhook".to_string(),
+            "sub-123",
+            "https://api.example.com/webhook",
             WebhookAuth::None,
         )
-        .subscribe_to(vec![
-            "credential.stored".to_string(),
-            "credential.deleted".to_string(),
-        ]);
+        .unwrap()
+        .subscribe_to(["credential.stored", "credential.deleted"]);
 
         assert!(subscription.matches_event("credential.stored"));
         assert!(subscription.matches_event("credential.deleted"));
@@ -233,10 +318,11 @@ mod tests {
     #[test]
     fn test_subscribe_all_events() {
         let subscription = WebhookSubscription::new(
-            "sub-123".to_string(),
-            "https://api.example.com/webhook".to_string(),
+            "sub-123",
+            "https://api.example.com/webhook",
             WebhookAuth::None,
         )
+        .unwrap()
         .subscribe_all();
 
         assert!(subscription.matches_event("credential.stored"));
@@ -246,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_secret_is_redacted_in_debug_output() {
-        let auth = WebhookAuth::hmac_sha256("super-secret");
+        let auth = WebhookAuth::hmac_sha256("super-secret", "X-Webhook-Signature");
         let debug = format!("{auth:?}");
         assert!(debug.contains("REDACTED"));
         assert!(!debug.contains("super-secret"));
@@ -260,18 +346,20 @@ mod tests {
     #[test]
     fn test_serialization_omits_secret() -> Result<(), serde_json::Error> {
         let subscription = WebhookSubscription::new(
-            "sub-123".to_string(),
-            "https://api.example.com/webhook".to_string(),
-            WebhookAuth::hmac_sha256("super-secret"),
+            "sub-123",
+            "https://api.example.com/webhook",
+            WebhookAuth::hmac_sha256("super-secret", "X-Webhook-Signature"),
         )
-        .subscribe_to(vec!["credential.stored".to_string()]);
+        .unwrap()
+        .subscribe_to(["credential.stored"]);
 
         let json = serde_json::to_string(&subscription)?;
 
         // Secret must never appear in serialized output
         assert!(!json.contains("super-secret"));
-        // Variant tag must be present
+        // Variant tag and header name must be present
         assert!(json.contains("hmac_sha256"));
+        assert!(json.contains("X-Webhook-Signature"));
         Ok(())
     }
 
@@ -289,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_clone_shares_arc_not_secret_bytes() {
-        let auth = WebhookAuth::hmac_sha256("shared-secret");
+        let auth = WebhookAuth::hmac_sha256("shared-secret", "X-Webhook-Signature");
         // Clone must succeed (Arc clone, no secret duplication)
         let _cloned = auth.clone();
     }
