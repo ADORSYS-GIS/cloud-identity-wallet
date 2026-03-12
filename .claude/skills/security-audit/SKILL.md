@@ -8,6 +8,7 @@ description: Audits code for security vulnerabilities covering OWASP Top 10, dep
 When performing a security audit, check every category below. Do not skip any section even if it seems unlikely to apply.
 
 ## 1. Injection Vulnerabilities
+
 - **SQL Injection**: Verify all database queries use parameterized statements or an ORM; flag any string concatenation in queries
 - **Command Injection**: Check for user input passed to shell commands, exec functions, or system calls; verify input is escaped or allowlisted
 - **XSS (Cross-Site Scripting)**: Ensure all user-supplied content is escaped before rendering in HTML; check for raw HTML insertion APIs and unescaped template output
@@ -15,6 +16,7 @@ When performing a security audit, check every category below. Do not skip any se
 - **Template Injection**: Verify server-side templates do not evaluate user input as code
 
 ## 2. Input Validation and Sanitization
+
 - All API endpoints validate input types, lengths, and formats before processing
 - File uploads check file type (by content, not just extension), enforce size limits, and store outside the webroot
 - URL parameters and query strings are decoded and validated
@@ -23,6 +25,7 @@ When performing a security audit, check every category below. Do not skip any se
 - Use allowlists (not denylists) for input validation where possible
 
 ## 3. Authentication
+
 - Passwords are hashed with a strong algorithm (bcrypt, scrypt, Argon2) — never MD5 or SHA-1
 - Authentication tokens (JWT, session IDs) have appropriate expiration times
 - Failed login attempts are rate-limited and do not reveal whether the username or password was wrong
@@ -31,6 +34,7 @@ When performing a security audit, check every category below. Do not skip any se
 - Session tokens are regenerated after login to prevent session fixation
 
 ## 4. Authorization
+
 - Every API endpoint checks authorization, not just authentication
 - Verify users cannot access or modify resources belonging to other users (IDOR)
 - Role-based access control is enforced at the backend, not just the UI
@@ -38,6 +42,7 @@ When performing a security audit, check every category below. Do not skip any se
 - Verify that privilege escalation is not possible through parameter tampering
 
 ## 5. Sensitive Data Exposure
+
 - No secrets (API keys, tokens, passwords) are committed to the repository
 - Sensitive data (PII, financial data) is encrypted at rest and in transit
 - Logs do not contain passwords, tokens, credit card numbers, or full PII
@@ -46,6 +51,7 @@ When performing a security audit, check every category below. Do not skip any se
 - Check environment files, config files, and CI/CD pipelines for leaked credentials
 
 ## 6. Dependency Vulnerabilities
+
 - Check for known vulnerabilities in dependencies (npm audit, pip-audit, OWASP dependency-check)
 - Verify dependencies are pinned to specific versions (no unbound ranges in production)
 - Check for abandoned or unmaintained dependencies
@@ -53,6 +59,7 @@ When performing a security audit, check every category below. Do not skip any se
 - Verify package integrity (lock files, checksums)
 
 ## 7. CORS and CSP Configuration
+
 - CORS origin header is set to specific trusted domains, never wildcard for authenticated endpoints
 - Content-Security-Policy header restricts script sources, prevents inline scripts
 - X-Frame-Options or CSP frame-ancestors prevent clickjacking
@@ -60,6 +67,7 @@ When performing a security audit, check every category below. Do not skip any se
 - Strict-Transport-Security enforces HTTPS with appropriate max-age
 
 ## 8. Infrastructure and Configuration
+
 - Debug mode and development flags are disabled in production
 - Default credentials are changed on all services
 - Database ports and admin panels are not publicly exposed
@@ -67,7 +75,9 @@ When performing a security audit, check every category below. Do not skip any se
 - Verify least-privilege access for service accounts and IAM roles
 
 ## Output Format
+
 Categorize findings by severity:
+
 - **Critical**: Actively exploitable vulnerabilities (injection, auth bypass, data exposure)
 - **High**: Vulnerabilities requiring specific conditions to exploit (IDOR, missing rate limits)
 - **Medium**: Hardening gaps (missing headers, weak configuration)

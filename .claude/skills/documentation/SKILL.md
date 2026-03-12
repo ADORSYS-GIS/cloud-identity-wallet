@@ -8,6 +8,7 @@ description: Generates and maintains project documentation including API docs, d
 When generating or updating documentation, ensure accuracy, completeness, and consistency with the codebase.
 
 ## 1. Public API Documentation (JSDoc / Docstrings)
+
 - Add documentation to all public functions, methods, classes, and interfaces
 - Include: purpose, parameters (with types), return value, thrown exceptions/errors
 - Use the project's established doc format (JSDoc, Google-style docstrings, KDoc, Javadoc, etc.)
@@ -17,6 +18,7 @@ When generating or updating documentation, ensure accuracy, completeness, and co
 - Keep doc comments concise — one sentence for simple functions, detailed for complex ones
 
 ## 2. README Updates
+
 - Update the README when new features, commands, or configuration options are added
 - Keep the installation/setup section current with any new dependencies or steps
 - Update the usage section with new CLI commands, API endpoints, or UI features
@@ -25,6 +27,7 @@ When generating or updating documentation, ensure accuracy, completeness, and co
 - Do NOT add sections that duplicate information available elsewhere (e.g., full API reference)
 
 ## 3. API Documentation
+
 - Document all endpoints: method, path, description, parameters, request/response bodies
 - Include example requests and responses with realistic data
 - Document all possible error responses with HTTP status codes and error body shapes
@@ -33,6 +36,7 @@ When generating or updating documentation, ensure accuracy, completeness, and co
 - Keep API docs versioned alongside the code — prefer generated docs (OpenAPI/Swagger) when available
 
 ## 4. Complex Business Logic
+
 - Add inline comments explaining the *why* behind non-obvious decisions
 - Document algorithms with a brief description of the approach and time/space complexity
 - Explain business rules that are not self-evident from the code
@@ -40,7 +44,8 @@ When generating or updating documentation, ensure accuracy, completeness, and co
 - Reference external specifications, RFCs, or requirements documents by number/link
 
 ## 5. Changelog Maintenance
-- Follow Keep a Changelog format (https://keepachangelog.com)
+
+- Follow Keep a Changelog format (<https://keepachangelog.com>)
 - Categorize entries: Added, Changed, Deprecated, Removed, Fixed, Security
 - Write entries from the user's perspective, not the developer's
 - Include the PR or issue number for traceability
@@ -48,12 +53,14 @@ When generating or updating documentation, ensure accuracy, completeness, and co
 - Date entries use ISO 8601 format (YYYY-MM-DD)
 
 ## 6. Architecture Documentation
+
 - Update architecture docs when new services, modules, or integrations are added
 - Document data flows for new features that cross service boundaries
 - Keep component diagrams current (or flag them as outdated)
 - Record significant design decisions as ADRs (Architecture Decision Records)
 
 ## Quality Standards
+
 - Documentation must be accurate — verify all code references, paths, and commands
 - Use consistent terminology throughout (define terms in a glossary if needed)
 - Write for the audience: README for new developers, API docs for consumers, inline comments for maintainers

@@ -2,13 +2,13 @@
 
 ## Prerequisites
 
-| Tool | Minimum Version | Installation |
-|------|----------------|--------------|
-| Rust | 2024 Edition | [rustup](https://rustup.rs/) |
-| Cargo | Via Rust | Included with Rust |
-| Git | 2.40+ | [git-scm.com](https://git-scm.com) |
-| Clippy | Via Rust | `rustup component add clippy` |
-| rustfmt | Via Rust | `rustup component add rustfmt` |
+| Tool     | Minimum Version | Installation                                  |
+|---------|-----------------|-----------------------------------------------|
+| Rust    | 2024 Edition    | [rustup](https://rustup.rs/)                  |
+| Cargo   | Via Rust        | Included with Rust                            |
+| Git     | 2.40+           | [git-scm.com](https://git-scm.com)            |
+| Clippy  | Via Rust        | `rustup component add clippy`                 |
+| rustfmt | Via Rust        | `rustup component add rustfmt`                |
 
 ## Environment Setup
 
@@ -41,12 +41,12 @@ To reduce build times, especially during development, the use of faster alternat
 
 ### Platform Support
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Linux | ✅ Supported | Uses `mold` for significantly faster linking |
-| macOS (Apple Silicon) | ✅ Supported | Uses Apple's default `ld_prime` linker |
-| macOS (Intel) | ✅ Supported | Uses LLVM's `lld` for faster linking |
-| Windows | ❌ Unsupported | Not currently supported |
+| Platform              | Status       | Notes                                        |
+|-----------------------|--------------|----------------------------------------------|
+| Linux                 | ✅ Supported | Uses `mold` for significantly faster linking |
+| macOS (Apple Silicon) | ✅ Supported | Uses Apple's default `ld_prime` linker       |
+| macOS (Intel)         | ✅ Supported | Uses LLVM's `lld` for faster linking         |
+| Windows               | ❌ Unsupported | Not currently supported                      |
 
 ### Linux Setup
 
