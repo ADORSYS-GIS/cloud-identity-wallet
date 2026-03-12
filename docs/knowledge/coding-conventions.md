@@ -2,19 +2,19 @@
 
 ## Naming Standards
 
-| Element | Convention | Example |
-|---------|-----------|---------|
-| Variables, functions, methods, modules | `snake_case` | `get_credential`, `user_id` |
-| Types, traits, enums | `PascalCase` | `CredentialOffer`, `ValidationError` |
-| Constants and statics | `SCREAMING_SNAKE_CASE` | `MAX_CREDENTIALS`, `DEFAULT_TIMEOUT` |
-| Lifetime parameters | Short lowercase (`'a`, `'b`); descriptive for clarity (`'conn`, `'ctx`) | |
-| Crate names | `kebab-case` in Cargo.toml, `snake_case` in code | `cloud-identity-wallet` |
-| Files | `snake_case.rs` | `credential_offer.rs` |
-| Type conversions | `from_*`, `to_*`, `into_*`, `as_*` | `from_bytes`, `to_string` |
+| Element                         | Convention                                                         | Example                         |
+|---------------------------------|--------------------------------------------------------------------|---------------------------------|
+| Variables, functions, methods, modules | `snake_case`                                                 | `get_credential`, `user_id`     |
+| Types, traits, enums            | `PascalCase`                                                       | `CredentialOffer`, `ValidationError` |
+| Constants and statics           | `SCREAMING_SNAKE_CASE`                                             | `MAX_CREDENTIALS`, `DEFAULT_TIMEOUT` |
+| Lifetime parameters             | Short lowercase (`'a`, `'b`); descriptive for clarity (`'conn`, `'ctx`) |                                 |
+| Crate names                     | `kebab-case` in Cargo.toml, `snake_case` in code                   | `cloud-identity-wallet`         |
+| Files                           | `snake_case.rs`                                                    | `credential_offer.rs`           |
+| Type conversions                | `from_*`, `to_*`, `into_*`, `as_*`                                 | `from_bytes`, `to_string`       |
 
 ## File Organization
 
-```
+```text
 cloud-identity-wallet/
 ├── crates/
 │   ├── cloud-identity-wallet/    # Main application (Axum-based API)
@@ -63,10 +63,10 @@ cloud-identity-wallet/
 
 ### Error Types
 
-| Error Type | Description |
-|------------|-------------|
-| `ValidationError::SchemaMismatch` | Schema validation failures |
-| `CredentialError` | Credential lifecycle state errors |
+| Error Type                    | Description                        |
+|-------------------------------|------------------------------------|
+| `ValidationError::SchemaMismatch` | Schema validation failures      |
+| `CredentialError`             | Credential lifecycle state errors  |
 
 ### Error Messages
 
@@ -88,6 +88,7 @@ cloud-identity-wallet/
 - Document feature requirements in code
 
 Example:
+
 ```toml
 [features]
 default = []

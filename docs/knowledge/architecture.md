@@ -17,25 +17,25 @@ Cloud Identity Wallet is a cloud-hosted, multi-tenant verifiable credential wall
 
 ### In Wallet Scope
 
-| Component | Responsibility | Tech Stack |
-|-----------|---------------|------------|
-| **UI (External)** | End-user web/mobile interface for offers, disclosures, consent; credential display and lifecycle management | External |
-| **API Gateway** | Public HTTP endpoints, authentication, request routing | Axum |
-| **Wallet Core Domain** | Business logic for offers, credential storage, presentation building | Rust |
-| **OpenID4VCI Adapter** | Outbound client to Issuers for credential issuance | Rust |
-| **OpenID4VP Adapter** | Outbound client to Verifiers for presentation/verification | Rust |
-| **Crypto & Key Management** | Abstractions over KMS/HSM for signing/encryption and key lifecycle | Rust |
-| **Encrypted Storage** | Encrypted database/object store for credentials and metadata | Rust |
-| **Event Bus / Audit Log** | Append-only auditing and integration hooks | Rust |
+| Component                    | Responsibility                                                                                      | Tech Stack |
+|------------------------------|------------------------------------------------------------------------------------------------------|------------|
+| **UI (External)**            | End-user web/mobile interface for offers, disclosures, consent; credential display and lifecycle management | External   |
+| **API Gateway**              | Public HTTP endpoints, authentication, request routing                                              | Axum       |
+| **Wallet Core Domain**       | Business logic for offers, credential storage, presentation building                                 | Rust       |
+| **OpenID4VCI Adapter**       | Outbound client to Issuers for credential issuance                                                   | Rust       |
+| **OpenID4VP Adapter**        | Outbound client to Verifiers for presentation/verification                                            | Rust       |
+| **Crypto & Key Management**  | Abstractions over KMS/HSM for signing/encryption and key lifecycle                                    | Rust       |
+| **Encrypted Storage**        | Encrypted database/object store for credentials and metadata                                          | Rust       |
+| **Event Bus / Audit Log**    | Append-only auditing and integration hooks                                                            | Rust       |
 
 ### Out of Scope (Ecosystem Actors)
 
-| Component | Notes |
-|-----------|-------|
-| External Issuers | Not hosted by wallet |
-| External Verifiers | Not hosted by wallet |
-| Revocation/Status Lists | Issuer/verifier responsibility; wallet may only need client capability for status checking |
-| Trust establishment frameworks | Explicitly out-of-scope for prototype |
+| Component                      | Notes                                                                         |
+|--------------------------------|-------------------------------------------------------------------------------|
+| External Issuers               | Not hosted by wallet                                                          |
+| External Verifiers             | Not hosted by wallet                                                          |
+| Revocation/Status Lists        | Issuer/verifier responsibility; wallet may only need client capability for status checking |
+| Trust establishment frameworks | Explicitly out-of-scope for prototype                                         |
 
 ## Key Management Design
 

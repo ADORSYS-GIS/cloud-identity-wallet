@@ -32,9 +32,9 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 ### Credential Offer
 
-| Method | Path | Description | Auth Required |
-|--------|------|-------------|---------------|
-| GET | `/credential-offer` | Resolve credential offer | No |
+| Method | Path                 | Description              | Auth Required |
+|--------|----------------------|--------------------------|---------------|
+| GET    | `/credential-offer`  | Resolve credential offer | No            |
 
 **Key Concepts:**
 
@@ -44,11 +44,12 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 ### Credential Endpoint
 
-| Method | Path | Description | Auth Required |
-|--------|------|-------------|---------------|
-| POST | `/credential` | Request credential with proofs | Yes |
+| Method | Path             | Description                       | Auth Required |
+|--------|------------------|-----------------------------------|---------------|
+| POST   | `/credential`    | Request credential with proofs    | Yes           |
 
 **Request Example:**
+
 ```json
 {
   "format": "vc+sd-jwt",
@@ -60,6 +61,7 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 ```
 
 **Response Example:**
+
 ```json
 {
   "credential": "<credential-jwt>",
@@ -74,9 +76,9 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 ### Presentation Request
 
-| Method | Path | Description | Auth Required |
-|--------|------|-------------|---------------|
-| GET | `/presentation/request` | Get presentation request from verifier | No |
+| Method | Path                      | Description                              | Auth Required |
+|--------|---------------------------|------------------------------------------|---------------|
+| GET    | `/presentation/request`   | Get presentation request from verifier    | No            |
 
 **Key Concepts:**
 
@@ -86,11 +88,12 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 ### Presentation Response
 
-| Method | Path | Description | Auth Required |
-|--------|------|-------------|---------------|
-| POST | `/presentation` | Submit verifiable presentation | Yes |
+| Method | Path              | Description                      | Auth Required |
+|--------|-------------------|----------------------------------|---------------|
+| POST   | `/presentation`   | Submit verifiable presentation    | Yes           |
 
 **Response Example:**
+
 ```json
 {
   "vp_token": "<verifiable-presentation>",
@@ -123,26 +126,26 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 ## Credential Lifecycle Endpoints
 
-| Method | Path | Description | Auth Required |
-|--------|------|-------------|---------------|
-| GET | `/credentials` | List stored credentials | Yes |
-| GET | `/credentials/{id}` | Get specific credential | Yes |
-| DELETE | `/credentials/{id}` | Delete credential | Yes |
-| POST | `/credentials/import` | Import credential | Yes |
+| Method | Path                      | Description              | Auth Required |
+|--------|---------------------------|--------------------------|---------------|
+| GET    | `/credentials`            | List stored credentials   | Yes           |
+| GET    | `/credentials/{id}`      | Get specific credential   | Yes           |
+| DELETE | `/credentials/{id}`      | Delete credential         | Yes           |
+| POST   | `/credentials/import`     | Import credential         | Yes           |
 
 ## Error Codes
 
-| HTTP Status | Error Code | Description | Resolution |
-|-------------|-----------|-------------|------------|
-| 400 | `VALIDATION_ERROR` | Schema validation failure | Check credential format and claims |
-| 400 | `SCHEMA_MISMATCH` | Credential does not match expected schema | Verify credential structure |
-| 401 | `UNAUTHORIZED` | Missing or invalid authentication | Provide valid bearer token |
-| 403 | `FORBIDDEN` | Insufficient permissions | Check tenant/user permissions |
-| 404 | `NOT_FOUND` | Resource not found | Verify resource ID |
-| 409 | `CONFLICT` | Credential state conflict | Check credential status |
-| 422 | `UNPROCESSABLE_ENTITY` | Invalid credential format | Verify format matches supported types |
-| 429 | `RATE_LIMITED` | Too many requests | Wait and retry |
-| 500 | `INTERNAL_ERROR` | Server error | Check logs, contact support |
+| HTTP Status | Error Code             | Description                               | Resolution                               |
+|-------------|------------------------|-------------------------------------------|------------------------------------------|
+| 400         | `VALIDATION_ERROR`     | Schema validation failure                 | Check credential format and claims       |
+| 400         | `SCHEMA_MISMATCH`      | Credential does not match expected schema | Verify credential structure              |
+| 401         | `UNAUTHORIZED`         | Missing or invalid authentication         | Provide valid bearer token               |
+| 403         | `FORBIDDEN`            | Insufficient permissions                 | Check tenant/user permissions            |
+| 404         | `NOT_FOUND`            | Resource not found                        | Verify resource ID                       |
+| 409         | `CONFLICT`             | Credential state conflict                 | Check credential status                  |
+| 422         | `UNPROCESSABLE_ENTITY` | Invalid credential format                 | Verify format matches supported types    |
+| 429         | `RATE_LIMITED`         | Too many requests                         | Wait and retry                           |
+| 500         | `INTERNAL_ERROR`       | Server error                              | Check logs, contact support              |
 
 ### Error Response Format
 
@@ -163,19 +166,21 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 ## Rate Limiting
 
-| Tier | Limit | Window | Headers |
-|------|-------|--------|---------|
-| Default | 100 | per minute | `X-RateLimit-Limit`, `X-RateLimit-Remaining` |
+| Tier    | Limit | Window     | Headers                                      |
+|---------|-------|------------|----------------------------------------------|
+| Default | 100   | per minute | `X-RateLimit-Limit`, `X-RateLimit-Remaining` |
 
 ## Pagination
 
 Cursor-based pagination for list endpoints:
 
 **Query Parameters:**
+
 - `cursor`: Pagination cursor
 - `limit`: Max items per page (default: 20, max: 100)
 
 **Response Format:**
+
 ```json
 {
   "items": [...],
@@ -188,14 +193,15 @@ Cursor-based pagination for list endpoints:
 
 Webhook events for credential lifecycle:
 
-| Event | Description |
-|-------|-------------|
-| `credential.issued` | Credential successfully issued |
-| `credential.stored` | Credential stored in wallet |
-| `credential.presented` | Credential presented to verifier |
-| `credential.deleted` | Credential deleted from wallet |
+| Event                  | Description                        |
+|------------------------|------------------------------------|
+| `credential.issued`    | Credential successfully issued     |
+| `credential.stored`    | Credential stored in wallet        |
+| `credential.presented` | Credential presented to verifier   |
+| `credential.deleted`   | Credential deleted from wallet     |
 
 **Payload Format:**
+
 ```json
 {
   "event": "credential.issued",
