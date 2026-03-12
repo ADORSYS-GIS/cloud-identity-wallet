@@ -9,13 +9,13 @@ use super::schemas::{DeliveryState, DeliveryStatus};
 /// **This queue is not the primary event source.** Events enter the system
 /// through the event-streaming infrastructure (via [`crate::webhook::event_listener::EventListener`])
 /// and are delivered directly. `DeliveryQueue` exists solely to support retries:
-/// when a delivery fails, the item is placed here so [`crate::webhook::delivery_service::DeliveryService`]
+/// when a delivery fails, the item is placed here so `DeliveryService`
 /// can attempt re-delivery with exponential backoff.
 ///
 /// The queue serves two purposes:
 ///
 /// 1. **Retry buffer** — a FIFO `VecDeque` of [`QueuedDelivery`] items waiting
-///    to be retried by [`crate::webhook::delivery_service::DeliveryService`].
+///    to be retried by `DeliveryService`.
 /// 2. **Status history** — a per-`(subscription_id, event_id)` log of every
 ///    [`DeliveryStatus`] transition recorded during delivery attempts, used for
 ///    observability and debugging.
@@ -35,7 +35,7 @@ pub struct DeliveryQueue {
 ///
 /// Created by [`crate::webhook::event_listener::EventListener`] when an event
 /// matches a subscription, and consumed by
-/// [`crate::webhook::delivery_service::DeliveryService`]. The `attempt` counter
+/// `DeliveryService`. The `attempt` counter
 /// is incremented by [`DeliveryQueue::requeue`] on each retry so
 /// `DeliveryService` can determine backoff delay and when max attempts are
 /// exhausted.

@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 ///
 /// # Implementor contract
 ///
-/// - [`find_for_event`] must return every subscription whose `event_types`
+/// - `find_for_event` must return every subscription whose `event_types`
 ///   set matches the given `event_type`, as well as any catch-all
 ///   subscriptions (those with an empty `event_types` set).
 /// - All methods must be safe to call concurrently from multiple tasks.

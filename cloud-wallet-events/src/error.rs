@@ -62,7 +62,7 @@ pub enum HttpClientError {
     SignatureError(String),
 }
 
-/// Errors returned by [`HmacSigner`] and the signature header helpers.
+/// Errors returned by `HmacSigner` and the signature header helpers.
 #[derive(Debug, thiserror::Error)]
 pub enum HmacSignerError {
     #[error("Failed to initialise HMAC: {0}")]

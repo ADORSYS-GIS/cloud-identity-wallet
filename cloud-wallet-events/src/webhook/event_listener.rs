@@ -35,7 +35,7 @@ impl EventListener {
     ///
     /// * `consumer` — Event-bus consumer used to subscribe to topics.
     /// * `repository` — Where to look up subscriptions matching each event.
-    /// * `payload_mapper` — Transforms an [`Event`] into a [`WebhookPayload`]
+    /// * `payload_mapper` — Transforms an [`Event`] into a `WebhookPayload`
     ///   JSON string. Use [`DefaultPayloadMapper`] or supply your own.
     /// * `delivery_queue` — Retry buffer onto which failed deliveries are
     ///   pushed. Successful first-attempt deliveries never touch this queue.

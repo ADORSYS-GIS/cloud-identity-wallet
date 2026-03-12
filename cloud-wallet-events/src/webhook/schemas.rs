@@ -46,7 +46,7 @@ impl WebhookPayload {
     ///
     /// `data` is accepted as-is. Any domain-specific field injection (e.g.
     /// `wallet_id`, `correlation_id`) is the responsibility of the caller's
-    /// [`PayloadMapper`] implementation, keeping this struct generic.
+    /// `PayloadMapper` implementation, keeping this struct generic.
     pub fn new(
         delivery_id: String,
         webhook_id: String,
