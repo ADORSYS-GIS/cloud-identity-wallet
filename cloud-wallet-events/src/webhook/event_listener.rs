@@ -1,7 +1,7 @@
 use crate::EventError;
 use crate::events::Event;
 use crate::traits::{Consumer, EventHandler, SubscriptionConfig};
-use crate::webhook::delivery_queue::{DeliveryQueue, QueuedDelivery};
+use crate::webhook::delivery_service::{DeliveryQueue, QueuedDelivery};
 use crate::webhook::payload_mapper::PayloadMapper;
 use crate::webhook::subscription_repository::SubscriptionRepository;
 use std::sync::Arc;
@@ -37,7 +37,8 @@ impl EventListener {
     /// * `repository` — Where to look up subscriptions matching each event.
     /// * `payload_mapper` — Transforms an [`Event`] into a [`WebhookPayload`]
     ///   JSON string. Use [`DefaultPayloadMapper`] or supply your own.
-    /// * `delivery_queue` — Queue onto which matched deliveries are pushed.
+    /// * `delivery_queue` — Retry buffer onto which failed deliveries are
+    ///   pushed. Successful first-attempt deliveries never touch this queue.
     /// * `topics` — Topic names to subscribe to on the event bus. The caller
     ///   controls which topics are relevant; this library imposes no opinion.
     ///
@@ -117,8 +118,8 @@ impl EventListener {
                 Err(_) => continue,
             };
 
-            let payload_json = match webhook_payload.to_json() {
-                Ok(j) => j,
+            let payload_bytes = match webhook_payload.to_json() {
+                Ok(j) => j.into_bytes(),
                 Err(_) => continue,
             };
 
@@ -126,7 +127,7 @@ impl EventListener {
                 sub.id.clone(),
                 event.id.to_string(),
                 event_type.to_string(),
-                payload_json,
+                payload_bytes,
                 sub.url.clone(),
             );
 
@@ -148,7 +149,7 @@ mod tests {
     use crate::error::EventError;
     use crate::events::{Event, EventType};
     use crate::traits::{Consumer, EventHandler, SubscriptionConfig};
-    use crate::webhook::delivery_queue::DeliveryQueue;
+    use crate::webhook::delivery_service::DeliveryQueue;
     use crate::webhook::payload_mapper::DefaultPayloadMapper;
     use crate::webhook::schemas::WebhookPayload;
     use crate::webhook::subscription::{WebhookAuth, WebhookSubscription};
@@ -232,8 +233,9 @@ mod tests {
         assert_eq!(delivery.subscription_id, "sub-1");
         assert_eq!(delivery.event_type, EventType::CREDENTIAL_STORED);
 
+        // payload is Vec<u8> — parse it back to verify contents
         let payload: WebhookPayload =
-            serde_json::from_str(&delivery.payload).expect("parse payload");
+            serde_json::from_slice(&delivery.payload).expect("parse payload");
         assert_eq!(payload.webhook_id, "sub-1");
         assert_eq!(payload.data["wallet_id"], "wallet-test");
         assert_eq!(payload.data["correlation_id"], "corr-test");
@@ -310,8 +312,8 @@ mod tests {
         let d1 = queue.dequeue().await.unwrap();
         let d2 = queue.dequeue().await.unwrap();
 
-        let p1: WebhookPayload = serde_json::from_str(&d1.payload).unwrap();
-        let p2: WebhookPayload = serde_json::from_str(&d2.payload).unwrap();
+        let p1: WebhookPayload = serde_json::from_slice(&d1.payload).unwrap();
+        let p2: WebhookPayload = serde_json::from_slice(&d2.payload).unwrap();
 
         let ids: std::collections::HashSet<_> =
             [p1.webhook_id.as_str(), p2.webhook_id.as_str()].into();

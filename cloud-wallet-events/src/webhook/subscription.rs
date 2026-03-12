@@ -4,13 +4,19 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use url::Url;
 
-/// Webhook subscription configuration
+/// Webhook subscription configuration.
+///
+/// `#[derive(Serialize, Deserialize)]` is sufficient here because all
+/// secret-handling logic lives in [`WebhookAuth`]'s own custom impls.
+/// `WebhookSubscription` itself contains no sensitive data that requires
+/// custom serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookSubscription {
     pub id: String,
 
     pub url: String,
 
+    #[serde(default)]
     pub event_types: HashSet<String>,
 
     pub auth: WebhookAuth,
@@ -226,7 +232,6 @@ impl<'de> Deserialize<'de> for WebhookAuth {
                 let mut auth_type: Option<String> = None;
                 let mut secret: Option<String> = None;
                 let mut token: Option<String> = None;
-
                 let mut header_name: Option<String> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
@@ -295,7 +300,6 @@ mod tests {
 
     #[test]
     fn test_new_accepts_str_without_to_string() {
-        // Verify impl Into<String> ergonomics — no .to_string() needed
         let sub = WebhookSubscription::new("sub-1", "https://example.com/hook", WebhookAuth::None);
         assert!(sub.is_ok());
     }
@@ -364,12 +368,29 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialization_roundtrip() -> Result<(), serde_json::Error> {
+        // Full WebhookSubscription round-trip through derived ser/de
+        let original =
+            WebhookSubscription::new("sub-rt", "https://example.com/hook", WebhookAuth::None)
+                .unwrap()
+                .subscribe_to(["credential.stored", "key.created"]);
+
+        let json = serde_json::to_string(&original)?;
+        let restored: WebhookSubscription = serde_json::from_str(&json)?;
+
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.url, original.url);
+        assert_eq!(restored.event_types, original.event_types);
+        assert!(matches!(restored.auth, WebhookAuth::None));
+        Ok(())
+    }
+
+    #[test]
     fn test_deserialization_wraps_secret_in_secrecy() -> Result<(), serde_json::Error> {
         // Simulates loading a webhook config from a JSON config file
         let json = r#"{"type":"hmac_sha256","secret":"loaded-from-config"}"#;
         let auth: WebhookAuth = serde_json::from_str(json)?;
 
-        // After deserialization the variant is correct and the debug output redacts
         assert!(matches!(auth, WebhookAuth::HmacSha256 { .. }));
         assert!(!format!("{auth:?}").contains("loaded-from-config"));
         Ok(())
@@ -378,7 +399,6 @@ mod tests {
     #[test]
     fn test_clone_shares_arc_not_secret_bytes() {
         let auth = WebhookAuth::hmac_sha256("shared-secret", "X-Webhook-Signature");
-        // Clone must succeed (Arc clone, no secret duplication)
         let _cloned = auth.clone();
     }
 }
