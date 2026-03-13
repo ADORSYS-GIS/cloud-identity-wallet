@@ -22,7 +22,7 @@ cloud-wallet-crypto = { path = "../cloud-wallet-crypto", optional = true }
 zeroize = { version = "1.8", optional = true }
 
 # Postgres feature
-sqlx = { version = "0.8", optional = true }
+sqlx = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
