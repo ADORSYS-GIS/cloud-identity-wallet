@@ -63,7 +63,7 @@ impl CredentialFilter {
 /// The `encryption` feature introduces a second impl where `T = StoredCredential`
 /// so the same trait serves both the plain and the encrypted storage layers.
 ///
-/// [`CredentialService`]: crate::service::CredentialService
+/// [`CredentialService`]: crate::CredentialService
 #[allow(async_fn_in_trait)]
 pub trait CredentialRepository<T = Credential>: Send + Sync {
     /// Persist a new item. Returns [`StoreError::DuplicateId`] if the ID already exists.

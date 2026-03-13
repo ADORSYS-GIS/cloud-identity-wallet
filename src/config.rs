@@ -43,9 +43,9 @@ impl Config {
     /// Set default values for the configuration.
     /// This is used when no environment variables or config file are provided
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
-        Ok(ConfigLib::builder()
+        ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)?)
+            .set_default("server.port", 3000)
     }
 }
 

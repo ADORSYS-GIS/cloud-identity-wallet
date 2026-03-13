@@ -65,7 +65,7 @@ impl<R: CredentialRepository> CredentialService<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CredentialPayload, CredentialStatus, SdJwtCredential};
+    use crate::models::{Binding, Claims, CredentialMetadata, CredentialStatus, CredentialType};
     use serde_json::json;
     use std::sync::Mutex;
     use time::{Duration, OffsetDateTime};
@@ -139,14 +139,13 @@ mod tests {
         Credential::new(
             "https://issuer.example.com",
             "user-1234",
+            CredentialType::new("identity_credential"),
+            Claims::new(json!({ "given_name": "Alice" })),
             now - Duration::hours(2),
             expires_at,
-            "identity_credential",
-            CredentialPayload::DcSdJwt(SdJwtCredential {
-                token: "t".to_owned(),
-                vct: "https://credentials.example.com/id".to_owned(),
-                claims: json!({ "given_name": "Alice" }),
-            }),
+            None, // status_reference
+            Binding,
+            CredentialMetadata {},
         )
         .expect("valid credential")
     }

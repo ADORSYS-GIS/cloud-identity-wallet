@@ -4,6 +4,7 @@ pub mod format;
 pub mod models;
 pub mod repository;
 pub mod schema;
+pub mod service;
 
 #[cfg(feature = "encryption")]
 mod encryption;
@@ -18,6 +19,7 @@ pub mod postgres;
 pub use config::PostgresConfig;
 pub use errors::StoreError;
 pub use repository::{CredentialFilter, CredentialRepository};
+pub use service::CredentialService;
 
 #[cfg(feature = "encryption")]
 pub use encryption::{Kek, StoredCredential, decrypt_credential, encrypt_credential};
