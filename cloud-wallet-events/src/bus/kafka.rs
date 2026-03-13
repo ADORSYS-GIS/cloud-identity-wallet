@@ -3,10 +3,6 @@
 //! [`Publisher`]: crate::traits::Publisher
 //! [`Consumer`]: crate::traits::Consumer
 //!
-//! This module provides [`KafkaPublisher`] and [`KafkaConsumer`], powered by
-//! the `kafka` crate. Both types integrate cleanly into an asynchronous
-//! runtime.
-//!
 //! # Topic naming
 //!
 //! Topics are derived automatically from events. Given a `topic_prefix` of
@@ -221,7 +217,7 @@ impl std::fmt::Debug for KafkaPublisher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KafkaPublisher")
             .field("config", &self.config)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -234,21 +230,20 @@ impl KafkaPublisher {
     ///
     /// # Errors
     ///
-    /// Returns [`EventError::ConfigurationError`] if the producer cannot be
-    /// created (e.g. no brokers are reachable or the configuration is
-    /// malformed).
+    /// [`EventError::Configuration`] if the producer cannot be created
+    /// (e.g. no brokers are reachable or the configuration is malformed).
     ///
     /// # Example
     ///
-    /// ```rust,no_run
-    /// use wallet_events::bus::kafka::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks};
+    /// ```
+    /// use wallet_events::bus::kafka::{KafkaPublisherConfig, ProducerAcks};
     ///
-    /// let publisher = KafkaPublisher::new(KafkaPublisherConfig {
+    /// let config = KafkaPublisherConfig {
     ///     bootstrap_servers: "localhost:9092".into(),
     ///     topic_prefix: "wallet".into(),
     ///     producer_acks: ProducerAcks::One,
     ///     ack_timeout_secs: 5,
-    /// }).expect("failed to create publisher");
+    /// };
     /// ```
     pub fn new(config: KafkaPublisherConfig) -> Result<Self, EventError> {
         // bootstrap_servers is a comma-separated list of "host:port" pairs.
@@ -263,7 +258,7 @@ impl KafkaPublisher {
             .with_required_acks(config.producer_acks.into())
             .create()
             .map_err(|e| {
-                EventError::ConfigurationError(format!("Failed to create producer: {e}"))
+                EventError::Configuration(format!("Failed to create producer: {e}"))
             })?;
 
         Ok(Self {
@@ -323,16 +318,9 @@ impl KafkaPublisher {
 ///     Ok(())
 /// }
 /// ```
+#[derive(Debug)]
 pub struct KafkaConsumer {
     config: KafkaConsumerConfig,
-}
-
-impl std::fmt::Debug for KafkaConsumer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KafkaConsumer")
-            .field("config", &self.config)
-            .finish()
-    }
 }
 
 impl KafkaConsumer {
@@ -366,13 +354,13 @@ impl EventPublisher for KafkaPublisher {
     ///
     /// # Errors
     ///
-    /// - [`EventError::SerializationError`] — the event cannot be serialized.
-    /// - [`EventError::PublishError`] — the broker rejected the record or the
+    /// - [`EventError::Serialization`] — the event cannot be serialized.
+    /// - [`EventError::Publish`] — the broker rejected the record or the
     ///   blocking task panicked.
     async fn publish(&self, event: &Event) -> Result<(), EventError> {
         let topic = self.topic_for(event);
         let payload = serde_json::to_vec(event).map_err(|e| {
-            EventError::SerializationError(format!("Failed to serialize event: {e}"))
+            EventError::Serialization(format!("Failed to serialize event: {e}"))
         })?;
         let key = event.id.to_string();
 
@@ -385,10 +373,10 @@ impl EventPublisher for KafkaPublisher {
             producer
                 .lock()
                 .send(&record)
-                .map_err(|e| EventError::PublishError(format!("Failed to send message: {e}")))
+                .map_err(|e| EventError::Publish(format!("Failed to send message: {e}")))
         })
         .await
-        .map_err(|e| EventError::PublishError(format!("Panicked while sending event: {e}")))??;
+        .map_err(|e| EventError::Publish(format!("Panicked while sending event: {e}")))??;
 
         Ok(())
     }
@@ -403,7 +391,7 @@ impl EventConsumer for KafkaConsumer {
     ///
     /// # Errors
     ///
-    /// Returns [`EventError::ConfigurationError`] if the underlying Kafka
+    ///[`EventError::ConfigurationError`] if the underlying Kafka
     /// consumer client cannot be created (e.g. the broker is unreachable or
     /// a topic does not exist).
     async fn subscribe(
@@ -437,7 +425,7 @@ impl EventConsumer for KafkaConsumer {
             let mut consumer = match builder.create() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx_err.send(Err(EventError::ConfigurationError(format!(
+                    let _ = tx_err.send(Err(EventError::Configuration(format!(
                         "Failed to create consumer: {e}"
                     ))));
                     return;
@@ -457,7 +445,7 @@ impl EventConsumer for KafkaConsumer {
                                     }
                                     Err(e) => {
                                         if tx
-                                            .send(Err(EventError::SerializationError(format!(
+                                            .send(Err(EventError::Serialization(format!(
                                                 "Failed to deserialize event: {e}"
                                             ))))
                                             .is_err()
@@ -471,7 +459,7 @@ impl EventConsumer for KafkaConsumer {
                         }
                         if let Err(e) = consumer.commit_consumed()
                             && tx
-                                .send(Err(EventError::PublishError(format!("Commit failed: {e}"))))
+                                .send(Err(EventError::Publish(format!("Commit failed: {e}"))))
                                 .is_err()
                         {
                             return;
@@ -479,7 +467,7 @@ impl EventConsumer for KafkaConsumer {
                     }
                     Err(e) => {
                         if tx
-                            .send(Err(EventError::ConnectionError(format!(
+                            .send(Err(EventError::Connection(format!(
                                 "Kafka poll error: {e}"
                             ))))
                             .is_err()
