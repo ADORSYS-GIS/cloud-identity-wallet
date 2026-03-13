@@ -41,6 +41,24 @@ impl AsRef<str> for CredentialId {
     }
 }
 
+impl CredentialId {
+    /// Returns the underlying string as bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl TryFrom<String> for CredentialId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // Validate it's a valid UUID
+        Uuid::parse_str(&value)
+            .map(|_| Self(value))
+            .map_err(|e| format!("invalid credential ID: {e}"))
+    }
+}
+
 /// The type URI of a credential, as declared by the issuer.
 ///
 /// For SD-JWT VCs this corresponds to the `vct` claim.
@@ -73,7 +91,7 @@ impl AsRef<str> for CredentialType {
 /// stored as a flat JSON object, independent of format. For SD-JWT VCs this is
 /// the decoded payload; for W3C VC JWTs this is the `credentialSubject`; for
 /// mdoc this is a flat merge of all namespace claim maps.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Claims(serde_json::Value);
 
 impl Claims {
