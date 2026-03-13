@@ -1,3 +1,69 @@
+//! Kafka-backed implementations of the [`Publisher`] and [`Consumer`] traits.
+//!
+//! [`Publisher`]: crate::traits::Publisher
+//! [`Consumer`]: crate::traits::Consumer
+//!
+//! # Topic naming
+//!
+//! Topics are derived automatically from events. Given a `topic_prefix` of
+//! `"wallet"` and an event type of `"credential.stored"`, the resolved topic
+//! is `"wallet.credential"`. The `"category"` metadata key overrides this
+//! derived value if present.
+//!
+//! # Quick start
+//!
+//! ```rust,no_run
+//! use wallet_events::bus::kafka::{
+//!     KafkaPublisher, KafkaPublisherConfig, KafkaConsumer, KafkaConsumerConfig,
+//!     ProducerAcks,
+//! };
+//! use wallet_events::{
+//!     Event, EventType, SubscriptionConfig, EventHandler,
+//!     Publisher, Consumer,
+//! };
+//! use serde_json::json;
+//! use std::sync::Arc;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // --- Publisher ---
+//!     let publisher = KafkaPublisher::new(KafkaPublisherConfig {
+//!         bootstrap_servers: "localhost:9092".into(),
+//!         topic_prefix: "wallet".into(),
+//!         producer_acks: ProducerAcks::One,
+//!         ack_timeout_secs: 5,
+//!     })?;
+//!
+//!     let event = Event::new(
+//!         EventType::new(EventType::KEY_CREATED),
+//!         json!({ "key_id": "abc-123" }),
+//!     )
+//!     .with_metadata("wallet_id", "wallet-42");
+//!
+//!     publisher.publish(&event).await?;
+//!
+//!     // --- Consumer ---
+//!     let consumer = KafkaConsumer::new(KafkaConsumerConfig {
+//!         bootstrap_servers: "localhost:9092".into(),
+//!         consumer_group_id: "my-service".into(),
+//!     });
+//!
+//!     let handler: EventHandler = Arc::new(|event| Box::pin(async move {
+//!         println!("Received: {:?}", event);
+//!         Ok(())
+//!     }));
+//!
+//!     consumer
+//!         .subscribe(
+//!             SubscriptionConfig { topics: vec!["wallet.key".into()] },
+//!             handler,
+//!         )
+//!         .await?;
+//!
+//!     Ok(())
+//! }
+//! ```
+
 use crate::error::EventError;
 use crate::events::Event;
 use crate::traits::{
@@ -18,8 +84,12 @@ pub enum ProducerAcks {
     /// Fire-and-forget — no acknowledgement is required.
     None,
     /// The leader broker must acknowledge the message.
+    ///
+    /// Balances throughput and durability. Suitable for most events.
     One,
     /// All in-sync replicas must acknowledge the message.
+    ///
+    /// Highest durability guarantee. Use for events that must never be lost.
     All,
 }
 
@@ -33,14 +103,27 @@ impl From<ProducerAcks> for RequiredAcks {
     }
 }
 
-/// Configuration for the Kafka publisher.
+/// Configuration for the [`KafkaPublisher`].
+///
+/// # Example
+///
+/// ```
+/// use wallet_events::bus::kafka::{KafkaPublisherConfig, ProducerAcks};
+///
+/// let config = KafkaPublisherConfig {
+///     bootstrap_servers: "broker1:9092,broker2:9092".into(),
+///     topic_prefix: "wallet".into(),
+///     producer_acks: ProducerAcks::One,
+///     ack_timeout_secs: 5,
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct KafkaPublisherConfig {
     /// Comma-separated list of Kafka broker addresses.
     ///
     /// Each entry must be a `host:port` pair. Multiple brokers should be
     /// separated by a single comma without surrounding whitespace.
-    /// example: `"broker1:9092,broker2:9092"`.
+    /// Example: `"broker1:9092,broker2:9092"`.
     pub bootstrap_servers: String,
 
     /// Prefix prepended to every topic name produced by this publisher.
@@ -48,6 +131,9 @@ pub struct KafkaPublisherConfig {
     /// Topics are derived as `"{topic_prefix}.{category}"` where `category`
     /// is taken from the `category` metadata field of the event (if present)
     /// or from the first dot-separated segment of the event type string.
+    ///
+    /// Example: prefix `"wallet"` + event type `"key.created"` → topic
+    /// `"wallet.key"`.
     pub topic_prefix: String,
 
     /// Acknowledgement level required from the broker.
@@ -58,7 +144,18 @@ pub struct KafkaPublisherConfig {
     pub ack_timeout_secs: u64,
 }
 
-/// Configuration for the Kafka consumer.
+/// Configuration for the [`KafkaConsumer`].
+///
+/// # Example
+///
+/// ```
+/// use wallet_events::bus::kafka::KafkaConsumerConfig;
+///
+/// let config = KafkaConsumerConfig {
+///     bootstrap_servers: "broker1:9092,broker2:9092".into(),
+///     consumer_group_id: "credential-service".into(),
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct KafkaConsumerConfig {
     /// Comma-separated list of Kafka broker addresses.
@@ -68,22 +165,86 @@ pub struct KafkaConsumerConfig {
     /// example: `"broker1:9092,broker2:9092"`.
     pub bootstrap_servers: String,
 
-    /// Consumer group ID. A random UUID suffix is appended per subscription
-    /// to ensure independent offset tracking.
+    /// Consumer group ID.
+    ///
+    /// A random UUID suffix is appended to each subscription so that
+    /// multiple instances of the same service receive independent offset
+    /// tracking and can all process every event (fan-out semantics).
+    ///
+    /// If you want competing-consumer semantics (each event processed by
+    /// exactly one instance), share the same prefix across all instances and
+    /// set up the consumer group accordingly in Kafka.
     pub consumer_group_id: String,
 }
 
+/// A Kafka-backed event publisher.
+///
+/// # Thread safety
+///
+/// `KafkaPublisher` is thread-safe and can be shared between tasks.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use wallet_events::bus::kafka::{KafkaPublisher, KafkaPublisherConfig, ProducerAcks};
+/// use wallet_events::{Publisher, Event, EventType};
+/// use serde_json::json;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let publisher = KafkaPublisher::new(KafkaPublisherConfig {
+///         bootstrap_servers: "localhost:9092".into(),
+///         topic_prefix: "wallet".into(),
+///         producer_acks: ProducerAcks::One,
+///         ack_timeout_secs: 5,
+///     })?;
+///
+///     let event = Event::new(
+///         EventType::new(EventType::CREDENTIAL_STORED),
+///         json!({ "issuer": "did:example:issuer" }),
+///     );
+///
+///     publisher.publish(&event).await?;
+///     Ok(())
+/// }
+/// ```
 pub struct KafkaPublisher {
     config: KafkaPublisherConfig,
     producer: Arc<Mutex<Producer>>,
 }
 
+impl std::fmt::Debug for KafkaPublisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KafkaPublisher")
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
 impl KafkaPublisher {
     /// Create a new [`KafkaPublisher`] from the supplied configuration.
     ///
+    /// Parses `bootstrap_servers` by splitting on `','` and attempts to
+    /// connect to at least one broker to create the underlying Kafka
+    /// producer.
+    ///
     /// # Errors
-    /// Returns [`EventError::ConfigurationError`] if the producer cannot be
-    /// created (e.g. no brokers are reachable).
+    ///
+    /// [`EventError::Configuration`] if the producer cannot be created
+    /// (e.g. no brokers are reachable or the configuration is malformed).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wallet_events::bus::kafka::{KafkaPublisherConfig, ProducerAcks};
+    ///
+    /// let config = KafkaPublisherConfig {
+    ///     bootstrap_servers: "localhost:9092".into(),
+    ///     topic_prefix: "wallet".into(),
+    ///     producer_acks: ProducerAcks::One,
+    ///     ack_timeout_secs: 5,
+    /// };
+    /// ```
     pub fn new(config: KafkaPublisherConfig) -> Result<Self, EventError> {
         // bootstrap_servers is a comma-separated list of "host:port" pairs.
         let hosts: Vec<String> = config
@@ -96,9 +257,7 @@ impl KafkaPublisher {
             .with_ack_timeout(Duration::from_secs(config.ack_timeout_secs))
             .with_required_acks(config.producer_acks.into())
             .create()
-            .map_err(|e| {
-                EventError::ConfigurationError(format!("Failed to create producer: {e}"))
-            })?;
+            .map_err(|e| EventError::Configuration(format!("Failed to create producer: {e}")))?;
 
         Ok(Self {
             config,
@@ -123,11 +282,63 @@ impl KafkaPublisher {
     }
 }
 
+/// A Kafka-backed event consumer.
+///
+/// # Thread safety
+///
+/// `KafkaConsumer` is thread-safe and can be shared across tasks.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use wallet_events::bus::kafka::{KafkaConsumer, KafkaConsumerConfig};
+/// use wallet_events::{Consumer, SubscriptionConfig, EventHandler};
+/// use std::sync::Arc;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let consumer = KafkaConsumer::new(KafkaConsumerConfig {
+///         bootstrap_servers: "localhost:9092".into(),
+///         consumer_group_id: "my-service".into(),
+///     });
+///
+///     let handler: EventHandler = Arc::new(|event| Box::pin(async move {
+///         println!("Got event: {}", event.event_type.as_str());
+///         Ok(())
+///     }));
+///
+///     consumer
+///         .subscribe(
+///             SubscriptionConfig { topics: vec!["wallet.key".into()] },
+///             handler,
+///         )
+///         .await?;
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug)]
 pub struct KafkaConsumer {
     config: KafkaConsumerConfig,
 }
 
 impl KafkaConsumer {
+    /// Create a new [`KafkaConsumer`] from the supplied configuration.
+    ///
+    /// This is a cheap operation — no network connection is established until
+    /// [`subscribe`] is called.
+    ///
+    /// [`subscribe`]: EventConsumer::subscribe
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wallet_events::bus::kafka::{KafkaConsumer, KafkaConsumerConfig};
+    ///
+    /// let consumer = KafkaConsumer::new(KafkaConsumerConfig {
+    ///     bootstrap_servers: "localhost:9092".into(),
+    ///     consumer_group_id: "my-service".into(),
+    /// });
+    /// ```
     pub fn new(config: KafkaConsumerConfig) -> Self {
         Self { config }
     }
@@ -135,11 +346,19 @@ impl KafkaConsumer {
 
 #[async_trait]
 impl EventPublisher for KafkaPublisher {
+    /// Serialize `event` to JSON and publish it to the appropriate Kafka topic.
+    ///
+    /// The topic is resolved based on the event's type and metadata.
+    ///
+    /// # Errors
+    ///
+    /// - [`EventError::Serialization`] — the event cannot be serialized.
+    /// - [`EventError::Publish`] — the broker rejected the record or the
+    ///   blocking task panicked.
     async fn publish(&self, event: &Event) -> Result<(), EventError> {
         let topic = self.topic_for(event);
-        let payload = serde_json::to_vec(event).map_err(|e| {
-            EventError::SerializationError(format!("Failed to serialize event: {e}"))
-        })?;
+        let payload = serde_json::to_vec(event)
+            .map_err(|e| EventError::Serialization(format!("Failed to serialize event: {e}")))?;
         let key = event.id.to_string();
 
         let producer = self.producer.clone();
@@ -151,10 +370,10 @@ impl EventPublisher for KafkaPublisher {
             producer
                 .lock()
                 .send(&record)
-                .map_err(|e| EventError::PublishError(format!("Failed to send message: {e}")))
+                .map_err(|e| EventError::Publish(format!("Failed to send message: {e}")))
         })
         .await
-        .map_err(|e| EventError::PublishError(format!("Panicked while sending event: {e}")))??;
+        .map_err(|e| EventError::Publish(format!("Panicked while sending event: {e}")))??;
 
         Ok(())
     }
@@ -162,6 +381,16 @@ impl EventPublisher for KafkaPublisher {
 
 #[async_trait]
 impl EventConsumer for KafkaConsumer {
+    /// Start consuming events from the topics listed in `config`.
+    ///
+    /// The handler is invoked for every event received from the subscribed topics.
+    /// The subscription runs until the consumer is dropped or an unrecoverable error occurs.
+    ///
+    /// # Errors
+    ///
+    ///[`EventError::Configuration`] if the underlying Kafka
+    /// consumer client cannot be created (e.g. the broker is unreachable or
+    /// a topic does not exist).
     async fn subscribe(
         &self,
         config: SubscriptionConfig,
@@ -193,7 +422,7 @@ impl EventConsumer for KafkaConsumer {
             let mut consumer = match builder.create() {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx_err.send(Err(EventError::ConfigurationError(format!(
+                    let _ = tx_err.send(Err(EventError::Configuration(format!(
                         "Failed to create consumer: {e}"
                     ))));
                     return;
@@ -213,7 +442,7 @@ impl EventConsumer for KafkaConsumer {
                                     }
                                     Err(e) => {
                                         if tx
-                                            .send(Err(EventError::SerializationError(format!(
+                                            .send(Err(EventError::Serialization(format!(
                                                 "Failed to deserialize event: {e}"
                                             ))))
                                             .is_err()
@@ -227,7 +456,7 @@ impl EventConsumer for KafkaConsumer {
                         }
                         if let Err(e) = consumer.commit_consumed()
                             && tx
-                                .send(Err(EventError::PublishError(format!("Commit failed: {e}"))))
+                                .send(Err(EventError::Publish(format!("Commit failed: {e}"))))
                                 .is_err()
                         {
                             return;
@@ -235,7 +464,7 @@ impl EventConsumer for KafkaConsumer {
                     }
                     Err(e) => {
                         if tx
-                            .send(Err(EventError::ConnectionError(format!(
+                            .send(Err(EventError::Connection(format!(
                                 "Kafka poll error: {e}"
                             ))))
                             .is_err()
