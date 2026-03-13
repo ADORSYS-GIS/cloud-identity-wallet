@@ -15,11 +15,7 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-ignore = [
-  # Marvin attack on rsa crate - timing sidechannel for key recovery
-  # No fix available, comes from sqlx-mysql transitive dependency
-  "RUSTSEC-2023-0071",
-]
+ignore = []
 
 [bans]
 # Lint level for when multiple versions of the same crate are detected
