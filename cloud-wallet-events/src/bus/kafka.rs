@@ -257,9 +257,7 @@ impl KafkaPublisher {
             .with_ack_timeout(Duration::from_secs(config.ack_timeout_secs))
             .with_required_acks(config.producer_acks.into())
             .create()
-            .map_err(|e| {
-                EventError::Configuration(format!("Failed to create producer: {e}"))
-            })?;
+            .map_err(|e| EventError::Configuration(format!("Failed to create producer: {e}")))?;
 
         Ok(Self {
             config,
@@ -359,9 +357,8 @@ impl EventPublisher for KafkaPublisher {
     ///   blocking task panicked.
     async fn publish(&self, event: &Event) -> Result<(), EventError> {
         let topic = self.topic_for(event);
-        let payload = serde_json::to_vec(event).map_err(|e| {
-            EventError::Serialization(format!("Failed to serialize event: {e}"))
-        })?;
+        let payload = serde_json::to_vec(event)
+            .map_err(|e| EventError::Serialization(format!("Failed to serialize event: {e}")))?;
         let key = event.id.to_string();
 
         let producer = self.producer.clone();
