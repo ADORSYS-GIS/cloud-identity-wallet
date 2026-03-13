@@ -1,5 +1,5 @@
 [advisories]
-ignore = ["RUSTSEC-2023-0071"] # Marvin Attack: potential key recovery through timing sidechannels (unpatched in rsa 0.9.10)
+ignore = [] # advisory IDs to ignore
 
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"

@@ -15,9 +15,7 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-ignore = [
-  "RUSTSEC-2023-0071", # Marvin Attack: potential key recovery through timing sidechannels (unpatched in rsa 0.9.10)
-]
+ignore = []
 
 [bans]
 # Lint level for when multiple versions of the same crate are detected
