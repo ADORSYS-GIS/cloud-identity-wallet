@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// The credential format identifier string as defined by [OpenID4VCI Appendix A].
-///
-/// [OpenID4VCI Appendix A]: (https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-A)
+/// The credential format identifier string as defined by OpenID4VCI Appendix A.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialFormatIdentifier {
@@ -70,24 +68,6 @@ pub struct Image {
     pub uri: url::Url,
 }
 
-/// Wallet-internal validation settings paired with a [`CredentialConfiguration`].
-///
-/// Never serialized to or from issuer metadata. Populated by the wallet's own
-/// configuration layer and keyed by `credential_configuration_id`. The
-/// `claims_schema` field holds a JSON Schema used to validate credential claims
-/// at issuance or presentation time — a wallet extension beyond the spec.
-#[derive(Debug, Clone)]
-pub struct CredentialValidationConfig {
-    /// Key into the issuer's `credential_configurations_supported` map.
-    pub credential_configuration_id: String,
-
-    /// JSON Schema to validate credential claims against, if any.
-    pub claims_schema: Option<serde_json::Value>,
-
-    /// For `mso_mdoc`, the namespace `claims_schema` applies to.
-    pub mdoc_claims_namespace: Option<String>,
-}
-
 /// Issuer's description of a particular kind of credential it can issue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialConfiguration {
@@ -113,22 +93,9 @@ impl CredentialConfiguration {
     }
 }
 
-impl CredentialValidationConfig {
-    /// Returns the JSON Schema to validate claims against, if one is set.
-    pub fn claims_schema(&self) -> Option<&serde_json::Value> {
-        self.claims_schema.as_ref()
-    }
-
-    /// Returns the mdoc namespace `claims_schema` applies to, if set.
-    pub fn mdoc_claims_namespace(&self) -> Option<&str> {
-        self.mdoc_claims_namespace.as_deref()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn sd_jwt_config() -> CredentialConfiguration {
         CredentialConfiguration {
@@ -145,23 +112,6 @@ mod tests {
                 text_color: Some("#FFFFFF".to_owned()),
             }],
             scope: Some("identity_credential".to_owned()),
-        }
-    }
-
-    fn sd_jwt_validation_config() -> CredentialValidationConfig {
-        CredentialValidationConfig {
-            credential_configuration_id: "identity_credential".to_owned(),
-            claims_schema: Some(json!({
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "properties": {
-                    "given_name": { "type": "string" },
-                    "family_name": { "type": "string" },
-                    "birthdate": { "type": "string" }
-                },
-                "required": ["given_name", "family_name"]
-            })),
-            mdoc_claims_namespace: None,
         }
     }
 
@@ -204,36 +154,6 @@ mod tests {
 
         let jwt: CredentialFormatIdentifier = serde_json::from_str(r#""jwt_vc_json""#)?;
         assert_eq!(jwt, CredentialFormatIdentifier::JwtVcJson);
-        Ok(())
-    }
-
-    // CredentialValidationConfig
-
-    #[test]
-    fn validation_config_claims_schema_accessible() {
-        let config = sd_jwt_validation_config();
-        assert!(config.claims_schema().is_some());
-    }
-
-    #[test]
-    fn validation_config_without_schema_returns_none() {
-        let config = CredentialValidationConfig {
-            credential_configuration_id: "id".to_owned(),
-            claims_schema: None,
-            mdoc_claims_namespace: None,
-        };
-        assert!(config.claims_schema().is_none());
-    }
-
-    #[test]
-    fn claims_schema_absent_from_credential_configuration_serialization()
-    -> Result<(), serde_json::Error> {
-        let config = sd_jwt_config();
-        let json_val = serde_json::to_value(&config)?;
-        assert!(
-            json_val.get("claims_schema").is_none(),
-            "claims_schema must not appear in serialized CredentialConfiguration"
-        );
         Ok(())
     }
 
