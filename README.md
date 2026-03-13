@@ -2,9 +2,10 @@
 
 [![CI](https://github.com/ADORSYS-GIS/cloud-identity-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/ADORSYS-GIS/cloud-identity-wallet/actions/workflows/ci.yml)
 [![dependencies](https://deps.rs/repo/github/ADORSYS-GIS/cloud-identity-wallet/status.svg)](https://deps.rs/repo/github/ADORSYS-GIS/cloud-identity-wallet)
+[![Rust](https://img.shields.io/badge/msrv-1.92-blue)](https://github.com/ADORSYS-GIS/cloud-identity-wallet)
 [![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)](#license)
 
-**Cloud Identity Wallet** is a cloud-hosted, multi-tenant verifiable credential wallet designed for **issuers, holders, and verifiers** operating in SSI- and eIDAS-aligned ecosystems.
+Cloud-hosted, multi-tenant verifiable credential wallet designed for issuers, holders, and verifiers operating in SSI- and eIDAS-aligned ecosystems.
 
 It implements:
 
