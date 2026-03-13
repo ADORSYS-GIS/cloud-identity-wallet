@@ -11,7 +11,7 @@ Cloud Identity Wallet is a cloud-hosted, multi-tenant verifiable credential wall
 
 ## Component Diagram
 
-![Component view](../assets/communication_flow.png)
+![Component view](../../assets/communication_flow.png)
 
 ## Key Components
 
@@ -41,7 +41,7 @@ Cloud Identity Wallet is a cloud-hosted, multi-tenant verifiable credential wall
 
 Custodial keys are protected by KMS/HSM. Wallet keys and Data Encryption Keys (DEKs) are wrapped at rest and unwrapped at use-time.
 
-![Key management design](../assets/key_management_design.png)
+![Key management design](../../assets/key_management_design.png)
 
 Key ideas:
 
@@ -54,7 +54,7 @@ Key ideas:
 
 ### Issuance – Authorization Code (OpenID4VCI)
 
-![Issuance: authorization code](../assets/authorization_code_flow.png)
+![Issuance: authorization code](../../assets/authorization_code_flow.png)
 
 Summary:
 
@@ -64,7 +64,7 @@ Summary:
 
 ### Issuance – Pre-Authorized Code (OpenID4VCI)
 
-![Issuance: pre-authorized code](../assets/pre-authorized_code_flow.png)
+![Issuance: pre-authorized code](../../assets/pre-authorized_code_flow.png)
 
 Summary:
 
@@ -74,7 +74,7 @@ Summary:
 
 ### Presentation – OpenID4VP
 
-![Verification flow](../assets/verification_flow.png)
+![Verification flow](../../assets/verification_flow.png)
 
 Summary:
 
