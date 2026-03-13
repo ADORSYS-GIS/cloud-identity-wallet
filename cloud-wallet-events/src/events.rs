@@ -8,23 +8,22 @@ use uuid::Uuid;
 
 /// A strongly-typed event type identifier.
 ///
-/// An `EventType` is a dot-separated string such as `"credential.stored"` or
-/// `"key.created"`. The first segment (before the first dot) is treated as
-/// the *category* and is used to derive the Kafka topic name.
+///
+/// `"key.created"`.
 ///
 /// # Well-known constants
 ///
 /// [`EventType`] exposes a set of pre-defined constants for the core wallet
 /// events:
 ///
-/// | Constant | Value |
-/// |----------|-------|
-/// | [`CREDENTIAL_STORED`] | `"credential.stored"` |
-/// | [`CREDENTIAL_DELETED`] | `"credential.deleted"` |
+/// | Constant                | Value                    |
+/// |-------------------------|--------------------------|
+/// | [`CREDENTIAL_STORED`]   | `"credential.stored"`    |
+/// | [`CREDENTIAL_DELETED`]   | `"credential.deleted"`   |
 /// | [`PRESENTATION_SUBMITTED`] | `"presentation.submitted"` |
-/// | [`KEY_CREATED`] | `"key.created"` |
-/// | [`KEY_ROTATED`] | `"key.rotated"` |
-/// | [`KEY_REVOKED`] | `"key.revoked"` |
+/// | [`KEY_CREATED`]         | `"key.created"`          |
+/// | [`KEY_ROTATED`]         | `"key.rotated"`          |
+/// | [`KEY_REVOKED`]         | `"key.revoked"`          |
 ///
 /// [`CREDENTIAL_STORED`]: EventType::CREDENTIAL_STORED
 /// [`CREDENTIAL_DELETED`]: EventType::CREDENTIAL_DELETED
@@ -93,14 +92,14 @@ impl EventType {
 ///
 /// # Anatomy of an event
 ///
-/// | Field | Description |
-/// |-------|-------------|
-/// | `id` | Globally unique identifier (UUIDv4) assigned at creation time. |
-/// | `event_type` | Dot-separated name — e.g. `"credential.stored"`. |
-/// | `version` | Schema version (`"1.0.0"` by default). Bump this when the payload structure changes. |
-/// | `timestamp` | UTC timestamp set at construction time. |
-/// | `payload` | Arbitrary JSON value. Use [`Event::payload`] to deserialize it into a concrete type. |
-/// | `metadata` | Extensible key-value map — add `wallet_id`, `correlation_id`, etc. |
+/// | Field        | Description                                                    |
+/// |--------------|----------------------------------------------------------------|
+/// | `id`         | Globally unique identifier (UUIDv4) assigned at creation time. |
+/// | `event_type` | Dot-separated name — e.g. `"credential.stored"`.               |
+/// | `version`    | Schema version (`"1.0.0"` by default).                         |
+/// | `timestamp`  | UTC timestamp set at construction time.                        |
+/// | `payload`    | Arbitrary JSON value.                                          |
+/// | `metadata`   | Extensible key-value map — add `wallet_id`, `correlation_id`, etc. |
 ///
 /// # Example
 ///
@@ -135,14 +134,6 @@ pub struct Event {
     /// Arbitrary JSON payload carrying domain-specific data.
     pub payload: serde_json::Value,
     /// Extensible key-value metadata map.
-    ///
-    /// Common keys include:
-    /// - `"wallet_id"` — the wallet that produced the event.
-    /// - `"correlation_id"` — links related events across service boundaries.
-    /// - `"category"` — overrides the Kafka topic category derived from
-    ///   `event_type` (see [`KafkaPublisher`]).
-    ///
-    /// [`KafkaPublisher`]: crate::bus::kafka::KafkaPublisher
     pub metadata: HashMap<String, Value>,
 }
 
