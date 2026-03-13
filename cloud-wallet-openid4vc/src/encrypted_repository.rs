@@ -92,7 +92,7 @@ impl<R: CredentialRepository<StoredCredential>> CredentialRepository<Credential>
 mod tests {
     use super::*;
     use crate::encryption::StoredCredential;
-    use crate::models::{CredentialPayload, SdJwtCredential};
+    use crate::models::{Binding, Claims, CredentialMetadata, CredentialType};
     use serde_json::json;
     use std::sync::Mutex;
     use time::{Duration, OffsetDateTime};
@@ -167,8 +167,10 @@ mod tests {
             let mut lock = self.records.lock().unwrap();
             if let Some(pos) = lock.iter().position(|r| &r.id == id) {
                 lock.remove(pos);
+                Ok(())
+            } else {
+                Err(StoreError::NotFound(id.clone()))
             }
-            Ok(())
         }
     }
 
@@ -176,14 +178,13 @@ mod tests {
         Credential::new(
             "https://issuer.example.com",
             "user-1234",
+            CredentialType::new("https://credentials.example.com/id"),
+            Claims::new(json!({ "given_name": "Alice" })),
             OffsetDateTime::now_utc(),
             Some(OffsetDateTime::now_utc() + Duration::days(365)),
-            "identity_credential",
-            CredentialPayload::DcSdJwt(SdJwtCredential {
-                token: "header.payload.sig~".into(),
-                vct: "https://credentials.example.com/id".into(),
-                claims: json!({ "given_name": "Alice" }),
-            }),
+            None,
+            Binding,
+            CredentialMetadata {},
         )
         .expect("valid credential")
     }
@@ -200,10 +201,7 @@ mod tests {
         let retrieved = repo.find_by_id(&id).await.unwrap();
         assert_eq!(retrieved.id, cred.id);
         assert_eq!(retrieved.issuer, cred.issuer);
-        assert_eq!(
-            retrieved.credential.claims().unwrap()["given_name"],
-            "Alice"
-        );
+        assert_eq!(retrieved.claims["given_name"], "Alice");
     }
 
     #[tokio::test]
@@ -273,7 +271,7 @@ mod tests {
         let all = repo.find_all().await.unwrap();
         assert_eq!(all.len(), 2);
         for c in &all {
-            assert_eq!(c.credential.claims().unwrap()["given_name"], "Alice");
+            assert_eq!(c.claims["given_name"], "Alice");
         }
     }
 }

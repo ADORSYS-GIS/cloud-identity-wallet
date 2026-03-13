@@ -10,7 +10,7 @@ use sqlx::{PgPool, Row};
 
 use crate::{
     config::PostgresConfig,
-    encryption::{EncryptedPayload, StoredCredential},
+    encryption::StoredCredential,
     errors::StoreError,
     models::{CredentialId, CredentialStatus, StatusReference},
     repository::{CredentialFilter, CredentialRepository},
@@ -43,58 +43,36 @@ fn parse_status(s: &str) -> Result<CredentialStatus, sqlx::Error> {
 }
 
 /// Map a Postgres row back to a [`StoredCredential`].
-///
-/// All columns are read by name — the mapping stays in one place and matches
-/// exactly what the INSERT/UPDATE writes; nothing is hardcoded in each method.
 fn row_to_stored(row: &sqlx::postgres::PgRow) -> Result<StoredCredential, sqlx::Error> {
-    let format: String = row.try_get("format")?;
-
-    // Reconstruct the format-aware encrypted payload.
-    // Each variant reads only its own plaintext column and the shared encrypted BYTEA.
-    let encrypted_payload = match format.as_str() {
-        "dc+sd-jwt" => EncryptedPayload::DcSdJwt {
-            vct: row.try_get("vct")?,
-            encrypted_token: row.try_get("encrypted_payload")?,
-        },
-        "mso_mdoc" => EncryptedPayload::MsoMdoc {
-            doc_type: row.try_get("doc_type")?,
-            encrypted_data: row.try_get("encrypted_payload")?,
-        },
-        "jwt_vc_json" => EncryptedPayload::JwtVcJson {
-            credential_type: {
-                let json_str: String = row.try_get("credential_type")?;
-                serde_json::from_str(&json_str).map_err(|e| sqlx::Error::Decode(e.into()))?
-            },
-            encrypted_token: row.try_get("encrypted_payload")?,
-        },
-        other => {
-            return Err(sqlx::Error::Decode(
-                format!("unknown credential format: {other}").into(),
-            ));
-        }
-    };
+    use crate::models::{Binding, CredentialMetadata, CredentialType};
 
     // Status-list reference — both columns must be present or both absent.
     let status_list_url: Option<String> = row.try_get("status_list_url")?;
     let status_list_index: Option<i64> = row.try_get("status_list_index")?;
     let status_reference = match (status_list_url, status_list_index) {
         (Some(url), Some(index)) => Some(StatusReference {
-            url,
+            status_list_url: url,
             index: index as u64,
         }),
         _ => None,
     };
 
+    // Parse the ID string back into CredentialId
+    let id_str: String = row.try_get("id")?;
+    let id = CredentialId::try_from(id_str).map_err(|e| sqlx::Error::Decode(e.into()))?;
+
     Ok(StoredCredential {
-        id: row.try_get("id")?,
+        id,
         issuer: row.try_get("issuer")?,
         subject: row.try_get("subject")?,
+        credential_type: CredentialType::new(row.try_get::<String, _>("credential_type")?),
         issued_at: row.try_get("issued_at")?,
         expires_at: row.try_get("expires_at")?,
-        credential_configuration_id: row.try_get("credential_configuration_id")?,
         status: parse_status(&row.try_get::<String, _>("status")?)?,
         status_reference,
-        encrypted_payload,
+        binding: Binding,
+        metadata: CredentialMetadata {},
+        encrypted_claims: row.try_get("encrypted_claims")?,
         encrypted_dek: row.try_get("encrypted_dek")?,
     })
 }
@@ -128,42 +106,30 @@ impl PostgresCredentialRepository {
 
 impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     async fn store(&self, cred: StoredCredential) -> Result<(), StoreError> {
-        // Derive the format-specific plaintext columns and the encrypted BYTEA.
-        let (format, vct, doc_type, credential_type_json, encrypted_payload) =
-            stored_payload_parts(&cred)?;
-
         sqlx::query(
             r#"
             INSERT INTO credentials (
-                id, issuer, subject, issued_at, expires_at,
-                credential_configuration_id, status, format,
-                vct, doc_type, credential_type,
-                status_list_url, status_list_index,
-                encrypted_dek, encrypted_payload
+                id, issuer, subject, credential_type, issued_at, expires_at,
+                status, status_list_url, status_list_index,
+                encrypted_dek, encrypted_claims
             ) VALUES (
-                $1, $2, $3, $4, $5,
-                $6, $7, $8,
-                $9, $10, $11,
-                $12, $13,
-                $14, $15
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9,
+                $10, $11
             )
             "#,
         )
-        .bind(&cred.id)
+        .bind(cred.id.as_ref())
         .bind(&cred.issuer)
         .bind(&cred.subject)
+        .bind(cred.credential_type.as_ref())
         .bind(cred.issued_at)
         .bind(cred.expires_at)
-        .bind(&cred.credential_configuration_id)
         .bind(status_str(&cred.status))
-        .bind(&format)
-        .bind(&vct)
-        .bind(&doc_type)
-        .bind(&credential_type_json)
-        .bind(cred.status_reference.as_ref().map(|s| &s.url))
+        .bind(cred.status_reference.as_ref().map(|s| &s.status_list_url))
         .bind(cred.status_reference.as_ref().map(|s| s.index as i64))
         .bind(&cred.encrypted_dek)
-        .bind(&encrypted_payload)
+        .bind(&cred.encrypted_claims)
         .execute(&self.pool)
         .await
         .map_err(|e| match &e {
@@ -178,7 +144,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
 
     async fn find_by_id(&self, id: &CredentialId) -> Result<StoredCredential, StoreError> {
         let row = sqlx::query("SELECT * FROM credentials WHERE id = $1")
-            .bind(id)
+            .bind(id.as_ref())
             .fetch_optional(&self.pool)
             .await
             .map_err(storage_err)?;
@@ -205,7 +171,6 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
         filter: CredentialFilter,
     ) -> Result<Vec<StoredCredential>, StoreError> {
         // Build a parameterised WHERE clause from whichever filter fields are set.
-        // Parameters are numbered sequentially — the same order as the binds below.
         let mut conditions: Vec<String> = Vec::new();
         let mut p = 1usize;
 
@@ -221,8 +186,8 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
             conditions.push(format!("status = ${p}"));
             p += 1;
         }
-        if filter.credential_configuration_id.is_some() {
-            conditions.push(format!("credential_configuration_id = ${p}"));
+        if filter.credential_type.is_some() {
+            conditions.push(format!("credential_type = ${p}"));
             p += 1;
         }
         if filter.active_at.is_some() {
@@ -250,8 +215,8 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
         if let Some(ref status) = filter.status {
             query = query.bind(status_str(status));
         }
-        if let Some(ref cfg_id) = filter.credential_configuration_id {
-            query = query.bind(cfg_id);
+        if let Some(ref cred_type) = filter.credential_type {
+            query = query.bind(cred_type.as_ref());
         }
         if let Some(active_at) = filter.active_at {
             query = query.bind(active_at);
@@ -264,44 +229,33 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     }
 
     async fn update(&self, cred: StoredCredential) -> Result<(), StoreError> {
-        let (format, vct, doc_type, credential_type_json, encrypted_payload) =
-            stored_payload_parts(&cred)?;
-
         let result = sqlx::query(
             r#"
             UPDATE credentials SET
-                issuer                      = $2,
-                subject                     = $3,
-                issued_at                   = $4,
-                expires_at                  = $5,
-                credential_configuration_id = $6,
-                status                      = $7,
-                format                      = $8,
-                vct                         = $9,
-                doc_type                    = $10,
-                credential_type             = $11,
-                status_list_url             = $12,
-                status_list_index           = $13,
-                encrypted_dek               = $14,
-                encrypted_payload           = $15
+                issuer            = $2,
+                subject           = $3,
+                credential_type   = $4,
+                issued_at         = $5,
+                expires_at        = $6,
+                status            = $7,
+                status_list_url   = $8,
+                status_list_index = $9,
+                encrypted_dek     = $10,
+                encrypted_claims  = $11
             WHERE id = $1
             "#,
         )
-        .bind(&cred.id)
+        .bind(cred.id.as_ref())
         .bind(&cred.issuer)
         .bind(&cred.subject)
+        .bind(cred.credential_type.as_ref())
         .bind(cred.issued_at)
         .bind(cred.expires_at)
-        .bind(&cred.credential_configuration_id)
         .bind(status_str(&cred.status))
-        .bind(&format)
-        .bind(&vct)
-        .bind(&doc_type)
-        .bind(&credential_type_json)
-        .bind(cred.status_reference.as_ref().map(|s| &s.url))
+        .bind(cred.status_reference.as_ref().map(|s| &s.status_list_url))
         .bind(cred.status_reference.as_ref().map(|s| s.index as i64))
         .bind(&cred.encrypted_dek)
-        .bind(&encrypted_payload)
+        .bind(&cred.encrypted_claims)
         .execute(&self.pool)
         .await
         .map_err(storage_err)?;
@@ -314,65 +268,16 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     }
 
     async fn delete(&self, id: &CredentialId) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM credentials WHERE id = $1")
-            .bind(id)
+        let result = sqlx::query("DELETE FROM credentials WHERE id = $1")
+            .bind(id.as_ref())
             .execute(&self.pool)
             .await
             .map_err(storage_err)?;
-        Ok(())
-    }
-}
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-/// The format-specific columns extracted from a [`StoredCredential`].
-/// `(format_str, vct, doc_type, credential_type_json, encrypted_bytes)`
-type TypeParts = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Vec<u8>,
-);
-
-/// Extract the columns that differ per format from a [`StoredCredential`].
-///
-/// Returns `(format_str, vct, doc_type, credential_type_json, encrypted_bytes)`.
-/// Columns not applicable to the current format are `None`.
-fn stored_payload_parts(cred: &StoredCredential) -> Result<TypeParts, StoreError> {
-    match &cred.encrypted_payload {
-        EncryptedPayload::DcSdJwt {
-            vct,
-            encrypted_token,
-        } => Ok((
-            "dc+sd-jwt".into(),
-            Some(vct.clone()),
-            None,
-            None,
-            encrypted_token.clone(),
-        )),
-        EncryptedPayload::MsoMdoc {
-            doc_type,
-            encrypted_data,
-        } => Ok((
-            "mso_mdoc".into(),
-            None,
-            Some(doc_type.clone()),
-            None,
-            encrypted_data.clone(),
-        )),
-        EncryptedPayload::JwtVcJson {
-            credential_type,
-            encrypted_token,
-        } => {
-            let json = serde_json::to_string(credential_type)
-                .map_err(|e| StoreError::Storage(Box::new(e)))?;
-            Ok((
-                "jwt_vc_json".into(),
-                None,
-                None,
-                Some(json),
-                encrypted_token.clone(),
-            ))
+        if result.rows_affected() == 0 {
+            Err(StoreError::NotFound(id.clone()))
+        } else {
+            Ok(())
         }
     }
 }
@@ -380,13 +285,13 @@ fn stored_payload_parts(cred: &StoredCredential) -> Result<TypeParts, StoreError
 // ── Integration tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[cfg(feature = "encryption")]
+#[cfg(all(feature = "postgres", feature = "encryption"))]
 mod tests {
     use super::*;
     use crate::{
         encrypted_repository::EncryptingRepository,
         encryption::Kek,
-        models::{Credential, CredentialPayload, SdJwtCredential},
+        models::{Binding, Claims, Credential, CredentialMetadata, CredentialType},
         repository::CredentialRepository,
     };
     use serde_json::json;
@@ -407,14 +312,13 @@ mod tests {
         Credential::new(
             "https://issuer.example.com",
             "user-1234",
+            CredentialType::new("https://credentials.example.com/id"),
+            Claims::new(json!({ "given_name": "Alice", "family_name": "Smith" })),
             OffsetDateTime::now_utc(),
             Some(OffsetDateTime::now_utc() + Duration::days(365)),
-            "identity_credential",
-            CredentialPayload::DcSdJwt(SdJwtCredential {
-                token: "header.payload.sig~disclosure~".into(),
-                vct: "https://credentials.example.com/id".into(),
-                claims: json!({ "given_name": "Alice", "family_name": "Smith" }),
-            }),
+            None,
+            Binding,
+            CredentialMetadata {},
         )
         .expect("valid test credential")
     }
@@ -436,7 +340,7 @@ mod tests {
         let found = repo.find_by_id(&id).await.unwrap();
         assert_eq!(found.id, id);
         assert_eq!(found.issuer, "https://issuer.example.com");
-        assert_eq!(found.credential.claims().unwrap()["given_name"], "Alice");
+        assert_eq!(found.claims["given_name"], "Alice");
 
         // Update
         let mut updated = repo.find_by_id(&id).await.unwrap();

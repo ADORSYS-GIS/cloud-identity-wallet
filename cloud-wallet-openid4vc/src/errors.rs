@@ -6,6 +6,8 @@ use std::fmt;
 use color_eyre::eyre::{Report, eyre};
 use thiserror::Error;
 
+use crate::models::CredentialId;
+
 /// A specialised [`Result`] type for this crate.
 ///
 /// [`Result`]: std::result::Result
@@ -151,4 +153,30 @@ pub enum ErrorKind {
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
+}
+
+// ── StoreError for repository operations ───────────────────────────────────────
+
+/// Errors from credential storage operations.
+#[derive(Debug, Error)]
+pub enum StoreError {
+    /// No credential found with the given ID.
+    #[error("credential not found: {0}")]
+    NotFound(CredentialId),
+
+    /// A credential with this ID already exists.
+    #[error("duplicate credential ID: {0}")]
+    DuplicateId(CredentialId),
+
+    /// Encryption or decryption failure.
+    #[error("encryption error: {0}")]
+    Encryption(String),
+
+    /// Decryption failure.
+    #[error("decryption error: {0}")]
+    Decryption(String),
+
+    /// Underlying storage error (e.g. database, I/O).
+    #[error("storage error: {0}")]
+    Storage(#[source] Box<dyn StdError + Send + Sync + 'static>),
 }

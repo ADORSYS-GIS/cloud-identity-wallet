@@ -8,36 +8,20 @@
 //! AES-256-GCM. The credential ID is used as AAD when wrapping the DEK,
 //! cryptographically binding the DEK to that exact record.
 //!
-//! Encryption is **format-aware**: the [`EncryptedPayload`] enum mirrors
-//! [`CredentialPayload`] and encrypts only the sensitive fields (the raw
-//! token / issuer-signed binary / claims), while non-sensitive type
-//! identifiers (`vct`, `doc_type`, `credential_type`) remain plaintext.
-//!
-//! # Layout on disk
-//!
-//! ```text
-//! encrypted_dek     = nonce (12 B) ‖ AES-GCM(raw_dek_32B, aad=id) ‖ tag (16 B)
-//!
-//! DcSdJwt:
-//!   encrypted_token = nonce (12 B) ‖ AES-GCM(token + claims JSON) ‖ tag (16 B)
-//! MsoMdoc:
-//!   encrypted_data  = nonce (12 B) ‖ AES-GCM(issuer_signed + namespaces JSON) ‖ tag (16 B)
-//! JwtVcJson:
-//!   encrypted_token = nonce (12 B) ‖ AES-GCM(token + credential_subject JSON) ‖ tag (16 B)
-//! ```
+//! The normalized `claims` field is encrypted while `credential_type` remains
+//! plaintext for filtering and display.
 
 use cloud_wallet_crypto::aead::{Algorithm, Key, NONCE_LENGTH};
 use cloud_wallet_crypto::rand;
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use zeroize::Zeroize;
 
 use crate::errors::StoreError;
 use crate::models::{
-    Credential, CredentialId, CredentialPayload, CredentialStatus, MsoMdocCredential,
-    SdJwtCredential, StatusReference, W3cVcJwtCredential,
+    Binding, Claims, Credential, CredentialId, CredentialMetadata, CredentialStatus,
+    CredentialType, StatusReference,
 };
 use crate::repository::CredentialFilter;
-use crate::schema::CredentialFormatIdentifier;
 
 // ── KEK ───────────────────────────────────────────────────────────────────────
 
@@ -63,57 +47,12 @@ impl Kek {
     }
 }
 
-// ── EncryptedPayload ──────────────────────────────────────────────────────────
-
-/// Format-aware encrypted credential payload.
-///
-/// Mirrors [`CredentialPayload`] but replaces each format's sensitive fields
-/// (raw token / issuer-signed binary / claims) with their AES-256-GCM
-/// ciphertext. Non-sensitive type identifiers remain in plaintext so they
-/// are available for display and filtering without decryption.
-#[derive(Debug, Clone)]
-pub enum EncryptedPayload {
-    /// SD-JWT VC (dc+sd-jwt)
-    DcSdJwt {
-        /// Verifiable credential type — plaintext, safe for display/filtering.
-        vct: String,
-        /// `nonce ‖ AES-GCM(token_bytes + claims_json) ‖ tag`
-        encrypted_token: Vec<u8>,
-    },
-    /// ISO 18013-5 mdoc (mso_mdoc)
-    MsoMdoc {
-        /// Document type — plaintext (e.g. `"org.iso.18013.5.1.mDL"`).
-        doc_type: String,
-        /// `nonce ‖ AES-GCM(issuer_signed_bytes + namespaces_json) ‖ tag`
-        encrypted_data: Vec<u8>,
-    },
-    /// W3C VC JWT (jwt_vc_json)
-    JwtVcJson {
-        /// VC type array — plaintext (e.g. `["VerifiableCredential", "IDCard"]`).
-        credential_type: Vec<String>,
-        /// `nonce ‖ AES-GCM(token_bytes + credential_subject_json) ‖ tag`
-        encrypted_token: Vec<u8>,
-    },
-}
-
-impl EncryptedPayload {
-    /// The format identifier for this encrypted payload.
-    pub fn format_identifier(&self) -> CredentialFormatIdentifier {
-        match self {
-            Self::DcSdJwt { .. } => CredentialFormatIdentifier::DcSdJwt,
-            Self::MsoMdoc { .. } => CredentialFormatIdentifier::MsoMdoc,
-            Self::JwtVcJson { .. } => CredentialFormatIdentifier::JwtVcJson,
-        }
-    }
-}
-
 // ── StoredCredential ──────────────────────────────────────────────────────────
 
 /// The persisted form of a [`Credential`].
 ///
 /// All fields needed for filtering and display remain in plaintext.
-/// Only the format-specific credential blob (token / issuer-signed / claims)
-/// is encrypted via the [`EncryptedPayload`] enum.
+/// Only the `claims` JSON is encrypted.
 #[derive(Debug, Clone)]
 pub struct StoredCredential {
     /// Wallet-internal ID — plaintext, used as AAD for DEK wrapping.
@@ -122,18 +61,22 @@ pub struct StoredCredential {
     pub issuer: String,
     /// Subject identifier — plaintext for filtering.
     pub subject: String,
+    /// Credential type — plaintext for filtering.
+    pub credential_type: CredentialType,
     /// Issuance timestamp — plaintext for filtering.
     pub issued_at: OffsetDateTime,
     /// Optional expiry — plaintext for filtering.
     pub expires_at: Option<OffsetDateTime>,
-    /// Credential configuration reference — plaintext for filtering.
-    pub credential_configuration_id: String,
     /// Wallet lifecycle status — plaintext for filtering.
     pub status: CredentialStatus,
     /// Issuer status-list reference — plaintext for revocation checks.
     pub status_reference: Option<StatusReference>,
-    /// Format-aware encrypted credential blob.
-    pub encrypted_payload: EncryptedPayload,
+    /// Holder key binding info (serialized).
+    pub binding: Binding,
+    /// Wallet-local metadata (serialized).
+    pub metadata: CredentialMetadata,
+    /// Encrypted claims JSON: `nonce ‖ AES-GCM(claims_json) ‖ tag`.
+    pub encrypted_claims: Vec<u8>,
     /// `nonce ‖ AES-GCM(raw_dek_32B, aad=id) ‖ tag` — KEK-wrapped DEK.
     pub encrypted_dek: Vec<u8>,
 }
@@ -158,8 +101,8 @@ impl StoredCredential {
         {
             return false;
         }
-        if let Some(ref cfg_id) = filter.credential_configuration_id
-            && &self.credential_configuration_id != cfg_id
+        if let Some(ref cred_type) = filter.credential_type
+            && &self.credential_type != cred_type
         {
             return false;
         }
@@ -177,8 +120,6 @@ impl StoredCredential {
 
 /// Encrypt a [`Credential`] into a [`StoredCredential`] using a fresh DEK
 /// wrapped by `kek`.
-///
-/// The format is preserved — only the sensitive fields are encrypted per format.
 pub fn encrypt_credential(
     kek: &Kek,
     credential: &Credential,
@@ -191,22 +132,29 @@ pub fn encrypt_credential(
     let dek = Key::new(Algorithm::AesGcm256, dek_raw)
         .map_err(|e| StoreError::Encryption(format!("DEK construction failed: {e}")))?;
 
-    // 2. Encrypt the format-specific sensitive data
-    let encrypted_payload = encrypt_payload(&dek, &credential.credential)?;
+    // 2. Encrypt the claims JSON
+    let claims_json = serde_json::to_vec(credential.claims.as_value())
+        .map_err(|e| StoreError::Encryption(format!("claims serialisation failed: {e}")))?;
+    let encrypted_claims = aead_seal(&dek, &claims_json, b"")?;
 
     // 3. Wrap DEK with KEK; bind to credential ID via AAD
     let encrypted_dek = aead_seal(&kek.0, &dek_raw, credential.id.as_bytes())?;
+
+    // 4. Zeroize the raw DEK bytes (security fix)
+    dek_raw.zeroize();
 
     Ok(StoredCredential {
         id: credential.id.clone(),
         issuer: credential.issuer.clone(),
         subject: credential.subject.clone(),
+        credential_type: credential.credential_type.clone(),
         issued_at: credential.issued_at,
         expires_at: credential.expires_at,
-        credential_configuration_id: credential.credential_configuration_id.clone(),
         status: credential.status.clone(),
         status_reference: credential.status_reference.clone(),
-        encrypted_payload,
+        binding: credential.binding.clone(),
+        metadata: credential.metadata.clone(),
+        encrypted_claims,
         encrypted_dek,
     })
 }
@@ -215,157 +163,33 @@ pub fn encrypt_credential(
 pub fn decrypt_credential(kek: &Kek, stored: &StoredCredential) -> Result<Credential, StoreError> {
     // 1. Unwrap DEK
     let mut dek_blob = stored.encrypted_dek.clone();
-    let dek_raw = aead_open(&kek.0, &mut dek_blob, stored.id.as_bytes())?;
+    let mut dek_raw = aead_open(&kek.0, &mut dek_blob, stored.id.as_bytes())?.to_vec();
 
-    let dek = Key::new(Algorithm::AesGcm256, dek_raw.to_vec())
+    let dek = Key::new(Algorithm::AesGcm256, dek_raw.clone())
         .map_err(|e| StoreError::Decryption(format!("DEK reconstruction failed: {e}")))?;
 
-    // 2. Decrypt the format-specific payload
-    let credential_payload = decrypt_payload(&dek, &stored.encrypted_payload)?;
+    // 2. Decrypt the claims
+    let mut claims_blob = stored.encrypted_claims.clone();
+    let claims_json = aead_open(&dek, &mut claims_blob, b"")?;
+    let claims: Claims = serde_json::from_slice(claims_json)
+        .map_err(|e| StoreError::Decryption(format!("claims deserialisation failed: {e}")))?;
+
+    // 3. Zeroize the raw DEK bytes (security fix)
+    dek_raw.zeroize();
 
     Ok(Credential {
         id: stored.id.clone(),
         issuer: stored.issuer.clone(),
         subject: stored.subject.clone(),
+        credential_type: stored.credential_type.clone(),
+        claims,
         issued_at: stored.issued_at,
         expires_at: stored.expires_at,
-        credential_configuration_id: stored.credential_configuration_id.clone(),
-        credential: credential_payload,
-        status: stored.status.clone(),
         status_reference: stored.status_reference.clone(),
+        binding: stored.binding.clone(),
+        metadata: stored.metadata.clone(),
+        status: stored.status.clone(),
     })
-}
-
-// ── Format-specific encrypt/decrypt ──────────────────────────────────────────
-
-fn encrypt_payload(dek: &Key, payload: &CredentialPayload) -> Result<EncryptedPayload, StoreError> {
-    match payload {
-        CredentialPayload::DcSdJwt(c) => {
-            // Encrypt token + claims together; keep vct plaintext
-            #[derive(Serialize)]
-            struct SdJwtSensitive<'a> {
-                token: &'a str,
-                claims: &'a serde_json::Value,
-            }
-            let plaintext = serde_json::to_vec(&SdJwtSensitive {
-                token: &c.token,
-                claims: &c.claims,
-            })
-            .map_err(|e| StoreError::Encryption(format!("SD-JWT serialisation failed: {e}")))?;
-
-            Ok(EncryptedPayload::DcSdJwt {
-                vct: c.vct.clone(),
-                encrypted_token: aead_seal(dek, &plaintext, b"")?,
-            })
-        }
-
-        CredentialPayload::MsoMdoc(c) => {
-            // Encrypt issuer_signed + namespaces together; keep doc_type plaintext
-            #[derive(Serialize)]
-            struct MdocSensitive<'a> {
-                issuer_signed: &'a str,
-                namespaces: &'a std::collections::HashMap<String, serde_json::Value>,
-            }
-            let plaintext = serde_json::to_vec(&MdocSensitive {
-                issuer_signed: &c.issuer_signed,
-                namespaces: &c.namespaces,
-            })
-            .map_err(|e| StoreError::Encryption(format!("mdoc serialisation failed: {e}")))?;
-
-            Ok(EncryptedPayload::MsoMdoc {
-                doc_type: c.doc_type.clone(),
-                encrypted_data: aead_seal(dek, &plaintext, b"")?,
-            })
-        }
-
-        CredentialPayload::JwtVcJson(c) => {
-            // Encrypt token + credential_subject; keep credential_type plaintext
-            #[derive(Serialize)]
-            struct JwtVcSensitive<'a> {
-                token: &'a str,
-                credential_subject: &'a serde_json::Value,
-            }
-            let plaintext = serde_json::to_vec(&JwtVcSensitive {
-                token: &c.token,
-                credential_subject: &c.credential_subject,
-            })
-            .map_err(|e| StoreError::Encryption(format!("JWT VC serialisation failed: {e}")))?;
-
-            Ok(EncryptedPayload::JwtVcJson {
-                credential_type: c.credential_type.clone(),
-                encrypted_token: aead_seal(dek, &plaintext, b"")?,
-            })
-        }
-    }
-}
-
-fn decrypt_payload(dek: &Key, enc: &EncryptedPayload) -> Result<CredentialPayload, StoreError> {
-    match enc {
-        EncryptedPayload::DcSdJwt {
-            vct,
-            encrypted_token,
-        } => {
-            #[derive(Deserialize)]
-            struct SdJwtSensitive {
-                token: String,
-                claims: serde_json::Value,
-            }
-            let mut blob = encrypted_token.clone();
-            let plaintext = aead_open(dek, &mut blob, b"")?;
-            let sensitive: SdJwtSensitive = serde_json::from_slice(plaintext).map_err(|e| {
-                StoreError::Decryption(format!("SD-JWT deserialisation failed: {e}"))
-            })?;
-
-            Ok(CredentialPayload::DcSdJwt(SdJwtCredential {
-                token: sensitive.token,
-                vct: vct.clone(),
-                claims: sensitive.claims,
-            }))
-        }
-
-        EncryptedPayload::MsoMdoc {
-            doc_type,
-            encrypted_data,
-        } => {
-            #[derive(Deserialize)]
-            struct MdocSensitive {
-                issuer_signed: String,
-                namespaces: std::collections::HashMap<String, serde_json::Value>,
-            }
-            let mut blob = encrypted_data.clone();
-            let plaintext = aead_open(dek, &mut blob, b"")?;
-            let sensitive: MdocSensitive = serde_json::from_slice(plaintext)
-                .map_err(|e| StoreError::Decryption(format!("mdoc deserialisation failed: {e}")))?;
-
-            Ok(CredentialPayload::MsoMdoc(MsoMdocCredential {
-                doc_type: doc_type.clone(),
-                namespaces: sensitive.namespaces,
-                issuer_signed: sensitive.issuer_signed,
-            }))
-        }
-
-        EncryptedPayload::JwtVcJson {
-            credential_type,
-            encrypted_token,
-        } => {
-            #[derive(Deserialize)]
-            struct JwtVcSensitive {
-                token: String,
-                credential_subject: serde_json::Value,
-            }
-            let mut blob = encrypted_token.clone();
-            let plaintext = aead_open(dek, &mut blob, b"")?;
-            let sensitive: JwtVcSensitive = serde_json::from_slice(plaintext).map_err(|e| {
-                StoreError::Decryption(format!("JWT VC deserialisation failed: {e}"))
-            })?;
-
-            Ok(CredentialPayload::JwtVcJson(W3cVcJwtCredential {
-                token: sensitive.token,
-                credential_type: credential_type.clone(),
-                credential_subject: sensitive.credential_subject,
-            }))
-        }
-    }
 }
 
 // ── Internal AEAD helpers ─────────────────────────────────────────────────────
@@ -405,149 +229,49 @@ fn aead_open<'a>(key: &Key, blob: &'a mut [u8], aad: &[u8]) -> Result<&'a [u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{MsoMdocCredential, W3cVcJwtCredential};
     use serde_json::json;
-    use std::collections::HashMap;
     use time::{Duration, OffsetDateTime};
 
-    fn make_sd_jwt() -> Credential {
+    fn make_credential() -> Credential {
         Credential::new(
             "https://issuer.example.com",
             "sub-1234",
+            CredentialType::new("https://credentials.example.com/identity"),
+            Claims::new(json!({ "given_name": "Alice", "family_name": "Smith" })),
             OffsetDateTime::now_utc(),
             Some(OffsetDateTime::now_utc() + Duration::days(365)),
-            "identity_credential",
-            CredentialPayload::DcSdJwt(SdJwtCredential {
-                token: "header.payload.sig~disclosure~".into(),
-                vct: "https://credentials.example.com/identity".into(),
-                claims: json!({ "given_name": "Alice", "family_name": "Smith" }),
-            }),
-        )
-        .expect("valid SD-JWT credential")
-    }
-
-    fn make_mdoc() -> Credential {
-        let mut namespaces = HashMap::new();
-        namespaces.insert(
-            "org.iso.18013.5.1".into(),
-            json!({ "family_name": "Smith", "given_name": "Alice" }),
-        );
-        Credential::new(
-            "https://dmv.example.com",
-            "sub-5678",
-            OffsetDateTime::now_utc(),
             None,
-            "mDL_credential",
-            CredentialPayload::MsoMdoc(MsoMdocCredential {
-                doc_type: "org.iso.18013.5.1.mDL".into(),
-                namespaces,
-                issuer_signed: "base64url-encoded-issuer-signed-data".into(),
-            }),
+            Binding,
+            CredentialMetadata {},
         )
-        .expect("valid mdoc credential")
-    }
-
-    fn make_w3c_vc() -> Credential {
-        Credential::new(
-            "https://university.example.com",
-            "sub-9012",
-            OffsetDateTime::now_utc(),
-            Some(OffsetDateTime::now_utc() + Duration::days(730)),
-            "diploma_credential",
-            CredentialPayload::JwtVcJson(W3cVcJwtCredential {
-                token: "eyJ.eyJ.sig".into(),
-                credential_type: vec![
-                    "VerifiableCredential".into(),
-                    "UniversityDegreeCredential".into(),
-                ],
-                credential_subject: json!({ "degree": { "type": "BachelorDegree", "name": "BSc Computer Science" } }),
-            }),
-        )
-        .expect("valid W3C VC credential")
-    }
-
-    // ── Round-trip tests (one per format) ─────────────────────────────────────
-
-    #[test]
-    fn sd_jwt_round_trip() {
-        let kek = Kek::generate().unwrap();
-        let credential = make_sd_jwt();
-
-        let stored = encrypt_credential(&kek, &credential).unwrap();
-
-        // vct must be plaintext
-        assert!(
-            matches!(&stored.encrypted_payload, EncryptedPayload::DcSdJwt { vct, .. }
-            if vct == "https://credentials.example.com/identity")
-        );
-        // Encrypted blob must contain nonce + ciphertext + tag
-        if let EncryptedPayload::DcSdJwt {
-            encrypted_token, ..
-        } = &stored.encrypted_payload
-        {
-            assert!(encrypted_token.len() > NONCE_LENGTH + 16);
-        }
-
-        let decrypted = decrypt_credential(&kek, &stored).unwrap();
-        assert_eq!(decrypted.id, credential.id);
-        let claims = decrypted.credential.claims().unwrap();
-        assert_eq!(claims["given_name"], "Alice");
+        .expect("valid credential")
     }
 
     #[test]
-    fn mdoc_round_trip() {
+    fn round_trip() {
         let kek = Kek::generate().unwrap();
-        let credential = make_mdoc();
-
-        let stored = encrypt_credential(&kek, &credential).unwrap();
-
-        // doc_type must be plaintext
-        assert!(
-            matches!(&stored.encrypted_payload, EncryptedPayload::MsoMdoc { doc_type, .. }
-            if doc_type == "org.iso.18013.5.1.mDL")
-        );
-
-        let decrypted = decrypt_credential(&kek, &stored).unwrap();
-        assert_eq!(decrypted.id, credential.id);
-        if let CredentialPayload::MsoMdoc(mdoc) = &decrypted.credential {
-            assert_eq!(mdoc.doc_type, "org.iso.18013.5.1.mDL");
-            assert_eq!(
-                mdoc.claims("org.iso.18013.5.1").unwrap()["given_name"],
-                "Alice"
-            );
-        } else {
-            panic!("expected MsoMdoc payload");
-        }
-    }
-
-    #[test]
-    fn w3c_vc_round_trip() {
-        let kek = Kek::generate().unwrap();
-        let credential = make_w3c_vc();
+        let credential = make_credential();
 
         let stored = encrypt_credential(&kek, &credential).unwrap();
 
         // credential_type must be plaintext
-        assert!(matches!(&stored.encrypted_payload,
-            EncryptedPayload::JwtVcJson { credential_type, .. }
-            if credential_type.contains(&"UniversityDegreeCredential".to_string())));
+        assert_eq!(
+            stored.credential_type.as_ref(),
+            "https://credentials.example.com/identity"
+        );
+        // Encrypted blob must contain nonce + ciphertext + tag
+        assert!(stored.encrypted_claims.len() > NONCE_LENGTH + 16);
 
         let decrypted = decrypt_credential(&kek, &stored).unwrap();
         assert_eq!(decrypted.id, credential.id);
-        if let CredentialPayload::JwtVcJson(vc) = &decrypted.credential {
-            assert_eq!(vc.token, "eyJ.eyJ.sig");
-        } else {
-            panic!("expected JwtVcJson payload");
-        }
+        assert_eq!(decrypted.claims["given_name"], "Alice");
     }
-
-    // ── Security tests ────────────────────────────────────────────────────────
 
     #[test]
     fn wrong_kek_fails() {
         let kek = Kek::generate().unwrap();
         let wrong = Kek::generate().unwrap();
-        let stored = encrypt_credential(&kek, &make_sd_jwt()).unwrap();
+        let stored = encrypt_credential(&kek, &make_credential()).unwrap();
         assert!(matches!(
             decrypt_credential(&wrong, &stored),
             Err(StoreError::Decryption(_))
@@ -555,16 +279,10 @@ mod tests {
     }
 
     #[test]
-    fn tampered_token_fails() {
+    fn tampered_claims_fails() {
         let kek = Kek::generate().unwrap();
-        let mut stored = encrypt_credential(&kek, &make_sd_jwt()).unwrap();
-        if let EncryptedPayload::DcSdJwt {
-            ref mut encrypted_token,
-            ..
-        } = stored.encrypted_payload
-        {
-            encrypted_token[NONCE_LENGTH] ^= 0xFF;
-        }
+        let mut stored = encrypt_credential(&kek, &make_credential()).unwrap();
+        stored.encrypted_claims[NONCE_LENGTH] ^= 0xFF;
         assert!(matches!(
             decrypt_credential(&kek, &stored),
             Err(StoreError::Decryption(_))
@@ -574,7 +292,7 @@ mod tests {
     #[test]
     fn tampered_dek_fails() {
         let kek = Kek::generate().unwrap();
-        let mut stored = encrypt_credential(&kek, &make_mdoc()).unwrap();
+        let mut stored = encrypt_credential(&kek, &make_credential()).unwrap();
         stored.encrypted_dek[NONCE_LENGTH] ^= 0xFF;
         assert!(matches!(
             decrypt_credential(&kek, &stored),
@@ -585,30 +303,21 @@ mod tests {
     #[test]
     fn each_credential_gets_unique_dek() {
         let kek = Kek::generate().unwrap();
-        let s1 = encrypt_credential(&kek, &make_sd_jwt()).unwrap();
-        let s2 = encrypt_credential(&kek, &make_sd_jwt()).unwrap();
+        let s1 = encrypt_credential(&kek, &make_credential()).unwrap();
+        let s2 = encrypt_credential(&kek, &make_credential()).unwrap();
         assert_ne!(s1.encrypted_dek, s2.encrypted_dek);
     }
 
     #[test]
     fn same_credential_encrypted_twice_has_distinct_ciphertext() {
         let kek = Kek::generate().unwrap();
-        let cred = make_sd_jwt();
+        let cred = make_credential();
         let s1 = encrypt_credential(&kek, &cred).unwrap();
         let s2 = encrypt_credential(&kek, &cred).unwrap();
-        if let (
-            EncryptedPayload::DcSdJwt {
-                encrypted_token: t1,
-                ..
-            },
-            EncryptedPayload::DcSdJwt {
-                encrypted_token: t2,
-                ..
-            },
-        ) = (&s1.encrypted_payload, &s2.encrypted_payload)
-        {
-            assert_ne!(t1, t2, "different nonces must produce different ciphertext");
-        }
+        assert_ne!(
+            s1.encrypted_claims, s2.encrypted_claims,
+            "different nonces must produce different ciphertext"
+        );
         // Both must still decrypt correctly
         assert_eq!(decrypt_credential(&kek, &s1).unwrap().id, cred.id);
         assert_eq!(decrypt_credential(&kek, &s2).unwrap().id, cred.id);

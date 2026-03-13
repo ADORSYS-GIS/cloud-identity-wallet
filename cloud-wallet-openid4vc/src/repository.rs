@@ -1,7 +1,7 @@
 //! Repository port: the async trait that all credential storage backends must implement.
 
 use crate::errors::StoreError;
-use crate::models::{Credential, CredentialId, CredentialStatus};
+use crate::models::{Credential, CredentialId, CredentialStatus, CredentialType};
 
 /// Filter parameters for querying credentials.
 #[derive(Debug, Default, Clone)]
@@ -15,8 +15,8 @@ pub struct CredentialFilter {
     /// Only return credentials with this lifecycle status.
     pub status: Option<CredentialStatus>,
 
-    /// Only return credentials with this credential configuration ID.
-    pub credential_configuration_id: Option<String>,
+    /// Only return credentials with this credential type.
+    pub credential_type: Option<CredentialType>,
 
     /// When set, exclude credentials whose `expires_at` is `Some` and in the past
     /// relative to this timestamp. Credentials with no expiry are always included.
@@ -41,8 +41,8 @@ impl CredentialFilter {
         {
             return false;
         }
-        if let Some(ref cfg_id) = self.credential_configuration_id
-            && &credential.credential_configuration_id != cfg_id
+        if let Some(ref cred_type) = self.credential_type
+            && &credential.credential_type != cred_type
         {
             return false;
         }
@@ -88,7 +88,7 @@ pub trait CredentialRepository<T = Credential>: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CredentialPayload, SdJwtCredential};
+    use crate::models::{Binding, Claims, CredentialMetadata, CredentialType};
     use serde_json::json;
     use time::{Duration, OffsetDateTime};
 
@@ -106,14 +106,13 @@ mod tests {
         Credential::new(
             issuer,
             subject,
+            CredentialType::new("https://credentials.example.com/id"),
+            Claims::new(json!({ "given_name": "Alice" })),
             issued_at,
             expires_at,
-            "identity_credential",
-            CredentialPayload::DcSdJwt(SdJwtCredential {
-                token: "header.payload.sig~".to_owned(),
-                vct: "https://credentials.example.com/id".to_owned(),
-                claims: json!({ "given_name": "Alice" }),
-            }),
+            None,
+            Binding,
+            CredentialMetadata {},
         )
         .map(|mut c| {
             c.status = status;
