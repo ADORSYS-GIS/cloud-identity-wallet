@@ -136,21 +136,13 @@ impl fmt::Debug for Error {
     }
 }
 
-/// The category of an [`struct@Error`].
+/// The category of an `Error`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Error)]
 #[non_exhaustive]
 pub enum ErrorKind {
     /// A credential failed structural validation (e.g. blank issuer, invalid dates).
     #[error("Invalid credential")]
     InvalidCredential,
-
-    /// A credential's claims did not conform to the expected JSON Schema.
-    #[error("Schema mismatch")]
-    SchemaMismatch,
-
-    /// A JSON Schema value could not be compiled into a validator.
-    #[error("Invalid JSON schema")]
-    InvalidSchema,
 
     /// An operation was attempted on a credential that has been revoked.
     #[error("Credential is revoked")]
