@@ -1,36 +1,13 @@
 [package]
 name = "cloud-wallet-openid4vc"
-version.workspace = true
+version = "0.1.0"
 license.workspace = true
-readme.workspace = true
 edition.workspace = true
-description = "OpenID4VCI credential domain model, schema definitions, validation logic, and credential storage"
-
-[features]
-default = []
-schema-validation = ["dep:jsonschema"]
-# Enable PostgreSQL-backed credential repository
-postgres = ["dep:sqlx"]
-# Enable credential encryption/decryption with per-record DEKs
-encryption = ["dep:cloud-wallet-crypto"]
 
 [dependencies]
 thiserror.workspace = true
+color-eyre.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = "1"
 uuid.workspace = true
 time.workspace = true
-jsonschema = { version = "0.29", optional = true }
-
-# Optional: PostgreSQL persistence
-sqlx = { version = "0.8", features = ["postgres", "json", "time", "runtime-tokio-rustls"], optional = true, default-features = false }
-
-# Optional: credential encryption
-cloud-wallet-crypto = { path = "../cloud-wallet-crypto", optional = true }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-
-[[example]]
-name = "live_credential_storage"
-required-features = ["postgres", "encryption"]
