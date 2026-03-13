@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 
 /// The credential format identifier string as defined by OpenID4VCI Appendix A.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum CredentialFormatIdentifier {
     /// IETF SD-JWT VC — wire value `"dc+sd-jwt"` (formerly `"vc+sd-jwt"`)
     #[serde(rename = "dc+sd-jwt")]
-    DcSdJwt,
+    VcSdJwt,
 
     /// ISO 18013-5 mdoc — wire value `"mso_mdoc"`
     #[serde(rename = "mso_mdoc")]
@@ -20,42 +21,26 @@ pub enum CredentialFormatIdentifier {
 /// Display metadata for a credential configuration (§12.2.4 `display` array).
 ///
 /// See <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-12.2.4>.
-///
-/// Note: the spec recommends that `background_color` and `text_color` values conform to
-/// CSS Color Module Level 3. Enforcement via the `validator` crate is deferred to a
-/// follow-up ticket.
+#[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialDisplay {
     pub name: String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub logo: Option<Logo>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub background_image: Option<Image>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>,
 }
 
 /// A logo image reference within [`CredentialDisplay`].
 ///
 /// Defined in OpenID4VCI §12.2.4.
+#[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Logo {
     /// A URI pointing to the logo image.
     pub uri: url::Url,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub alt_text: Option<String>,
 }
 
@@ -69,6 +54,7 @@ pub struct Image {
 }
 
 /// Issuer's description of a particular kind of credential it can issue.
+#[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialConfiguration {
     pub format: CredentialFormatIdentifier,
@@ -82,7 +68,6 @@ pub struct CredentialConfiguration {
     #[serde(default)]
     pub display: Vec<CredentialDisplay>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
 }
 
@@ -99,7 +84,7 @@ mod tests {
 
     fn sd_jwt_config() -> CredentialConfiguration {
         CredentialConfiguration {
-            format: CredentialFormatIdentifier::DcSdJwt,
+            format: CredentialFormatIdentifier::VcSdJwt,
             cryptographic_binding_methods_supported: vec!["jwk".to_owned()],
             credential_signing_alg_values_supported: vec!["ES256".to_owned()],
             display: vec![CredentialDisplay {
@@ -130,7 +115,7 @@ mod tests {
     #[test]
     fn format_identifier_serializes_to_spec_wire_values() -> Result<(), serde_json::Error> {
         assert_eq!(
-            serde_json::to_string(&CredentialFormatIdentifier::DcSdJwt)?,
+            serde_json::to_string(&CredentialFormatIdentifier::VcSdJwt)?,
             r#""dc+sd-jwt""#
         );
         assert_eq!(
@@ -147,7 +132,7 @@ mod tests {
     #[test]
     fn format_identifier_deserializes_from_spec_wire_values() -> Result<(), serde_json::Error> {
         let sd: CredentialFormatIdentifier = serde_json::from_str(r#""dc+sd-jwt""#)?;
-        assert_eq!(sd, CredentialFormatIdentifier::DcSdJwt);
+        assert_eq!(sd, CredentialFormatIdentifier::VcSdJwt);
 
         let mdoc: CredentialFormatIdentifier = serde_json::from_str(r#""mso_mdoc""#)?;
         assert_eq!(mdoc, CredentialFormatIdentifier::MsoMdoc);
@@ -164,7 +149,7 @@ mod tests {
         let config = sd_jwt_config();
         let json = serde_json::to_string(&config)?;
         let restored: CredentialConfiguration = serde_json::from_str(&json)?;
-        assert_eq!(restored.format, CredentialFormatIdentifier::DcSdJwt);
+        assert_eq!(restored.format, CredentialFormatIdentifier::VcSdJwt);
         assert_eq!(restored.scope, Some("identity_credential".to_owned()));
         Ok(())
     }
@@ -191,7 +176,6 @@ mod tests {
         );
         assert_eq!(display["background_color"], "#12107c");
         assert_eq!(display["text_color"], "#FFFFFF");
-        // None fields must be omitted
         assert!(display.get("logo").is_none());
         assert!(display.get("background_image").is_none());
         Ok(())

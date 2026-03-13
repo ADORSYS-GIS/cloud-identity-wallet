@@ -2,10 +2,12 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::errors::{Error, ErrorKind};
-use crate::schema::CredentialFormatIdentifier;
-use crate::validation::Validatable;
 
-// ── CredentialId ─────────────────────────────────────────────────────────────
+/// Structural self-validation that a type can perform without external context.
+pub trait Validatable {
+    type Error;
+    fn validate(&self) -> Result<(), Self::Error>;
+}
 
 /// Unique identifier for a [`Credential`] stored in the wallet.
 ///
@@ -39,16 +41,11 @@ impl AsRef<str> for CredentialId {
     }
 }
 
-// ── CredentialType ────────────────────────────────────────────────────────────
-
 /// The type URI of a credential, as declared by the issuer.
 ///
 /// For SD-JWT VCs this corresponds to the `vct` claim.
 /// For W3C VC JWTs this corresponds to the `type` array in the credential body.
 /// For mdoc this corresponds to the `docType` field.
-///
-/// Distinct from [`CredentialMetadata::credential_configuration_id`], which is a
-/// wallet-local key into the issuer's `credential_configurations_supported` map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialType(String);
 
@@ -70,8 +67,6 @@ impl AsRef<str> for CredentialType {
     }
 }
 
-// ── Claims ────────────────────────────────────────────────────────────────────
-
 /// The normalized, format-agnostic claim set of a credential.
 ///
 /// Claims are extracted from the original encoded form at ingestion time and
@@ -83,9 +78,6 @@ pub struct Claims(serde_json::Value);
 
 impl Claims {
     /// Constructs a [`Claims`] object from a JSON value.
-    ///
-    /// The value should be a JSON object (`{…}`). Passing an array or scalar is
-    /// not rejected here but will produce unexpected results in downstream consumers.
     pub fn new(value: serde_json::Value) -> Self {
         Self(value)
     }
@@ -101,6 +93,12 @@ impl Claims {
     }
 }
 
+impl From<serde_json::Value> for Claims {
+    fn from(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
 impl std::ops::Index<&str> for Claims {
     type Output = serde_json::Value;
 
@@ -109,15 +107,13 @@ impl std::ops::Index<&str> for Claims {
     }
 }
 
-// ── StatusReference ───────────────────────────────────────────────────────────
-
 /// A pointer to an issuer-maintained status list entry for this credential.
 ///
 /// Modelled on the Token Status List draft (draft-ietf-oauth-status-list).
 /// The wallet uses this reference to poll or resolve the current status of the
 /// credential from the issuer's infrastructure.
 ///
-/// Distinct from [`CredentialLifecycle::status`], which is the wallet's *derived*
+/// Distinct from [`CredentialStatus`], which is the wallet's *derived*
 /// view of the credential's usability after resolving the reference.
 #[derive(Debug, Clone)]
 pub struct StatusReference {
@@ -128,64 +124,15 @@ pub struct StatusReference {
     pub index: u64,
 }
 
-// ── Binding ───────────────────────────────────────────────────────────────────
-
 /// Holder key binding information for a credential.
-///
-/// Represents proof-of-possession material that binds the credential to a
-/// specific holder key. The concrete key representation (JWK, DID key, etc.)
-/// is out of scope for this ticket and will be introduced when the
-/// cryptographic engine integration is wired up.
 #[derive(Debug, Clone)]
-pub struct Binding {
-    /// The holder's public key, represented as a raw JWK JSON object.
-    ///
-    /// `None` if the credential is a bearer credential with no holder binding.
-    pub holder_key: Option<serde_json::Value>,
-}
-
-impl Binding {
-    /// Constructs an unbound (bearer) binding.
-    pub fn none() -> Self {
-        Self { holder_key: None }
-    }
-}
-
-// ── CredentialMetadata ────────────────────────────────────────────────────────
+pub struct Binding;
 
 /// Wallet-local metadata about a stored credential.
-///
-/// Carries information that is not intrinsic to the credential itself but is
-/// needed by the wallet to manage, display, and re-encode it.
 #[derive(Debug, Clone)]
-pub struct CredentialMetadata {
-    /// Key into the issuer's `credential_configurations_supported` map,
-    /// retained for re-encoding and display-hint lookup.
-    pub credential_configuration_id: String,
-
-    /// The format in which this credential was originally issued.
-    ///
-    /// Retained so the wallet can select the correct [`CredentialFormat`] adapter
-    /// when re-encoding for presentation.
-    ///
-    /// [`CredentialFormat`]: crate::format::CredentialFormat
-    pub format: CredentialFormatIdentifier,
-
-    /// The original encoded credential token, preserved for lossless re-encoding
-    /// until a full format adapter is available.
-    ///
-    /// For SD-JWT VCs this is the full compact serialization including disclosures.
-    /// For W3C VC JWTs this is the JWT string.
-    /// For mdoc this is the base64url-encoded issuer-signed structure.
-    pub raw_credential: String,
-}
-
-// ── CredentialLifecycle ───────────────────────────────────────────────────────
+pub struct CredentialMetadata {}
 
 /// The wallet's local lifecycle view of a stored credential.
-///
-/// Tracks the wallet-derived usability status and the issuer-provided status
-/// list reference used to keep that status current.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialStatus {
     /// The credential is valid and usable.
@@ -195,8 +142,6 @@ pub enum CredentialStatus {
     /// The credential has been temporarily suspended by the issuer.
     Suspended,
 }
-
-// ── Credential ────────────────────────────────────────────────────────────────
 
 /// The wallet's canonical, encoding-agnostic record for a stored credential.
 ///
@@ -237,7 +182,7 @@ pub struct Credential {
 
     /// Holder key binding information.
     ///
-    /// `None`/[`Binding::none()`] for bearer credentials.
+    /// Use `Binding` for bearer credentials.
     pub binding: Binding,
 
     /// Wallet-local metadata needed for management and re-encoding.
@@ -374,12 +319,8 @@ mod tests {
     use serde_json::json;
     use time::Duration;
 
-    fn sd_jwt_metadata() -> CredentialMetadata {
-        CredentialMetadata {
-            credential_configuration_id: "identity_credential".to_owned(),
-            format: CredentialFormatIdentifier::DcSdJwt,
-            raw_credential: "header.payload.sig~disclosure~".to_owned(),
-        }
+    fn metadata() -> CredentialMetadata {
+        CredentialMetadata {}
     }
 
     fn sd_jwt_credential() -> Result<Credential, Error> {
@@ -391,8 +332,8 @@ mod tests {
             OffsetDateTime::now_utc(),
             Some(OffsetDateTime::now_utc() + Duration::days(365)),
             None,
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )
     }
 
@@ -405,12 +346,8 @@ mod tests {
             OffsetDateTime::now_utc(),
             Some(OffsetDateTime::now_utc() + Duration::days(365)),
             None,
-            Binding::none(),
-            CredentialMetadata {
-                credential_configuration_id: "university_degree".to_owned(),
-                format: CredentialFormatIdentifier::JwtVcJson,
-                raw_credential: "header.payload.sig".to_owned(),
-            },
+            Binding,
+            metadata(),
         )
     }
 
@@ -423,12 +360,8 @@ mod tests {
             OffsetDateTime::now_utc(),
             Some(OffsetDateTime::now_utc() + Duration::days(365)),
             None,
-            Binding::none(),
-            CredentialMetadata {
-                credential_configuration_id: "mdl_credential".to_owned(),
-                format: CredentialFormatIdentifier::MsoMdoc,
-                raw_credential: "base64url-mso".to_owned(),
-            },
+            Binding,
+            metadata(),
         )
     }
 
@@ -458,8 +391,8 @@ mod tests {
             OffsetDateTime::now_utc(),
             None,
             None,
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )
         .expect_err("expected an error for a blank issuer");
 
@@ -479,8 +412,8 @@ mod tests {
             OffsetDateTime::now_utc(),
             None,
             None,
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )
         .expect_err("expected an error for a blank subject");
 
@@ -501,8 +434,8 @@ mod tests {
             now,
             Some(now - Duration::seconds(1)),
             None,
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )
         .expect_err("expected an error when expires_at is before issued_at");
 
@@ -523,8 +456,8 @@ mod tests {
                 OffsetDateTime::now_utc(),
                 None,
                 None,
-                Binding::none(),
-                sd_jwt_metadata(),
+                Binding,
+                metadata(),
             )
             .is_ok()
         );
@@ -589,30 +522,13 @@ mod tests {
         Ok(())
     }
 
-    // Format and metadata
+    // All three credential types construct correctly
 
     #[test]
-    fn all_three_formats_construct() -> Result<(), Error> {
+    fn all_three_types_construct() -> Result<(), Error> {
         assert!(sd_jwt_credential()?.is_usable());
         assert!(w3c_credential()?.is_usable());
         assert!(mdoc_credential()?.is_usable());
-        Ok(())
-    }
-
-    #[test]
-    fn metadata_format_is_preserved() -> Result<(), Error> {
-        assert_eq!(
-            sd_jwt_credential()?.metadata.format,
-            CredentialFormatIdentifier::DcSdJwt
-        );
-        assert_eq!(
-            w3c_credential()?.metadata.format,
-            CredentialFormatIdentifier::JwtVcJson
-        );
-        assert_eq!(
-            mdoc_credential()?.metadata.format,
-            CredentialFormatIdentifier::MsoMdoc
-        );
         Ok(())
     }
 
@@ -634,13 +550,10 @@ mod tests {
     }
 
     #[test]
-    fn raw_credential_preserved_in_metadata() -> Result<(), Error> {
-        let cred = sd_jwt_credential()?;
-        assert_eq!(
-            cred.metadata.raw_credential,
-            "header.payload.sig~disclosure~"
-        );
-        Ok(())
+    fn claims_from_json_value() {
+        let value = json!({ "sub": "user-1" });
+        let claims = Claims::from(value.clone());
+        assert_eq!(claims.as_value(), &value);
     }
 
     // Status reference
@@ -658,8 +571,8 @@ mod tests {
                 status_list_url: "https://issuer.example.com/status/1".to_owned(),
                 index: 42,
             }),
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )?;
         let sr = cred
             .status_reference
@@ -681,8 +594,8 @@ mod tests {
             OffsetDateTime::now_utc() - Duration::days(10),
             Some(OffsetDateTime::now_utc() - Duration::days(1)),
             None,
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )?;
         cred.status = CredentialStatus::Active;
         assert!(cred.is_expired());
@@ -700,11 +613,38 @@ mod tests {
             OffsetDateTime::now_utc(),
             None,
             None,
-            Binding::none(),
-            sd_jwt_metadata(),
+            Binding,
+            metadata(),
         )?;
         assert!(!cred.is_expired());
         assert!(cred.is_usable());
         Ok(())
+    }
+
+    // Validatable
+
+    #[test]
+    fn validate_passes_for_valid_credential() -> Result<(), Box<dyn std::error::Error>> {
+        let cred = sd_jwt_credential()?;
+        assert!(cred.validate().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn validate_catches_blank_issuer() {
+        let cred = Credential {
+            id: CredentialId::new(),
+            issuer: "  ".to_owned(),
+            subject: "user-1234".to_owned(),
+            credential_type: CredentialType::new("vct"),
+            claims: Claims::new(json!({})),
+            issued_at: OffsetDateTime::now_utc(),
+            expires_at: None,
+            status_reference: None,
+            binding: Binding,
+            metadata: metadata(),
+            status: CredentialStatus::Active,
+        };
+        assert!(cred.validate().is_err());
     }
 }

@@ -2,7 +2,7 @@
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 license.workspace = true
-readme.workspace = true
+readme = "README.md"
 edition.workspace = true
 
 [dependencies]
@@ -10,6 +10,7 @@ thiserror.workspace = true
 color-eyre.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = "1"
+serde_with = "3"
 uuid.workspace = true
 time.workspace = true
 url.workspace = true
