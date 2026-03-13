@@ -1,7 +1,7 @@
 # General rules for the project
 
 ## Knowledge Base
-Before reviewing PRs, consult the project knowledge summary at `docs/project-knowledge.md` for:
+Before reviewing PRs, consult the project knowledge summary at `docs/knowledge/project-knowledge.md` for:
 - OpenID4VCI/OpenID4VP spec details
 - Credential format handling (vc+sd-jwt, mso_mdoc, jwt_vc_json)
 - Architecture patterns and scope boundaries

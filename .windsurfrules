@@ -10,7 +10,7 @@
 | `docs/knowledge/coding-conventions.md` | Rust naming, ownership patterns, error handling, feature gates |
 | `docs/knowledge/development-setup.md` | Prerequisites, linker setup, build/test commands |
 | `docs/knowledge/api-reference.md` | OpenID4VCI/OpenID4VP endpoints, credential formats, error codes |
-| `docs/project-knowledge.md` | PR review checklist, EU/EUDI context |
+| `docs/knowledge/project-knowledge.md` | PR review checklist, EU/EUDI context |
 
 ## Tech Stack
 - **Languages:** rust
