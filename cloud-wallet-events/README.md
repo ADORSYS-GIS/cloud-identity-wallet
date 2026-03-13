@@ -53,14 +53,14 @@ consumer.subscribe(SubscriptionConfig::default(), handler).await?;
 
 ## Well-known Event Types
 
-| Constant                          | Value                    |
-|-----------------------------------|--------------------------|
-| `EventType::CREDENTIAL_STORED`    | `"credential.stored"`    |
-| `EventType::CREDENTIAL_DELETED`   | `"credential.deleted"`   |
+| Constant                            | Value                      |
+|-------------------------------------|----------------------------|
+| `EventType::CREDENTIAL_STORED`      | `"credential.stored"`      |
+| `EventType::CREDENTIAL_DELETED`     | `"credential.deleted"`     |
 | `EventType::PRESENTATION_SUBMITTED` | `"presentation.submitted"` |
-| `EventType::KEY_CREATED`          | `"key.created"`          |
-| `EventType::KEY_ROTATED`          | `"key.rotated"`          |
-| `EventType::KEY_REVOKED`          | `"key.revoked"`          |
+| `EventType::KEY_CREATED`            | `"key.created"`            |
+| `EventType::KEY_ROTATED`            | `"key.rotated"`            |
+| `EventType::KEY_REVOKED`            | `"key.revoked"`            |
 
 ## Testing
 
