@@ -388,7 +388,7 @@ impl EventConsumer for KafkaConsumer {
     ///
     /// # Errors
     ///
-    ///[`EventError::ConfigurationError`] if the underlying Kafka
+    ///[`EventError::Configuration`] if the underlying Kafka
     /// consumer client cannot be created (e.g. the broker is unreachable or
     /// a topic does not exist).
     async fn subscribe(
