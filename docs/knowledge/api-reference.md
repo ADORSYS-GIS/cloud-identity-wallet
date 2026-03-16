@@ -47,7 +47,7 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
       "issuer_state": "opaque-state-string"
     },
     "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
-      "pre_authorized_code": "short-lived-code",
+      "pre-authorized_code": "short-lived-code",
       "tx_code": {
         "input_mode": "numeric",
         "length": 4,
@@ -62,14 +62,14 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `credential_issuer` | Yes | URL of the Credential Issuer |
+| `credential_issuer` | Yes | HTTPS URL of the Credential Issuer (per [Section 11.2.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-issuer-identifie)) |
 | `credential_configuration_ids` | Yes | Array of credential configuration IDs to offer |
 | `grants` | No | Object with supported grant types |
 
 **Grant Types:**
 
 - `authorization_code`: Standard OAuth 2.0 flow with optional `issuer_state`
-- `urn:ietf:params:oauth:grant-type:pre-authorized_code`: Pre-authorized flow with required `pre_authorized_code` and optional `tx_code`
+- `urn:ietf:params:oauth:grant-type:pre-authorized_code`: Pre-authorized flow with required `pre-authorized_code` and optional `tx_code`
 
 **Key Concepts:**
 
