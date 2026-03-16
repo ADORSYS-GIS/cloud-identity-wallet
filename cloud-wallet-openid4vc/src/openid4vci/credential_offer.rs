@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::errors::{Error, ErrorKind};
 
@@ -99,12 +101,12 @@ pub struct AuthorizationCodeGrant {
 /// Parameters for the pre-authorized code grant type as defined in
 /// [OpenID4VCI Section 4.1.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-offer-parameters).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub struct PreAuthorizedCodeGrant {
     /// The code representing the Credential Issuer's authorization for the Wallet
     /// to obtain Credentials of a certain type.
     ///
     /// This code MUST be short lived and single use.
+    #[serde(rename = "pre-authorized_code")]
     pub pre_authorized_code: String,
 
     /// Transaction code requirements.
@@ -204,14 +206,24 @@ impl CredentialOffer {
     /// # Errors
     ///
     /// Returns an error if:
-    /// - `credential_issuer` is empty
+    /// - `credential_issuer` is not a valid HTTPS URL
     /// - `credential_configuration_ids` is empty
     /// - Any grant has invalid parameters
     pub fn validate(&self) -> Result<(), Error> {
-        if self.credential_issuer.is_empty() {
+        let parsed = Url::parse(&self.credential_issuer).map_err(|_| {
+            Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!(
+                    "credential_issuer '{}' is not a valid URL",
+                    self.credential_issuer
+                ),
+            )
+        })?;
+
+        if parsed.scheme() != "https" {
             return Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
-                "credential_issuer is required",
+                "credential_issuer must use the https scheme",
             ));
         }
 
@@ -247,28 +259,11 @@ impl CredentialOffer {
     }
 }
 
-/// Simple URL percent-decoding (to avoid adding a urlencoding dependency).
+/// URL percent-decoding using `percent_encoding` crate.
+///
+/// Properly handles UTF-8 encoded bytes (e.g., `%C3%A9` for `é`).
 fn urlencoding_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            } else {
-                result.push('%');
-                result.push_str(&hex);
-            }
-        } else if c == '+' {
-            result.push(' ');
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
+    percent_decode_str(s).decode_utf8_lossy().into_owned()
 }
 
 /// Source of a credential offer.
@@ -341,7 +336,7 @@ mod tests {
             "credential_configuration_ids": ["UniversityDegreeCredential", "org.iso.18013.5.1.mDL"],
             "grants": {
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
-                    "pre_authorized_code": "oaKazRN8I0IbtZ0C7JuMn5",
+                    "pre-authorized_code": "oaKazRN8I0IbtZ0C7JuMn5",
                     "tx_code": {
                         "length": 4,
                         "input_mode": "numeric",
@@ -567,13 +562,71 @@ mod tests {
     }
 
     #[test]
+    fn serialize_pre_authorized_code_with_hyphen() {
+        let grant = PreAuthorizedCodeGrant {
+            pre_authorized_code: "test-code".to_string(),
+            tx_code: None,
+            authorization_server: None,
+        };
+
+        let json = serde_json::to_string(&grant).expect("Failed to serialize");
+
+        // Must serialize with hyphen, not underscore
+        assert!(json.contains("\"pre-authorized_code\":\"test-code\""));
+        assert!(!json.contains("pre_authorized_code"));
+    }
+
+    #[test]
+    fn validate_http_url_rejected() {
+        let offer = CredentialOffer {
+            credential_issuer: "http://issuer.example.com".to_string(), // http, not https
+            credential_configuration_ids: vec!["MyCredential".to_string()],
+            grants: None,
+        };
+
+        let result = offer.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("https scheme"));
+    }
+
+    #[test]
+    fn validate_invalid_url_rejected() {
+        let offer = CredentialOffer {
+            credential_issuer: "not-a-valid-url".to_string(),
+            credential_configuration_ids: vec!["MyCredential".to_string()],
+            grants: None,
+        };
+
+        let result = offer.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("not a valid URL"));
+    }
+
+    #[test]
+    fn url_decode_utf8() {
+        // Test UTF-8 decoding: %C3%A9 = é (UTF-8 encoded as 0xC3 0xA9)
+        let encoded = "%C3%A9";
+        let decoded = urlencoding_decode(encoded);
+        assert_eq!(decoded, "é");
+
+        // Test in context of credential offer URL
+        let description = "Code%20for%20%C3%A9%C3%A8%C3%AA"; // "Code for éèê"
+        let decoded = urlencoding_decode(description);
+        assert_eq!(decoded, "Code for éèê");
+    }
+
+    #[test]
     fn empty_tx_code_allowed() {
         let json = r#"{
             "credential_issuer": "https://issuer.example.com",
             "credential_configuration_ids": ["MyCredential"],
             "grants": {
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
-                    "pre_authorized_code": "code123",
+                    "pre-authorized_code": "code123",
                     "tx_code": {}
                 }
             }
