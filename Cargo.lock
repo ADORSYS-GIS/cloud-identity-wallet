@@ -374,6 +374,7 @@ version = "0.1.0"
 dependencies = [
  "cloud-wallet-crypto",
  "color-eyre",
+ "futures",
  "serde",
  "serde_json",
  "sqlx",

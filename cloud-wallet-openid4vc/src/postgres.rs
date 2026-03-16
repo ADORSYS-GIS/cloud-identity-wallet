@@ -23,24 +23,7 @@ fn storage_err(err: sqlx::Error) -> StoreError {
     StoreError::Storage(Box::new(err))
 }
 
-fn status_str(s: &CredentialStatus) -> &'static str {
-    match s {
-        CredentialStatus::Active => "active",
-        CredentialStatus::Revoked => "revoked",
-        CredentialStatus::Suspended => "suspended",
-    }
-}
-
-fn parse_status(s: &str) -> Result<CredentialStatus, sqlx::Error> {
-    match s {
-        "active" => Ok(CredentialStatus::Active),
-        "revoked" => Ok(CredentialStatus::Revoked),
-        "suspended" => Ok(CredentialStatus::Suspended),
-        other => Err(sqlx::Error::Decode(
-            format!("unknown credential status: {other}").into(),
-        )),
-    }
-}
+// Use CredentialStatus::to_string() and CredentialStatus::from_str() directly.
 
 /// Map a Postgres row back to a [`StoredCredential`].
 fn row_to_stored(row: &sqlx::postgres::PgRow) -> Result<StoredCredential, sqlx::Error> {
@@ -68,7 +51,10 @@ fn row_to_stored(row: &sqlx::postgres::PgRow) -> Result<StoredCredential, sqlx::
         credential_type: CredentialType::new(row.try_get::<String, _>("credential_type")?),
         issued_at: row.try_get("issued_at")?,
         expires_at: row.try_get("expires_at")?,
-        status: parse_status(&row.try_get::<String, _>("status")?)?,
+        status: row
+            .try_get::<String, _>("status")?
+            .parse::<CredentialStatus>()
+            .map_err(|e| sqlx::Error::Decode(e.into()))?,
         status_reference,
         binding: Binding,
         metadata: CredentialMetadata {},
@@ -89,6 +75,12 @@ pub struct PostgresCredentialRepository {
 
 impl PostgresCredentialRepository {
     /// Connect and run the embedded migration DDL.
+    ///
+    /// # Limitation
+    /// This implementation runs `CREATE TABLE IF NOT EXISTS` on every startup.
+    /// While sufficient for the current single-migration prototype, it does not
+    /// support versioned migrations or schema evolution. A more robust migration
+    /// runner should be considered for production use.
     pub async fn new(pool: PgPool) -> Result<Self, StoreError> {
         sqlx::raw_sql(MIGRATION_SQL)
             .execute(&pool)
@@ -125,7 +117,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
         .bind(cred.credential_type.as_ref())
         .bind(cred.issued_at)
         .bind(cred.expires_at)
-        .bind(status_str(&cred.status))
+        .bind(cred.status.to_string())
         .bind(cred.status_reference.as_ref().map(|s| &s.status_list_url))
         .bind(cred.status_reference.as_ref().map(|s| s.index as i64))
         .bind(&cred.encrypted_dek)
@@ -213,7 +205,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
             query = query.bind(subject);
         }
         if let Some(ref status) = filter.status {
-            query = query.bind(status_str(status));
+            query = query.bind(status.to_string());
         }
         if let Some(ref cred_type) = filter.credential_type {
             query = query.bind(cred_type.as_ref());
@@ -251,7 +243,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
         .bind(cred.credential_type.as_ref())
         .bind(cred.issued_at)
         .bind(cred.expires_at)
-        .bind(status_str(&cred.status))
+        .bind(cred.status.to_string())
         .bind(cred.status_reference.as_ref().map(|s| &s.status_list_url))
         .bind(cred.status_reference.as_ref().map(|s| s.index as i64))
         .bind(&cred.encrypted_dek)

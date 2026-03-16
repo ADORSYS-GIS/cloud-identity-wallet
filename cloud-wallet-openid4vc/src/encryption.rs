@@ -29,6 +29,7 @@ use crate::repository::CredentialFilter;
 ///
 /// Load from a KMS, hardware token, or environment variable.
 /// The underlying key bytes are zeroized on drop.
+#[derive(Clone)]
 pub struct Kek(Key);
 
 impl Kek {

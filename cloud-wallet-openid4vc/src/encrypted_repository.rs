@@ -58,9 +58,11 @@ impl<R: CredentialRepository<StoredCredential>> CredentialRepository<Credential>
 
     async fn find_all(&self) -> Result<Vec<Credential>, StoreError> {
         let all = self.inner.find_all().await?;
-        all.iter()
-            .map(|s| decrypt_credential(&self.kek, s))
-            .collect()
+        let tasks = all.into_iter().map(|s| {
+            let kek = self.kek.clone();
+            async move { decrypt_credential(&kek, &s) }
+        });
+        futures::future::try_join_all(tasks).await
     }
 
     async fn find_by_filter(
@@ -70,10 +72,11 @@ impl<R: CredentialRepository<StoredCredential>> CredentialRepository<Credential>
         // Filtering is pushed down to the inner repo (SQL for Postgres;
         // plaintext-field matching for in-memory). Decryption happens after.
         let matched = self.inner.find_by_filter(filter).await?;
-        matched
-            .iter()
-            .map(|s| decrypt_credential(&self.kek, s))
-            .collect()
+        let tasks = matched.into_iter().map(|s| {
+            let kek = self.kek.clone();
+            async move { decrypt_credential(&kek, &s) }
+        });
+        futures::future::try_join_all(tasks).await
     }
 
     async fn update(&self, credential: Credential) -> Result<(), StoreError> {

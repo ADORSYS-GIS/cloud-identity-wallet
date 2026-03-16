@@ -151,7 +151,8 @@ pub struct Binding;
 pub struct CredentialMetadata {}
 
 /// The wallet's local lifecycle view of a stored credential.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CredentialStatus {
     /// The credential is valid and usable.
     Active,
@@ -159,6 +160,29 @@ pub enum CredentialStatus {
     Revoked,
     /// The credential has been temporarily suspended by the issuer.
     Suspended,
+}
+
+impl std::fmt::Display for CredentialStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active => write!(f, "active"),
+            Self::Revoked => write!(f, "revoked"),
+            Self::Suspended => write!(f, "suspended"),
+        }
+    }
+}
+
+impl std::str::FromStr for CredentialStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "active" => Ok(Self::Active),
+            "revoked" => Ok(Self::Revoked),
+            "suspended" => Ok(Self::Suspended),
+            other => Err(format!("unknown credential status: {other}")),
+        }
+    }
 }
 
 /// The wallet's canonical, encoding-agnostic record for a stored credential.
