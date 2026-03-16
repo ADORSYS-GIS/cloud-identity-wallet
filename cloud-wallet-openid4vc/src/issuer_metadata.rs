@@ -118,7 +118,7 @@ pub struct CredentialDisplay {
 /// corresponding value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProofTypeMetadata {
-    /// Non-empty list of signing algorithm identifiers (JWA / COSE) that the
+    /// Non-empty list of signing algorithm identifiers (JWA / CASE) that the
     /// issuer accepts for this proof type.
     pub proof_signing_alg_values_supported: Vec<String>,
 }
@@ -261,7 +261,7 @@ pub struct CredentialConfiguration {
     pub scope: Option<String>,
 
     /// Cryptographic key binding methods supported by the issuer for this
-    /// credential (e.g. `["jwk"]`, `["cose_key"]`, `["did:example"]`).
+    /// credential (e.g. `["jwk"]`, `["case_key"]`, `["did:example"]`).
     ///
     /// When present, `proof_types_supported` **MUST** also be present.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -755,7 +755,7 @@ mod tests {
                 "mDL": {
                     "format": "mso_mdoc",
                     "doctype": "org.iso.18013.5.1.mDL",
-                    "cryptographic_binding_methods_supported": ["cose_key"],
+                    "cryptographic_binding_methods_supported": ["case_key"],
                     "credential_signing_alg_values_supported": ["ES256"],
                     "proof_types_supported": {
                         "jwt": { "proof_signing_alg_values_supported": ["ES256"] }
