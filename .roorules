@@ -1,0 +1,21 @@
+# General rules for the project
+
+## Knowledge Base
+Before reviewing PRs, consult the project knowledge summary at `docs/knowledge/project-knowledge.md` for:
+- OpenID4VCI/OpenID4VP spec details
+- Credential format handling (vc+sd-jwt, mso_mdoc, jwt_vc_json)
+- Architecture patterns and scope boundaries
+- Validation and error handling patterns
+
+## PR Review rules
+- when reviewing a PR, read the the issues description and title, then compare implementation based on these desciption and specs
+- if the implementation doesn't match the description or if implementation is not according to the specs or if there are any issues, request changes, 
+- always be polite and respectful
+- if the implementation is good, approve it
+- if the implementation is good but could be improved, request changes
+- always suggest improvements, never just criticize
+- always be clear and direct when requesting changes if possible show snippets of code to support your request/reviewing
+- always be constructive and helpful
+- always highlight the specific section of the code need changes if possible with what to do instead code format
+- always update the knowledge base if you find something missing or incorrect
+- always review as if you are posing a question and never be review with complete certainty
