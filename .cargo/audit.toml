@@ -1,5 +1,11 @@
 [advisories]
-ignore = [] # advisory IDs to ignore
+ignore = [
+  # RUSTSEC-2023-0071: Marvin Attack potential key recovery via timing sidechannels in `rsa`.
+  # No fixed upgrade is available upstream. This advisory is triggered by `sqlx-mysql`, a
+  # transitive dependency of `sqlx`, which is never actually used in this project (only
+  # PostgreSQL is used). The vulnerable MySQL RSA code path is therefore never executed.
+  "RUSTSEC-2023-0071",
+]
 
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"
