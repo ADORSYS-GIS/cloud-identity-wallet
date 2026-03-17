@@ -4,6 +4,10 @@ version = "0.1.0"
 license.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+http = ["reqwest"]
+
 [dependencies]
 thiserror.workspace = true
 color-eyre.workspace = true
@@ -11,3 +15,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = "1"
 uuid.workspace = true
 time.workspace = true
+url.workspace = true
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
