@@ -7,9 +7,10 @@
 //! [`EncryptingRepository`]: crate::encrypted_repository::EncryptingRepository
 
 use sqlx_core::error::Error as SqlxError;
-use sqlx_core::query::QueryAs;
+use sqlx_core::query::query;
+use sqlx_core::raw_sql::raw_sql;
 use sqlx_core::row::Row;
-use sqlx_postgres::{PgPool, PgRow, Postgres};
+use sqlx_postgres::{PgPool, PgRow};
 
 use crate::{
     config::PostgresConfig,
@@ -85,7 +86,7 @@ impl PostgresCredentialRepository {
     /// support versioned migrations or schema evolution. A more robust migration
     /// runner should be considered for production use.
     pub async fn new(pool: PgPool) -> Result<Self, StoreError> {
-        sqlx_core::raw_sql(MIGRATION_SQL)
+        raw_sql(MIGRATION_SQL)
             .execute(&pool)
             .await
             .map_err(storage_err)?;
@@ -101,7 +102,7 @@ impl PostgresCredentialRepository {
 
 impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     async fn store(&self, cred: StoredCredential) -> Result<(), StoreError> {
-        sqlx_core::query(
+        query(
             r#"
             INSERT INTO credentials (
                 id, issuer, subject, credential_type, issued_at, expires_at,
@@ -138,7 +139,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     }
 
     async fn find_by_id(&self, id: &CredentialId) -> Result<StoredCredential, StoreError> {
-        let row = sqlx_core::query("SELECT * FROM credentials WHERE id = $1")
+        let row = query("SELECT * FROM credentials WHERE id = $1")
             .bind(id.as_ref())
             .fetch_optional(&self.pool)
             .await
@@ -151,7 +152,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     }
 
     async fn find_all(&self) -> Result<Vec<StoredCredential>, StoreError> {
-        let rows = sqlx_core::query("SELECT * FROM credentials")
+        let rows = query("SELECT * FROM credentials")
             .fetch_all(&self.pool)
             .await
             .map_err(storage_err)?;
@@ -198,33 +199,33 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
         };
 
         let sql = format!("SELECT * FROM credentials {where_clause}");
-        let mut query = sqlx_core::query(&sql);
+        let mut q = query(&sql);
 
         // Bind values in the same order the placeholders were inserted.
         if let Some(ref issuer) = filter.issuer {
-            query = query.bind(issuer);
+            q = q.bind(issuer);
         }
         if let Some(ref subject) = filter.subject {
-            query = query.bind(subject);
+            q = q.bind(subject);
         }
         if let Some(ref status) = filter.status {
-            query = query.bind(status.to_string());
+            q = q.bind(status.to_string());
         }
         if let Some(ref cred_type) = filter.credential_type {
-            query = query.bind(cred_type.as_ref());
+            q = q.bind(cred_type.as_ref());
         }
         if let Some(active_at) = filter.active_at {
-            query = query.bind(active_at);
+            q = q.bind(active_at);
         }
 
-        let rows = query.fetch_all(&self.pool).await.map_err(storage_err)?;
+        let rows = q.fetch_all(&self.pool).await.map_err(storage_err)?;
         rows.iter()
             .map(|r| row_to_stored(r).map_err(storage_err))
             .collect()
     }
 
     async fn update(&self, cred: StoredCredential) -> Result<(), StoreError> {
-        let result = sqlx::query(
+        let result = query(
             r#"
             UPDATE credentials SET
                 issuer            = $2,
@@ -263,7 +264,7 @@ impl CredentialRepository<StoredCredential> for PostgresCredentialRepository {
     }
 
     async fn delete(&self, id: &CredentialId) -> Result<(), StoreError> {
-        let result = sqlx_core::query("DELETE FROM credentials WHERE id = $1")
+        let result = query("DELETE FROM credentials WHERE id = $1")
             .bind(id.as_ref())
             .execute(&self.pool)
             .await
