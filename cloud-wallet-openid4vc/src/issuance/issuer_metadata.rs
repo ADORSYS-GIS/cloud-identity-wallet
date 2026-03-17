@@ -1182,7 +1182,10 @@ mod tests {
         };
 
         let cred_meta = sd.credential_metadata.as_ref().unwrap();
-        assert_eq!(cred_meta.display.as_ref().unwrap()[0].name, Some("University Degree".to_string()));
+        assert_eq!(
+            cred_meta.display.as_ref().unwrap()[0].name,
+            Some("University Degree".to_string())
+        );
         assert!(cred_meta.claims.is_some());
         let claims = cred_meta.claims.as_ref().unwrap();
         assert_eq!(claims.len(), 2);
@@ -1221,7 +1224,9 @@ mod tests {
             }
         });
         let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
-        let err = metadata.validate().expect_err("expected https failure for auth server");
+        let err = metadata
+            .validate()
+            .expect_err("expected https failure for auth server");
         assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
         assert!(err.to_string().contains("authorization_servers"));
     }
@@ -1239,7 +1244,9 @@ mod tests {
             }
         });
         let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
-        let err = metadata.validate().expect_err("expected https failure for issuer");
+        let err = metadata
+            .validate()
+            .expect_err("expected https failure for issuer");
         assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
         assert!(err.to_string().contains("credential_issuer"));
     }
