@@ -546,14 +546,14 @@ impl CredentialIssuerMetadata {
         // 5. authorization_servers validation (§12.2.1).
         // When absent, the issuer acts as its own AS. Validate that the issuer
         // URL is well-formed for this purpose.
-        if self.authorization_servers.is_none() {
-            // Issuer is acting as its own AS - validate credential_issuer URL
-            require_https(&self.credential_issuer, "credential_issuer")?;
-        } else {
+        if let Some(auth_servers) = &self.authorization_servers {
             // External AS is specified - validate each authorization server URL
-            for auth_server in self.authorization_servers.as_ref().unwrap() {
+            for auth_server in auth_servers {
                 require_https(auth_server, "authorization_servers entry")?;
             }
+        } else {
+            // Issuer is acting as its own AS - validate credential_issuer URL
+            require_https(&self.credential_issuer, "credential_issuer")?;
         }
 
         Ok(())
