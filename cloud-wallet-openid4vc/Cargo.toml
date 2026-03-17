@@ -7,7 +7,8 @@ edition.workspace = true
 [features]
 default = []
 encryption = ["cloud-wallet-crypto", "zeroize"]
-postgres = ["sqlx", "sqlx/runtime-tokio-rustls", "sqlx/postgres", "sqlx/time", "sqlx/uuid"]
+
+postgres = ["dep:sqlx-core","dep:sqlx-postgres","sqlx-core/tokio","sqlx-core/rustls","sqlx-core/webpki-roots","sqlx-postgres/time","sqlx-postgres/uuid"]
 
 [dependencies]
 thiserror.workspace = true
@@ -19,12 +20,11 @@ time.workspace = true
 futures = "0.3"
 
 # Encryption feature
+sqlx-core = { version = "0.8", default-features = false, optional = true }
+sqlx-postgres = { version = "0.8", default-features = false, optional = true }
+
 cloud-wallet-crypto = { path = "../cloud-wallet-crypto", optional = true }
 zeroize = { version = "1.8", optional = true }
 
-# Postgres feature
-sqlx = { version = "0.8", default-features = false, optional = true }
-
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "time", "uuid", "migrate", "macros"] }
