@@ -111,6 +111,23 @@ pub struct CredentialDisplay {
 // Proof types
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Key attestation requirements for proof types.
+///
+/// Used in high-assurance credential issuance flows to specify required
+/// security levels for key storage and user authentication.
+///
+/// Defined in OID4VCI §12.2.4 inside `proof_types_supported`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeyAttestationsRequired {
+    /// Required key storage security levels (e.g. `"iso_18045_moderate"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_storage: Option<Vec<String>>,
+
+    /// Required user authentication security levels (e.g. `"iso_18045_moderate"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_authentication: Option<Vec<String>>,
+}
+
 /// Metadata for a single proof type supported by a credential configuration.
 ///
 /// Lives under `proof_types_supported` in a [`CredentialConfiguration`]. The
@@ -121,6 +138,13 @@ pub struct ProofTypeMetadata {
     /// Non-empty list of signing algorithm identifiers (JWA / CASE) that the
     /// issuer accepts for this proof type.
     pub proof_signing_alg_values_supported: Vec<String>,
+
+    /// Key attestation requirements for high-assurance issuance flows.
+    ///
+    /// When present, specifies required security levels for key storage
+    /// and/or user authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_attestations_required: Option<KeyAttestationsRequired>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +166,25 @@ pub struct CredentialDefinition {
     pub credential_subject: Option<HashMap<String, Value>>,
 }
 
+/// Nested credential metadata for SD-JWT VC configurations.
+///
+/// The spec's Appendix I example shows SD-JWT VC configurations with a nested
+/// `credential_metadata` object containing `display` and `claims` arrays.
+/// This structure supports that format-specific nesting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SdJwtVcCredentialMetadata {
+    /// Per-language display metadata for this credential.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<Vec<CredentialDisplay>>,
+
+    /// Optional array of claim metadata objects.
+    ///
+    /// Each claim object contains `path`, `display`, `mandatory`, and
+    /// optionally `value_type` fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claims: Option<Vec<Value>>,
+}
+
 /// Format-specific configuration for an **IETF SD-JWT VC** credential
 /// (`"dc+sd-jwt"`, OID4VCI Appendix A.3).
 ///
@@ -155,8 +198,18 @@ pub struct SdJwtVcCredentialConfiguration {
     pub vct: String,
 
     /// Optional map of claim metadata for selective disclosure.
+    ///
+    /// This is the format-agnostic location. For SD-JWT VC-specific
+    /// nesting, use `credential_metadata` instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claims: Option<HashMap<String, Value>>,
+
+    /// Nested credential metadata following SD-JWT VC spec structure.
+    ///
+    /// When present, contains `display` and `claims` in the format shown
+    /// in Appendix I of the OID4VCI specification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_metadata: Option<SdJwtVcCredentialMetadata>,
 }
 
 /// Format-specific configuration for an **ISO/IEC 18013-5 mdoc** credential
@@ -268,8 +321,11 @@ pub struct CredentialConfiguration {
     pub cryptographic_binding_methods_supported: Option<Vec<String>>,
 
     /// Signing algorithms used by the issuer to sign issued credentials.
+    ///
+    /// Values may be strings (e.g. `"ES256"`) or integers for COSE algorithm
+    /// identifiers (e.g. `-7` for ES256).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_signing_alg_values_supported: Option<Vec<String>>,
+    pub credential_signing_alg_values_supported: Option<Vec<Value>>,
 
     /// Supported key proof types, keyed by proof type name (e.g. `"jwt"`).
     ///
@@ -294,7 +350,10 @@ pub struct CredentialConfiguration {
 pub struct CredentialEncryptionInfo {
     /// JSON Web Key Set containing public keys for the key agreement used in
     /// encryption.
-    pub jwks: Value,
+    ///
+    /// Required for request encryption, optional for response encryption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwks: Option<Value>,
 
     /// JWE `alg` algorithm values supported (for response encryption only).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -429,6 +488,8 @@ impl CredentialIssuerMetadata {
     /// 3. `credential_configurations_supported` is non-empty.
     /// 4. For each configuration: if `cryptographic_binding_methods_supported`
     ///    is set, `proof_types_supported` must also be set (§12.2.4).
+    /// 5. `authorization_servers` validation: when absent, the issuer is
+    ///    expected to act as its own Authorization Server (§12.2.1).
     ///
     /// # Errors
     ///
@@ -479,6 +540,19 @@ impl CredentialIssuerMetadata {
                          present when cryptographic_binding_methods_supported is set"
                     ),
                 ));
+            }
+        }
+
+        // 5. authorization_servers validation (§12.2.1).
+        // When absent, the issuer acts as its own AS. Validate that the issuer
+        // URL is well-formed for this purpose.
+        if self.authorization_servers.is_none() {
+            // Issuer is acting as its own AS - validate credential_issuer URL
+            require_https(&self.credential_issuer, "credential_issuer")?;
+        } else {
+            // External AS is specified - validate each authorization server URL
+            for auth_server in self.authorization_servers.as_ref().unwrap() {
+                require_https(auth_server, "authorization_servers entry")?;
             }
         }
 
@@ -600,6 +674,7 @@ mod tests {
         let sd = CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
             vct: "https://example.com/vct".to_string(),
             claims: None,
+            credential_metadata: None,
         });
         assert_eq!(sd.format_str(), "dc+sd-jwt");
 
@@ -1013,5 +1088,159 @@ mod tests {
             configs["W3Ccred"].format_details,
             CredentialFormatDetails::JwtVcJson(_)
         ));
+    }
+
+    // ── key_attestations_required parsing ─────────────────────────────────────
+
+    #[test]
+    fn key_attestations_required_parses_correctly() {
+        let json = json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_endpoint": "https://issuer.example.com/credential",
+            "credential_configurations_supported": {
+                "HighAssuranceCred": {
+                    "format": "dc+sd-jwt",
+                    "vct": "https://example.com/vct",
+                    "cryptographic_binding_methods_supported": ["jwk"],
+                    "proof_types_supported": {
+                        "jwt": {
+                            "proof_signing_alg_values_supported": ["ES256"],
+                            "key_attestations_required": {
+                                "key_storage": ["iso_18045_moderate"],
+                                "user_authentication": ["iso_18045_moderate"]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
+        metadata.validate().unwrap();
+
+        let config = metadata
+            .credential_configurations_supported
+            .get("HighAssuranceCred")
+            .unwrap();
+        let proof_types = config.proof_types_supported.as_ref().unwrap();
+        let jwt_proof = proof_types.get("jwt").unwrap();
+        let key_att = jwt_proof.key_attestations_required.as_ref().unwrap();
+
+        assert_eq!(
+            key_att.key_storage.as_ref().unwrap()[0],
+            "iso_18045_moderate"
+        );
+        assert_eq!(
+            key_att.user_authentication.as_ref().unwrap()[0],
+            "iso_18045_moderate"
+        );
+    }
+
+    // ── credential_metadata nested structure ──────────────────────────────────
+
+    #[test]
+    fn sd_jwt_vc_credential_metadata_parses_correctly() {
+        let json = json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_endpoint": "https://issuer.example.com/credential",
+            "credential_configurations_supported": {
+                "UniversityDegree": {
+                    "format": "dc+sd-jwt",
+                    "vct": "https://credentials.example.com/UniversityDegree",
+                    "credential_metadata": {
+                        "display": [
+                            {
+                                "name": "University Degree",
+                                "locale": "en-US"
+                            }
+                        ],
+                        "claims": [
+                            {
+                                "path": ["given_name"],
+                                "display": [{"locale": "en", "name": "Given Name"}],
+                                "mandatory": true
+                            },
+                            {
+                                "path": ["family_name"],
+                                "display": [{"locale": "en", "name": "Family Name"}],
+                                "mandatory": true
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
+        metadata.validate().unwrap();
+
+        let config = metadata
+            .credential_configurations_supported
+            .get("UniversityDegree")
+            .unwrap();
+        let sd = match &config.format_details {
+            CredentialFormatDetails::DcSdJwt(sd) => sd,
+            other => panic!("expected DcSdJwt, got {other:?}"),
+        };
+
+        let cred_meta = sd.credential_metadata.as_ref().unwrap();
+        assert_eq!(cred_meta.display.as_ref().unwrap()[0].name, Some("University Degree".to_string()));
+        assert!(cred_meta.claims.is_some());
+        let claims = cred_meta.claims.as_ref().unwrap();
+        assert_eq!(claims.len(), 2);
+    }
+
+    // ── authorization_servers validation ──────────────────────────────────────
+
+    #[test]
+    fn validation_passes_with_external_authorization_servers() {
+        let json = json!({
+            "credential_issuer": "https://issuer.example.com",
+            "authorization_servers": ["https://auth.example.com"],
+            "credential_endpoint": "https://issuer.example.com/credential",
+            "credential_configurations_supported": {
+                "ExampleCredential": {
+                    "format": "dc+sd-jwt",
+                    "vct": "https://example.com/vct"
+                }
+            }
+        });
+        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
+        assert!(metadata.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_non_https_authorization_server() {
+        let json = json!({
+            "credential_issuer": "https://issuer.example.com",
+            "authorization_servers": ["http://auth.example.com"],
+            "credential_endpoint": "https://issuer.example.com/credential",
+            "credential_configurations_supported": {
+                "ExampleCredential": {
+                    "format": "dc+sd-jwt",
+                    "vct": "https://example.com/vct"
+                }
+            }
+        });
+        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
+        let err = metadata.validate().expect_err("expected https failure for auth server");
+        assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
+        assert!(err.to_string().contains("authorization_servers"));
+    }
+
+    #[test]
+    fn validation_rejects_non_https_credential_issuer_when_no_auth_servers() {
+        let json = json!({
+            "credential_issuer": "http://issuer.example.com",
+            "credential_endpoint": "https://issuer.example.com/credential",
+            "credential_configurations_supported": {
+                "ExampleCredential": {
+                    "format": "dc+sd-jwt",
+                    "vct": "https://example.com/vct"
+                }
+            }
+        });
+        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
+        let err = metadata.validate().expect_err("expected https failure for issuer");
+        assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
+        assert!(err.to_string().contains("credential_issuer"));
     }
 }

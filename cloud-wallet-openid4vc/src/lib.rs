@@ -1,7 +1,7 @@
 pub mod errors;
 pub mod format;
 pub mod models;
-pub mod openid4vci;
+pub mod issuance;
 pub mod schema;
 
-pub use openid4vci::issuer_metadata;
+pub use issuance::issuer_metadata;
