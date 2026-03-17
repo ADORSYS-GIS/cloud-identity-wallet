@@ -322,7 +322,7 @@ pub struct CredentialConfiguration {
 
     /// Signing algorithms used by the issuer to sign issued credentials.
     ///
-    /// Values may be strings (e.g. `"ES256"`) or integers for COSE algorithm
+    /// Values may be strings (e.g. `"ES256"`) or integers for CASE algorithm
     /// identifiers (e.g. `-7` for ES256).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_signing_alg_values_supported: Option<Vec<Value>>,
