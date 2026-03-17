@@ -148,6 +148,9 @@ pub enum ErrorKind {
     #[error("Credential is revoked")]
     CredentialRevoked,
 
+    #[error("Invalid proof")]
+    InvalidProof,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
