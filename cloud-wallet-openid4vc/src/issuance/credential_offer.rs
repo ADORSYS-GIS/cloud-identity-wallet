@@ -409,14 +409,16 @@ pub async fn resolve_by_reference(
     http_client: &reqwest::Client,
 ) -> Result<CredentialOffer, Error> {
     // Validate URI scheme
-    let parsed = Url::parse(uri).map_err(|e| {
-        Error::new(ErrorKind::InvalidCredentialOfferUri, e)
-    })?;
+    let parsed =
+        Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOfferUri, e))?;
 
     if parsed.scheme() != "https" {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOfferUri,
-            format!("credential_offer_uri must use https scheme, got '{}'", parsed.scheme()),
+            format!(
+                "credential_offer_uri must use https scheme, got '{}'",
+                parsed.scheme()
+            ),
         ));
     }
 
@@ -450,9 +452,10 @@ pub async fn resolve_by_reference(
     }
 
     // Get response body
-    let body = response.text().await.map_err(|e| {
-        Error::new(ErrorKind::CredentialOfferFetchFailed, e)
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::new(ErrorKind::CredentialOfferFetchFailed, e))?;
 
     // Security check: reject JWT with "alg": "none"
     if looks_like_jwt_with_none(&body) {
@@ -464,7 +467,10 @@ pub async fn resolve_by_reference(
 
     // Parse JSON
     let offer: CredentialOffer = serde_json::from_str(&body).map_err(|e| {
-        Error::message(ErrorKind::InvalidCredentialOffer, format!("invalid JSON: {e}"))
+        Error::message(
+            ErrorKind::InvalidCredentialOffer,
+            format!("invalid JSON: {e}"),
+        )
     })?;
 
     // Validate
@@ -487,15 +493,15 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
     }
 
     // Try to decode the header (first part)
-    if let Ok(header_bytes) = base64url_decode_no_padding(parts[0]) {
-        if let Ok(header_str) = String::from_utf8(header_bytes) {
-            // Check for "alg":"none" pattern (case-insensitive)
-            let header_lower = header_str.to_lowercase();
-            if header_lower.contains(r#""alg":"none""#)
-                || header_lower.contains(r#""alg" : "none""#)
-            {
-                return true;
-            }
+    if let Ok(header_bytes) = base64url_decode_no_padding(parts[0])
+        && let Ok(header_str) = String::from_utf8(header_bytes)
+    {
+        // Check for "alg":"none" pattern (case-insensitive)
+        let header_lower = header_str.to_lowercase();
+        if header_lower.contains(r#""alg":"none""#)
+            || header_lower.contains(r#""alg" : "none""#)
+        {
+            return true;
         }
     }
 
@@ -505,8 +511,8 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
 /// Decodes base64url without padding.
 #[cfg(feature = "http")]
 fn base64url_decode_no_padding(input: &str) -> Result<Vec<u8>, ()> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     URL_SAFE_NO_PAD.decode(input).map_err(|_| ())
 }
@@ -849,7 +855,10 @@ mod tests {
     fn validate_duplicate_configuration_ids_rejected() {
         let offer = CredentialOffer {
             credential_issuer: "https://issuer.example.com".to_string(),
-            credential_configuration_ids: vec!["MyCredential".to_string(), "MyCredential".to_string()],
+            credential_configuration_ids: vec![
+                "MyCredential".to_string(),
+                "MyCredential".to_string(),
+            ],
             grants: None,
         };
 
