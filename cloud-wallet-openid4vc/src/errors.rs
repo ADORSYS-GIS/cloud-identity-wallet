@@ -148,6 +148,26 @@ pub enum ErrorKind {
     #[error("Credential is revoked")]
     CredentialRevoked,
 
+    /// A credential offer failed validation (e.g. non-HTTPS issuer, empty configuration IDs).
+    #[error("Invalid credential offer")]
+    InvalidCredentialOffer,
+
+    /// A credential offer could not be parsed (malformed JSON or URL encoding).
+    #[error("Malformed credential offer")]
+    MalformedCredentialOffer,
+
+    /// A credential offer URI is invalid (e.g. non-HTTPS scheme).
+    #[error("Invalid credential offer URI")]
+    InvalidCredentialOfferUri,
+
+    /// A credential offer could not be fetched from the reference URI.
+    #[error("Failed to fetch credential offer")]
+    CredentialOfferFetchFailed,
+
+    /// A credential offer reference returned an invalid media type.
+    #[error("Invalid credential offer media type")]
+    InvalidCredentialOfferMediaType,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
