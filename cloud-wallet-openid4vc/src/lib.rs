@@ -1,5 +1,5 @@
 pub mod errors;
 pub mod format;
-pub mod issuer;
+pub mod issuance;
 pub mod models;
 pub mod schema;
