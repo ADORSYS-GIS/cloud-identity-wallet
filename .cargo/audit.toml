@@ -1,5 +1,5 @@
 [advisories]
-ignore = []
+ignore = [] # advisory IDs to ignore
 
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"
