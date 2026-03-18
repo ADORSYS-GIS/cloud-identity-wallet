@@ -20,8 +20,8 @@ serde_with = { version = "3", optional = true }
 simple_asn1 = { version = "0.6", optional = true }
 subtle = "2.6"
 thiserror.workspace = true
-url = { version = "2", features = ["serde"], optional = true }
-zeroize = "1.8"
+url = { workspace = true, features = ["serde"], optional = true }
+zeroize.workspace = true
 
 [dev-dependencies]
 hex-literal = "1"

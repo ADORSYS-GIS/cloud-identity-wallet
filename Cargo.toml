@@ -25,6 +25,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Async utilities
 async-trait = "0.1"
+tokio = "1"
 
 # Error handling
 color-eyre = "0.6"
@@ -44,6 +45,7 @@ tracing = "0.1"
 time = "0.3"
 url = "2.5"
 uuid = "1"
+zeroize = "1.8"
 
 [workspace.lints.clippy]
 
