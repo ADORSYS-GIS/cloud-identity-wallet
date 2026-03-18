@@ -148,6 +148,20 @@ pub enum ErrorKind {
     #[error("Credential is revoked")]
     CredentialRevoked,
 
+    /// Authorization server metadata failed structural validation (e.g. missing required
+    /// fields, `issuer` not using `https`, empty `response_types_supported`).
+    ///
+    /// Defined by [RFC 8414 §2](https://www.rfc-editor.org/rfc/rfc8414#section-2).
+    #[error("Invalid authorization server metadata")]
+    InvalidAuthorizationServerMetadata,
+
+    /// A token response failed structural validation (e.g. missing `access_token` or
+    /// `token_type`).
+    ///
+    /// Defined by [RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1).
+    #[error("Invalid token response")]
+    InvalidTokenResponse,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,

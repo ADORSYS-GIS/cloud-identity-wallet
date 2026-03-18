@@ -1,0 +1,866 @@
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::errors::{Error, ErrorKind};
+
+/// OAuth 2.0 Authorization Server Metadata.
+///
+/// Represents the metadata document published at the AS well-known endpoint
+/// (/.well-known/oauth-authorization-server) as defined in
+/// [RFC 8414 §2](https://www.rfc-editor.org/rfc/rfc8414.html#section-2).
+///
+/// The OID4VCI-specific extension parameter
+/// pre-authorized_grant_anonymous_access_supported is defined in
+/// [OID4VCI §12.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-oauth-20-authorization-serv).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorizationServerMetadata {
+    /// REQUIRED. The authorization server's issuer identifier URL.
+    ///
+    /// MUST use the https scheme and contain no query or fragment
+    /// components. The wallet MUST verify this matches the URL used to
+    /// retrieve the metadata document (RFC 8414 §3.3).
+    pub issuer: String,
+
+    /// URL of the authorization server's authorization endpoint (RFC 6749).
+    ///
+    /// REQUIRED unless no grant types are supported that use the
+    /// authorization endpoint. Modelled as Option because an AS that
+    /// supports only the Pre-Authorized Code grant type may omit it
+    /// (OID4VCI §12.2.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_endpoint: Option<String>,
+
+    /// URL of the authorization server's token endpoint (RFC 6749).
+    ///
+    /// REQUIRED unless only the implicit grant type is supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+
+    /// OPTIONAL. URL of the authorization server's JWK Set document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwks_uri: Option<String>,
+
+    /// OPTIONAL. URL of the OAuth 2.0 Dynamic Client Registration endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration_endpoint: Option<String>,
+
+    /// RECOMMENDED. OAuth 2.0 scope values this server supports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes_supported: Option<Vec<String>>,
+
+    /// REQUIRED by RFC 8414 in responses. OAuth 2.0 response_type values
+    /// this server supports. Modelled as Option to accommodate the OID4VCI
+    /// exception for Pre-Authorized Code only servers (§12.2.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_types_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. OAuth 2.0 response_mode values this server supports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_modes_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. OAuth 2.0 grant type values this server supports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_types_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. Client authentication methods supported by the token endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. JWS signing algorithms supported by the token endpoint for
+    /// JWT client authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. URL of a page with human-readable developer documentation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_documentation: Option<String>,
+
+    /// OPTIONAL. BCP 47 language tags for supported UI languages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_locales_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. URL of the server's policy on how clients may use provided
+    /// data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub op_policy_uri: Option<String>,
+
+    /// OPTIONAL. URL of the server's terms of service.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub op_tos_uri: Option<String>,
+
+    /// OPTIONAL. URL of the OAuth 2.0 token revocation endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_endpoint: Option<String>,
+
+    /// OPTIONAL. Client authentication methods supported by the revocation
+    /// endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_endpoint_auth_methods_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. JWS signing algorithms supported by the revocation endpoint
+    /// for JWT client authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. URL of the OAuth 2.0 token introspection endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub introspection_endpoint: Option<String>,
+
+    /// OPTIONAL. Client authentication methods supported by the introspection
+    /// endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub introspection_endpoint_auth_methods_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. JWS signing algorithms supported by the introspection
+    /// endpoint for JWT client authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub introspection_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. PKCE code challenge methods this server supports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_challenge_methods_supported: Option<Vec<String>>,
+
+    /// OPTIONAL. Whether the AS accepts a Token Request with a
+    /// Pre-Authorized Code but without a `client_id`.
+    ///
+    /// Defaults to `false` when absent (OID4VCI §12.3).
+    #[serde(
+        rename = "pre-authorized_grant_anonymous_access_supported",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pre_authorized_grant_anonymous_access_supported: Option<bool>,
+}
+
+impl AuthorizationServerMetadata {
+    /// Validates the Authorization Server Metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - issuer is not a valid HTTPS URL
+    /// - issuer has a query or fragment component (RFC 8414 §2)
+    /// - token_endpoint is present but not a valid HTTPS URL
+    /// - authorization_endpoint is present but not a valid HTTPS URL
+    #[must_use = "validation result must be checked"]
+    pub fn validate(&self) -> Result<(), Error> {
+        validate_https_url(&self.issuer, "issuer")?;
+
+        let parsed = Url::parse(&self.issuer).expect("already validated above");
+        if parsed.query().is_some() {
+            return Err(Error::message(
+                ErrorKind::InvalidAuthorizationServerMetadata,
+                "issuer must not contain a query component",
+            ));
+        }
+        if parsed.fragment().is_some() {
+            return Err(Error::message(
+                ErrorKind::InvalidAuthorizationServerMetadata,
+                "issuer must not contain a fragment component",
+            ));
+        }
+
+        if let Some(ref url) = self.token_endpoint {
+            validate_https_url(url, "token_endpoint")?;
+        }
+
+        if let Some(ref url) = self.authorization_endpoint {
+            validate_https_url(url, "authorization_endpoint")?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns true if the AS supports anonymous Pre-Authorized Code token
+    /// requests (i.e., without a client_id).
+    ///
+    /// Defaults to false per OID4VCI §12.3 when the parameter is absent.
+    pub fn allows_anonymous_pre_authorized_grant(&self) -> bool {
+        self.pre_authorized_grant_anonymous_access_supported
+            .unwrap_or(false)
+    }
+}
+
+// Token Response
+
+/// A single entry in the authorization_details array of a Token Response.
+///
+/// When the wallet used authorization_details in the Authorization or Token
+/// Request, each entry MUST include credential_identifiers that the wallet
+/// MUST use in subsequent Credential Requests.
+///
+/// Defined in [OID4VCI §6.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenResponseAuthorizationDetails {
+    /// REQUIRED. MUST be openid_credential.
+    #[serde(rename = "type")]
+    pub kind: String,
+
+    /// The Credential Configuration identifier this entry relates to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_configuration_id: Option<String>,
+
+    /// REQUIRED when authorization_details was used. Non-empty array of
+    /// strings each identifying a Credential Dataset that can be issued
+    /// using the access token returned in this response.
+    ///
+    /// The wallet MUST use these identifiers as the credential_identifier
+    /// parameter in subsequent Credential Requests (OID4VCI §8.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_identifiers: Option<Vec<String>>,
+}
+
+impl TokenResponseAuthorizationDetails {
+    /// Validates the authorization details entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - type is not openid_credential
+    /// - credential_identifiers is present but empty
+    #[must_use = "validation result must be checked"]
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.kind != "openid_credential" {
+            return Err(Error::message(
+                ErrorKind::InvalidTokenResponse,
+                format!(
+                    "authorization_details type must be 'openid_credential', got '{}'",
+                    self.kind
+                ),
+            ));
+        }
+
+        if let Some(ref ids) = self.credential_identifiers 
+            && ids.is_empty() {
+                return Err(Error::message(
+                    ErrorKind::InvalidTokenResponse,
+                    "credential_identifiers must not be empty when present",
+                ));
+            }
+
+        Ok(())
+    }
+}
+
+/// Successful OAuth 2.0 Token Response extended for OID4VCI.
+///
+/// Represents the response from the Token Endpoint as defined in
+/// [RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1),
+/// extended with the authorization_details parameter from
+/// [OID4VCI §6.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenResponse {
+    /// REQUIRED. The access token issued by the authorization server.
+    pub access_token: String,
+
+    /// REQUIRED. The type of the token. Typically Bearer.
+    pub token_type: String,
+
+    /// RECOMMENDED. Lifetime of the access token in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
+
+    /// OPTIONAL. Refresh token for obtaining new access tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+
+    /// OPTIONAL. Scope of the access token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+
+    /// REQUIRED when authorization_details was used in the Authorization
+    /// or Token Request. OPTIONAL when scope was used.
+    ///
+    /// Each entry contains credential_identifiers the wallet MUST use in
+    /// subsequent Credential Requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_details: Option<Vec<TokenResponseAuthorizationDetails>>,
+}
+
+impl TokenResponse {
+    /// Validates the Token Response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - access_token is empty
+    /// - token_type is empty
+    /// - authorization_details is present but empty
+    /// - Any authorization_details entry is invalid
+    #[must_use = "validation result must be checked"]
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.access_token.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidTokenResponse,
+                "access_token must not be empty",
+            ));
+        }
+
+        if self.token_type.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidTokenResponse,
+                "token_type must not be empty",
+            ));
+        }
+
+        if let Some(ref details) = self.authorization_details {
+            if details.is_empty() {
+                return Err(Error::message(
+                    ErrorKind::InvalidTokenResponse,
+                    "authorization_details must not be empty when present",
+                ));
+            }
+            for entry in details {
+                entry.validate()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the credential_identifiers for a given
+    /// credential_configuration_id, if present in authorization_details.
+    ///
+    /// Returns None if authorization_details is absent, the given
+    /// configuration ID is not found, or the matching entry has no
+    /// credential_identifiers.
+    pub fn credential_identifiers_for(
+        &self,
+        credential_configuration_id: &str,
+    ) -> Option<&[String]> {
+        self.authorization_details
+            .as_ref()?
+            .iter()
+            .find_map(|entry| {
+                if entry.credential_configuration_id.as_deref() == Some(credential_configuration_id)
+                {
+                    entry.credential_identifiers.as_deref()
+                } else {
+                    None
+                }
+            })
+    }
+}
+
+// helpers
+
+fn validate_https_url(url: &str, field: &str) -> Result<(), Error> {
+    let parsed = Url::parse(url).map_err(|_| {
+        Error::message(
+            ErrorKind::InvalidAuthorizationServerMetadata,
+            format!("'{field}' is not a valid URL: {url}"),
+        )
+    })?;
+
+    if parsed.scheme() != "https" {
+        return Err(Error::message(
+            ErrorKind::InvalidAuthorizationServerMetadata,
+            format!("'{field}' must use the https scheme"),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // helpers
+
+    fn minimal_metadata() -> AuthorizationServerMetadata {
+        AuthorizationServerMetadata {
+            issuer: "https://server.example.com".to_string(),
+            authorization_endpoint: Some("https://server.example.com/authorize".to_string()),
+            token_endpoint: Some("https://server.example.com/token".to_string()),
+            jwks_uri: None,
+            registration_endpoint: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            response_modes_supported: None,
+            grant_types_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            token_endpoint_auth_signing_alg_values_supported: None,
+            service_documentation: None,
+            ui_locales_supported: None,
+            op_policy_uri: None,
+            op_tos_uri: None,
+            revocation_endpoint: None,
+            revocation_endpoint_auth_methods_supported: None,
+            revocation_endpoint_auth_signing_alg_values_supported: None,
+            introspection_endpoint: None,
+            introspection_endpoint_auth_methods_supported: None,
+            introspection_endpoint_auth_signing_alg_values_supported: None,
+            code_challenge_methods_supported: None,
+            pre_authorized_grant_anonymous_access_supported: None,
+        }
+    }
+
+    //  AuthorizationServerMetadata::validate
+
+    #[test]
+    fn valid_minimal_metadata() {
+        assert!(minimal_metadata().validate().is_ok());
+    }
+
+    #[test]
+    fn valid_metadata_with_pre_authorized_flag() {
+        let mut m = minimal_metadata();
+        m.pre_authorized_grant_anonymous_access_supported = Some(true);
+        assert!(m.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_http_issuer() {
+        let mut m = minimal_metadata();
+        m.issuer = "http://server.example.com".to_string();
+        let err = m.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
+        assert!(err.to_string().contains("https scheme"));
+    }
+
+    #[test]
+    fn rejects_invalid_url_issuer() {
+        let mut m = minimal_metadata();
+        m.issuer = "not-a-url".to_string();
+        let err = m.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
+        assert!(err.to_string().contains("valid URL"));
+    }
+
+    #[test]
+    fn rejects_issuer_with_query() {
+        let mut m = minimal_metadata();
+        m.issuer = "https://server.example.com?foo=bar".to_string();
+        let err = m.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
+        assert!(err.to_string().contains("query"));
+    }
+
+    #[test]
+    fn rejects_issuer_with_fragment() {
+        let mut m = minimal_metadata();
+        m.issuer = "https://server.example.com#section".to_string();
+        let err = m.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
+        assert!(err.to_string().contains("fragment"));
+    }
+
+    #[test]
+    fn rejects_http_token_endpoint() {
+        let mut m = minimal_metadata();
+        m.token_endpoint = Some("http://server.example.com/token".to_string());
+        let err = m.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
+        assert!(err.to_string().contains("token_endpoint"));
+    }
+
+    #[test]
+    fn rejects_http_authorization_endpoint() {
+        let mut m = minimal_metadata();
+        m.authorization_endpoint = Some("http://server.example.com/authorize".to_string());
+        let err = m.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
+        assert!(err.to_string().contains("authorization_endpoint"));
+    }
+
+    #[test]
+    fn accepts_metadata_without_optional_endpoints() {
+        // A Pre-Authorized Code only AS may omit authorization_endpoint
+        let mut m = minimal_metadata();
+        m.authorization_endpoint = None;
+        m.response_types_supported = None;
+        assert!(m.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_issuer_with_path_component() {
+        let mut m = minimal_metadata();
+        m.issuer = "https://server.example.com/tenant1".to_string();
+        assert!(m.validate().is_ok());
+    }
+
+    //  allows_anonymous_pre_authorized_grant
+
+    #[test]
+    fn anonymous_grant_defaults_to_false_when_absent() {
+        assert!(!minimal_metadata().allows_anonymous_pre_authorized_grant());
+    }
+
+    #[test]
+    fn anonymous_grant_returns_true_when_set() {
+        let mut m = minimal_metadata();
+        m.pre_authorized_grant_anonymous_access_supported = Some(true);
+        assert!(m.allows_anonymous_pre_authorized_grant());
+    }
+
+    #[test]
+    fn anonymous_grant_returns_false_when_explicitly_false() {
+        let mut m = minimal_metadata();
+        m.pre_authorized_grant_anonymous_access_supported = Some(false);
+        assert!(!m.allows_anonymous_pre_authorized_grant());
+    }
+
+    // AuthorizationServerMetadata serialization
+
+    #[test]
+    fn serializes_pre_authorized_flag_with_hyphenated_name() {
+        let mut m = minimal_metadata();
+        m.pre_authorized_grant_anonymous_access_supported = Some(true);
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"pre-authorized_grant_anonymous_access_supported\""));
+        // Must NOT use the Rust field name
+        assert!(!json.contains("\"pre_authorized_grant_anonymous_access_supported\""));
+    }
+
+    #[test]
+    fn absent_optional_fields_omitted_from_json() {
+        let m = minimal_metadata();
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("jwks_uri"));
+        assert!(!json.contains("registration_endpoint"));
+        assert!(!json.contains("pre-authorized"));
+    }
+
+    #[test]
+    fn deserializes_from_rfc8414_example() {
+        // Non-normative example from RFC 8414 §3.2
+        let json = r#"{
+            "issuer": "https://server.example.com",
+            "authorization_endpoint": "https://server.example.com/authorize",
+            "token_endpoint": "https://server.example.com/token",
+            "token_endpoint_auth_methods_supported": [
+                "client_secret_basic", "private_key_jwt"
+            ],
+            "token_endpoint_auth_signing_alg_values_supported": ["RS256", "ES256"],
+            "jwks_uri": "https://server.example.com/jwks.json",
+            "registration_endpoint": "https://server.example.com/register",
+            "scopes_supported": ["openid", "profile", "email"],
+            "response_types_supported": ["code", "code token"],
+            "service_documentation":
+                "http://server.example.com/service_documentation.html",
+            "ui_locales_supported": ["en-US", "en-GB", "fr-FR"]
+        }"#;
+        let m: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
+        assert!(m.validate().is_ok());
+        assert_eq!(m.issuer, "https://server.example.com");
+        assert_eq!(
+            m.token_endpoint.as_deref(),
+            Some("https://server.example.com/token")
+        );
+        assert_eq!(m.scopes_supported.as_ref().unwrap().len(), 3);
+        assert_eq!(
+            m.token_endpoint_auth_methods_supported
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn deserializes_oid4vci_extension_field() {
+        let json = r#"{
+            "issuer": "https://server.example.com",
+            "token_endpoint": "https://server.example.com/token",
+            "pre-authorized_grant_anonymous_access_supported": true
+        }"#;
+        let m: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
+        assert!(m.validate().is_ok());
+        assert_eq!(
+            m.pre_authorized_grant_anonymous_access_supported,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored_on_deserialization() {
+        // Spec: "The Wallet MUST ignore any unrecognized parameters"
+        let json = r#"{
+            "issuer": "https://server.example.com",
+            "token_endpoint": "https://server.example.com/token",
+            "some_future_extension": "value"
+        }"#;
+        let result: Result<AuthorizationServerMetadata, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+    }
+
+    // TokenResponseAuthorizationDetails::validate
+
+    #[test]
+    fn valid_authorization_details_entry() {
+        let entry = TokenResponseAuthorizationDetails {
+            kind: "openid_credential".to_string(),
+            credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
+            credential_identifiers: Some(vec!["CivilEngineeringDegree-2023".to_string()]),
+        };
+        assert!(entry.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_wrong_type_in_authorization_details() {
+        let entry = TokenResponseAuthorizationDetails {
+            kind: "some_other_type".to_string(),
+            credential_configuration_id: None,
+            credential_identifiers: None,
+        };
+        let err = entry.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
+        assert!(err.to_string().contains("openid_credential"));
+    }
+
+    #[test]
+    fn rejects_empty_credential_identifiers() {
+        let entry = TokenResponseAuthorizationDetails {
+            kind: "openid_credential".to_string(),
+            credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
+            credential_identifiers: Some(vec![]),
+        };
+        let err = entry.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
+        assert!(err.to_string().contains("credential_identifiers"));
+    }
+
+    #[test]
+    fn valid_entry_without_credential_identifiers() {
+        // Scope flow: identifiers may not be returned
+        let entry = TokenResponseAuthorizationDetails {
+            kind: "openid_credential".to_string(),
+            credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
+            credential_identifiers: None,
+        };
+        assert!(entry.validate().is_ok());
+    }
+
+    #[test]
+    fn authorization_details_type_field_serializes_as_type() {
+        let entry = TokenResponseAuthorizationDetails {
+            kind: "openid_credential".to_string(),
+            credential_configuration_id: None,
+            credential_identifiers: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"type\":\"openid_credential\""));
+        assert!(!json.contains("\"kind\""));
+    }
+
+    // TokenResponse::validate
+
+    #[test]
+    fn valid_minimal_token_response() {
+        let resp = TokenResponse {
+            access_token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: Some(86400),
+            refresh_token: None,
+            scope: None,
+            authorization_details: None,
+        };
+        assert!(resp.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_token_response_with_authorization_details() {
+        let resp = TokenResponse {
+            access_token: "some-access-token".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: Some(86400),
+            refresh_token: None,
+            scope: None,
+            authorization_details: Some(vec![TokenResponseAuthorizationDetails {
+                kind: "openid_credential".to_string(),
+                credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
+                credential_identifiers: Some(vec![
+                    "CivilEngineeringDegree-2023".to_string(),
+                    "ElectricalEngineeringDegree-2023".to_string(),
+                ]),
+            }]),
+        };
+        assert!(resp.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_access_token() {
+        let resp = TokenResponse {
+            access_token: String::new(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: None,
+        };
+        let err = resp.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
+        assert!(err.to_string().contains("access_token"));
+    }
+
+    #[test]
+    fn rejects_empty_token_type() {
+        let resp = TokenResponse {
+            access_token: "some-token".to_string(),
+            token_type: String::new(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: None,
+        };
+        let err = resp.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
+        assert!(err.to_string().contains("token_type"));
+    }
+
+    #[test]
+    fn rejects_empty_authorization_details_array() {
+        let resp = TokenResponse {
+            access_token: "some-token".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: Some(vec![]),
+        };
+        let err = resp.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
+        assert!(err.to_string().contains("authorization_details"));
+    }
+
+    #[test]
+    fn invalid_authorization_details_entry_propagates_error() {
+        let resp = TokenResponse {
+            access_token: "some-token".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: Some(vec![TokenResponseAuthorizationDetails {
+                kind: "wrong_type".to_string(),
+                credential_configuration_id: None,
+                credential_identifiers: None,
+            }]),
+        };
+        assert_eq!(
+            resp.validate().unwrap_err().kind(),
+            ErrorKind::InvalidTokenResponse
+        );
+    }
+
+    // TokenResponse serialization
+
+    #[test]
+    fn deserializes_from_oid4vci_spec_example() {
+        // Non-normative example from OID4VCI §6.2
+        let json = r#"{
+            "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp..sHQ",
+            "token_type": "Bearer",
+            "expires_in": 86400,
+            "authorization_details": [
+                {
+                    "type": "openid_credential",
+                    "credential_configuration_id": "UniversityDegreeCredential",
+                    "credential_identifiers": [
+                        "CivilEngineeringDegree-2023",
+                        "ElectricalEngineeringDegree-2023"
+                    ]
+                }
+            ]
+        }"#;
+        let resp: TokenResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.validate().is_ok());
+        assert_eq!(resp.access_token, "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp..sHQ");
+        assert_eq!(resp.token_type, "Bearer");
+        assert_eq!(resp.expires_in, Some(86400));
+        let details = resp.authorization_details.as_ref().unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].kind, "openid_credential");
+        assert_eq!(
+            details[0].credential_configuration_id.as_deref(),
+            Some("UniversityDegreeCredential")
+        );
+        assert_eq!(
+            details[0].credential_identifiers.as_ref().unwrap(),
+            &[
+                "CivilEngineeringDegree-2023",
+                "ElectricalEngineeringDegree-2023"
+            ]
+        );
+    }
+
+    #[test]
+    fn optional_fields_omitted_from_json_when_none() {
+        let resp = TokenResponse {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(!json.contains("expires_in"));
+        assert!(!json.contains("refresh_token"));
+        assert!(!json.contains("scope"));
+        assert!(!json.contains("authorization_details"));
+    }
+
+    // TokenResponse::credential_identifiers_for
+
+    #[test]
+    fn returns_matching_credential_identifiers() {
+        let resp = TokenResponse {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: Some(vec![
+                TokenResponseAuthorizationDetails {
+                    kind: "openid_credential".to_string(),
+                    credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
+                    credential_identifiers: Some(vec![
+                        "Degree-A".to_string(),
+                        "Degree-B".to_string(),
+                    ]),
+                },
+                TokenResponseAuthorizationDetails {
+                    kind: "openid_credential".to_string(),
+                    credential_configuration_id: Some("mDLCredential".to_string()),
+                    credential_identifiers: Some(vec!["mDL-1".to_string()]),
+                },
+            ]),
+        };
+
+        let ids = resp
+            .credential_identifiers_for("UniversityDegreeCredential")
+            .unwrap();
+        assert_eq!(ids, ["Degree-A", "Degree-B"]);
+    }
+
+    #[test]
+    fn returns_none_when_authorization_details_absent() {
+        let resp = TokenResponse {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: None,
+        };
+        assert!(resp.credential_identifiers_for("anything").is_none());
+    }
+
+    #[test]
+    fn returns_none_when_config_id_not_found() {
+        let resp = TokenResponse {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            authorization_details: Some(vec![TokenResponseAuthorizationDetails {
+                kind: "openid_credential".to_string(),
+                credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
+                credential_identifiers: Some(vec!["Degree-A".to_string()]),
+            }]),
+        };
+        assert!(resp.credential_identifiers_for("mDLCredential").is_none());
+    }
+}
