@@ -570,16 +570,16 @@ impl CredentialIssuerMetadata {
         }
 
         // 7. batch_credential_issuance.batch_size MUST be >= 2 (§12.2.4).
-        if let Some(batch) = &self.batch_credential_issuance {
-            if batch.batch_size < 2 {
-                return Err(Error::message(
-                    ErrorKind::InvalidIssuerMetadata,
-                    format!(
-                        "batch_credential_issuance.batch_size must be >= 2, got {}",
-                        batch.batch_size
-                    ),
-                ));
-            }
+        if let Some(batch) = &self.batch_credential_issuance
+            && batch.batch_size < 2
+        {
+            return Err(Error::message(
+                ErrorKind::InvalidIssuerMetadata,
+                format!(
+                    "batch_credential_issuance.batch_size must be >= 2, got {}",
+                    batch.batch_size
+                ),
+            ));
         }
 
         Ok(())
