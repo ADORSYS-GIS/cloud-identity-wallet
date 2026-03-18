@@ -269,9 +269,17 @@ pub enum CredentialFormatDetails {
     /// Any format not explicitly modelled above.
     ///
     /// The raw format string is preserved in the `format` field and any
-    /// additional fields are collected in `extra`.
-    #[serde(other)]
-    Other,
+    /// additional fields are collected in `extra`. This enables wallets to
+    /// process configurations for formats they don't understand, as required
+    /// by §12.2.4 of the specification.
+    #[serde(untagged)]
+    Other {
+        /// The format identifier string (e.g., "some_future_format").
+        format: String,
+        /// Additional fields that are not recognized by this implementation.
+        #[serde(flatten)]
+        extra: serde_json::Value,
+    },
 }
 
 impl CredentialFormatDetails {
@@ -281,7 +289,7 @@ impl CredentialFormatDetails {
             Self::DcSdJwt(_) => "dc+sd-jwt",
             Self::MsoMdoc(_) => "mso_mdoc",
             Self::JwtVcJson(_) => "jwt_vc_json",
-            Self::Other => "unknown",
+            Self::Other { format, .. } => format,
         }
     }
 }
@@ -322,8 +330,14 @@ pub struct CredentialConfiguration {
 
     /// Signing algorithms used by the issuer to sign issued credentials.
     ///
-    /// Values may be strings (e.g. `"ES256"`) or integers for CASE algorithm
-    /// identifiers (e.g. `-7` for ES256).
+    /// Per §12.2.4, algorithm identifier types and values are determined by the
+    /// Credential Format and defined in Appendix A:
+    /// - JWT-based formats (jwt_vc_json, dc+sd-jwt): string identifiers from
+    ///   the JWA registry (e.g., `"ES256"`, `"RS256"`)
+    /// - COSE-based formats (mso_mdoc): integer identifiers from the CASE
+    ///   Algorithms IANA registry (e.g., `-7` for ES256, `-257` for RS256)
+    ///
+    /// Validation of these values is format-specific and handled elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_signing_alg_values_supported: Option<Vec<Value>>,
 
@@ -488,8 +502,9 @@ impl CredentialIssuerMetadata {
     /// 3. `credential_configurations_supported` is non-empty.
     /// 4. For each configuration: if `cryptographic_binding_methods_supported`
     ///    is set, `proof_types_supported` must also be set (§12.2.4).
-    /// 5. `authorization_servers` validation: when absent, the issuer is
-    ///    expected to act as its own Authorization Server (§12.2.1).
+    /// 5. `credential_issuer` uses the `https` scheme unconditionally (§12.2.1).
+    /// 6. Each `authorization_servers` entry uses the `https` scheme when present.
+    /// 7. `batch_credential_issuance.batch_size` is >= 2 when present (§12.2.4).
     ///
     /// # Errors
     ///
@@ -543,17 +558,28 @@ impl CredentialIssuerMetadata {
             }
         }
 
-        // 5. authorization_servers validation (§12.2.1).
-        // When absent, the issuer acts as its own AS. Validate that the issuer
-        // URL is well-formed for this purpose.
+        // 5. credential_issuer MUST use HTTPS unconditionally (§12.2.1).
+        require_https(&self.credential_issuer, "credential_issuer")?;
+
+        // 6. authorization_servers validation (§12.2.4).
+        // When present, each authorization server URL must use HTTPS.
         if let Some(auth_servers) = &self.authorization_servers {
-            // External AS is specified - validate each authorization server URL
             for auth_server in auth_servers {
                 require_https(auth_server, "authorization_servers entry")?;
             }
-        } else {
-            // Issuer is acting as its own AS - validate credential_issuer URL
-            require_https(&self.credential_issuer, "credential_issuer")?;
+        }
+
+        // 7. batch_credential_issuance.batch_size MUST be >= 2 (§12.2.4).
+        if let Some(batch) = &self.batch_credential_issuance {
+            if batch.batch_size < 2 {
+                return Err(Error::message(
+                    ErrorKind::InvalidIssuerMetadata,
+                    format!(
+                        "batch_credential_issuance.batch_size must be >= 2, got {}",
+                        batch.batch_size
+                    ),
+                ));
+            }
         }
 
         Ok(())
@@ -660,13 +686,17 @@ mod tests {
     #[test]
     fn unknown_format_deserializes_to_other_variant() {
         let json = json!({
-            "format": "some_future_format"
+            "format": "some_future_format",
+            "custom_field": "custom_value"
         });
         let config: CredentialConfiguration = serde_json::from_value(json).unwrap();
-        assert!(matches!(
-            config.format_details,
-            CredentialFormatDetails::Other
-        ));
+        match &config.format_details {
+            CredentialFormatDetails::Other { format, extra } => {
+                assert_eq!(format, "some_future_format");
+                assert_eq!(extra["custom_field"], "custom_value");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
     }
 
     #[test]
@@ -691,6 +721,12 @@ mod tests {
             },
         });
         assert_eq!(jwt.format_str(), "jwt_vc_json");
+
+        let other = CredentialFormatDetails::Other {
+            format: "custom_format".to_string(),
+            extra: serde_json::Value::Null,
+        };
+        assert_eq!(other.format_str(), "custom_format");
     }
 
     // ── Construction / round-trip ─────────────────────────────────────────────
