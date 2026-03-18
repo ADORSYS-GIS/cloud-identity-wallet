@@ -288,22 +288,29 @@ pub struct CredentialOfferUri {
 }
 
 impl CredentialOfferUri {
-    /// Parses credential offer URI parameters from a query string.
+    /// Parses a credential offer from a full offer link URI.
     ///
-    /// Supports both `credential_offer` (by value) and `credential_offer_uri` (by reference).
+    /// Accepts either:
+    /// - A full URI like `openid-credential-offer://?credential_offer=...`
+    /// - A query string like `credential_offer=...` (will prepend the scheme)
     ///
     /// # Errors
     ///
-    /// Returns an error if neither parameter is present or parsing fails.
-    pub fn from_query(query: &str) -> Result<Self, Error> {
-        // Use URL parser for robust query string parsing
-        let parsed_url =
-            Url::parse(&format!("openid-credential-offer://?{query}")).map_err(|e| {
-                Error::message(
-                    ErrorKind::InvalidCredentialOffer,
-                    format!("invalid query string: {e}"),
-                )
-            })?;
+    /// Returns an error if the URI is malformed or required parameters are missing.
+    pub fn from_offer_link(link: &str) -> Result<Self, Error> {
+        // Prepend scheme if not already present
+        let uri = if link.contains("://") {
+            link.to_string()
+        } else {
+            format!("openid-credential-offer://?{link}")
+        };
+
+        let parsed_url = Url::parse(&uri).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!("invalid offer link: {e}"),
+            )
+        })?;
 
         let params: HashMap<String, String> = parsed_url
             .query_pairs()
@@ -327,6 +334,17 @@ impl CredentialOfferUri {
             ErrorKind::InvalidCredentialOffer,
             "missing credential_offer or credential_offer_uri parameter",
         ))
+    }
+
+    /// Parses credential offer URI parameters from a query string.
+    ///
+    /// Supports both `credential_offer` (by value) and `credential_offer_uri` (by reference).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if neither parameter is present or parsing fails.
+    pub fn from_query(query: &str) -> Result<Self, Error> {
+        Self::from_offer_link(query)
     }
 }
 
@@ -535,8 +553,7 @@ mod tests {
 
     #[test]
     fn parse_credential_offer_uri_by_value() {
-        // Test with standard openid-credential-offer:// scheme format
-        // Full URI: openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D
+        // Test with query string only (scheme prepended automatically)
         let query_part = "credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
 
         let uri = CredentialOfferUri::from_query(query_part).expect("Failed to parse");
@@ -544,6 +561,22 @@ mod tests {
         match uri.source {
             CredentialOfferSource::ByValue(offer) => {
                 assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_full_offer_link_uri() {
+        // Test with full openid-credential-offer:// URI as typically received
+        let full_uri = "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(full_uri).expect("Failed to parse");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+                assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
             }
             CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
         }
