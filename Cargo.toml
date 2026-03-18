@@ -9,13 +9,41 @@ exclude = ["/.github/*", "/assets/*", "/docs/*"]
 [workspace]
 resolver = "2"
 
-members = ["cloud-wallet-crypto", "cloud-wallet-events", "cloud-wallet-openid4vc"]
+members = [
+  "cloud-wallet-crypto",
+  "cloud-wallet-events",
+  "cloud-wallet-kms",
+  "cloud-wallet-openid4vc"
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Async utilities
+async-trait = "0.1"
+
+# Error handling
+color-eyre = "0.6"
+thiserror = "2"
+
+# Configuration
+config = "0.15"
+
+# Serialization / Deserialization
+base64ct = "1.8"
+serde = "1"
+serde_json = "1"
+
+# Logging and metrics
+tracing = "0.1"
+
+time = "0.3"
+url = "2.5"
+uuid = "1"
 
 [workspace.lints.clippy]
 
@@ -26,28 +54,10 @@ missing_docs = "warn"
 broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
-[workspace.dependencies]
-# Serialization / Deserialization
-serde = "1"
-
-# Error handling
-color-eyre = "0.6"
-thiserror = "2"
-
-# Configuration
-config = "0.15"
-
-# Logging and metrics
-tracing = "0.1"
-
-uuid = { version = "1", features = ["v4", "serde"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-url = { version = "2.5", features = ["serde"] }
-
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
 color-eyre.workspace = true
-config.workspace = true
+config = "0.15"
 serde = { workspace = true, features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
