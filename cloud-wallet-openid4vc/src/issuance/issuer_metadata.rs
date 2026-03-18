@@ -334,7 +334,7 @@ pub struct CredentialConfiguration {
     /// Credential Format and defined in Appendix A:
     /// - JWT-based formats (jwt_vc_json, dc+sd-jwt): string identifiers from
     ///   the JWA registry (e.g., `"ES256"`, `"RS256"`)
-    /// - COSE-based formats (mso_mdoc): integer identifiers from the CASE
+    /// - CASE-based formats (mso_mdoc): integer identifiers from the CASE
     ///   Algorithms IANA registry (e.g., `-7` for ES256, `-257` for RS256)
     ///
     /// Validation of these values is format-specific and handled elsewhere.
