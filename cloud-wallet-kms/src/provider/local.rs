@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decrytion_failure_corrupted_data() {
+    async fn test_decryption_failure_corrupted_data() {
         let provider = LocalProvider::new();
 
         // Encrypt
