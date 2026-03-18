@@ -297,8 +297,8 @@ impl CredentialOfferUri {
     /// Returns an error if neither parameter is present or parsing fails.
     pub fn from_query(query: &str) -> Result<Self, Error> {
         // Use URL parser for robust query string parsing
-        let parsed_url = Url::parse(&format!("openid-credential-offer://?{query}"))
-            .map_err(|e| {
+        let parsed_url =
+            Url::parse(&format!("openid-credential-offer://?{query}")).map_err(|e| {
                 Error::message(
                     ErrorKind::InvalidCredentialOffer,
                     format!("invalid query string: {e}"),
@@ -434,7 +434,10 @@ mod tests {
             "credential_issuer": "https://issuer.example.com",
             "credential_configuration_ids": ["MyCredential"]
         });
-        assert_eq!(parsed, expected, "Serialized JSON should match expected structure");
+        assert_eq!(
+            parsed, expected,
+            "Serialized JSON should match expected structure"
+        );
     }
 
     #[test]
