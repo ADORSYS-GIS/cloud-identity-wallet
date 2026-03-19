@@ -36,11 +36,47 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 |--------|----------------------|--------------------------|---------------|
 | GET    | `/credential-offer`  | Resolve credential offer | No            |
 
+**Credential Offer Structure:**
+
+```json
+{
+  "credential_issuer": "https://issuer.example.com",
+  "credential_configuration_ids": ["UniversityDegreeCredential"],
+  "grants": {
+    "authorization_code": {
+      "issuer_state": "opaque-state-string"
+    },
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+      "pre-authorized_code": "short-lived-code",
+      "tx_code": {
+        "input_mode": "numeric",
+        "length": 4,
+        "description": "Enter the code sent via SMS"
+      }
+    }
+  }
+}
+```
+
+**Fields:**
+
+| Field                         | Required | Description                                                                                             |
+|-------------------------------|----------|---------------------------------------------------------------------------------------------------------|
+| `credential_issuer`           | Yes      | HTTPS URL of the Credential Issuer (per [Section 11.2.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-issuer-identifie)) |
+| `credential_configuration_ids` | Yes      | Array of credential configuration IDs to offer                                                          |
+| `grants`                      | No       | Object with supported grant types                                                                        |
+
+**Grant Types:**
+
+- `authorization_code`: Standard OAuth 2.0 flow with optional `issuer_state`
+- `urn:ietf:params:oauth:grant-type:pre-authorized_code`: Pre-authorized flow with required `pre-authorized_code` and optional `tx_code`
+
 **Key Concepts:**
 
 - Credential offers can contain multiple credentials; UI should allow user selection
 - Nonce is requested at dedicated Nonce Endpoint, not at credential-offer dereference time
 - Access token handling is mediated through wallet backend
+- `tx_code.description` max length is 300 characters
 
 ### Credential Endpoint
 
