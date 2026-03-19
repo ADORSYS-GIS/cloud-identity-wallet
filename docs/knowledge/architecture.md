@@ -69,7 +69,7 @@ Summary:
 Summary:
 
 1. Resolve out-of-band `credential_offer` and issuer metadata.
-2. Exchange `pre_authorized_code` (and optional `tx_code`) for access token.
+2. Exchange `pre-authorized_code` (and optional `tx_code`) for access token.
 3. `POST /credential`; validate and store.
 
 ### Presentation – OpenID4VP

@@ -6,8 +6,10 @@ license.workspace = true
 
 [dependencies]
 color-eyre.workspace = true
+percent-encoding = "2"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+url.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
