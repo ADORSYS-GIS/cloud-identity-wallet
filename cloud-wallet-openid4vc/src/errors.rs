@@ -152,6 +152,10 @@ pub enum ErrorKind {
     #[error("Credential is revoked")]
     CredentialRevoked,
 
+    /// A network error occurred while fetching a resource.
+    #[error("Network error")]
+    NetworkError,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,

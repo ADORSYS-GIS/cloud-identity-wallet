@@ -13,3 +13,8 @@ uuid.workspace = true
 time.workspace = true
 url.workspace = true
 percent-encoding = "2"
+reqwest = { version = "0.13", features = ["json"] }
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
