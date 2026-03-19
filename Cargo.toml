@@ -31,9 +31,6 @@ tokio = "1"
 color-eyre = "0.6"
 thiserror = "2"
 
-# Configuration
-config = "0.15"
-
 # Serialization / Deserialization
 base64ct = "1.8"
 serde = "1"

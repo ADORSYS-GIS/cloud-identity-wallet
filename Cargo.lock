@@ -923,7 +923,6 @@ dependencies = [
  "moka",
  "pollster",
  "rand 0.10.0",
- "serde",
  "sqlx",
  "testcontainers-modules",
  "thiserror 2.0.18",
