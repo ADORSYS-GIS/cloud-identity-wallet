@@ -35,6 +35,7 @@ use moka::future::Cache as MokaCache;
 pub struct Cache<K, V, S = RandomState> {
     inner: MokaCache<K, V, S>,
     stats: CacheStatsRef,
+    enable_stats: bool,
     access_counters: Arc<DashMap<K, AccessCounter, S>>,
     max_accesses: Option<u64>,
 }
@@ -125,6 +126,7 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let result = self.inner.get(key).await;
+        let is_stats_enabled = self.enable_stats;
 
         if result.is_some() {
             // Increment access counter
@@ -144,9 +146,13 @@ where
                 self.stats.record_eviction();
                 return None;
             }
-            self.stats.record_hit();
+            if is_stats_enabled {
+                self.stats.record_hit();
+            }
         } else {
-            self.stats.record_miss();
+            if is_stats_enabled {
+                self.stats.record_miss();
+            }
         }
         result
     }
@@ -216,14 +222,19 @@ where
         F: Future<Output = V>,
     {
         let entry = self.inner.entry(key.clone()).or_insert_with(init).await;
+        let is_stats_enabled = self.enable_stats;
 
         if entry.is_fresh() {
-            self.stats.record_miss();
+            if is_stats_enabled {
+                self.stats.record_miss();
+            }
             // Initialize access counter for new entry
             let counters = &self.access_counters;
             counters.insert(key, AccessCounter::new(self.max_accesses));
         } else {
-            self.stats.record_hit();
+            if is_stats_enabled {
+                self.stats.record_hit();
+            }
             // Increment access counter
             let counters = &self.access_counters;
             if let Some(counter) = counters.get(&key) {
@@ -372,6 +383,7 @@ impl<K, V, S> Clone for Cache<K, V, S> {
         Self {
             inner: self.inner.clone(),
             stats: self.stats.clone(),
+            enable_stats: self.enable_stats,
             access_counters: self.access_counters.clone(),
             max_accesses: self.max_accesses,
         }
@@ -452,11 +464,33 @@ where
     where
         H: BuildHasher + Clone + Send + Sync + 'static,
     {
+        let stats = CacheStatsRef::new();
+        let mut builder = MokaCache::builder();
+
+        if let Some(capacity) = self.max_capacity {
+            builder = builder.max_capacity(capacity);
+        }
+        if let Some(ttl) = self.time_to_live {
+            builder = builder.time_to_live(ttl);
+        }
+        if let Some(tti) = self.time_to_idle {
+            builder = builder.time_to_idle(tti);
+        }
+
+        // Add eviction listener for statistics
+        if self.enable_stats {
+            let stats_clone = stats.clone();
+            builder = builder.eviction_listener(move |_key, _value, _cause| {
+                stats_clone.record_eviction();
+            });
+        }
+
         Cache {
-            inner: MokaCache::builder().build_with_hasher(hasher.clone()),
-            stats: CacheStatsRef::default(),
+            inner: builder.build_with_hasher(hasher.clone()),
+            stats,
+            enable_stats: self.enable_stats,
             access_counters: Arc::new(DashMap::with_hasher(hasher)),
-            max_accesses: None,
+            max_accesses: self.max_accesses,
         }
     }
 
@@ -546,6 +580,7 @@ where
         Cache {
             inner: builder.build_with_hasher(build_hasher.clone()),
             stats,
+            enable_stats: self.enable_stats,
             access_counters: Arc::new(DashMap::with_hasher(build_hasher)),
             max_accesses: self.max_accesses,
         }
