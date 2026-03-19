@@ -1347,43 +1347,6 @@ mod tests {
             serde_json::to_value(&metadata).expect("failed to serialize back to JSON");
 
         // Compare the two JSON values
-        // Note: HashMap ordering is non-deterministic, so we compare the structures
-        // rather than raw strings. The values should be semantically equal.
-        assert_json_values_equal(&original, &serialized);
-    }
-
-    /// Compares two JSON values for semantic equality, handling HashMap ordering.
-    fn assert_json_values_equal(expected: &serde_json::Value, actual: &serde_json::Value) {
-        match (expected, actual) {
-            (serde_json::Value::Object(expected_map), serde_json::Value::Object(actual_map)) => {
-                assert_eq!(
-                    expected_map.len(),
-                    actual_map.len(),
-                    "object key count mismatch"
-                );
-                for (key, expected_value) in expected_map {
-                    let actual_value = actual_map
-                        .get(key)
-                        .unwrap_or_else(|| panic!("missing key: {key}"));
-                    assert_json_values_equal(expected_value, actual_value);
-                }
-            }
-            (serde_json::Value::Array(expected_arr), serde_json::Value::Array(actual_arr)) => {
-                assert_eq!(
-                    expected_arr.len(),
-                    actual_arr.len(),
-                    "array length mismatch"
-                );
-                for (expected_item, actual_item) in expected_arr.iter().zip(actual_arr.iter()) {
-                    assert_json_values_equal(expected_item, actual_item);
-                }
-            }
-            _ => {
-                assert_eq!(
-                    expected, actual,
-                    "value mismatch: expected {expected}, got {actual}"
-                );
-            }
-        }
+        assert_eq!(original, serialized);
     }
 }
