@@ -313,6 +313,54 @@ pub struct CredentialOfferUri {
 }
 
 impl CredentialOfferUri {
+    /// Parses a credential offer from a full offer link URI.
+    ///
+    /// Accepts either:
+    /// - A full URI like `openid-credential-offer://?credential_offer=...`
+    /// - A query string like `credential_offer=...` (will prepend the scheme)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URI is malformed or required parameters are missing.
+    pub fn from_offer_link(link: &str) -> Result<Self, Error> {
+        // Prepend scheme if not already present
+        let uri = if link.contains("://") {
+            link.to_string()
+        } else {
+            format!("openid-credential-offer://?{link}")
+        };
+
+        let parsed_url = Url::parse(&uri).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!("invalid offer link: {e}"),
+            )
+        })?;
+
+        let params: HashMap<String, String> = parsed_url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+
+        if let Some(encoded) = params.get("credential_offer") {
+            let offer = CredentialOffer::from_query_param(encoded)?;
+            return Ok(Self {
+                source: CredentialOfferSource::ByValue(offer),
+            });
+        }
+
+        if let Some(uri) = params.get("credential_offer_uri") {
+            return Ok(Self {
+                source: CredentialOfferSource::ByReference(uri.clone()),
+            });
+        }
+
+        Err(Error::message(
+            ErrorKind::InvalidCredentialOffer,
+            "missing credential_offer or credential_offer_uri parameter",
+        ))
+    }
+
     /// Parses credential offer URI parameters from a query string.
     ///
     /// Supports both `credential_offer` (by value) and `credential_offer_uri` (by reference).
@@ -614,9 +662,17 @@ mod tests {
 
         let json = serde_json::to_string(&offer).expect("Failed to serialize");
 
-        assert!(json.contains("\"credential_issuer\":\"https://issuer.example.com\""));
-        assert!(json.contains("\"credential_configuration_ids\":[\"MyCredential\"]"));
-        assert!(!json.contains("\"grants\"")); // Should be skipped when None
+        // Parse and compare as JSON for canonical comparison
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("Failed to parse serialized JSON");
+        let expected = serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["MyCredential"]
+        });
+        assert_eq!(
+            parsed, expected,
+            "Serialized JSON should match expected structure"
+        );
     }
 
     #[test]
@@ -629,9 +685,11 @@ mod tests {
 
         let result = offer.validate();
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind(),
-            ErrorKind::InvalidCredentialOffer
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "Error message should mention empty configuration ids"
         );
     }
 
@@ -645,9 +703,11 @@ mod tests {
 
         let result = offer.validate();
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind(),
-            ErrorKind::InvalidCredentialOffer
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(
+            err.to_string().contains("not a valid URL"),
+            "Error message should mention invalid URL"
         );
     }
 
@@ -673,9 +733,11 @@ mod tests {
 
         let result = offer.validate();
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind(),
-            ErrorKind::InvalidCredentialOffer
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(
+            err.to_string().contains("300 characters"),
+            "Error message should mention the 300 character limit"
         );
     }
 
@@ -708,13 +770,30 @@ mod tests {
 
     #[test]
     fn parse_credential_offer_uri_by_value() {
-        let query = "credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+        // Test with query string only (scheme prepended automatically)
+        let query_part = "credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
 
-        let uri = CredentialOfferUri::from_query(query).expect("Failed to parse");
+        let uri = CredentialOfferUri::from_query(query_part).expect("Failed to parse");
 
         match uri.source {
             CredentialOfferSource::ByValue(offer) => {
                 assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_full_offer_link_uri() {
+        // Test with full openid-credential-offer:// URI as typically received
+        let full_uri = "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(full_uri).expect("Failed to parse");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+                assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
             }
             CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
         }

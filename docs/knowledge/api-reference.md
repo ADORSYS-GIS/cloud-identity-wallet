@@ -60,11 +60,11 @@ Authentication flows are handled via OpenID4VCI/OpenID4VP protocols. The wallet 
 
 **Fields:**
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `credential_issuer` | Yes | HTTPS URL of the Credential Issuer (per [Section 11.2.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-issuer-identifie)) |
-| `credential_configuration_ids` | Yes | Array of credential configuration IDs to offer |
-| `grants` | No | Object with supported grant types |
+| Field                         | Required | Description                                                                                             |
+|-------------------------------|----------|---------------------------------------------------------------------------------------------------------|
+| `credential_issuer`           | Yes      | HTTPS URL of the Credential Issuer (per [Section 11.2.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-issuer-identifie)) |
+| `credential_configuration_ids` | Yes      | Array of credential configuration IDs to offer                                                          |
+| `grants`                      | No       | Object with supported grant types                                                                        |
 
 **Grant Types:**
 
