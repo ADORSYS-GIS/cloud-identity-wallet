@@ -273,11 +273,17 @@ impl KafkaPublisher {
     /// `"credential"` from `"credential.stored"`).
     fn topic_for(&self, event: &Event) -> String {
         let category = event
-            .event_type
-            .as_str()
-            .split('.')
-            .next()
-            .unwrap_or("default");
+            .metadata
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| {
+                event
+                    .event_type
+                    .as_str()
+                    .split('.')
+                    .next()
+                    .unwrap_or("default")
+            });
         format!("{}.{}", self.config.topic_prefix, category)
     }
 }
@@ -456,7 +462,7 @@ impl EventConsumer for KafkaConsumer {
                         }
                         if let Err(e) = consumer.commit_consumed()
                             && tx
-                                .send(Err(EventError::Publish(format!("Commit failed: {e}"))))
+                                .send(Err(EventError::Connection(format!("Commit failed: {e}"))))
                                 .is_err()
                         {
                             return;
@@ -477,19 +483,19 @@ impl EventConsumer for KafkaConsumer {
             }
         });
 
-        // Async handler task — forward events from the blocking poll to the caller's handler
+        // Async handler task — forward events from the blocking poll to the caller's handler.
+        // Handler errors are logged and ignored; consumer-level errors are also logged.
+        // For custom error handling, wrap the handler before passing it to subscribe.
         tokio::spawn(async move {
             while let Some(result) = rx.recv().await {
                 match result {
                     Ok(event) => {
-                        if let Err(_e) = handler(event).await {
-                            // Propagate handler errors back to the caller via
-                            // the channel so they decide how to react.
+                        if let Err(e) = handler(event).await {
+                            eprintln!("Handler error: {e}");
                         }
                     }
-                    Err(_e) => {
-                        // Consumer-level errors are surfaced here; callers
-                        // can wrap the handler to observe them.
+                    Err(e) => {
+                        eprintln!("Consumer error: {e}");
                     }
                 }
             }
