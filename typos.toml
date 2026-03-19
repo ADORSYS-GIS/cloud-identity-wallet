@@ -8,5 +8,6 @@ extend-ignore-identifiers-re = []
 [files]
 extend-exclude = [
   "cloud-wallet-crypto/src/jwk.rs",
-  "cloud-wallet-crypto/src/jwk/tests.rs"
+  "cloud-wallet-crypto/src/jwk/tests.rs",
+  "cloud-wallet-openid4vc/tests_metadata/issuer_metadata.json"
 ]
