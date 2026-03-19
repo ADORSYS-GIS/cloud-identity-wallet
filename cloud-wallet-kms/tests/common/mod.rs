@@ -1,5 +1,7 @@
 //! Common utilities for integration tests.
 
+#![allow(dead_code)]
+
 use aws_config::SdkConfig;
 use aws_sdk_kms::config::Credentials;
 use std::sync::OnceLock;
@@ -11,11 +13,9 @@ use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 /// Sample plaintext for testing encryption/decryption operations.
-#[allow(dead_code)]
 pub const SAMPLE_PLAINTEXT: &[u8] = b"Hello, World!";
 
 /// Sample Additional Authenticated Data (AAD).
-#[allow(dead_code)]
 pub const SAMPLE_AAD: &[u8] = b"some-additional-data";
 
 /// Initialize tracing for tests.
@@ -53,8 +53,6 @@ fn localstack_state() -> &'static Mutex<Option<LocalStackState>> {
 }
 
 /// Sets up the test environment with LocalStack.
-#[cfg(feature = "aws-kms")]
-#[allow(dead_code)]
 pub async fn setup() -> SdkConfig {
     init_tracing();
 
