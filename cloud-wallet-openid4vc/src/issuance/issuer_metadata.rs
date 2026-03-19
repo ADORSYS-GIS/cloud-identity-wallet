@@ -251,7 +251,7 @@ pub struct JwtVcJsonCredentialConfiguration {
 /// pattern matching to access format-specific required fields:
 ///
 /// ```
-/// use cloud_wallet_openid4vc::issuer_metadata::{CredentialFormatDetails, CredentialConfiguration};
+/// use cloud_wallet_openid4vc::issuance::issuer_metadata::{CredentialFormatDetails, CredentialConfiguration};
 ///
 /// # let json = serde_json::json!({
 /// #     "format": "dc+sd-jwt",
@@ -433,7 +433,7 @@ pub struct BatchCredentialIssuance {
 /// # Example
 ///
 /// ```
-/// use cloud_wallet_openid4vc::issuer_metadata::{
+/// use cloud_wallet_openid4vc::issuance::issuer_metadata::{
 ///     CredentialIssuerMetadata, CredentialFormatDetails,
 /// };
 ///
@@ -1319,21 +1319,24 @@ mod tests {
             serde_json::from_str(KEYCLOAK_METADATA).expect("failed to parse original JSON");
 
         // Deserialize into typed struct
-        let metadata: CredentialIssuerMetadata =
-            serde_json::from_str(KEYCLOAK_METADATA)
-                .expect("failed to deserialize into CredentialIssuerMetadata");
+        let metadata: CredentialIssuerMetadata = serde_json::from_str(KEYCLOAK_METADATA)
+            .expect("failed to deserialize into CredentialIssuerMetadata");
 
         // Validate the metadata
         metadata.validate().expect("metadata validation failed");
 
         // Verify we parsed both credential configurations
         assert_eq!(metadata.credential_configurations_supported.len(), 2);
-        assert!(metadata
-            .credential_configurations_supported
-            .contains_key("oid4vc_natural_person"));
-        assert!(metadata
-            .credential_configurations_supported
-            .contains_key("IdentityCredential"));
+        assert!(
+            metadata
+                .credential_configurations_supported
+                .contains_key("oid4vc_natural_person")
+        );
+        assert!(
+            metadata
+                .credential_configurations_supported
+                .contains_key("IdentityCredential")
+        );
 
         // Verify encryption settings
         assert!(metadata.credential_response_encryption.is_some());
