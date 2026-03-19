@@ -68,7 +68,7 @@ async fn test_with_encryption_context() {
     // Decrypt with provider2 should fail
     let result = provider2.decrypt(aad, &mut plaintext).await;
     assert!(result.is_err());
-    assert!(matches!(result, Err(cloud_wallet_kms::Error::Provider(_))));
+    assert!(matches!(result, Err(cloud_wallet_kms::Error::Crypto(_))));
 }
 
 #[tokio::test]
