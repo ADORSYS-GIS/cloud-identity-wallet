@@ -1,0 +1,479 @@
+{
+  "credential_issuer": "https://413f-2605-59c0-1e33-c410-322e-7689-a3a2-515.ngrok-free.app/realms/oid4vc-vci",
+  "credential_endpoint": "https://413f-2605-59c0-1e33-c410-322e-7689-a3a2-515.ngrok-free.app/realms/oid4vc-vci/protocol/oid4vc/credential",
+  "nonce_endpoint": "https://413f-2605-59c0-1e33-c410-322e-7689-a3a2-515.ngrok-free.app/realms/oid4vc-vci/protocol/oid4vc/nonce",
+  "authorization_servers": [
+    "https://413f-2605-59c0-1e33-c410-322e-7689-a3a2-515.ngrok-free.app/realms/oid4vc-vci"
+  ],
+  "credential_configurations_supported": {
+    "oid4vc_natural_person": {
+      "id": "oid4vc_natural_person",
+      "format": "dc+sd-jwt",
+      "scope": "oid4vc_natural_person",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_signing_alg_values_supported": [
+        "PS384",
+        "RS384",
+        "EdDSA",
+        "ES384",
+        "ES256",
+        "RS256",
+        "ES512",
+        "PS256",
+        "PS512",
+        "RS512"
+      ],
+      "vct": "oid4vc_natural_person",
+      "credential_definition": {
+        "type": [
+          "oid4vc_natural_person"
+        ],
+        "@context": [
+          "oid4vc_natural_person"
+        ]
+      },
+      "proof_types_supported": {
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "PS384",
+            "RS384",
+            "EdDSA",
+            "ES384",
+            "ES256",
+            "RS256",
+            "ES512",
+            "PS256",
+            "PS512",
+            "RS512"
+          ]
+        },
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "PS384",
+            "RS384",
+            "EdDSA",
+            "ES384",
+            "ES256",
+            "RS256",
+            "ES512",
+            "PS256",
+            "PS512",
+            "RS512"
+          ]
+        }
+      },
+      "credential_metadata": {
+        "claims": [
+          {
+            "path": [
+              "id"
+            ],
+            "mandatory": false
+          },
+          {
+            "path": [
+              "email"
+            ],
+            "mandatory": false
+          },
+          {
+            "path": [
+              "firstName"
+            ],
+            "mandatory": false
+          },
+          {
+            "path": [
+              "familyName"
+            ],
+            "mandatory": false
+          }
+        ]
+      }
+    },
+    "IdentityCredential": {
+      "id": "IdentityCredential",
+      "format": "dc+sd-jwt",
+      "scope": "IdentityCredential",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "vct": "https://credentials.example.com/identity_credential",
+      "credential_definition": {
+        "type": [
+          "identity_credential"
+        ],
+        "@context": [
+          "https://credentials.example.com/identity_credential"
+        ]
+      },
+      "proof_types_supported": {
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "PS384",
+            "RS384",
+            "EdDSA",
+            "ES384",
+            "ES256",
+            "RS256",
+            "ES512",
+            "PS256",
+            "PS512",
+            "RS512"
+          ]
+        },
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "PS384",
+            "RS384",
+            "EdDSA",
+            "ES384",
+            "ES256",
+            "RS256",
+            "ES512",
+            "PS256",
+            "PS512",
+            "RS512"
+          ]
+        }
+      },
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "Identity Credential"
+          }
+        ],
+        "claims": [
+          {
+            "path": [
+              "given_name"
+            ],
+            "mandatory": false,
+            "display": [
+              {
+                "name": "الاسم الشخصي",
+                "locale": "ar"
+              },
+              {
+                "name": "Vorname",
+                "locale": "de"
+              },
+              {
+                "name": "Given Name",
+                "locale": "en"
+              },
+              {
+                "name": "Nombre",
+                "locale": "es"
+              },
+              {
+                "name": "نام",
+                "locale": "fa"
+              },
+              {
+                "name": "Etunimi",
+                "locale": "fi"
+              },
+              {
+                "name": "Prénom",
+                "locale": "fr"
+              },
+              {
+                "name": "पहचानी गई नाम",
+                "locale": "hi"
+              },
+              {
+                "name": "Nome",
+                "locale": "it"
+              },
+              {
+                "name": "名",
+                "locale": "ja"
+              },
+              {
+                "name": "Овог нэр",
+                "locale": "mn"
+              },
+              {
+                "name": "Voornaam",
+                "locale": "nl"
+              },
+              {
+                "name": "Nome Próprio",
+                "locale": "pt"
+              },
+              {
+                "name": "Förnamn",
+                "locale": "sv"
+              },
+              {
+                "name": "مسلمان نام",
+                "locale": "ur"
+              }
+            ]
+          },
+          {
+            "path": [
+              "family_name"
+            ],
+            "mandatory": false,
+            "display": [
+              {
+                "name": "اسم العائلة",
+                "locale": "ar"
+              },
+              {
+                "name": "Nachname",
+                "locale": "de"
+              },
+              {
+                "name": "Family Name",
+                "locale": "en"
+              },
+              {
+                "name": "Apellido",
+                "locale": "es"
+              },
+              {
+                "name": "نام خانوادگی",
+                "locale": "fa"
+              },
+              {
+                "name": "Sukunimi",
+                "locale": "fi"
+              },
+              {
+                "name": "Nom de famille",
+                "locale": "fr"
+              },
+              {
+                "name": "परिवार का नाम",
+                "locale": "hi"
+              },
+              {
+                "name": "Cognome",
+                "locale": "it"
+              },
+              {
+                "name": "姓",
+                "locale": "ja"
+              },
+              {
+                "name": "өөрийн нэр",
+                "locale": "mn"
+              },
+              {
+                "name": "Achternaam",
+                "locale": "nl"
+              },
+              {
+                "name": "Sobrenome",
+                "locale": "pt"
+              },
+              {
+                "name": "Efternamn",
+                "locale": "sv"
+              },
+              {
+                "name": "خاندانی نام",
+                "locale": "ur"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birthdate"
+            ],
+            "mandatory": false,
+            "display": [
+              {
+                "name": "تاريخ الميلاد",
+                "locale": "ar"
+              },
+              {
+                "name": "Geburtsdatum",
+                "locale": "de"
+              },
+              {
+                "name": "Date of Birth",
+                "locale": "en"
+              },
+              {
+                "name": "Fecha de Nacimiento",
+                "locale": "es"
+              },
+              {
+                "name": "تاریخ تولد",
+                "locale": "fa"
+              },
+              {
+                "name": "Syntymäaika",
+                "locale": "fi"
+              },
+              {
+                "name": "Date de naissance",
+                "locale": "fr"
+              },
+              {
+                "name": "जन्म की तारीख",
+                "locale": "hi"
+              },
+              {
+                "name": "Data di nascita",
+                "locale": "it"
+              },
+              {
+                "name": "生年月日",
+                "locale": "ja"
+              },
+              {
+                "name": "төрсөн өдөр",
+                "locale": "mn"
+              },
+              {
+                "name": "Geboortedatum",
+                "locale": "nl"
+              },
+              {
+                "name": "Data de Nascimento",
+                "locale": "pt"
+              },
+              {
+                "name": "Födelsedatum",
+                "locale": "sv"
+              },
+              {
+                "name": "تاریخ پیدائش",
+                "locale": "ur"
+              }
+            ]
+          },
+          {
+            "path": [
+              "username"
+            ],
+            "mandatory": false,
+            "display": [
+              {
+                "name": "اسم المستخدم",
+                "locale": "ar"
+              },
+              {
+                "name": "Benutzername",
+                "locale": "de"
+              },
+              {
+                "name": "Username",
+                "locale": "en"
+              },
+              {
+                "name": "Nombre de usuario",
+                "locale": "es"
+              },
+              {
+                "name": "نام کاربری",
+                "locale": "fa"
+              },
+              {
+                "name": "Käyttäjätunnus",
+                "locale": "fi"
+              },
+              {
+                "name": "Nom d'utilisateur",
+                "locale": "fr"
+              },
+              {
+                "name": "उपयोगकर्ता नाम",
+                "locale": "hi"
+              },
+              {
+                "name": "Nome utente",
+                "locale": "it"
+              },
+              {
+                "name": "ユーザー名",
+                "locale": "ja"
+              },
+              {
+                "name": "Хэрэглэгчийн нэр",
+                "locale": "mn"
+              },
+              {
+                "name": "Gebruikersnaam",
+                "locale": "nl"
+              },
+              {
+                "name": "Nome de usuário",
+                "locale": "pt"
+              },
+              {
+                "name": "Användarnamn",
+                "locale": "sv"
+              },
+              {
+                "name": "صارف کا نام",
+                "locale": "ur"
+              }
+            ]
+          },
+          {
+            "path": [
+              "id"
+            ],
+            "mandatory": false
+          }
+        ]
+      }
+    }
+  },
+  "credential_response_encryption": {
+    "alg_values_supported": [
+      "RSA-OAEP"
+    ],
+    "enc_values_supported": [
+      "A256GCM"
+    ],
+    "encryption_required": false
+  },
+  "credential_request_encryption": {
+    "jwks": {
+      "keys": [
+        {
+          "kid": "3QLAT-RXmKM5tvild4qUZ6vREWcrXI2z-asbdX5RGe0",
+          "kty": "RSA",
+          "alg": "RSA-OAEP",
+          "use": "enc",
+          "x5c": [
+            "MIIEtjCCAx6gAwIBAgIJAKYdXkst6VWeMA0GCSqGSIb3DQEBDAUAMIGIMQswCQYDVQQGEwJDTTENMAsGA1UECBMEV2VzdDESMBAGA1UEBxMJQmFuZ2FuZ3RlMRQwEgYDVQQKEwtBZG9yc3lzIExhYjEjMCEGA1UECxMaS2V5Y2xvYWsgQ29tcGV0ZW5jZSBDZW50ZXIxGzAZBgNVBAMTElJTQSBFbmNyeXB0aW9uIEtleTAeFw0yNjAxMTUxMjAxNTdaFw0zNjAxMTMxMjAxNTdaMIGIMQswCQYDVQQGEwJDTTENMAsGA1UECBMEV2VzdDESMBAGA1UEBxMJQmFuZ2FuZ3RlMRQwEgYDVQQKEwtBZG9yc3lzIExhYjEjMCEGA1UECxMaS2V5Y2xvYWsgQ29tcGV0ZW5jZSBDZW50ZXIxGzAZBgNVBAMTElJTQSBFbmNyeXB0aW9uIEtleTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBALMAeFHn1ZxqSWrMR2AN+Ahcf9kZ5enkKaRUw1qUQJ3la8rdanArdfMVbMsh5UcRiO2qN7alppt9gav66Bh/ELQ/c2XHX2sCerahrDlnmB/0mbxFDs4FIYNSNOCw+jqmeqxfFwOYEI++XNCK+svTHz5HYeZqhJvyOvX6rZwEdbTgz8fzV7lHtSbdUHgf0wQy714Q9K4hAj+bREyZilL8IjYpGfBmweh+XqNt1wiccKIlrwe/4a6xTgHlDiySZi+suSj5EpjR22hU+7gTO6ZehWVaP8cm8aAhqYyhvQj+Zoy3cBNHX1x5s9VQWmEewe4wmtpuUhyIGT0f8DyjpCJJCXg8ybVd+hr8hkK4Rkgg6YsFeztrKDC/oRQsjcbee0AloB/EdSEcsHslyVueuVrTEnbXcPEwpCsuEBIdgnEZc2XZaRpGEDrAdmj7C5OKfvnJZBLcHpG6TVeEQLUnjV5cGuwvajS4i8W7cm04Z8/Za9SpQyC2kxRi+jVtUBb0mtbhswIDAQABoyEwHzAdBgNVHQ4EFgQUrMjgjREso5ddpk2r4QL42MeCQVkwDQYJKoZIhvcNAQEMBQADggGBAEfiKqTrtNGhuZSbCmPuPFXIoaHbDjpNMdiCyJ1gKK53NJYLL53mbuBVHwyqnZs/2KHFIvwbf7NvzvCaCIn59BhW7uvy8wcAWa1W7lh4KY5/uMLsO9aC2JAGb+qJrAnr0OdMLoWMj6UEparyMzkeluEjApppB0nga8+vU/nAA2GSHqinbIpbDHB1NbK5hdpI61k/u99qfBEdPkA1/A3Zs1ehIQEC6UYarj2uff7K3yXWedqb/5DnYfzEgTG7qzAsg4FRS+z1GAOQDfE+W7BvRlwV4nB26nsqyWoXAni9hmDI3UxpMd9axb7eClM8KJXlJwVLaUBVBVg9XJKa8mvfL3/vFp+mlTyCHfpkBjB/zVDFrNu3PMTv/6msvhT3mG32N5rs56hCWsqeygR1NvmVoEoGnwhF+XZVnjj0xFlBbIVgtb6NvGXF02xWpjur2u2Dh6D/ZDb9k77t+/HsYN1VKxdCYupgdPb/bUOj/9UTSFPgabXfPPQY9HOZ3WH8KWadgQ=="
+          ],
+          "x5t": "kcdaOA7ggoWJJ6aNL0XKqxgoYy8",
+          "x5t#S256": "I9Kpw-oM45wCVbboJ2h3Iz1k0yiOb9S9v_qEDGb7ilY",
+          "n": "swB4UefVnGpJasxHYA34CFx_2Rnl6eQppFTDWpRAneVryt1qcCt18xVsyyHlRxGI7ao3tqWmm32Bq_roGH8QtD9zZcdfawJ6tqGsOWeYH_SZvEUOzgUhg1I04LD6OqZ6rF8XA5gQj75c0Ir6y9MfPkdh5mqEm_I69fqtnAR1tODPx_NXuUe1Jt1QeB_TBDLvXhD0riECP5tETJmKUvwiNikZ8GbB6H5eo23XCJxwoiWvB7_hrrFOAeUOLJJmL6y5KPkSmNHbaFT7uBM7pl6FZVo_xybxoCGpjKG9CP5mjLdwE0dfXHmz1VBaYR7B7jCa2m5SHIgZPR_wPKOkIkkJeDzJtV36GvyGQrhGSCDpiwV7O2soML-hFCyNxt57QCWgH8R1IRyweyXJW565WtMSdtdw8TCkKy4QEh2CcRlzZdlpGkYQOsB2aPsLk4p--clkEtwekbpNV4RAtSeNXlwa7C9qNLiLxbtybThnz9lr1KlDILaTFGL6NW1QFvSa1uGz",
+          "e": "AQAB"
+        },
+        {
+          "kid": "E-YimBC_6VkC1SVVVtHJXEQCzwI7u-vrSt6VK3JieFc",
+          "kty": "RSA",
+          "alg": "RSA-OAEP",
+          "use": "enc",
+          "x5c": [
+            "MIICozCCAYsCBgGcbC8fNTANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDDApvaWQ0dmMtdmNpMB4XDTI2MDIxNzE1MTczM1oXDTM2MDIxNzE1MTkxM1owFTETMBEGA1UEAwwKb2lkNHZjLXZjaTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANPJHJFnUkAdqVKsW+ZFTnswjbHBT2cn1ce5q0AX5naty6xf3GvFMHFDS1ijbpzU86B4R6jmOVDspGl8DQ/LIQloEe48dlfrqpeauecrx0pjApe8TXxXYfxjingKFuw7ZxVEXmRW26PIyKy8MxHNq1ZNk73mB+vvHRhDnFri5UsZHtBAkJbe+Fc0gDmVt2O8u5Mes9Ak+nfDgMFT5Nh6/o3/4frvsJS81IsTEn2gU9UDrF1/SthoxhK+/PYFsZV8VMrU7a22NarLLNpUMAl6hVYZvCSR4axwzU8FmMwGu2n3hqi+qTeFAWFvr5yLJVLq7tt26EJ+nLsd++XPwxAENc8CAwEAATANBgkqhkiG9w0BAQsFAAOCAQEAhG+Oh1TzMyTY3fF6Gs3zozSktxZtddQmNeP2LyuacVA9ZwYBxQuRYIS7HUQOWWSBfsvWWeHGQl0dmUrBljt8xSuGysviYrmq3/qxBhHN68W9ASor2HgimDc3T8OglQY/zZe0sirdWDk/sR66NggXrXVmMerUGZS//i57RMgtCxLMFN9XAop+YwZvsKJo/TU2DvvRLr54EFvq+dnf5XB4YGdK009+SPgC6oFWKbxiXJqyojOuwm/F0bB4P1OI+NqQoZ++RWa5nnRNR9UWopUzUlzu+4Jy4EI0wGtIYBOtq2ZoHwI5mJFiiTBSKy6z4ZWifiHnFaswqoKgwQ+zpWcbKQ=="
+          ],
+          "x5t": "mzvgX111AH3CRnFAGktgljvMgYs",
+          "x5t#S256": "wvAn1rWO15FaQRGL7YwaYAuDQbaQwCqtp17-TId7mqU",
+          "n": "08kckWdSQB2pUqxb5kVOezCNscFPZyfVx7mrQBfmdq3LrF_ca8UwcUNLWKNunNTzoHhHqOY5UOykaXwND8shCWgR7jx2V-uql5q55yvHSmMCl7xNfFdh_GOKeAoW7DtnFUReZFbbo8jIrLwzEc2rVk2TveYH6-8dGEOcWuLlSxke0ECQlt74VzSAOZW3Y7y7kx6z0CT6d8OAwVPk2Hr-jf_h-u-wlLzUixMSfaBT1QOsXX9K2GjGEr789gWxlXxUytTtrbY1qsss2lQwCXqFVhm8JJHhrHDNTwWYzAa7afeGqL6pN4UBYW-vnIslUuru23boQn6cux375c_DEAQ1zw",
+          "e": "AQAB"
+        }
+      ]
+    },
+    "enc_values_supported": [
+      "A256GCM"
+    ],
+    "encryption_required": false
+  }
+}

@@ -154,11 +154,16 @@ pub struct ProofTypeMetadata {
 /// Credential definition for W3C Verifiable Credential formats.
 ///
 /// Required inside [`JwtVcJsonCredentialConfiguration`] (Appendix A.1).
+/// Also used in SD-JWT VC configurations in some implementations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialDefinition {
     /// The credential type values (e.g. `["VerifiableCredential", "UniversityDegreeCredential"]`).
     #[serde(rename = "type")]
     pub types: Vec<String>,
+
+    /// Optional @context array for JSON-LD compatibility.
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Vec<String>>,
 
     /// Optional map of claim metadata; the keys are claim names.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +201,12 @@ pub struct SdJwtVcCredentialConfiguration {
     ///
     /// Corresponds to the `vct` header claim in the issued SD-JWT.
     pub vct: String,
+
+    /// Optional credential definition with type and context.
+    ///
+    /// Some implementations include this alongside `vct` for compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_definition: Option<CredentialDefinition>,
 
     /// Optional map of claim metadata for selective disclosure.
     ///
@@ -316,6 +327,12 @@ pub struct CredentialConfiguration {
     /// format-mandatory fields.
     #[serde(flatten)]
     pub format_details: CredentialFormatDetails,
+
+    /// Unique identifier for this credential configuration.
+    ///
+    /// Typically matches the map key in `credential_configurations_supported`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 
     /// OAuth 2.0 scope value used to request this credential type.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -630,6 +647,10 @@ mod tests {
         })
     }
 
+    /// Full issuer metadata from Keycloak OID4VCI deployment.
+    /// Source: ngrok tunnel to Keycloak realm with OID4VCI enabled.
+    const KEYCLOAK_METADATA: &str = include_str!("../../tests_metadata/issuer_metadata.json");
+
     // ── Format model deserialization ──────────────────────────────────────────
 
     #[test]
@@ -703,6 +724,7 @@ mod tests {
     fn format_str_helper_returns_correct_strings() {
         let sd = CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
             vct: "https://example.com/vct".to_string(),
+            credential_definition: None,
             claims: None,
             credential_metadata: None,
         });
@@ -717,6 +739,7 @@ mod tests {
         let jwt = CredentialFormatDetails::JwtVcJson(JwtVcJsonCredentialConfiguration {
             credential_definition: CredentialDefinition {
                 types: vec!["VerifiableCredential".to_string()],
+                context: None,
                 credential_subject: None,
             },
         });
@@ -1285,5 +1308,81 @@ mod tests {
             .expect_err("expected https failure for issuer");
         assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
         assert!(err.to_string().contains("credential_issuer"));
+    }
+
+    /// Tests that Keycloak issuer metadata can be deserialized and re-serialized
+    /// to produce equivalent JSON (round-trip test).
+    #[test]
+    fn keycloak_issuer_metadata_round_trip() {
+        // Parse the original JSON
+        let original: serde_json::Value =
+            serde_json::from_str(KEYCLOAK_METADATA).expect("failed to parse original JSON");
+
+        // Deserialize into typed struct
+        let metadata: CredentialIssuerMetadata =
+            serde_json::from_str(KEYCLOAK_METADATA)
+                .expect("failed to deserialize into CredentialIssuerMetadata");
+
+        // Validate the metadata
+        metadata.validate().expect("metadata validation failed");
+
+        // Verify we parsed both credential configurations
+        assert_eq!(metadata.credential_configurations_supported.len(), 2);
+        assert!(metadata
+            .credential_configurations_supported
+            .contains_key("oid4vc_natural_person"));
+        assert!(metadata
+            .credential_configurations_supported
+            .contains_key("IdentityCredential"));
+
+        // Verify encryption settings
+        assert!(metadata.credential_response_encryption.is_some());
+        assert!(metadata.credential_request_encryption.is_some());
+
+        // Re-serialize to JSON
+        let serialized: serde_json::Value =
+            serde_json::to_value(&metadata).expect("failed to serialize back to JSON");
+
+        // Compare the two JSON values
+        // Note: HashMap ordering is non-deterministic, so we compare the structures
+        // rather than raw strings. The values should be semantically equal.
+        assert_json_values_equal(&original, &serialized);
+    }
+
+    /// Compares two JSON values for semantic equality, handling HashMap ordering.
+    fn assert_json_values_equal(expected: &serde_json::Value, actual: &serde_json::Value) {
+        match (expected, actual) {
+            (serde_json::Value::Object(expected_map), serde_json::Value::Object(actual_map)) => {
+                assert_eq!(
+                    expected_map.len(),
+                    actual_map.len(),
+                    "object key count mismatch"
+                );
+                for (key, expected_value) in expected_map {
+                    let actual_value = actual_map
+                        .get(key)
+                        .unwrap_or_else(|| panic!("missing key: {key}"));
+                    assert_json_values_equal(expected_value, actual_value);
+                }
+            }
+            (serde_json::Value::Array(expected_arr), serde_json::Value::Array(actual_arr)) => {
+                assert_eq!(
+                    expected_arr.len(),
+                    actual_arr.len(),
+                    "array length mismatch"
+                );
+                for (_i, (expected_item, actual_item)) in
+                    expected_arr.iter().zip(actual_arr.iter()).enumerate()
+                {
+                    assert_json_values_equal(expected_item, actual_item);
+                }
+            }
+            _ => {
+                assert_eq!(
+                    expected, actual,
+                    "value mismatch: expected {expected}, got {actual}"
+                );
+            }
+        }
     }
 }
