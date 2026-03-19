@@ -1374,9 +1374,7 @@ mod tests {
                     actual_arr.len(),
                     "array length mismatch"
                 );
-                for (expected_item, actual_item) in
-                    expected_arr.iter().zip(actual_arr.iter())
-                {
+                for (expected_item, actual_item) in expected_arr.iter().zip(actual_arr.iter()) {
                     assert_json_values_equal(expected_item, actual_item);
                 }
             }
