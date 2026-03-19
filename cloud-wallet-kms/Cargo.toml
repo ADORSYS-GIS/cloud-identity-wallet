@@ -40,6 +40,11 @@ optional = true
 
 [dev-dependencies]
 pollster = { version = "0.4", features = ["macro"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies.testcontainers-modules]
+version = "0.15"
+features = ["localstack", "mysql", "postgres"]
 
 [features]
 default = ["local-kms", "memory-backend"]
