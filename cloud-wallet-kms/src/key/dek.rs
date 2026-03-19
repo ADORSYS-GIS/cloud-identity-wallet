@@ -1,5 +1,4 @@
 use cloud_wallet_crypto::secret::Secret;
-use serde::{Deserialize, Serialize};
 use time::UtcDateTime;
 
 use crate::{AeadAlgorithm, key::master::Id as MasterKeyId};
@@ -65,7 +64,7 @@ impl DataEncryptionKey {
 }
 
 /// A unique identifier for a [`DataEncryptionKey`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Id(String);
 
 impl Id {
