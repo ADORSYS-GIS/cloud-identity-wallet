@@ -245,14 +245,13 @@ impl TokenResponseAuthorizationDetails {
             ));
         }
 
-        if let Some(ref ids) = self.credential_identifiers {
-            if ids.is_empty() {
+        if let Some(ref ids) = self.credential_identifiers 
+            && ids.is_empty() {
                 return Err(Error::message(
                     ErrorKind::InvalidTokenResponse,
                     "credential_identifiers must not be empty when present",
                 ));
             }
-        }
 
         Ok(())
     }
