@@ -360,6 +360,8 @@ where
         f.debug_struct("Cache")
             .field("inner", &self.inner)
             .field("stats", &self.stats)
+            .field("access_counters", &self.access_counters)
+            .field("max_accesses", &self.max_accesses)
             .finish()
     }
 }
