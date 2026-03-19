@@ -152,12 +152,6 @@ impl From<NonceError> for crate::Error {
     }
 }
 
-impl From<cloud_wallet_crypto::error::Error> for NonceError {
-    fn from(error: cloud_wallet_crypto::error::Error) -> Self {
-        Self::new(error.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
