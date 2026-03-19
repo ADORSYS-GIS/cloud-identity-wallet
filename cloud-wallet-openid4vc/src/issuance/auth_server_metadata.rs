@@ -3,6 +3,8 @@ use url::Url;
 
 use crate::errors::{Error, ErrorKind};
 
+//  Authorization Server Metadata
+
 /// OAuth 2.0 Authorization Server Metadata.
 ///
 /// Represents the metadata document published at the AS well-known endpoint
@@ -14,6 +16,7 @@ use crate::errors::{Error, ErrorKind};
 /// [OID4VCI §12.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-oauth-20-authorization-serv).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationServerMetadata {
+    //  RFC 8414 REQUIRED fields
     /// REQUIRED. The authorization server's issuer identifier URL.
     ///
     /// MUST use the https scheme and contain no query or fragment
@@ -36,6 +39,7 @@ pub struct AuthorizationServerMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_endpoint: Option<String>,
 
+    //  RFC 8414 OPTIONAL fields
     /// OPTIONAL. URL of the authorization server's JWK Set document.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwks_uri: Option<String>,
@@ -120,15 +124,27 @@ pub struct AuthorizationServerMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_challenge_methods_supported: Option<Vec<String>>,
 
+    //  OID4VCI §12.3 extension
     /// OPTIONAL. Whether the AS accepts a Token Request with a
     /// Pre-Authorized Code but without a `client_id`.
     ///
-    /// Defaults to `false` when absent (OID4VCI §12.3).
+    /// Defaults to false when absent (OID4VCI §12.3).
     #[serde(
         rename = "pre-authorized_grant_anonymous_access_supported",
         skip_serializing_if = "Option::is_none"
     )]
     pub pre_authorized_grant_anonymous_access_supported: Option<bool>,
+
+    /// Catch-all for additional metadata parameters defined by other
+    /// specifications or by the AS itself.
+    ///
+    /// RFC 8414 §2 states: "Additional authorization server metadata
+    /// parameters MAY also be used." The spec also requires the wallet to
+    /// ignore unrecognized parameters, but for round-trip fidelity (e.g.
+    /// when the wallet stores and re-serializes received metadata) we
+    /// preserve them here instead of silently dropping them.
+    #[serde(flatten)]
+    pub extra_fields: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl AuthorizationServerMetadata {
@@ -229,13 +245,13 @@ impl TokenResponseAuthorizationDetails {
             ));
         }
 
-        if let Some(ref ids) = self.credential_identifiers
-            && ids.is_empty()
-        {
-            return Err(Error::message(
-                ErrorKind::InvalidTokenResponse,
-                "credential_identifiers must not be empty when present",
-            ));
+        if let Some(ref ids) = self.credential_identifiers {
+            if ids.is_empty() {
+                return Err(Error::message(
+                    ErrorKind::InvalidTokenResponse,
+                    "credential_identifiers must not be empty when present",
+                ));
+            }
         }
 
         Ok(())
@@ -393,6 +409,7 @@ mod tests {
             introspection_endpoint_auth_signing_alg_values_supported: None,
             code_challenge_methods_supported: None,
             pre_authorized_grant_anonymous_access_supported: None,
+            extra_fields: std::collections::HashMap::new(),
         }
     }
 
@@ -425,7 +442,11 @@ mod tests {
         m.issuer = "not-a-url".to_string();
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
-        assert!(err.to_string().contains("valid URL"));
+        assert!(
+            err.to_string().contains("'issuer' is not a valid URL"),
+            "expected error to state that issuer is not a valid URL, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -434,7 +455,12 @@ mod tests {
         m.issuer = "https://server.example.com?foo=bar".to_string();
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
-        assert!(err.to_string().contains("query"));
+        assert!(
+            err.to_string()
+                .contains("issuer must not contain a query component"),
+            "expected error to state that the issuer must not contain a query component, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -443,7 +469,12 @@ mod tests {
         m.issuer = "https://server.example.com#section".to_string();
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
-        assert!(err.to_string().contains("fragment"));
+        assert!(
+            err.to_string()
+                .contains("issuer must not contain a fragment component"),
+            "expected error to state that the issuer must not contain a fragment component, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -452,7 +483,12 @@ mod tests {
         m.token_endpoint = Some("http://server.example.com/token".to_string());
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
-        assert!(err.to_string().contains("token_endpoint"));
+        assert!(
+            err.to_string()
+                .contains("'token_endpoint' must use the https scheme"),
+            "expected error to state that token_endpoint must use https, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -461,7 +497,12 @@ mod tests {
         m.authorization_endpoint = Some("http://server.example.com/authorize".to_string());
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
-        assert!(err.to_string().contains("authorization_endpoint"));
+        assert!(
+            err.to_string()
+                .contains("'authorization_endpoint' must use the https scheme"),
+            "expected error to state that authorization_endpoint must use https, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -863,5 +904,40 @@ mod tests {
             }]),
         };
         assert!(resp.credential_identifiers_for("mDLCredential").is_none());
+    }
+
+    // Real server round-trip
+
+    #[test]
+    fn real_keycloak_metadata_round_trips_without_data_loss() {
+        // Load the fixture that contains an actual metadata response captured
+        // from a Keycloak + OID4VCI server. This exercises two things:
+        //   1. All known RFC 8414 fields deserialize without error.
+        //   2. Unknown fields (userinfo_endpoint, frontchannel_logout_supported,
+        //      dpop_signing_alg_values_supported, etc.) are preserved in
+        //      extra_fields and round-trip back to identical JSON.
+        let original = include_str!("../../../tests/fixtures/keycloak_as_metadata.json");
+
+        let metadata: AuthorizationServerMetadata =
+            serde_json::from_str(original).expect("fixture should deserialize without error");
+
+        assert!(
+            metadata.validate().is_ok(),
+            "real server metadata should pass validation"
+        );
+
+        // Re-serialize and compare as parsed JSON values so that key ordering
+        // differences between the original and serde's output do not cause
+        // a false failure.
+        let re_serialized =
+            serde_json::to_string(&metadata).expect("serialization should not fail");
+
+        let original_value: serde_json::Value = serde_json::from_str(original).unwrap();
+        let round_tripped_value: serde_json::Value = serde_json::from_str(&re_serialized).unwrap();
+
+        assert_eq!(
+            original_value, round_tripped_value,
+            "round-tripped JSON must be semantically identical to the original"
+        );
     }
 }
