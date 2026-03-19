@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::sync::OnceLock;
+
 use crate::Result;
 use crate::key::{
     dek::{DataEncryptionKey, Id},
@@ -5,7 +8,7 @@ use crate::key::{
 };
 use crate::storage::Storage;
 
-use sqlx::{AnyPool, Executor, Transaction};
+use sqlx::{AnyPool, ConnectOptions, Transaction};
 use time::UtcDateTime;
 
 /// Error that can occur when working with the database storage.
@@ -35,6 +38,7 @@ impl From<Error> for crate::Error {
 #[derive(Debug, Clone)]
 pub struct SqlxBackend {
     pool: AnyPool,
+    driver: Driver,
 }
 
 impl SqlxBackend {
@@ -60,7 +64,8 @@ impl SqlxBackend {
     /// let storage = SqlxBackend::new(pool);
     /// ```
     pub fn new(pool: AnyPool) -> Self {
-        Self { pool }
+        let driver = Driver::from_pool(&pool);
+        Self { pool, driver }
     }
 
     /// Initializes the database schema.
@@ -82,9 +87,9 @@ impl SqlxBackend {
         dek: &DataEncryptionKey,
     ) -> Result<()> {
         let record = DekRecord::from(dek);
-        let rows = update_dek(tx, &record).await?;
+        let rows = update_dek(&self.driver, tx, &record).await?;
         if rows == 0 {
-            insert_dek(tx, &record).await?;
+            insert_dek(&self.driver, tx, &record).await?;
         }
         Ok(())
     }
@@ -102,21 +107,20 @@ impl Storage for SqlxBackend {
     }
 
     async fn get_dek(&self, id: &Id) -> Result<Option<DataEncryptionKey>> {
-        let row = sqlx::query_as::<_, DekRecord>(
-            "SELECT id, master_id, encrypted_key,
-                algorithm, created_at, last_accessed
-            FROM data_encryption_keys WHERE id = ?",
-        )
-        .bind(id.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
+        let sql = FIND_DEK.for_driver(&self.driver);
+        let row = sqlx::query_as::<_, DekRecord>(sql)
+            .bind(id.as_str())
+            .fetch_optional(&self.pool)
+            .await?;
 
         match row {
             Some(db) => {
                 // Update last accessed time
                 let mut dek = DataEncryptionKey::try_from(db)?;
                 let now = UtcDateTime::now();
+                let driver = self.driver.clone();
                 tokio::spawn(update_last_accessed(
+                    driver,
                     self.pool.clone(),
                     id.as_str().into(),
                     now,
@@ -125,6 +129,26 @@ impl Storage for SqlxBackend {
                 Ok(Some(dek))
             }
             None => Ok(None),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Driver {
+    Postgres,
+    MySql,
+    Sqlite,
+}
+
+impl Driver {
+    fn from_pool(pool: &AnyPool) -> Self {
+        let db_url = pool.connect_options().to_url_lossy();
+        if db_url.as_str().starts_with("postgres") {
+            Driver::Postgres
+        } else if db_url.as_str().starts_with("mysql") {
+            Driver::MySql
+        } else {
+            Driver::Sqlite
         }
     }
 }
@@ -182,49 +206,124 @@ impl TryFrom<DekRecord> for DataEncryptionKey {
     }
 }
 
-async fn insert_dek(tx: &mut Transaction<'_, sqlx::Any>, record: &DekRecord) -> Result<()> {
-    let query = sqlx::query(
-        r#"
-        INSERT INTO data_encryption_keys 
-        (id, master_id, encrypted_key, algorithm, created_at, last_accessed)
-        VALUES (?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(record.id.as_str())
-    .bind(record.master_id.as_str())
-    .bind(&record.encrypted_key)
-    .bind(&record.algorithm)
-    .bind(record.created_at)
-    .bind(record.last_accessed);
-    tx.execute(query).await?;
+async fn insert_dek(
+    driver: &Driver,
+    tx: &mut Transaction<'_, sqlx::Any>,
+    record: &DekRecord,
+) -> Result<()> {
+    sqlx::query(INSERT_DEK.for_driver(driver))
+        .bind(record.id.as_str())
+        .bind(record.master_id.as_str())
+        .bind(&record.encrypted_key)
+        .bind(&record.algorithm)
+        .bind(record.created_at)
+        .bind(record.last_accessed)
+        .execute(tx.as_mut())
+        .await?;
     Ok(())
 }
 
-async fn update_dek(tx: &mut Transaction<'_, sqlx::Any>, record: &DekRecord) -> Result<u64> {
-    let query = sqlx::query(
-        r#"
-        UPDATE data_encryption_keys 
-        SET master_id = ?, encrypted_key = ?, algorithm = ?,
-            created_at = ?, last_accessed = ?
-        WHERE id = ?
-        "#,
-    )
-    .bind(record.master_id.as_str())
-    .bind(&record.encrypted_key)
-    .bind(&record.algorithm)
-    .bind(record.created_at)
-    .bind(record.last_accessed)
-    .bind(record.id.as_str());
-    Ok(tx.execute(query).await?.rows_affected())
+async fn update_dek(
+    driver: &Driver,
+    tx: &mut Transaction<'_, sqlx::Any>,
+    record: &DekRecord,
+) -> Result<u64> {
+    let result = sqlx::query(UPDATE_DEK.for_driver(driver))
+        .bind(record.master_id.as_str())
+        .bind(&record.encrypted_key)
+        .bind(&record.algorithm)
+        .bind(record.created_at)
+        .bind(record.last_accessed)
+        .bind(record.id.as_str())
+        .execute(tx.as_mut())
+        .await?;
+    Ok(result.rows_affected())
 }
 
-async fn update_last_accessed(pool: AnyPool, id: String, now: UtcDateTime) -> Result<()> {
-    sqlx::query("UPDATE data_encryption_keys SET last_accessed = ? WHERE id = ?")
+async fn update_last_accessed(
+    driver: Driver,
+    pool: AnyPool,
+    id: String,
+    now: UtcDateTime,
+) -> Result<()> {
+    sqlx::query(UPDATE_LAST_ACCESSED.for_driver(&driver))
         .bind(now.unix_timestamp())
         .bind(&id)
         .execute(&pool)
         .await?;
     Ok(())
+}
+
+static FIND_DEK: Query = Query::new(
+    "SELECT id, master_id, encrypted_key, algorithm, created_at, last_accessed \
+     FROM data_encryption_keys WHERE id = $1",
+);
+
+static INSERT_DEK: Query = Query::new(
+    "INSERT INTO data_encryption_keys \
+     (id, master_id, encrypted_key, algorithm, created_at, last_accessed) \
+     VALUES ($1, $2, $3, $4, $5, $6)",
+);
+
+static UPDATE_DEK: Query = Query::new(
+    "UPDATE data_encryption_keys SET \
+     master_id = $1, encrypted_key = $2, algorithm = $3, created_at = $4, last_accessed = $5 \
+     WHERE id = $6",
+);
+
+static UPDATE_LAST_ACCESSED: Query =
+    Query::new("UPDATE data_encryption_keys SET last_accessed = $1 WHERE id = $2");
+
+struct Query {
+    raw: &'static str,
+    rewritten: OnceLock<String>,
+}
+
+impl Query {
+    const fn new(sql: &'static str) -> Self {
+        Self {
+            raw: sql,
+            rewritten: OnceLock::new(),
+        }
+    }
+
+    fn for_driver(&self, driver: &Driver) -> &str {
+        match driver {
+            Driver::Postgres => self.raw,
+            _ => self
+                .rewritten
+                .get_or_init(|| rewrite_to_positional(self.raw).into_owned()),
+        }
+    }
+}
+
+fn rewrite_to_positional(sql: &str) -> Cow<'_, str> {
+    let bytes = sql.as_bytes();
+    let mut result = String::with_capacity(sql.len());
+    let mut last = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] == b'$' {
+            // Peek ahead — must be followed by at least one digit
+            let start_digits = index + 1;
+            let mut end_digits = start_digits;
+            while end_digits < bytes.len() && bytes[end_digits].is_ascii_digit() {
+                end_digits += 1;
+            }
+            if end_digits > start_digits {
+                // Flush unchanged segment before the `$N`
+                result.push_str(&sql[last..index]);
+                result.push('?');
+                index = end_digits;
+                last = index;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    result.push_str(&sql[last..]);
+    Cow::Owned(result)
 }
 
 impl From<sqlx::Error> for crate::Error {
