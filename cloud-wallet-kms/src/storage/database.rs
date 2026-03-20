@@ -11,6 +11,8 @@ use crate::storage::Storage;
 use sqlx::{AnyPool, ConnectOptions, Transaction};
 use time::UtcDateTime;
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("src/storage/migrations");
+
 /// Error that can occur when working with the database storage.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -75,9 +77,7 @@ impl SqlxBackend {
     #[inline]
     pub async fn init_schema(&self) -> Result<()> {
         // Run database migrations
-        sqlx::migrate!("src/storage/migrations")
-            .run(&self.pool)
-            .await?;
+        MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
 
