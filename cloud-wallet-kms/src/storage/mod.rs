@@ -9,12 +9,12 @@
 
 use crate::key::dek::{DataEncryptionKey, Id as DekId};
 
-#[cfg(feature = "sqlx-backend")]
+#[cfg(any(feature = "mysql", feature = "postgres", feature = "sqlite"))]
 mod database;
 #[cfg(feature = "memory-backend")]
 mod memory;
 
-#[cfg(feature = "sqlx-backend")]
+#[cfg(any(feature = "mysql", feature = "postgres", feature = "sqlite"))]
 pub use database::{Error as DatabaseError, SqlxBackend};
 #[cfg(feature = "memory-backend")]
 pub use memory::InMemoryBackend;
