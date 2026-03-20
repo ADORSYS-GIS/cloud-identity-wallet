@@ -11,20 +11,20 @@ A key management library for envelope encryption in the Cloud Identity Wallet ec
 
 The library follows a standard envelope-encryption model:
 
-1. A Master Key (managed locally for `LocalProvider`, or in AWS KMS for `AwsProvider`) protects a Data Encryption Key (DEK). A custom provider can be implemented to support other key management systems.
-2. The encrypted DEK is stored via a `Storage` backend.
+![Envelope Encryption](../assets/envelope_encryption.png)
+
+1. A Master Key/Root Key protects a Data Encryption Key (DEK).
+2. The encrypted DEK is stored via a storage backend.
 3. Payload encryption/decryption uses the plaintext DEK.
 
 ## Feature Flags
 
-Default features: `local-kms`, `memory-backend`.
-
-- `local-kms`: Enables `provider::LocalProvider` for local key management.
-- `aws-kms`: Enables `provider::AwsProvider` which uses AWS KMS for master key and data encryption key lifecycles.
-- `memory-backend`: Enables `storage::InMemoryBackend`.
-- `sqlite`: Uses SQLite database for storing Data encryption keys.
-- `postgres`: Uses PostgreSQL database for storing Data encryption keys.
-- `mysql`: Uses MySQL database for storing Data encryption keys.
+- **`local-kms`**: Enables support for local key management (enabled by default).
+- **`aws-kms`**: Enables support for AWS KMS for master key and data encryption key lifecycles.
+- **`memory-backend`**: Enables support for in-memory storage of Data encryption keys (enabled by default).
+- **`sqlite`**: Enables support for SQLite database storage of Data encryption keys.
+- **`postgres`**: Enables support for PostgreSQL database storage of Data encryption keys.
+- **`mysql`**: Enables support for MySQL database storage of Data encryption keys.
 
 ## Installation
 
@@ -42,14 +42,37 @@ AWS + PostgresSQL example:
 cloud-wallet-kms = { version = "0.1", default-features = false, features = ["aws-kms", "postgres"] }
 ```
 
-## Quick Start (Local Provider)
+## Quick Start (Local Provider + SQLite database storage backend)
+
+Requires the **`sqlite`** feature flag.
 
 ```rust
 use cloud_wallet_kms::provider::{LocalProvider, Provider};
+use cloud_wallet_kms::storage::SqlxBackend;
+use sqlx::any::AnyPoolOptions;
 
-async fn roundtrip() -> cloud_wallet_kms::Result<()> {
-    let provider = LocalProvider::new();
-    let aad = b"tenant:acme";
+async fn setup_storage() -> cloud_wallet_kms::Result<SqlxBackend> {
+    // Install default drivers for SQLite
+    sqlx::any::install_default_drivers();
+
+    // Create a connection pool to the SQLite database
+    let pool = AnyPoolOptions::new()
+        .max_connections(5)
+        .connect("sqlite::memory:")
+        .await?;
+
+    let storage = SqlxBackend::new(pool);
+    // Initialize the database schema
+    storage.init_schema().await?;
+
+    Ok(storage)
+}
+
+#[tokio::main]
+async fn main() -> cloud_wallet_kms::Result<()> {
+    let storage = setup_storage().await?;
+    let provider = LocalProvider::with_storage(storage);
+    let aad = b"tenant:wallet1";
     let mut payload = b"secret payload".to_vec();
 
     provider.encrypt(aad, &mut payload).await?;
@@ -58,8 +81,6 @@ async fn roundtrip() -> cloud_wallet_kms::Result<()> {
     assert_eq!(plaintext, b"secret payload");
     Ok(())
 }
-
-fn main() {}
 ```
 
 ## AWS KMS Provider
@@ -75,10 +96,11 @@ async fn aws_roundtrip() -> cloud_wallet_kms::Result<()> {
         .load()
         .await;
 
-    let provider = AwsProvider::new(&config, "server.example.com", InMemoryBackend::new())
-        .with_encryption_context("tenant", "acme");
+    let storage = InMemoryBackend::new();
+    let provider = AwsProvider::new(&config, "server.example.com", storage)
+        .with_encryption_context("tenant", "wallet1");
 
-    let aad = b"credential:issue";
+    let aad = b"tenant:wallet1";
     let mut payload = b"sensitive value".to_vec();
 
     provider.encrypt(aad, &mut payload).await?;
@@ -89,32 +111,9 @@ async fn aws_roundtrip() -> cloud_wallet_kms::Result<()> {
 }
 ```
 
-## SQLite Storage Backend
-
-`SqlxBackend` works with SQLite, PostgreSQL, and MySQL (via feature flags).
-
-```rust,ignore
-use cloud_wallet_kms::storage::SqlxBackend;
-use sqlx::any::AnyPoolOptions;
-
-async fn setup_storage() -> cloud_wallet_kms::Result<SqlxBackend> {
-    sqlx::any::install_default_drivers();
-
-    let pool = AnyPoolOptions::new()
-        .max_connections(5)
-        .connect("sqlite::memory:")
-        .await?;
-
-    let storage = SqlxBackend::new(pool);
-    storage.init_schema().await?;
-
-    Ok(storage)
-}
-```
-
 ## Security Notes
 
-`LocalProvider` is intended for development/testing and keeps key material local.
+The local KMS provider is intended for development/testing and keeps key material local.
 
 ## Testing
 
@@ -130,7 +129,7 @@ Run full feature matrix:
 cargo test -p cloud-wallet-kms --all-features
 ```
 
-Some integration tests use Testcontainers and require a working Docker environment.
+**Note**: Some integration tests use Testcontainers and require a working Docker daemon.
 
 ## Contributing
 
