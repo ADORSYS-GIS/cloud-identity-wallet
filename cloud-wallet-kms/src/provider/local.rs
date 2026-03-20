@@ -23,21 +23,28 @@ struct MasterKey {
     material: Secret,
 }
 
-/// A KMS `Provider` that uses a locally managed, in-memory master key.
+/// A KMS [`Provider`] that uses a locally managed, in-memory master key.
 ///
 /// This provider is designed for local development and testing.
 #[derive(Debug)]
-pub struct LocalProvider {
+pub struct LocalProvider<S = InMemoryBackend> {
     master_key: Arc<OnceCell<MasterKey>>,
     master_id: MasterId,
     dek_id: DekId,
-    storage: InMemoryBackend,
+    storage: S,
     nonce_gen: NonceGenerator,
 }
 
 impl LocalProvider {
-    /// Creates a new `LocalProvider`.
+    /// Creates a new `LocalProvider` with an in-memory storage backend.
     pub fn new() -> Self {
+        Self::with_storage(InMemoryBackend::new())
+    }
+}
+
+impl<S: Storage> LocalProvider<S> {
+    /// Creates a new `LocalProvider` with the specified storage backend.
+    pub fn with_storage(storage: S) -> Self {
         // Generate deterministic IDs
         let master_id = MasterId::new(HOSTNAME);
         let dek_id = DekId::new(HOSTNAME);
@@ -50,7 +57,7 @@ impl LocalProvider {
             master_key: Arc::new(OnceCell::new()),
             master_id,
             dek_id,
-            storage: InMemoryBackend::new(),
+            storage,
             nonce_gen,
         }
     }
@@ -131,7 +138,7 @@ impl LocalProvider {
 }
 
 #[async_trait::async_trait]
-impl Provider for LocalProvider {
+impl<S: Storage> Provider for LocalProvider<S> {
     async fn encrypt<T>(&self, aad: &[u8], plain_inout: &mut T) -> crate::Result<()>
     where
         T: AsMut<[u8]> + for<'a> Extend<&'a u8> + Send,
@@ -166,12 +173,6 @@ impl Provider for LocalProvider {
         let encrypted_slice = &mut cipher_inout[..nonce_start];
         let plaintext_dek = key.decrypt(&nonce, aad, encrypted_slice)?;
         Ok(plaintext_dek)
-    }
-}
-
-impl Default for LocalProvider {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
