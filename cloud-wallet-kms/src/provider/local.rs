@@ -137,6 +137,12 @@ impl<S: Storage> LocalProvider<S> {
     }
 }
 
+impl Default for LocalProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait::async_trait]
 impl<S: Storage> Provider for LocalProvider<S> {
     async fn encrypt<T>(&self, aad: &[u8], plain_inout: &mut T) -> crate::Result<()>
