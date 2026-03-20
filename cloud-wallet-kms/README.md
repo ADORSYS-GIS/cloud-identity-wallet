@@ -57,7 +57,7 @@ async fn setup_storage() -> cloud_wallet_kms::Result<SqlxBackend> {
 
     // Create a connection pool to the SQLite database
     let pool = AnyPoolOptions::new()
-        .max_connections(5)
+        .max_connections(1)
         .connect("sqlite::memory:")
         .await?;
 
