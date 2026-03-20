@@ -5,7 +5,7 @@
 //! - [`LocalProvider`]: An implementation that uses a locally generated, in-memory master key.
 //!   It is intended for development and testing.
 //! - [`AwsProvider`]: An implementation that uses AWS KMS for master key management
-//! and encryption/decryption of data encryption keys.
+//!   and encryption/decryption of data encryption keys.
 
 #[cfg(feature = "aws-kms")]
 mod aws;
