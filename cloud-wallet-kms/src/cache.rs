@@ -6,7 +6,7 @@
 //! * Time-to-Live (TTL): Evicts entries after a specified time-to-live period.
 //! * Time-to-Idle (TTI): Evicts entries after a specified time-to-idle period.
 //! * Custom Access Limits: Ability to set specific access limits on individual entries
-//!   using [`Cache::insert_with_max_accesses`], ensuring they are evicted after a certain number of reads.
+//!   using [`Cache::insert_with_max_accesses`] or globally using [`CacheBuilder::max_accesses`].
 //!
 //! # Hasher
 //!
@@ -329,7 +329,10 @@ where
     /// # use cloud_wallet_kms::cache::Cache;
     /// # #[pollster::main]
     /// # async fn main() {
-    /// let cache: Cache<&str, i32> = Cache::new(10);
+    /// let cache: Cache<&str, i32> = Cache::builder()
+    ///     .max_capacity(10)
+    ///     .enable_stats(true)
+    ///     .build();
     ///
     /// cache.insert("key1", 1).await;
     /// let _ = cache.get("key1").await; // Hit
@@ -424,15 +427,13 @@ impl AccessCounter {
 
 /// A builder for configuring and creating a [`Cache`].
 ///
-/// Use [`Cache::builder()`] to obtain an instance of this builder.
-///
 /// # Default Values
 ///
-/// * Maximum capacity: None (unbounded)
-/// * Time to live (TTL): None (entries don't expire based on absolute time)
-/// * Time to idle (TTI): None (entries don't expire based on idle time)
-/// * Max accesses: None (entries are not evicted based on read counts)
-/// * Statistics: Disabled
+/// * Maximum capacity: `None` (unbounded)
+/// * Time to live: `None` (entries don't expire based on absolute time)
+/// * Time to idle: `None` (entries don't expire based on idle time)
+/// * Max accesses: `None` (entries are not evicted based on read counts)
+/// * Statistics: `false` (statistics are disabled)
 #[derive(Debug)]
 pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,

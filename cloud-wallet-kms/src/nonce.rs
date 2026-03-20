@@ -2,8 +2,8 @@
 //!
 //! [`NonceGenerator`] uses an internal counter to generate unique nonces. Generated nonces
 //! are 12 bytes long and are guaranteed to be unique within the same generator instance.
-//! The counter is incremented on each call to `next()`. Nonces are constructed by
-//! concatenating the prefix (4 bytes) with the counter (8 bytes).
+//! The counter is incremented on each call to [`next()`](NonceGenerator::next()).
+//! Nonces are constructed by concatenating the prefix (4 bytes) with the counter (8 bytes).
 
 use cloud_wallet_crypto::aead::NONCE_LENGTH;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -54,7 +54,9 @@ impl NonceGenerator {
 
     /// Sets a limit on the number of nonces that can be generated.
     ///
-    /// If `next()` is called after the limit has been reached, it will return an error.
+    /// If [`next()`] is called after the limit has been reached, it will return an error.
+    ///
+    /// [`next()`]: Self::next
     pub fn with_limit(mut self, limit: u64) -> Self {
         self.limit = limit;
         self
