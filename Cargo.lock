@@ -359,10 +359,12 @@ version = "0.1.0"
 dependencies = [
  "color-eyre",
  "percent-encoding",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "url",
  "uuid",
 ]

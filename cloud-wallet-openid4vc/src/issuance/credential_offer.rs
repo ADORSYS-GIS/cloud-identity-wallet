@@ -346,6 +346,66 @@ impl CredentialOfferUri {
     pub fn from_query(query: &str) -> Result<Self, Error> {
         Self::from_offer_link(query)
     }
+
+    /// Resolves the credential offer, fetching it if passed by reference.
+    ///
+    /// - For `ByValue`, returns the contained `CredentialOffer` directly.
+    /// - For `ByReference`, fetches the JSON from the URI and parses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The URI is not a valid HTTPS URL (for `ByReference`)
+    /// - The HTTP request fails (network error, non-success status)
+    /// - The response body is not valid JSON
+    /// - The JSON does not conform to the `CredentialOffer` structure
+    pub async fn resolve(&self) -> Result<CredentialOffer, Error> {
+        match &self.source {
+            CredentialOfferSource::ByValue(offer) => Ok(offer.clone()),
+            CredentialOfferSource::ByReference(uri) => {
+                // Validate URI scheme
+                let parsed_url = Url::parse(uri).map_err(|e| {
+                    Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        format!("invalid credential_offer_uri: {e}"),
+                    )
+                })?;
+
+                if parsed_url.scheme() != "https" {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "credential_offer_uri must use the https scheme",
+                    ));
+                }
+
+                // Fetch the credential offer from the URI
+                let response = reqwest::get(uri)
+                    .await
+                    .map_err(|e| Error::new(ErrorKind::NetworkError, e))?;
+
+                // Check for successful response
+                if !response.status().is_success() {
+                    return Err(Error::message(
+                        ErrorKind::NetworkError,
+                        format!(
+                            "failed to fetch credential offer: HTTP {}",
+                            response.status()
+                        ),
+                    ));
+                }
+
+                // Parse the JSON response
+                let offer = response.json::<CredentialOffer>().await.map_err(|e| {
+                    Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        format!("failed to parse credential offer JSON: {e}"),
+                    )
+                })?;
+
+                Ok(offer)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -688,5 +748,53 @@ mod tests {
 
         let offer: CredentialOffer = serde_json::from_str(json).expect("Failed to deserialize");
         assert!(offer.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn resolve_by_value_returns_offer() {
+        let offer = CredentialOffer {
+            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_configuration_ids: vec!["MyCredential".to_string()],
+            grants: None,
+        };
+
+        let uri = CredentialOfferUri {
+            source: CredentialOfferSource::ByValue(offer.clone()),
+        };
+
+        let resolved = uri.resolve().await.expect("Failed to resolve");
+        assert_eq!(resolved.credential_issuer, offer.credential_issuer);
+        assert_eq!(
+            resolved.credential_configuration_ids,
+            offer.credential_configuration_ids
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_by_reference_rejects_http_uri() {
+        let uri = CredentialOfferUri {
+            source: CredentialOfferSource::ByReference(
+                "http://server.example.com/credential-offer/123".to_string(),
+            ),
+        };
+
+        let result = uri.resolve().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("https scheme"));
+    }
+
+    #[tokio::test]
+    async fn resolve_by_reference_rejects_invalid_uri() {
+        let uri = CredentialOfferUri {
+            source: CredentialOfferSource::ByReference("not-a-valid-uri".to_string()),
+        };
+
+        let result = uri.resolve().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("invalid credential_offer_uri"));
     }
 }
