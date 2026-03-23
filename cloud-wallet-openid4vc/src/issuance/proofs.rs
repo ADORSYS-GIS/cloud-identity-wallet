@@ -1,79 +1,44 @@
-//! Credential Request Proof data models for OpenID4VCI.
-//!
-//! This module implements the data models required to represent credential
-//! request proofs as defined in
-//! [OpenID4VCI Appendix F](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-proof-types)
-//! and the `proofs` parameter defined in
-//! [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
-//!
-//! # Note on `c_nonce`
-//!
-//! The `nonce` claim inside a JWT proof carries a `c_nonce` value obtained
-//! either from the Nonce Endpoint or from the Token Response. The Token
-//! Response model will be introduced in Ticket 3 (AS Metadata). Until then,
-//! `nonce` is represented as a plain `Option<String>` and callers are
-//! responsible for supplying the correct value.
+//! Credential Request Proof models for OpenID4VCI Appendix F.
 
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 
 use crate::errors::{Error, ErrorKind};
 
-/// The `typ` header value required for JWT proofs (Appendix F.1).
 const JWT_PROOF_TYPE_HEADER: &str = "openid4vci-proof+jwt";
 
-/// Identifies the proof type used in a credential request.
-///
-/// The proof type determines which key inside the `proofs` object is present
-/// and how the proof is structured. Defined in
-/// [OpenID4VCI Appendix F](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-proof-types).
+/// Proof type identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProofType {
-    /// JWT proof type (Appendix F.1).
     Jwt,
-    /// Data Integrity VP proof type (Appendix F.2).
     DiVp,
-    /// Attestation proof type (Appendix F.3).
     Attestation,
 }
 
-// ── F.1: jwt proof type ───────────────────────────────────────────────────────
-
-/// JOSE header claims for a JWT proof.
-///
-/// Defined in [OpenID4VCI Appendix F.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-jwt-proof-type).
+/// JOSE header for JWT proof. Exactly one of `jwk`, `kid`, or `x5c` required.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JwtProofHeader {
-    /// REQUIRED. MUST be `openid4vci-proof+jwt`.
+    /// MUST be `openid4vci-proof+jwt`.
     pub typ: String,
-
-    /// REQUIRED. Algorithm used to sign the JWT. MUST NOT be `none`.
+    /// Algorithm. MUST NOT be `none`.
     pub alg: String,
-
-    /// OPTIONAL. JSON Web Key the credential shall be bound to.
-    ///
-    /// Either `jwk` or `kid` MUST be present; both MUST NOT be present.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// JSON Web Key. Exactly one of `jwk`, `kid`, `x5c` required.
     pub jwk: Option<serde_json::Value>,
-
-    /// OPTIONAL. Key ID the credential shall be bound to.
-    ///
-    /// Either `jwk` or `kid` MUST be present; both MUST NOT be present.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Key ID (DID URL). Exactly one of `jwk`, `kid`, `x5c` required.
     pub kid: Option<String>,
+    /// X.509 certificate chain. Exactly one of `jwk`, `kid`, `x5c` required.
+    pub x5c: Option<Vec<String>>,
+    /// Key attestation (Appendix D).
+    pub key_attestation: Option<String>,
+    /// OpenID Federation Trust Chain. Requires `kid` to be present.
+    pub trust_chain: Option<String>,
 }
 
 impl JwtProofHeader {
-    /// Validates the JWT proof header claims.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - `typ` is not `openid4vci-proof+jwt`
-    /// - `alg` is empty or `none`
-    /// - Neither `jwk` nor `kid` is present
-    /// - Both `jwk` and `kid` are present
-    #[must_use = "validation result must be checked"]
+    /// Validates: typ=openid4vci-proof+jwt, alg not empty/none, exactly one of jwk/kid/x5c, trust_chain requires kid.
+    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.typ != JWT_PROOF_TYPE_HEADER {
             return Err(Error::message(
@@ -92,55 +57,56 @@ impl JwtProofHeader {
             ));
         }
 
-        match (&self.jwk, &self.kid) {
-            (None, None) => {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "JWT proof header must contain either 'jwk' or 'kid'",
-                ));
-            }
-            (Some(_), Some(_)) => {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "JWT proof header must not contain both 'jwk' and 'kid'",
-                ));
-            }
-            _ => {}
+        // Exactly one of jwk, kid, or x5c must be present
+        let key_identifiers = [
+            self.jwk.is_some(),
+            self.kid.is_some(),
+            self.x5c.is_some(),
+        ];
+        let present_count = key_identifiers.iter().filter(|&&v| v).count();
+
+        if present_count == 0 {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "JWT proof header must contain exactly one of 'jwk', 'kid', or 'x5c'",
+            ));
+        }
+
+        if present_count > 1 {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "JWT proof header must not contain more than one of 'jwk', 'kid', or 'x5c'",
+            ));
+        }
+
+        // trust_chain requires kid to be present (per spec)
+        if self.trust_chain.is_some() && self.kid.is_none() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "JWT proof header with 'trust_chain' must also contain 'kid'",
+            ));
         }
 
         Ok(())
     }
 }
 
-/// JWT payload claims for a JWT proof.
-///
-/// Defined in [OpenID4VCI Appendix F.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-jwt-proof-type).
+/// JWT payload claims. `nonce` carries c_nonce from Token Response or Nonce Endpoint.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JwtProofClaims {
-    /// REQUIRED. The Credential Issuer Identifier used as the `aud` claim.
-    ///
-    /// MUST be the `credential_issuer` URL from the Credential Issuer metadata.
+    /// Client ID. Omit for anonymous Pre-Authorized Code Flow.
+    pub iss: Option<String>,
+    /// Credential Issuer Identifier.
     pub aud: String,
-
-    /// REQUIRED. Unix timestamp at which the JWT was issued.
+    /// Issued-at timestamp.
     pub iat: i64,
-
-    /// OPTIONAL. Challenge value from the Credential Issuer.
-    ///
-    /// When the issuer has a Nonce Endpoint or returns a `c_nonce` in the
-    /// Token Response, this value MUST be included. Sourced from T3 (Token
-    /// Response) once that ticket lands.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// c_nonce value when required.
     pub nonce: Option<String>,
 }
 
 impl JwtProofClaims {
-    /// Validates the JWT proof payload claims.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `aud` is empty or `iat` is zero or negative.
-    #[must_use = "validation result must be checked"]
+    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.aud.is_empty() {
             return Err(Error::message(
@@ -160,24 +126,14 @@ impl JwtProofClaims {
     }
 }
 
-/// A single entry in the `proofs.jwt` array.
-///
-/// Each entry is the compact-serialized signed JWT string (`header.claims.sig`).
-/// Spec §8.2: the value of the `jwt` key is a non-empty array of JWT strings.
+/// Compact-serialized JWT string entry in `proofs.jwt` array.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JwtProof {
-    /// The compact-serialized JWT string (`<header>.<claims>.<signature>`).
     pub jwt: String,
 }
 
 impl JwtProof {
-    /// Validates the JWT proof entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the string is empty or does not have three
-    /// dot-separated parts.
-    #[must_use = "validation result must be checked"]
+    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.jwt.is_empty() {
             return Err(Error::message(
@@ -198,164 +154,151 @@ impl JwtProof {
     }
 }
 
-// ── F.2: di_vp proof type ─────────────────────────────────────────────────────
+/// Data Integrity Proof. challenge required when c_nonce provided, MUST NOT be present otherwise.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataIntegrityProof {
+    #[serde(rename = "type")]
+    pub proof_type: String,
+    /// MUST match proof_signing_alg_values_supported if issuer metadata provided.
+    pub cryptosuite: String,
+    /// MUST be "authentication".
+    #[serde(rename = "proofPurpose")]
+    pub proof_purpose: String,
+    #[serde(rename = "verificationMethod")]
+    pub verification_method: String,
+    pub created: String,
+    /// c_nonce value. Required when issuer provided c_nonce, MUST NOT be present otherwise.
+    pub challenge: Option<String>,
+    /// Credential Issuer Identifier.
+    pub domain: String,
+    #[serde(rename = "proofValue")]
+    pub proof_value: String,
+}
 
-/// A single entry in the `proofs.di_vp` array.
-///
-/// Each entry is a W3C Verifiable Presentation secured with a Data Integrity
-/// proof. The spec (§8.2, Appendix F.2) requires:
-/// - The `proof.challenge` field MUST contain the `c_nonce` value.
-/// - The `proof.domain` field MUST contain the Credential Issuer Identifier.
-///
-/// The full structure follows the W3C VC Data Model. This type models only
-/// what OID4VCI mandates at the wire level — the VP as a JSON object.
-///
-/// Defined in [OpenID4VCI Appendix F.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-di_vp-proof-type).
+impl DataIntegrityProof {
+    #[must_use]
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.cryptosuite.is_empty() {
+            return Err(Error::message(ErrorKind::InvalidProof, "cryptosuite must not be empty"));
+        }
+        if self.proof_purpose != "authentication" {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                format!("proofPurpose must be 'authentication', got '{}'", self.proof_purpose),
+            ));
+        }
+        if self.domain.is_empty() {
+            return Err(Error::message(ErrorKind::InvalidProof, "domain must not be empty"));
+        }
+        Ok(())
+    }
+
+    /// Validates challenge against c_nonce: required when c_nonce provided, MUST NOT be present otherwise.
+    #[must_use]
+    pub fn validate_with_nonce(&self, c_nonce: Option<&str>) -> Result<(), Error> {
+        self.validate()?;
+        match c_nonce {
+            Some(expected) => match &self.challenge {
+                Some(challenge) if challenge == expected => Ok(()),
+                Some(challenge) => Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    format!("challenge must match c_nonce, got '{}'", challenge),
+                )),
+                None => Err(Error::message(ErrorKind::InvalidProof, "challenge required when c_nonce provided")),
+            },
+            None => {
+                if self.challenge.is_some() {
+                    return Err(Error::message(ErrorKind::InvalidProof, "challenge MUST NOT be present when no c_nonce provided"));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// W3C Verifiable Presentation with Data Integrity proof.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiVpProof {
-    /// The Verifiable Presentation as a JSON object.
-    ///
-    /// Must contain a `proof` field with at least one Data Integrity proof.
-    #[serde(flatten)]
-    pub verifiable_presentation: serde_json::Value,
+    /// Holder DID. If present, must match controller of verificationMethod.
+    pub holder: Option<String>,
+    /// Data Integrity proofs. At least one required.
+    pub proof: Vec<DataIntegrityProof>,
 }
 
 impl DiVpProof {
-    /// Validates the `di_vp` proof entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the presentation is not a JSON object or is
-    /// missing the required `proof` field.
-    #[must_use = "validation result must be checked"]
+    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
-        let obj = self.verifiable_presentation.as_object().ok_or_else(|| {
-            Error::message(ErrorKind::InvalidProof, "di_vp proof must be a JSON object")
-        })?;
-
-        if !obj.contains_key("proof") {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "di_vp proof object must contain a 'proof' field",
-            ));
+        if self.proof.is_empty() {
+            return Err(Error::message(ErrorKind::InvalidProof, "di_vp must contain at least one proof"));
         }
+        for proof in &self.proof {
+            proof.validate()?;
+        }
+        Ok(())
+    }
 
+    /// Validates challenge against c_nonce for all proofs.
+    #[must_use]
+    pub fn validate_with_nonce(&self, c_nonce: Option<&str>) -> Result<(), Error> {
+        if self.proof.is_empty() {
+            return Err(Error::message(ErrorKind::InvalidProof, "di_vp must contain at least one proof"));
+        }
+        for proof in &self.proof {
+            proof.validate_with_nonce(c_nonce)?;
+        }
         Ok(())
     }
 }
 
-// ── F.3: attestation proof type ───────────────────────────────────────────────
-
-/// A single entry in the `proofs.attestation` array.
-///
-/// Each entry is a compact-serialized JWT representing a key attestation.
-/// Unlike the `jwt` proof type, the attestation conveys key material without
-/// a separate proof of possession — the key attestation JWT itself serves as
-/// the binding mechanism.
-///
-/// The JWT MUST set the `typ` JOSE header to `openid4vci-proof+jwt` and
-/// include a `key_attestation` header as defined in Appendix D.
-///
-/// Defined in [OpenID4VCI Appendix F.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-attestation-proof-type).
+/// Key attestation JWT. typ header must be openid4vci-proof+jwt with key_attestation header.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttestationProof {
-    /// The compact-serialized attestation JWT (`<header>.<claims>.<signature>`).
     pub attestation: String,
 }
 
 impl AttestationProof {
-    /// Validates the attestation proof entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the string is empty or does not have three
-    /// dot-separated parts of a compact JWT.
-    #[must_use = "validation result must be checked"]
+    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.attestation.is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "attestation proof string must not be empty",
-            ));
+            return Err(Error::message(ErrorKind::InvalidProof, "attestation must not be empty"));
         }
-
         let parts: Vec<&str> = self.attestation.splitn(4, '.').collect();
         if parts.len() != 3 {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "attestation proof must be a compact serialization with three dot-separated parts",
-            ));
+            return Err(Error::message(ErrorKind::InvalidProof, "attestation must be compact JWT with three parts"));
         }
-
         Ok(())
     }
 }
 
-// ── Proofs wrapper ────────────────────────────────────────────────────────────
-
-/// The `proofs` object included in a Credential Request.
-///
-/// Contains exactly one proof type key whose value is a non-empty array of
-/// proofs of that type. Spec §8.2: "The `proofs` parameter contains exactly
-/// one parameter named as the proof type in Appendix F."
-///
-/// Defined in [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
+/// Credential Request proofs. Exactly one proof type required.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proofs {
-    /// One or more JWT proofs (Appendix F.1).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt: Option<Vec<JwtProof>>,
-
-    /// One or more Data Integrity VP proofs (Appendix F.2).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub di_vp: Option<Vec<DiVpProof>>,
-
-    /// One or more attestation proofs (Appendix F.3).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub attestation: Option<Vec<AttestationProof>>,
 }
 
 impl Proofs {
-    /// Validates the proofs object.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - No proof type is present
-    /// - More than one proof type is present (spec requires exactly one)
-    /// - The present array is empty
-    /// - Any individual proof entry is invalid
-    #[must_use = "validation result must be checked"]
+    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
-        let present_count = [
-            self.jwt.is_some(),
-            self.di_vp.is_some(),
-            self.attestation.is_some(),
-        ]
-        .iter()
-        .filter(|&&v| v)
-        .count();
+        let present_count = [self.jwt.is_some(), self.di_vp.is_some(), self.attestation.is_some()]
+            .into_iter()
+            .filter(|v| *v)
+            .count();
 
         if present_count == 0 {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "proofs object must contain at least one proof type",
-            ));
+            return Err(Error::message(ErrorKind::InvalidProof, "proofs must contain exactly one proof type"));
         }
-
         if present_count > 1 {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "proofs object must contain exactly one proof type",
-            ));
+            return Err(Error::message(ErrorKind::InvalidProof, "proofs must contain exactly one proof type"));
         }
 
         if let Some(ref proofs) = self.jwt {
             if proofs.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "proofs.jwt must not be empty when present",
-                ));
+                return Err(Error::message(ErrorKind::InvalidProof, "proofs.jwt must not be empty"));
             }
             for proof in proofs {
                 proof.validate()?;
@@ -364,10 +307,7 @@ impl Proofs {
 
         if let Some(ref proofs) = self.di_vp {
             if proofs.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "proofs.di_vp must not be empty when present",
-                ));
+                return Err(Error::message(ErrorKind::InvalidProof, "proofs.di_vp must not be empty"));
             }
             for proof in proofs {
                 proof.validate()?;
@@ -376,10 +316,7 @@ impl Proofs {
 
         if let Some(ref proofs) = self.attestation {
             if proofs.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "proofs.attestation must not be empty when present",
-                ));
+                return Err(Error::message(ErrorKind::InvalidProof, "proofs.attestation must not be empty"));
             }
             for proof in proofs {
                 proof.validate()?;
@@ -394,8 +331,6 @@ impl Proofs {
 mod tests {
     use super::*;
 
-    // ── JwtProofHeader ────────────────────────────────────────────────────────
-
     #[test]
     fn valid_jwt_proof_header_with_jwk() {
         let header = JwtProofHeader {
@@ -403,6 +338,9 @@ mod tests {
             alg: "ES256".to_string(),
             jwk: Some(serde_json::json!({"kty": "EC"})),
             kid: None,
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
         };
         assert!(header.validate().is_ok());
     }
@@ -414,6 +352,51 @@ mod tests {
             alg: "ES256".to_string(),
             jwk: None,
             kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
+        };
+        assert!(header.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_jwt_proof_header_with_x5c() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: None,
+            kid: None,
+            x5c: Some(vec!["MIIBk...".to_string()]),
+            key_attestation: None,
+            trust_chain: None,
+        };
+        assert!(header.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_jwt_proof_header_with_key_attestation() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: None,
+            kid: Some("0".to_string()),
+            x5c: None,
+            key_attestation: Some("eyJ...".to_string()),
+            trust_chain: None,
+        };
+        assert!(header.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_jwt_proof_header_with_trust_chain() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: None,
+            kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: Some("eyJ...".to_string()),
         };
         assert!(header.validate().is_ok());
     }
@@ -425,6 +408,9 @@ mod tests {
             alg: "ES256".to_string(),
             jwk: None,
             kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
         };
         let err = header.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
@@ -438,6 +424,9 @@ mod tests {
             alg: String::new(),
             jwk: None,
             kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
         };
         assert_eq!(
             header.validate().unwrap_err().kind(),
@@ -452,6 +441,9 @@ mod tests {
             alg: "none".to_string(),
             jwk: None,
             kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
         };
         assert_eq!(
             header.validate().unwrap_err().kind(),
@@ -460,29 +452,84 @@ mod tests {
     }
 
     #[test]
-    fn rejects_both_jwk_and_kid() {
+    fn rejects_multiple_key_identifiers() {
+        // jwk + kid
         let header = JwtProofHeader {
             typ: "openid4vci-proof+jwt".to_string(),
             alg: "ES256".to_string(),
             jwk: Some(serde_json::json!({"kty": "EC"})),
             kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
         };
         let err = header.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("both"));
+        assert!(err.to_string().contains("more than one"));
     }
 
     #[test]
-    fn rejects_neither_jwk_nor_kid() {
+    fn rejects_jwk_and_x5c() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: Some(serde_json::json!({"kty": "EC"})),
+            kid: None,
+            x5c: Some(vec!["MIIBk...".to_string()]),
+            key_attestation: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("more than one"));
+    }
+
+    #[test]
+    fn rejects_kid_and_x5c() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: None,
+            kid: Some("key-1".to_string()),
+            x5c: Some(vec!["MIIBk...".to_string()]),
+            key_attestation: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("more than one"));
+    }
+
+    #[test]
+    fn rejects_no_key_identifier() {
         let header = JwtProofHeader {
             typ: "openid4vci-proof+jwt".to_string(),
             alg: "ES256".to_string(),
             jwk: None,
             kid: None,
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
         };
         let err = header.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("either"));
+        assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn rejects_trust_chain_without_kid() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: Some(serde_json::json!({"kty": "EC"})),
+            kid: None,
+            x5c: None,
+            key_attestation: None,
+            trust_chain: Some("eyJ...".to_string()),
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("trust_chain") && err.to_string().contains("kid"));
     }
 
     // ── JwtProofClaims ────────────────────────────────────────────────────────
@@ -490,6 +537,7 @@ mod tests {
     #[test]
     fn valid_jwt_proof_claims_without_nonce() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: "https://issuer.example.com".to_string(),
             iat: 1700000000,
             nonce: None,
@@ -500,6 +548,7 @@ mod tests {
     #[test]
     fn valid_jwt_proof_claims_with_nonce() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: "https://issuer.example.com".to_string(),
             iat: 1700000000,
             nonce: Some("wKI4LT17ac15ES9bw8ac4".to_string()),
@@ -508,8 +557,20 @@ mod tests {
     }
 
     #[test]
+    fn valid_jwt_proof_claims_with_iss() {
+        let claims = JwtProofClaims {
+            iss: Some("s6BhdRkqt3".to_string()),
+            aud: "https://issuer.example.com".to_string(),
+            iat: 1700000000,
+            nonce: Some("tZignsnFbp".to_string()),
+        };
+        assert!(claims.validate().is_ok());
+    }
+
+    #[test]
     fn rejects_empty_aud() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: String::new(),
             iat: 1700000000,
             nonce: None,
@@ -522,6 +583,7 @@ mod tests {
     #[test]
     fn rejects_zero_iat() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: "https://issuer.example.com".to_string(),
             iat: 0,
             nonce: None,
@@ -534,6 +596,7 @@ mod tests {
     #[test]
     fn rejects_negative_iat() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: "https://issuer.example.com".to_string(),
             iat: -1,
             nonce: None,
@@ -547,6 +610,7 @@ mod tests {
     #[test]
     fn nonce_skipped_when_absent() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: "https://issuer.example.com".to_string(),
             iat: 1700000000,
             nonce: None,
@@ -558,12 +622,38 @@ mod tests {
     #[test]
     fn nonce_present_when_set() {
         let claims = JwtProofClaims {
+            iss: None,
             aud: "https://issuer.example.com".to_string(),
             iat: 1700000000,
             nonce: Some("abc123".to_string()),
         };
         let json = serde_json::to_string(&claims).unwrap();
         assert!(json.contains("\"nonce\":\"abc123\""));
+    }
+
+    #[test]
+    fn iss_skipped_when_absent() {
+        let claims = JwtProofClaims {
+            iss: None,
+            aud: "https://issuer.example.com".to_string(),
+            iat: 1700000000,
+            nonce: None,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        // Check for "iss" as a JSON key, not just substring (issuer contains "iss")
+        assert!(!json.contains("\"iss\":"));
+    }
+
+    #[test]
+    fn iss_present_when_set() {
+        let claims = JwtProofClaims {
+            iss: Some("client123".to_string()),
+            aud: "https://issuer.example.com".to_string(),
+            iat: 1700000000,
+            nonce: None,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains("\"iss\":\"client123\""));
     }
 
     // ── JwtProof ──────────────────────────────────────────────────────────────
@@ -600,72 +690,114 @@ mod tests {
     #[test]
     fn valid_di_vp_proof() {
         let proof = DiVpProof {
-            verifiable_presentation: serde_json::json!({
-                "@context": ["https://www.w3.org/ns/credentials/v2"],
-                "type": ["VerifiablePresentation"],
-                "holder": "did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro",
-                "proof": [{
-                    "type": "DataIntegrityProof",
-                    "cryptosuite": "eddsa-2022",
-                    "proofPurpose": "authentication",
-                    "verificationMethod": "did:key:z6Mk#z6Mk",
-                    "challenge": "wKI4LT17ac15ES9bw8ac4",
-                    "domain": "https://issuer.example.com",
-                    "proofValue": "z5hrbHz"
-                }]
-            }),
+            holder: Some("did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro".to_string()),
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: Some("wKI4LT17ac15ES9bw8ac4".to_string()),
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
         };
         assert!(proof.validate().is_ok());
     }
 
     #[test]
-    fn rejects_di_vp_proof_not_an_object() {
+    fn valid_di_vp_proof_without_holder() {
         let proof = DiVpProof {
-            verifiable_presentation: serde_json::json!("not an object"),
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
         };
-        let err = proof.validate().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("JSON object"));
+        assert!(proof.validate().is_ok());
     }
 
     #[test]
-    fn rejects_di_vp_proof_missing_proof_field() {
+    fn rejects_di_vp_proof_empty_proof_array() {
         let proof = DiVpProof {
-            verifiable_presentation: serde_json::json!({
-                "@context": ["https://www.w3.org/ns/credentials/v2"],
-                "type": ["VerifiablePresentation"]
-                // "proof" field absent
-            }),
+            holder: None,
+            proof: vec![],
         };
         let err = proof.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("'proof'"));
+        assert!(err.to_string().contains("at least one"));
     }
 
     #[test]
-    fn di_vp_proof_serializes_flattened() {
+    fn rejects_di_vp_proof_wrong_proof_purpose() {
         let proof = DiVpProof {
-            verifiable_presentation: serde_json::json!({
-                "type": ["VerifiablePresentation"],
-                "proof": [{"type": "DataIntegrityProof"}]
-            }),
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "assertionMethod".to_string(), // wrong value
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
         };
-        let json = serde_json::to_string(&proof).unwrap();
-        // Must be flattened — no "verifiable_presentation" wrapper key
-        assert!(json.contains("\"type\""));
-        assert!(json.contains("VerifiablePresentation"));
-        assert!(!json.contains("verifiable_presentation"));
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("authentication"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_empty_cryptosuite() {
+        let proof = DiVpProof {
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: String::new(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("cryptosuite"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_empty_domain() {
+        let proof = DiVpProof {
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: String::new(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("domain"));
     }
 
     #[test]
     fn di_vp_proof_deserializes_from_spec_example() {
         // Non-normative example from spec §8.2
         let json = r#"{
-            "@context": [
-                "https://www.w3.org/ns/credentials/v2",
-                "https://www.w3.org/ns/credentials/examples/v2"
-            ],
-            "type": ["VerifiablePresentation"],
             "holder": "did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro",
             "proof": [{
                 "type": "DataIntegrityProof",
@@ -681,9 +813,153 @@ mod tests {
         let proof: DiVpProof = serde_json::from_str(json).unwrap();
         assert!(proof.validate().is_ok());
         assert_eq!(
-            proof.verifiable_presentation["holder"],
-            "did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro"
+            proof.holder,
+            Some("did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro".to_string())
         );
+        assert_eq!(proof.proof.len(), 1);
+        assert_eq!(proof.proof[0].cryptosuite, "eddsa-2022");
+    }
+
+    #[test]
+    fn di_vp_proof_serializes_correctly() {
+        let proof = DiVpProof {
+            holder: Some("did:key:z6Mk".to_string()),
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: Some("abc123".to_string()),
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&proof).unwrap();
+        assert!(json.contains("\"holder\""));
+        assert!(json.contains("\"proof\""));
+        assert!(json.contains("\"type\":\"DataIntegrityProof\""));
+        assert!(json.contains("\"cryptosuite\":\"eddsa-2022\""));
+    }
+
+    // ── DataIntegrityProof nonce validation ─────────────────────────────────────
+
+    #[test]
+    fn validate_with_nonce_matches() {
+        let proof = DataIntegrityProof {
+            proof_type: "DataIntegrityProof".to_string(),
+            cryptosuite: "eddsa-2022".to_string(),
+            proof_purpose: "authentication".to_string(),
+            verification_method: "did:key:z6Mk#z6Mk".to_string(),
+            created: "2023-03-01T14:56:29.280619Z".to_string(),
+            challenge: Some("server-nonce-123".to_string()),
+            domain: "https://issuer.example.com".to_string(),
+            proof_value: "z5hrbHz".to_string(),
+        };
+        assert!(proof.validate_with_nonce(Some("server-nonce-123")).is_ok());
+    }
+
+    #[test]
+    fn validate_with_nonce_missing_challenge() {
+        let proof = DataIntegrityProof {
+            proof_type: "DataIntegrityProof".to_string(),
+            cryptosuite: "eddsa-2022".to_string(),
+            proof_purpose: "authentication".to_string(),
+            verification_method: "did:key:z6Mk#z6Mk".to_string(),
+            created: "2023-03-01T14:56:29.280619Z".to_string(),
+            challenge: None, // missing
+            domain: "https://issuer.example.com".to_string(),
+            proof_value: "z5hrbHz".to_string(),
+        };
+        let err = proof.validate_with_nonce(Some("server-nonce-123")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("challenge"));
+        assert!(err.to_string().contains("required"));
+    }
+
+    #[test]
+    fn validate_with_nonce_wrong_challenge() {
+        let proof = DataIntegrityProof {
+            proof_type: "DataIntegrityProof".to_string(),
+            cryptosuite: "eddsa-2022".to_string(),
+            proof_purpose: "authentication".to_string(),
+            verification_method: "did:key:z6Mk#z6Mk".to_string(),
+            created: "2023-03-01T14:56:29.280619Z".to_string(),
+            challenge: Some("wrong-nonce".to_string()),
+            domain: "https://issuer.example.com".to_string(),
+            proof_value: "z5hrbHz".to_string(),
+        };
+        let err = proof.validate_with_nonce(Some("server-nonce-123")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("must match"));
+    }
+
+    #[test]
+    fn validate_without_nonce_ok() {
+        let proof = DataIntegrityProof {
+            proof_type: "DataIntegrityProof".to_string(),
+            cryptosuite: "eddsa-2022".to_string(),
+            proof_purpose: "authentication".to_string(),
+            verification_method: "did:key:z6Mk#z6Mk".to_string(),
+            created: "2023-03-01T14:56:29.280619Z".to_string(),
+            challenge: None, // no challenge - ok when no c_nonce
+            domain: "https://issuer.example.com".to_string(),
+            proof_value: "z5hrbHz".to_string(),
+        };
+        assert!(proof.validate_with_nonce(None).is_ok());
+    }
+
+    #[test]
+    fn validate_without_nonce_rejects_challenge() {
+        let proof = DataIntegrityProof {
+            proof_type: "DataIntegrityProof".to_string(),
+            cryptosuite: "eddsa-2022".to_string(),
+            proof_purpose: "authentication".to_string(),
+            verification_method: "did:key:z6Mk#z6Mk".to_string(),
+            created: "2023-03-01T14:56:29.280619Z".to_string(),
+            challenge: Some("unexpected".to_string()), // MUST NOT be present
+            domain: "https://issuer.example.com".to_string(),
+            proof_value: "z5hrbHz".to_string(),
+        };
+        let err = proof.validate_with_nonce(None).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("MUST NOT be present"));
+    }
+
+    #[test]
+    fn di_vp_validate_with_nonce() {
+        let proof = DiVpProof {
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: Some("server-nonce".to_string()),
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        assert!(proof.validate_with_nonce(Some("server-nonce")).is_ok());
+    }
+
+    #[test]
+    fn di_vp_validate_without_nonce() {
+        let proof = DiVpProof {
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        assert!(proof.validate_with_nonce(None).is_ok());
     }
 
     // ── AttestationProof ──────────────────────────────────────────────────────
@@ -769,10 +1045,17 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: Some(vec![DiVpProof {
-                verifiable_presentation: serde_json::json!({
-                    "type": ["VerifiablePresentation"],
-                    "proof": [{"type": "DataIntegrityProof"}]
-                }),
+                holder: None,
+                proof: vec![DataIntegrityProof {
+                    proof_type: "DataIntegrityProof".to_string(),
+                    cryptosuite: "eddsa-2022".to_string(),
+                    proof_purpose: "authentication".to_string(),
+                    verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                    created: "2023-03-01T14:56:29.280619Z".to_string(),
+                    challenge: None,
+                    domain: "https://issuer.example.com".to_string(),
+                    proof_value: "z5hrbHz".to_string(),
+                }],
             }]),
             attestation: None,
         };
@@ -800,7 +1083,7 @@ mod tests {
         };
         let err = proofs.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("at least one"));
+        assert!(err.to_string().contains("exactly one"));
     }
 
     #[test]
@@ -811,10 +1094,17 @@ mod tests {
                 jwt: "aaa.bbb.ccc".to_string(),
             }]),
             di_vp: Some(vec![DiVpProof {
-                verifiable_presentation: serde_json::json!({
-                    "type": ["VerifiablePresentation"],
-                    "proof": [{}]
-                }),
+                holder: None,
+                proof: vec![DataIntegrityProof {
+                    proof_type: "DataIntegrityProof".to_string(),
+                    cryptosuite: "eddsa-2022".to_string(),
+                    proof_purpose: "authentication".to_string(),
+                    verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                    created: "2023-03-01T14:56:29.280619Z".to_string(),
+                    challenge: None,
+                    domain: "https://issuer.example.com".to_string(),
+                    proof_value: "z5hrbHz".to_string(),
+                }],
             }]),
             attestation: None,
         };
@@ -879,10 +1169,8 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: Some(vec![DiVpProof {
-                verifiable_presentation: serde_json::json!({
-                    "type": ["VerifiablePresentation"]
-                    // missing "proof"
-                }),
+                holder: None,
+                proof: vec![], // empty proof array
             }]),
             attestation: None,
         };
@@ -930,10 +1218,17 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: Some(vec![DiVpProof {
-                verifiable_presentation: serde_json::json!({
-                    "type": ["VerifiablePresentation"],
-                    "proof": []
-                }),
+                holder: Some("did:key:z6Mk".to_string()),
+                proof: vec![DataIntegrityProof {
+                    proof_type: "DataIntegrityProof".to_string(),
+                    cryptosuite: "eddsa-2022".to_string(),
+                    proof_purpose: "authentication".to_string(),
+                    verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                    created: "2023-03-01T14:56:29.280619Z".to_string(),
+                    challenge: None,
+                    domain: "https://issuer.example.com".to_string(),
+                    proof_value: "z5hrbHz".to_string(),
+                }],
             }]),
             attestation: None,
         };
