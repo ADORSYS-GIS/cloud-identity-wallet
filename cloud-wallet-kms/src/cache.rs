@@ -465,34 +465,7 @@ where
     where
         H: BuildHasher + Clone + Send + Sync + 'static,
     {
-        let stats = CacheStatsRef::new();
-        let mut builder = MokaCache::builder();
-
-        if let Some(capacity) = self.max_capacity {
-            builder = builder.max_capacity(capacity);
-        }
-        if let Some(ttl) = self.time_to_live {
-            builder = builder.time_to_live(ttl);
-        }
-        if let Some(tti) = self.time_to_idle {
-            builder = builder.time_to_idle(tti);
-        }
-
-        // Add eviction listener for statistics
-        if self.enable_stats {
-            let stats_clone = stats.clone();
-            builder = builder.eviction_listener(move |_key, _value, _cause| {
-                stats_clone.record_eviction();
-            });
-        }
-
-        Cache {
-            inner: builder.build_with_hasher(hasher.clone()),
-            stats,
-            enable_stats: self.enable_stats,
-            access_counters: Arc::new(DashMap::with_hasher(hasher)),
-            max_accesses: self.max_accesses,
-        }
+        self.build_inner(hasher)
     }
 
     /// Sets the maximum capacity of the cache.
@@ -557,6 +530,13 @@ where
     /// expiration.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::new();
+        self.build_inner(build_hasher)
+    }
+
+    fn build_inner<H>(self, hasher: H) -> Cache<K, V, H>
+    where
+        H: BuildHasher + Clone + Send + Sync + 'static,
+    {
         let stats = CacheStatsRef::new();
         let mut builder = MokaCache::builder();
 
@@ -579,10 +559,10 @@ where
         }
 
         Cache {
-            inner: builder.build_with_hasher(build_hasher.clone()),
+            inner: builder.build_with_hasher(hasher.clone()),
             stats,
             enable_stats: self.enable_stats,
-            access_counters: Arc::new(DashMap::with_hasher(build_hasher)),
+            access_counters: Arc::new(DashMap::with_hasher(hasher)),
             max_accesses: self.max_accesses,
         }
     }
