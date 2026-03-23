@@ -58,11 +58,7 @@ impl JwtProofHeader {
         }
 
         // Exactly one of jwk, kid, or x5c must be present
-        let key_identifiers = [
-            self.jwk.is_some(),
-            self.kid.is_some(),
-            self.x5c.is_some(),
-        ];
+        let key_identifiers = [self.jwk.is_some(), self.kid.is_some(), self.x5c.is_some()];
         let present_count = key_identifiers.iter().filter(|&&v| v).count();
 
         if present_count == 0 {
@@ -180,16 +176,25 @@ impl DataIntegrityProof {
     #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.cryptosuite.is_empty() {
-            return Err(Error::message(ErrorKind::InvalidProof, "cryptosuite must not be empty"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "cryptosuite must not be empty",
+            ));
         }
         if self.proof_purpose != "authentication" {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
-                format!("proofPurpose must be 'authentication', got '{}'", self.proof_purpose),
+                format!(
+                    "proofPurpose must be 'authentication', got '{}'",
+                    self.proof_purpose
+                ),
             ));
         }
         if self.domain.is_empty() {
-            return Err(Error::message(ErrorKind::InvalidProof, "domain must not be empty"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "domain must not be empty",
+            ));
         }
         Ok(())
     }
@@ -205,11 +210,17 @@ impl DataIntegrityProof {
                     ErrorKind::InvalidProof,
                     format!("challenge must match c_nonce, got '{}'", challenge),
                 )),
-                None => Err(Error::message(ErrorKind::InvalidProof, "challenge required when c_nonce provided")),
+                None => Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    "challenge required when c_nonce provided",
+                )),
             },
             None => {
                 if self.challenge.is_some() {
-                    return Err(Error::message(ErrorKind::InvalidProof, "challenge MUST NOT be present when no c_nonce provided"));
+                    return Err(Error::message(
+                        ErrorKind::InvalidProof,
+                        "challenge MUST NOT be present when no c_nonce provided",
+                    ));
                 }
                 Ok(())
             }
@@ -231,7 +242,10 @@ impl DiVpProof {
     #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.proof.is_empty() {
-            return Err(Error::message(ErrorKind::InvalidProof, "di_vp must contain at least one proof"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "di_vp must contain at least one proof",
+            ));
         }
         for proof in &self.proof {
             proof.validate()?;
@@ -243,7 +257,10 @@ impl DiVpProof {
     #[must_use]
     pub fn validate_with_nonce(&self, c_nonce: Option<&str>) -> Result<(), Error> {
         if self.proof.is_empty() {
-            return Err(Error::message(ErrorKind::InvalidProof, "di_vp must contain at least one proof"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "di_vp must contain at least one proof",
+            ));
         }
         for proof in &self.proof {
             proof.validate_with_nonce(c_nonce)?;
@@ -262,11 +279,17 @@ impl AttestationProof {
     #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.attestation.is_empty() {
-            return Err(Error::message(ErrorKind::InvalidProof, "attestation must not be empty"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "attestation must not be empty",
+            ));
         }
         let parts: Vec<&str> = self.attestation.splitn(4, '.').collect();
         if parts.len() != 3 {
-            return Err(Error::message(ErrorKind::InvalidProof, "attestation must be compact JWT with three parts"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "attestation must be compact JWT with three parts",
+            ));
         }
         Ok(())
     }
@@ -284,21 +307,34 @@ pub struct Proofs {
 impl Proofs {
     #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
-        let present_count = [self.jwt.is_some(), self.di_vp.is_some(), self.attestation.is_some()]
-            .into_iter()
-            .filter(|v| *v)
-            .count();
+        let present_count = [
+            self.jwt.is_some(),
+            self.di_vp.is_some(),
+            self.attestation.is_some(),
+        ]
+        .into_iter()
+        .filter(|v| *v)
+        .count();
 
         if present_count == 0 {
-            return Err(Error::message(ErrorKind::InvalidProof, "proofs must contain exactly one proof type"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "proofs must contain exactly one proof type",
+            ));
         }
         if present_count > 1 {
-            return Err(Error::message(ErrorKind::InvalidProof, "proofs must contain exactly one proof type"));
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "proofs must contain exactly one proof type",
+            ));
         }
 
         if let Some(ref proofs) = self.jwt {
             if proofs.is_empty() {
-                return Err(Error::message(ErrorKind::InvalidProof, "proofs.jwt must not be empty"));
+                return Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    "proofs.jwt must not be empty",
+                ));
             }
             for proof in proofs {
                 proof.validate()?;
@@ -307,7 +343,10 @@ impl Proofs {
 
         if let Some(ref proofs) = self.di_vp {
             if proofs.is_empty() {
-                return Err(Error::message(ErrorKind::InvalidProof, "proofs.di_vp must not be empty"));
+                return Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    "proofs.di_vp must not be empty",
+                ));
             }
             for proof in proofs {
                 proof.validate()?;
@@ -316,7 +355,10 @@ impl Proofs {
 
         if let Some(ref proofs) = self.attestation {
             if proofs.is_empty() {
-                return Err(Error::message(ErrorKind::InvalidProof, "proofs.attestation must not be empty"));
+                return Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    "proofs.attestation must not be empty",
+                ));
             }
             for proof in proofs {
                 proof.validate()?;
@@ -871,7 +913,9 @@ mod tests {
             domain: "https://issuer.example.com".to_string(),
             proof_value: "z5hrbHz".to_string(),
         };
-        let err = proof.validate_with_nonce(Some("server-nonce-123")).unwrap_err();
+        let err = proof
+            .validate_with_nonce(Some("server-nonce-123"))
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
         assert!(err.to_string().contains("challenge"));
         assert!(err.to_string().contains("required"));
@@ -889,7 +933,9 @@ mod tests {
             domain: "https://issuer.example.com".to_string(),
             proof_value: "z5hrbHz".to_string(),
         };
-        let err = proof.validate_with_nonce(Some("server-nonce-123")).unwrap_err();
+        let err = proof
+            .validate_with_nonce(Some("server-nonce-123"))
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
         assert!(err.to_string().contains("must match"));
     }

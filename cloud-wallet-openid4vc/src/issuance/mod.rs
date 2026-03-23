@@ -1,2 +1,2 @@
-pub mod proofs;
 pub mod credential_offer;
+pub mod proofs;
