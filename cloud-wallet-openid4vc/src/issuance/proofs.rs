@@ -38,7 +38,6 @@ pub struct JwtProofHeader {
 
 impl JwtProofHeader {
     /// Validates: typ=openid4vci-proof+jwt, alg not empty/none, exactly one of jwk/kid/x5c, trust_chain requires kid.
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.typ != JWT_PROOF_TYPE_HEADER {
             return Err(Error::message(
@@ -102,7 +101,6 @@ pub struct JwtProofClaims {
 }
 
 impl JwtProofClaims {
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.aud.is_empty() {
             return Err(Error::message(
@@ -129,7 +127,6 @@ pub struct JwtProof {
 }
 
 impl JwtProof {
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.jwt.is_empty() {
             return Err(Error::message(
@@ -173,7 +170,6 @@ pub struct DataIntegrityProof {
 }
 
 impl DataIntegrityProof {
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.cryptosuite.is_empty() {
             return Err(Error::message(
@@ -200,7 +196,6 @@ impl DataIntegrityProof {
     }
 
     /// Validates challenge against c_nonce: required when c_nonce provided, MUST NOT be present otherwise.
-    #[must_use]
     pub fn validate_with_nonce(&self, c_nonce: Option<&str>) -> Result<(), Error> {
         self.validate()?;
         match c_nonce {
@@ -239,7 +234,6 @@ pub struct DiVpProof {
 }
 
 impl DiVpProof {
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.proof.is_empty() {
             return Err(Error::message(
@@ -254,7 +248,6 @@ impl DiVpProof {
     }
 
     /// Validates challenge against c_nonce for all proofs.
-    #[must_use]
     pub fn validate_with_nonce(&self, c_nonce: Option<&str>) -> Result<(), Error> {
         if self.proof.is_empty() {
             return Err(Error::message(
@@ -276,7 +269,6 @@ pub struct AttestationProof {
 }
 
 impl AttestationProof {
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         if self.attestation.is_empty() {
             return Err(Error::message(
@@ -305,7 +297,6 @@ pub struct Proofs {
 }
 
 impl Proofs {
-    #[must_use]
     pub fn validate(&self) -> Result<(), Error> {
         let present_count = [
             self.jwt.is_some(),
