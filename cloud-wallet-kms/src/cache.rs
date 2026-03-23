@@ -457,17 +457,6 @@ where
         }
     }
 
-    /// Builds the cache using a custom hasher.
-    ///
-    /// This is useful if you want to use a specific hashing algorithm instead of
-    /// the default `RandomState` provided by `ahash`.
-    pub fn build_with_hasher<H>(self, hasher: H) -> Cache<K, V, H>
-    where
-        H: BuildHasher + Clone + Send + Sync + 'static,
-    {
-        self.build_inner(hasher)
-    }
-
     /// Sets the maximum capacity of the cache.
     ///
     /// When the cache reaches this capacity, it will begin evicting entries based
@@ -531,6 +520,17 @@ where
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::new();
         self.build_inner(build_hasher)
+    }
+
+    /// Builds the cache using a custom hasher.
+    ///
+    /// This is useful if you want to use a specific hashing algorithm instead of
+    /// the default `RandomState` provided by `ahash`.
+    pub fn build_with_hasher<H>(self, hasher: H) -> Cache<K, V, H>
+    where
+        H: BuildHasher + Clone + Send + Sync + 'static,
+    {
+        self.build_inner(hasher)
     }
 
     fn build_inner<H>(self, hasher: H) -> Cache<K, V, H>
