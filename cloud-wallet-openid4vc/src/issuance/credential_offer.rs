@@ -546,9 +546,7 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
     {
         // Check for "alg":"none" pattern (case-insensitive)
         let header_lower = header_str.to_lowercase();
-        if header_lower.contains(r#""alg":"none""#)
-            || header_lower.contains(r#""alg" : "none""#)
-        {
+        if header_lower.contains(r#""alg":"none""#) || header_lower.contains(r#""alg" : "none""#) {
             return true;
         }
     }
