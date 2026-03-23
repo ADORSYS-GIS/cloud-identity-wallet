@@ -1,537 +1,110 @@
-//! Data models for the OpenID for Verifiable Credential Issuance (OID4VCI) 1.0
-//! **Credential Issuer Metadata** document (§12.2).
+//! Credential Issuer Metadata.
 //!
-//! The metadata is served by a Credential Issuer at the well-known path:
+//! See [spec].
 //!
-//! ```text
-//! GET /.well-known/openid-credential-issuer HTTP/1.1
-//! Host: issuer.example.com
-//! ```
-//!
-//! and describes the issuer's technical capabilities, supported credential
-//! formats, and optional display information.
-//!
-//! # Credential Formats
-//!
-//! Format-specific configuration is represented by the [`CredentialFormatDetails`]
-//! enum, which provides a typed variant for each format defined in the
-//! specification's Appendix A:
-//!
-//! | Variant | JSON `format` value | Spec |
-//! |---------|---------------------|------|
-//! | [`CredentialFormatDetails::DcSdJwt`] | `"dc+sd-jwt"` | Appendix A.3 |
-//! | [`CredentialFormatDetails::MsoMdoc`] | `"mso_mdoc"` | Appendix A.2 |
-//! | [`CredentialFormatDetails::JwtVcJson`] | `"jwt_vc_json"` | Appendix A.1 |
-//! | [`CredentialFormatDetails::Other`] | any other string | — |
-//!
-//! # Reference
-//!
-//! <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-issuer-metadata>
+//! [spec]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-issuer-metadata
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_with::skip_serializing_none;
 use url::Url;
 
 use crate::errors::{Error, ErrorKind};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Display helpers
-// ─────────────────────────────────────────────────────────────────────────────
+use super::credential_configuration::{CredentialConfiguration, Logo};
 
-/// Logo information for display objects.
-///
-/// Defined in OID4VCI §12.2.4 inside the `display` array of
-/// [`CredentialIssuerMetadata`] and [`CredentialDisplay`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Logo {
-    /// URI where the wallet can obtain the logo image.
-    ///
-    /// The scheme is not restricted; `https:` and `data:` URIs are both valid.
-    pub uri: String,
-
-    /// Alternative text for the logo image, used for accessibility.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alt_text: Option<String>,
-}
-
-/// Per-language display properties for the Credential Issuer itself.
-///
-/// One object exists per supported language. The `locale` field identifies the
-/// language using a BCP47 language tag (e.g. `"en-US"`, `"de"`).
+/// Per-language display properties for the Credential Issuer.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IssuerDisplay {
     /// Human-readable display name of the Credential Issuer.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// BCP47 language tag (e.g. `"en-US"`) identifying the language of this
-    /// display object.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// BCP47 language tag (e.g. `"en-US"`).
     pub locale: Option<String>,
 
     /// Optional logo for the Credential Issuer.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub logo: Option<Logo>,
 }
 
-/// Per-language display properties for a single credential configuration.
-///
-/// Carries the credential's name, description, background, text colors and an
-/// optional logo, each scoped to one locale.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CredentialDisplay {
-    /// Human-readable name of the credential type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-
-    /// BCP47 language tag identifying the language of this display object.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub locale: Option<String>,
-
-    /// Optional logo for the credential.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logo: Option<Logo>,
-
-    /// Optional background color expressed as a CSS color value (e.g. `"#12107c"`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background_color: Option<String>,
-
-    /// Optional text color expressed as a CSS color value (e.g. `"#FFFFFF"`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_color: Option<String>,
-
-    /// Optional description for the credential type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Proof types
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Key attestation requirements for proof types.
-///
-/// Used in high-assurance credential issuance flows to specify required
-/// security levels for key storage and user authentication.
-///
-/// Defined in OID4VCI §12.2.4 inside `proof_types_supported`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct KeyAttestationsRequired {
-    /// Required key storage security levels (e.g. `"iso_18045_moderate"`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_storage: Option<Vec<String>>,
-
-    /// Required user authentication security levels (e.g. `"iso_18045_moderate"`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_authentication: Option<Vec<String>>,
-}
-
-/// Metadata for a single proof type supported by a credential configuration.
-///
-/// Lives under `proof_types_supported` in a [`CredentialConfiguration`]. The
-/// map key (e.g. `"jwt"`, `"cwt"`) names the proof type; this struct is the
-/// corresponding value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProofTypeMetadata {
-    /// Non-empty list of signing algorithm identifiers (JWA / CASE) that the
-    /// issuer accepts for this proof type.
-    pub proof_signing_alg_values_supported: Vec<String>,
-
-    /// Key attestation requirements for high-assurance issuance flows.
-    ///
-    /// When present, specifies required security levels for key storage
-    /// and/or user authentication.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_attestations_required: Option<KeyAttestationsRequired>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Format-specific credential configuration models (OID4VCI Appendix A)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Credential definition for W3C Verifiable Credential formats.
-///
-/// Required inside [`JwtVcJsonCredentialConfiguration`] (Appendix A.1).
-/// Also used in SD-JWT VC configurations in some implementations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CredentialDefinition {
-    /// The credential type values (e.g. `["VerifiableCredential", "UniversityDegreeCredential"]`).
-    #[serde(rename = "type")]
-    pub types: Vec<String>,
-
-    /// Optional @context array for JSON-LD compatibility.
-    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
-    pub context: Option<Vec<String>>,
-
-    /// Optional map of claim metadata; the keys are claim names.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "credentialSubject")]
-    pub credential_subject: Option<HashMap<String, Value>>,
-}
-
-/// Nested credential metadata for SD-JWT VC configurations.
-///
-/// The spec's Appendix I example shows SD-JWT VC configurations with a nested
-/// `credential_metadata` object containing `display` and `claims` arrays.
-/// This structure supports that format-specific nesting.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SdJwtVcCredentialMetadata {
-    /// Per-language display metadata for this credential.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display: Option<Vec<CredentialDisplay>>,
-
-    /// Optional array of claim metadata objects.
-    ///
-    /// Each claim object contains `path`, `display`, `mandatory`, and
-    /// optionally `value_type` fields.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub claims: Option<Vec<Value>>,
-}
-
-/// Format-specific configuration for an **IETF SD-JWT VC** credential
-/// (`"dc+sd-jwt"`, OID4VCI Appendix A.3).
-///
-/// The `vct` claim is the Verifiable Credential Type and uniquely identifies
-/// the credential schema.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SdJwtVcCredentialConfiguration {
-    /// Verifiable Credential Type URI — **REQUIRED** for SD-JWT VC.
-    ///
-    /// Corresponds to the `vct` header claim in the issued SD-JWT.
-    pub vct: String,
-
-    /// Optional credential definition with type and context.
-    ///
-    /// Some implementations include this alongside `vct` for compatibility.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_definition: Option<CredentialDefinition>,
-
-    /// Optional map of claim metadata for selective disclosure.
-    ///
-    /// This is the format-agnostic location. For SD-JWT VC-specific
-    /// nesting, use `credential_metadata` instead.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub claims: Option<HashMap<String, Value>>,
-
-    /// Nested credential metadata following SD-JWT VC spec structure.
-    ///
-    /// When present, contains `display` and `claims` in the format shown
-    /// in Appendix I of the OID4VCI specification.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_metadata: Option<SdJwtVcCredentialMetadata>,
-}
-
-/// Format-specific configuration for an **ISO/IEC 18013-5 mdoc** credential
-/// (`"mso_mdoc"`, OID4VCI Appendix A.2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MsoMdocCredentialConfiguration {
-    /// Document type string — **REQUIRED** for ISO mdoc.
-    ///
-    /// Identifies the type of the mobile document (e.g. `"org.iso.18013.5.1.mDL"`).
-    pub doctype: String,
-
-    /// Optional namespace-to-claims map for this document type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub claims: Option<HashMap<String, Value>>,
-}
-
-/// Format-specific configuration for a **W3C Verifiable Credential in JWT JSON** format
-/// (`"jwt_vc_json"`, OID4VCI Appendix A.1).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JwtVcJsonCredentialConfiguration {
-    /// Credential definition including the `type` array — **REQUIRED**.
-    pub credential_definition: CredentialDefinition,
-}
-
-/// Typed discriminant over all format-specific credential configurations.
-///
-/// The `format` key in the JSON object determines which variant is used. Use
-/// pattern matching to access format-specific required fields:
-///
-/// ```
-/// use cloud_wallet_openid4vc::issuance::issuer_metadata::{CredentialFormatDetails, CredentialConfiguration};
-///
-/// # let json = serde_json::json!({
-/// #     "format": "dc+sd-jwt",
-/// #     "vct": "https://credentials.example.com/identity"
-/// # });
-/// let config: CredentialConfiguration = serde_json::from_value(json).unwrap();
-/// if let CredentialFormatDetails::DcSdJwt(sd) = &config.format_details {
-///     println!("vct = {}", sd.vct);
-/// }
-/// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "format")]
-pub enum CredentialFormatDetails {
-    /// IETF SD-JWT VC (`"dc+sd-jwt"`) — requires `vct`.
-    #[serde(rename = "dc+sd-jwt")]
-    DcSdJwt(SdJwtVcCredentialConfiguration),
-
-    /// ISO/IEC 18013-5 mdoc (`"mso_mdoc"`) — requires `doctype`.
-    #[serde(rename = "mso_mdoc")]
-    MsoMdoc(MsoMdocCredentialConfiguration),
-
-    /// W3C VC in JWT JSON encoding (`"jwt_vc_json"`) — requires `credential_definition`.
-    #[serde(rename = "jwt_vc_json")]
-    JwtVcJson(JwtVcJsonCredentialConfiguration),
-
-    /// Any format not explicitly modelled above.
-    ///
-    /// The raw format string is preserved in the `format` field and any
-    /// additional fields are collected in `extra`. This enables wallets to
-    /// process configurations for formats they don't understand, as required
-    /// by §12.2.4 of the specification.
-    #[serde(untagged)]
-    Other {
-        /// The format identifier string (e.g., "some_future_format").
-        format: String,
-        /// Additional fields that are not recognized by this implementation.
-        #[serde(flatten)]
-        extra: serde_json::Value,
-    },
-}
-
-impl CredentialFormatDetails {
-    /// Returns the wire-format string identifier (e.g. `"dc+sd-jwt"`).
-    pub fn format_str(&self) -> &str {
-        match self {
-            Self::DcSdJwt(_) => "dc+sd-jwt",
-            Self::MsoMdoc(_) => "mso_mdoc",
-            Self::JwtVcJson(_) => "jwt_vc_json",
-            Self::Other { format, .. } => format,
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Credential configuration
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// One entry in the `credential_configurations_supported` map.
-///
-/// Describes a specific credential that the issuer can issue. Common fields
-/// (scope, proof types, display) are in this struct. Format-specific required
-/// fields are in the `format_details` field as a typed
-/// [`CredentialFormatDetails`] variant — no raw `HashMap` is needed.
-///
-/// # Deserialisation
-///
-/// The JSON object's `format` key drives which [`CredentialFormatDetails`]
-/// variant is used. All fields of the format-specific struct are expected at
-/// the top level of the same JSON object (internally-tagged flat envelope).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CredentialConfiguration {
-    /// Typed format details, including the `format` discriminant and all
-    /// format-mandatory fields.
-    #[serde(flatten)]
-    pub format_details: CredentialFormatDetails,
-
-    /// Unique identifier for this credential configuration.
-    ///
-    /// Typically matches the map key in `credential_configurations_supported`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-
-    /// OAuth 2.0 scope value used to request this credential type.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
-
-    /// Cryptographic key binding methods supported by the issuer for this
-    /// credential (e.g. `["jwk"]`, `["case_key"]`, `["did:example"]`).
-    ///
-    /// When present, `proof_types_supported` **MUST** also be present.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cryptographic_binding_methods_supported: Option<Vec<String>>,
-
-    /// Signing algorithms used by the issuer to sign issued credentials.
-    ///
-    /// Per §12.2.4, algorithm identifier types and values are determined by the
-    /// Credential Format and defined in Appendix A:
-    /// - JWT-based formats (jwt_vc_json, dc+sd-jwt): string identifiers from
-    ///   the JWA registry (e.g., `"ES256"`, `"RS256"`)
-    /// - CASE-based formats (mso_mdoc): integer identifiers from the CASE
-    ///   Algorithms IANA registry (e.g., `-7` for ES256, `-257` for RS256)
-    ///
-    /// Validation of these values is format-specific and handled elsewhere.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_signing_alg_values_supported: Option<Vec<Value>>,
-
-    /// Supported key proof types, keyed by proof type name (e.g. `"jwt"`).
-    ///
-    /// **MUST** be present when `cryptographic_binding_methods_supported` is
-    /// present; **MUST** be omitted otherwise.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proof_types_supported: Option<HashMap<String, ProofTypeMetadata>>,
-
-    /// Per-language display metadata for this credential configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display: Option<Vec<CredentialDisplay>>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Encryption objects
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Encryption capability descriptor, used for both request and response
-/// encryption (`credential_request_encryption` and
-/// `credential_response_encryption` fields).
+/// Encryption capability descriptor for request and response encryption.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialEncryptionInfo {
-    /// JSON Web Key Set containing public keys for the key agreement used in
-    /// encryption.
-    ///
-    /// Required for request encryption, optional for response encryption.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// JSON Web Key Set for key agreement.
     pub jwks: Option<Value>,
 
-    /// JWE `alg` algorithm values supported (for response encryption only).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// JWE `alg` algorithm values supported (response encryption only).
     pub alg_values_supported: Option<Vec<String>>,
 
     /// JWE `enc` content-encryption algorithm values supported.
     pub enc_values_supported: Vec<String>,
 
     /// JWE `zip` compression algorithm values supported.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub zip_values_supported: Option<Vec<String>>,
 
     /// Whether encryption is required on top of TLS.
     pub encryption_required: bool,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Batch issuance
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Information about the issuer's support for batch credential issuance.
-///
-/// Presence of this object signals that the issuer supports more than one
-/// key proof in the `proofs` array of a Credential Request.
+/// Information about batch credential issuance support.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BatchCredentialIssuance {
-    /// Maximum size of the `proofs` array in a Credential Request.
-    ///
-    /// **MUST** be 2 or greater.
+    /// Maximum size of the `proofs` array (must be >= 2).
     pub batch_size: u32,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Top-level metadata document
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// The Credential Issuer Metadata document (OID4VCI §12.2).
+/// The Credential Issuer Metadata document.
 ///
-/// Served at `/.well-known/openid-credential-issuer` (or with the issuer's
-/// path component appended, as described in §12.2.2).
-///
-/// After deserializing, call [`CredentialIssuerMetadata::validate`] to enforce
-/// specification constraints that cannot be expressed in the type system alone
-/// (e.g. HTTPS-only URLs, non-empty configuration map).
-///
-/// # Example
-///
-/// ```
-/// use cloud_wallet_openid4vc::issuance::issuer_metadata::{
-///     CredentialIssuerMetadata, CredentialFormatDetails,
-/// };
-///
-/// let json = serde_json::json!({
-///     "credential_issuer": "https://issuer.example.com",
-///     "credential_endpoint": "https://issuer.example.com/credential",
-///     "credential_configurations_supported": {
-///         "ExampleCredential": {
-///             "format": "dc+sd-jwt",
-///             "vct": "https://credentials.example.com/identity"
-///         }
-///     }
-/// });
-///
-/// let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
-/// metadata.validate().unwrap();
-///
-/// let config = metadata.credential_configurations_supported.get("ExampleCredential").unwrap();
-/// assert!(matches!(config.format_details, CredentialFormatDetails::DcSdJwt(_)));
-/// ```
+/// Served at `/.well-known/openid-credential-issuer`. Call [`validate`](Self::validate)
+/// after deserializing to enforce specification constraints.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialIssuerMetadata {
-    /// Unique URL identifier of the Credential Issuer (HTTPS, no query/fragment).
-    ///
-    /// **REQUIRED.** The value MUST match the URL from which the metadata was
-    /// retrieved (§12.2.1).
+    /// Unique URL identifier of the Credential Issuer (HTTPS).
     pub credential_issuer: String,
 
-    /// OAuth 2.0 Authorization Server identifiers relied on by this issuer.
-    ///
-    /// If absent, the issuer itself acts as the Authorization Server.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// OAuth 2.0 Authorization Server identifiers.
     pub authorization_servers: Option<Vec<String>>,
 
-    /// URL of the Credential Endpoint (§8.2, REQUIRED, HTTPS).
+    /// URL of the Credential Endpoint (HTTPS).
     pub credential_endpoint: String,
 
-    /// URL of the Nonce Endpoint, if supported (§7, HTTPS).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// URL of the Nonce Endpoint (HTTPS).
     pub nonce_endpoint: Option<String>,
 
-    /// URL of the Deferred Credential Endpoint, if supported (§9, HTTPS).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// URL of the Deferred Credential Endpoint (HTTPS).
     pub deferred_credential_endpoint: Option<String>,
 
-    /// URL of the Notification Endpoint, if supported (§11, HTTPS).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// URL of the Notification Endpoint (HTTPS).
     pub notification_endpoint: Option<String>,
 
-    /// URL of the Batch Credential Endpoint, if supported (HTTPS).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// URL of the Batch Credential Endpoint (HTTPS).
     pub batch_credential_endpoint: Option<String>,
 
-    /// Information about request-level encryption support.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Request-level encryption support.
     pub credential_request_encryption: Option<CredentialEncryptionInfo>,
 
-    /// Information about response-level encryption support.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Response-level encryption support.
     pub credential_response_encryption: Option<CredentialEncryptionInfo>,
 
-    /// Batch issuance capability; presence implies support.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Batch issuance capability.
     pub batch_credential_issuance: Option<BatchCredentialIssuance>,
 
-    /// Per-language display information for the Credential Issuer.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Per-language display information.
     pub display: Option<Vec<IssuerDisplay>>,
 
-    /// Map of supported credential configurations, keyed by a unique config ID.
-    ///
-    /// **REQUIRED.** Must contain at least one entry. The keys are used in
-    /// Credential Offers to reference specific credential types.
+    /// Map of supported credential configurations.
     pub credential_configurations_supported: HashMap<String, CredentialConfiguration>,
 }
 
 impl CredentialIssuerMetadata {
     /// Validates structural invariants required by the OID4VCI specification.
-    ///
-    /// Checks performed:
-    /// 1. `credential_endpoint` uses the `https` scheme.
-    /// 2. All optional endpoint URLs use the `https` scheme when present.
-    /// 3. `credential_configurations_supported` is non-empty.
-    /// 4. For each configuration: if `cryptographic_binding_methods_supported`
-    ///    is set, `proof_types_supported` must also be set (§12.2.4).
-    /// 5. `credential_issuer` uses the `https` scheme unconditionally (§12.2.1).
-    /// 6. Each `authorization_servers` entry uses the `https` scheme when present.
-    /// 7. `batch_credential_issuance.batch_size` is >= 2 when present (§12.2.4).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ErrorKind::InvalidIssuerMetadata`] if any constraint is
-    /// violated.
     pub fn validate(&self) -> Result<(), Error> {
-        // 1. credential_endpoint must use HTTPS.
         require_https(&self.credential_endpoint, "credential_endpoint")?;
 
-        // 2. Optional endpoint URLs must use HTTPS when present.
         for (field, url) in [
             ("nonce_endpoint", self.nonce_endpoint.as_deref()),
             (
@@ -552,7 +125,6 @@ impl CredentialIssuerMetadata {
             }
         }
 
-        // 3. credential_configurations_supported must not be empty.
         if self.credential_configurations_supported.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidIssuerMetadata,
@@ -560,7 +132,6 @@ impl CredentialIssuerMetadata {
             ));
         }
 
-        // 4. Per-configuration invariants.
         for (id, config) in &self.credential_configurations_supported {
             if config.cryptographic_binding_methods_supported.is_some()
                 && config.proof_types_supported.is_none()
@@ -573,20 +144,30 @@ impl CredentialIssuerMetadata {
                     ),
                 ));
             }
+
+            // Validate non-empty proof_signing_alg_values_supported
+            if let Some(proof_types) = &config.proof_types_supported {
+                for (proof_type, metadata) in proof_types {
+                    if metadata.proof_signing_alg_values_supported.is_empty() {
+                        return Err(Error::message(
+                            ErrorKind::InvalidIssuerMetadata,
+                            format!(
+                                "credential configuration \"{id}\": proof_types_supported.\"{proof_type}\".proof_signing_alg_values_supported must be non-empty"
+                            ),
+                        ));
+                    }
+                }
+            }
         }
 
-        // 5. credential_issuer MUST use HTTPS unconditionally (§12.2.1).
         require_https(&self.credential_issuer, "credential_issuer")?;
 
-        // 6. authorization_servers validation (§12.2.4).
-        // When present, each authorization server URL must use HTTPS.
         if let Some(auth_servers) = &self.authorization_servers {
             for auth_server in auth_servers {
                 require_https(auth_server, "authorization_servers entry")?;
             }
         }
 
-        // 7. batch_credential_issuance.batch_size MUST be >= 2 (§12.2.4).
         if let Some(batch) = &self.batch_credential_issuance
             && batch.batch_size < 2
         {
@@ -624,13 +205,13 @@ fn require_https(raw_url: &str, field: &str) -> Result<(), Error> {
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::issuance::credential_formats::{
+        CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
+        MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
+    };
     use serde_json::json;
 
     /// Minimal valid metadata — one SD-JWT VC config (only required fields).
@@ -726,7 +307,6 @@ mod tests {
             vct: "https://example.com/vct".to_string(),
             credential_definition: None,
             claims: None,
-            credential_metadata: None,
         });
         assert_eq!(sd.format_str(), "dc+sd-jwt");
 
@@ -811,18 +391,20 @@ mod tests {
                             "proof_signing_alg_values_supported": ["ES256"]
                         }
                     },
-                    "display": [
-                        {
-                            "name": "University Credential",
-                            "locale": "en-US",
-                            "logo": {
-                                "uri": "https://university.example.edu/public/logo.png",
-                                "alt_text": "a square logo of a university"
-                            },
-                            "background_color": "#12107c",
-                            "text_color": "#FFFFFF"
-                        }
-                    ]
+                    "credential_metadata": {
+                        "display": [
+                            {
+                                "name": "University Credential",
+                                "locale": "en-US",
+                                "logo": {
+                                    "uri": "https://university.example.edu/public/logo.png",
+                                    "alt_text": "a square logo of a university"
+                                },
+                                "background_color": "#12107c",
+                                "text_color": "#FFFFFF"
+                            }
+                        ]
+                    }
                 }
             }
         });
@@ -872,8 +454,9 @@ mod tests {
                 .contains(&"ES256".to_string())
         );
 
-        // Credential display
-        let cred_display = config.display.as_ref().unwrap();
+        // Credential display (via credential_metadata)
+        let cred_meta = config.credential_metadata.as_ref().unwrap();
+        let cred_display = cred_meta.display.as_ref().unwrap();
         assert_eq!(cred_display[0].background_color.as_deref(), Some("#12107c"));
         assert_eq!(cred_display[0].text_color.as_deref(), Some("#FFFFFF"));
     }
@@ -1083,7 +666,7 @@ mod tests {
         assert_eq!(display.len(), 2);
         assert_eq!(display[0].locale.as_deref(), Some("de"));
         let logo = display[0].logo.as_ref().unwrap();
-        assert_eq!(logo.uri, "https://my.logo/img.png");
+        assert_eq!(logo.uri.as_str(), "https://my.logo/img.png");
         assert!(logo.alt_text.is_none());
         assert!(display[1].logo.is_none());
     }
@@ -1235,15 +818,11 @@ mod tests {
             .credential_configurations_supported
             .get("UniversityDegree")
             .unwrap();
-        let sd = match &config.format_details {
-            CredentialFormatDetails::DcSdJwt(sd) => sd,
-            other => panic!("expected DcSdJwt, got {other:?}"),
-        };
 
-        let cred_meta = sd.credential_metadata.as_ref().unwrap();
+        let cred_meta = config.credential_metadata.as_ref().unwrap();
         assert_eq!(
             cred_meta.display.as_ref().unwrap()[0].name,
-            Some("University Degree".to_string())
+            "University Degree"
         );
         assert!(cred_meta.claims.is_some());
         let claims = cred_meta.claims.as_ref().unwrap();
