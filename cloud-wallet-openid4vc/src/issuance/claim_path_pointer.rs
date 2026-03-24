@@ -20,7 +20,7 @@ fn deserialize_null<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let _ = <() as serde::Deserialize>::deserialize(deserializer)?;
+    <() as serde::Deserialize>::deserialize(deserializer)?;
     Ok(())
 }
 
