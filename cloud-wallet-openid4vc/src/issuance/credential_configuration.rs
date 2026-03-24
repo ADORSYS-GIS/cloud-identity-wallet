@@ -1,15 +1,16 @@
-//! Credential configuration and metadata types.
+//! Credential configuration types per [OpenID4VCI §12.2.3].
 //!
-//! These types model the credential configuration entries in the
-//! `credential_configurations_supported` map of the issuer metadata.
+//! [OpenID4VCI §12.2.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-12.2.3
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_with::skip_serializing_none;
 
+use super::claim_path_pointer::ClaimPathPointer;
 use super::credential_formats::CredentialFormatDetails;
+use super::css_color::CssColor;
+use super::signing_algorithm::SigningAlgorithm;
 
 /// Key attestation requirements for proof types.
 #[skip_serializing_none]
@@ -22,14 +23,12 @@ pub struct KeyAttestationsRequired {
     pub user_authentication: Option<Vec<String>>,
 }
 
-/// Metadata for a single proof type supported by a credential configuration.
+/// Metadata for a single proof type.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProofTypeMetadata {
-    /// Non-empty list of signing algorithm identifiers that the issuer accepts.
-    pub proof_signing_alg_values_supported: Vec<String>,
-
-    /// Key attestation requirements for high-assurance issuance flows.
+    /// Non-empty list of signing algorithm identifiers the issuer accepts.
+    pub proof_signing_alg_values_supported: Vec<SigningAlgorithm>,
     pub key_attestations_required: Option<KeyAttestationsRequired>,
 }
 
@@ -40,29 +39,22 @@ pub struct CredentialConfiguration {
     /// Typed format details.
     #[serde(flatten)]
     pub format_details: CredentialFormatDetails,
-
-    /// Unique identifier for this credential configuration.
-    ///
-    /// Not part of OID4VCI spec; included for backward compatibility with Keycloak.
-    pub id: Option<String>,
-
     /// OAuth 2.0 scope value used to request this credential type.
     pub scope: Option<String>,
 
     /// Cryptographic key binding methods supported.
     pub cryptographic_binding_methods_supported: Option<Vec<String>>,
-
-    /// Signing algorithms used by the issuer.
-    pub credential_signing_alg_values_supported: Option<Vec<Value>>,
-
-    /// Supported key proof types.
+    /// Algorithm identifiers for JWT-based formats SHOULD be JWS names from [IANA JOSE Registry].
+    ///
+    /// [IANA JOSE Registry]: https://www.iana.org/assignments/jose/jose.xhtml#web-signature-encryption-algorithms
+    pub credential_signing_alg_values_supported: Option<Vec<SigningAlgorithm>>,
     pub proof_types_supported: Option<HashMap<String, ProofTypeMetadata>>,
 
     /// Credential metadata for display and claims.
     pub credential_metadata: Option<CredentialMetadata>,
 }
 
-/// Credential metadata for usage and display of issued credentials.
+/// Credential metadata for display and claims.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialMetadata {
@@ -73,7 +65,7 @@ pub struct CredentialMetadata {
     pub claims: Option<Vec<ClaimDescription>>,
 }
 
-/// Per-language display properties for a credential configuration.
+/// Per-language display properties for a credential.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialDisplay {
@@ -85,17 +77,9 @@ pub struct CredentialDisplay {
 
     /// Optional logo for the credential.
     pub logo: Option<Logo>,
-
-    /// Optional background color (CSS color value).
-    pub background_color: Option<String>,
-
-    /// Optional background image.
+    pub background_color: Option<CssColor>,
     pub background_image: Option<BackgroundImage>,
-
-    /// Optional text color (CSS color value).
-    pub text_color: Option<String>,
-
-    /// Optional description for the credential type.
+    pub text_color: Option<CssColor>,
     pub description: Option<String>,
 }
 
@@ -105,8 +89,7 @@ pub struct CredentialDisplay {
 pub struct Logo {
     /// URI where the wallet can obtain the logo image.
     pub uri: url::Url,
-
-    /// Alternative text for the logo image, used for accessibility.
+    /// Alternative text for accessibility.
     pub alt_text: Option<String>,
 }
 
@@ -117,14 +100,16 @@ pub struct BackgroundImage {
     pub uri: url::Url,
 }
 
-/// Description of a claim in issued credentials (Appendix B.2).
+/// Description of a claim in issued credentials per [Appendix B.2].
+///
+/// [Appendix B.2]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-b.2
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaimDescription {
-    /// Path to the claim within the credential.
-    pub path: Vec<String>,
-
-    /// Whether the claim is always included.
+    /// Claims path pointer per [Appendix C].
+    ///
+    /// [Appendix C]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-C
+    pub path: ClaimPathPointer,
     pub mandatory: Option<bool>,
 
     /// Per-language display properties for this claim.
