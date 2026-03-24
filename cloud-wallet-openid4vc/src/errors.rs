@@ -146,7 +146,7 @@ pub enum ErrorKind {
 
     /// A credential offer failed validation or parsing.
     #[error("Invalid credential offer")]
-    InvalidCredentialOffer, 
+    InvalidCredentialOffer,
 
     /// An operation was attempted on a credential that has been revoked.
     #[error("Credential is revoked")]
