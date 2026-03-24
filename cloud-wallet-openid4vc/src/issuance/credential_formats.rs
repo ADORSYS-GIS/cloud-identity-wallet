@@ -1,7 +1,10 @@
 //! Credential format-specific configuration types.
 //!
 //! These types model the format-specific fields for different credential formats
-//! defined in OID4VCI Appendices A.1, A.2, and A.3.
+//! defined in:
+//! - [Appendix A.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.1): W3C Verifiable Credentials
+//! - [Appendix A.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.2): Mobile Documents (mdoc)
+//! - [Appendix A.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.3): IETF SD-JWT VC
 
 use std::collections::HashMap;
 
