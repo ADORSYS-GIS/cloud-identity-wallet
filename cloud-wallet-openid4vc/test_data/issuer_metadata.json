@@ -26,14 +26,6 @@
         "RS512"
       ],
       "vct": "oid4vc_natural_person",
-      "credential_definition": {
-        "type": [
-          "oid4vc_natural_person"
-        ],
-        "@context": [
-          "oid4vc_natural_person"
-        ]
-      },
       "proof_types_supported": {
         "attestation": {
           "proof_signing_alg_values_supported": [
@@ -104,14 +96,6 @@
         "ES256"
       ],
       "vct": "https://credentials.example.com/identity_credential",
-      "credential_definition": {
-        "type": [
-          "identity_credential"
-        ],
-        "@context": [
-          "https://credentials.example.com/identity_credential"
-        ]
-      },
       "proof_types_supported": {
         "attestation": {
           "proof_signing_alg_values_supported": [

@@ -10,7 +10,56 @@ use serde_with::skip_serializing_none;
 use super::claim_path_pointer::ClaimPathPointer;
 use super::credential_formats::CredentialFormatDetails;
 use super::css_color::CssColor;
-use super::signing_algorithm::SigningAlgorithm;
+
+/// Algorithm identifier that can be either a string or integer value.
+///
+/// Per OpenID4VCI spec, algorithm identifiers for JWT-based formats SHOULD be
+/// JWS names from the IANA JOSE Registry (strings), while for mso_mdoc format
+/// they MUST be numeric COSE algorithm identifiers from the IANA COSE Registry.
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[serde(untagged)]
+pub enum AlgorithmIdentifier {
+    /// String identifier (e.g., "ES256", "RS256").
+    String(String),
+    /// Integer identifier (e.g., -7 for ES256 in COSE).
+    Integer(i64),
+}
+
+impl AlgorithmIdentifier {
+    /// Returns the identifier as a string, if it is a string variant.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(s) => Some(s),
+            Self::Integer(_) => None,
+        }
+    }
+
+    /// Returns the identifier as an integer, if it is an integer variant.
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Self::String(_) => None,
+            Self::Integer(n) => Some(*n),
+        }
+    }
+}
+
+impl From<String> for AlgorithmIdentifier {
+    fn from(s: String) -> Self {
+        Self::String(s)
+    }
+}
+
+impl From<&str> for AlgorithmIdentifier {
+    fn from(s: &str) -> Self {
+        Self::String(s.to_string())
+    }
+}
+
+impl From<i64> for AlgorithmIdentifier {
+    fn from(n: i64) -> Self {
+        Self::Integer(n)
+    }
+}
 
 /// Key attestation requirements for proof types.
 #[skip_serializing_none]
@@ -28,7 +77,7 @@ pub struct KeyAttestationsRequired {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProofTypeMetadata {
     /// Non-empty list of signing algorithm identifiers the issuer accepts.
-    pub proof_signing_alg_values_supported: Vec<SigningAlgorithm>,
+    pub proof_signing_alg_values_supported: Vec<AlgorithmIdentifier>,
     pub key_attestations_required: Option<KeyAttestationsRequired>,
 }
 
@@ -50,7 +99,7 @@ pub struct CredentialConfiguration {
     /// Algorithm identifiers for JWT-based formats SHOULD be JWS names from [IANA JOSE Registry].
     ///
     /// [IANA JOSE Registry]: https://www.iana.org/assignments/jose/jose.xhtml#web-signature-encryption-algorithms
-    pub credential_signing_alg_values_supported: Option<Vec<SigningAlgorithm>>,
+    pub credential_signing_alg_values_supported: Option<Vec<AlgorithmIdentifier>>,
     pub proof_types_supported: Option<HashMap<String, ProofTypeMetadata>>,
 
     /// Credential metadata for display and claims.

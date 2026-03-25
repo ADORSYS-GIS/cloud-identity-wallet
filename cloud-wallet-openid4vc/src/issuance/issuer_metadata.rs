@@ -79,6 +79,7 @@ pub struct CredentialIssuerMetadata {
     pub batch_credential_endpoint: Option<Url>,
     pub credential_request_encryption: Option<CredentialRequestEncryption>,
     pub credential_response_encryption: Option<CredentialResponseEncryption>,
+    #[validate(nested)]
     pub batch_credential_issuance: Option<BatchCredentialIssuance>,
     pub display: Option<Vec<IssuerDisplay>>,
     pub credential_configurations_supported: HashMap<String, CredentialConfiguration>,
@@ -235,13 +236,11 @@ mod tests {
     fn format_str_helper_returns_correct_strings() {
         let sd = CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
             vct: "https://example.com/vct".to_string(),
-            credential_definition: None,
         });
         assert_eq!(sd.format_str(), "dc+sd-jwt");
 
         let mdoc = CredentialFormatDetails::MsoMdoc(MsoMdocCredentialConfiguration {
             doctype: "org.iso.18013.5.1.mDL".to_string(),
-            claims: None,
         });
         assert_eq!(mdoc.format_str(), "mso_mdoc");
 
