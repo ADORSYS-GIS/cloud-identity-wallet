@@ -15,3 +15,4 @@ time.workspace = true
 url.workspace = true
 percent-encoding = "2"
 validator = { version = "0.20", features = ["derive"] }
+csscolorparser = { version = "0.8", features = ["serde"] }
