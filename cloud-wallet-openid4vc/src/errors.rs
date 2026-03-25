@@ -152,6 +152,11 @@ pub enum ErrorKind {
     #[error("Credential is revoked")]
     CredentialRevoked,
 
+    /// Credential Issuer Metadata failed structural validation.
+    #[error("Invalid issuer metadata")]
+    InvalidIssuerMetadata,
+
+    /// A proof failed validation (e.g. invalid type, missing required fields).
     #[error("Invalid proof")]
     InvalidProof,
 

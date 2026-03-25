@@ -74,6 +74,26 @@ impl JwtProofHeader {
             ));
         }
 
+        // kid must be non-empty when present
+        if let Some(ref kid) = self.kid {
+            if kid.is_empty() {
+                return Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    "JWT proof header 'kid' must not be empty when present",
+                ));
+            }
+        }
+
+        // x5c must be non-empty when present
+        if let Some(ref x5c) = self.x5c {
+            if x5c.is_empty() {
+                return Err(Error::message(
+                    ErrorKind::InvalidProof,
+                    "JWT proof header 'x5c' must not be empty when present",
+                ));
+            }
+        }
+
         // trust_chain requires kid to be present (per spec)
         if self.trust_chain.is_some() && self.kid.is_none() {
             return Err(Error::message(
@@ -171,6 +191,12 @@ pub struct DataIntegrityProof {
 
 impl DataIntegrityProof {
     pub fn validate(&self) -> Result<(), Error> {
+        if self.proof_type.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "type must not be empty",
+            ));
+        }
         if self.cryptosuite.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
@@ -186,10 +212,28 @@ impl DataIntegrityProof {
                 ),
             ));
         }
+        if self.verification_method.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "verificationMethod must not be empty",
+            ));
+        }
+        if self.created.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "created must not be empty",
+            ));
+        }
         if self.domain.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
                 "domain must not be empty",
+            ));
+        }
+        if self.proof_value.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "proofValue must not be empty",
             ));
         }
         Ok(())
@@ -938,6 +982,126 @@ mod tests {
         let err = proof.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
         assert!(err.to_string().contains("domain"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_empty_type() {
+        let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: String::new(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("type"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_empty_verification_method() {
+        let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: String::new(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("verificationMethod"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_empty_created() {
+        let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: String::new(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("created"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_empty_proof_value() {
+        let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: String::new(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("proofValue"));
+    }
+
+    #[test]
+    fn rejects_jwt_header_empty_kid() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: None,
+            kid: Some(String::new()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("kid"));
+    }
+
+    #[test]
+    fn rejects_jwt_header_empty_x5c() {
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "ES256".to_string(),
+            jwk: None,
+            kid: None,
+            x5c: Some(vec![]),
+            key_attestation: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("x5c"));
     }
 
     #[test]
