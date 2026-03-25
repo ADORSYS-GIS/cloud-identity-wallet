@@ -201,7 +201,7 @@ mod tests {
 
     /// Full issuer metadata from Keycloak OID4VCI deployment.
     /// Source: ngrok tunnel to Keycloak realm with OID4VCI enabled.
-    const KEYCLOAK_METADATA: &str = include_str!("../../tests_metadata/issuer_metadata.json");
+    const KEYCLOAK_METADATA: &str = include_str!("../../test_data/issuer_metadata.json");
 
     // ── Format model deserialization ──────────────────────────────────────────
 
