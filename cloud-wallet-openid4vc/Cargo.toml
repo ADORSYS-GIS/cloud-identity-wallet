@@ -17,5 +17,5 @@ uuid.workspace = true
 time.workspace = true
 url.workspace = true
 base64 = "0.22"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
 percent-encoding = "2"
