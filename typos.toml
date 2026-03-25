@@ -9,5 +9,5 @@ extend-ignore-identifiers-re = []
 extend-exclude = [
   "cloud-wallet-crypto/src/jwk.rs",
   "cloud-wallet-crypto/src/jwk/tests.rs",
-  "cloud-wallet-openid4vc/tests_metadata/issuer_metadata.json"
+  "cloud-wallet-openid4vc/test_data/issuer_metadata.json"
 ]
