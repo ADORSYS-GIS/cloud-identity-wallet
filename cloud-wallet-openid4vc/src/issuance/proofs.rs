@@ -224,17 +224,36 @@ impl DataIntegrityProof {
 }
 
 /// W3C Verifiable Presentation with Data Integrity proof.
+/// Per spec F.2, MUST contain @context, type, and proof properties.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiVpProof {
-    /// Holder DID. If present, must match controller of verificationMethod.
+    /// REQUIRED. W3C VP context URIs.
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+    /// REQUIRED. MUST include "VerifiablePresentation".
+    #[serde(rename = "type")]
+    pub types: Vec<String>,
+    /// OPTIONAL. If present, must match controller of verificationMethod.
     pub holder: Option<String>,
-    /// Data Integrity proofs. At least one required.
+    /// REQUIRED. Data Integrity proofs. At least one required.
     pub proof: Vec<DataIntegrityProof>,
 }
 
 impl DiVpProof {
     pub fn validate(&self) -> Result<(), Error> {
+        if self.context.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "di_vp @context must not be empty",
+            ));
+        }
+        if !self.types.iter().any(|t| t == "VerifiablePresentation") {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "di_vp type must include 'VerifiablePresentation'",
+            ));
+        }
         if self.proof.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
@@ -281,6 +300,87 @@ impl AttestationProof {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
                 "attestation must be compact JWT with three parts",
+            ));
+        }
+        Ok(())
+    }
+}
+
+const KEY_ATTESTATION_TYPE: &str = "key-attestation+jwt";
+
+/// JOSE header for Key Attestation JWT (Appendix D.1).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyAttestationHeader {
+    /// REQUIRED. MUST be `key-attestation+jwt`.
+    pub typ: String,
+    /// REQUIRED. Algorithm, MUST NOT be `none` or symmetric.
+    pub alg: String,
+    /// OPTIONAL. X.509 certificate chain.
+    pub x5c: Option<Vec<String>>,
+    /// OPTIONAL. Key ID.
+    pub kid: Option<String>,
+    /// OPTIONAL. OpenID Federation Trust Chain.
+    pub trust_chain: Option<String>,
+}
+
+impl KeyAttestationHeader {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.typ != KEY_ATTESTATION_TYPE {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                format!(
+                    "Key attestation typ must be '{}', got '{}'",
+                    KEY_ATTESTATION_TYPE, self.typ
+                ),
+            ));
+        }
+        if self.alg.is_empty() || self.alg.eq_ignore_ascii_case("none") {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "Key attestation alg must not be empty or 'none'",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Key Attestation JWT claims (Appendix D.1).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyAttestationClaims {
+    /// OPTIONAL. Issuer of the key attestation.
+    pub iss: Option<String>,
+    /// REQUIRED. Issued-at timestamp.
+    pub iat: i64,
+    /// OPTIONAL. Expiration time. REQUIRED when used with jwt proof type.
+    pub exp: Option<i64>,
+    /// REQUIRED. Non-empty array of attested keys (JWK format).
+    pub attested_keys: Vec<serde_json::Value>,
+    /// OPTIONAL. Attack potential resistance of key storage.
+    pub key_storage: Option<Vec<String>>,
+    /// OPTIONAL. Attack potential resistance of user authentication.
+    pub user_authentication: Option<Vec<String>>,
+    /// OPTIONAL. URL linking to certification.
+    pub certification: Option<String>,
+    /// OPTIONAL. Nonce from issuer.
+    pub nonce: Option<String>,
+    /// OPTIONAL. Revocation check mechanisms.
+    pub status: Option<serde_json::Value>,
+}
+
+impl KeyAttestationClaims {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.iat <= 0 {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "Key attestation iat must be a positive Unix timestamp",
+            ));
+        }
+        if self.attested_keys.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "Key attestation attested_keys must be a non-empty array",
             ));
         }
         Ok(())
@@ -345,10 +445,11 @@ impl Proofs {
         }
 
         if let Some(ref proofs) = self.attestation {
-            if proofs.is_empty() {
+            // Spec F.3: "array that contains exactly one JWT"
+            if proofs.len() != 1 {
                 return Err(Error::message(
                     ErrorKind::InvalidProof,
-                    "proofs.attestation must not be empty",
+                    "proofs.attestation must contain exactly one JWT",
                 ));
             }
             for proof in proofs {
@@ -723,6 +824,10 @@ mod tests {
     #[test]
     fn valid_di_vp_proof() {
         let proof = DiVpProof {
+            context: vec![
+                "https://www.w3.org/ns/credentials/v2".to_string(),
+            ],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: Some("did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro".to_string()),
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -741,6 +846,10 @@ mod tests {
     #[test]
     fn valid_di_vp_proof_without_holder() {
         let proof = DiVpProof {
+            context: vec![
+                "https://www.w3.org/ns/credentials/v2".to_string(),
+            ],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -759,6 +868,8 @@ mod tests {
     #[test]
     fn rejects_di_vp_proof_empty_proof_array() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![],
         };
@@ -770,6 +881,8 @@ mod tests {
     #[test]
     fn rejects_di_vp_proof_wrong_proof_purpose() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -790,6 +903,8 @@ mod tests {
     #[test]
     fn rejects_di_vp_proof_empty_cryptosuite() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -810,6 +925,8 @@ mod tests {
     #[test]
     fn rejects_di_vp_proof_empty_domain() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -829,8 +946,15 @@ mod tests {
 
     #[test]
     fn di_vp_proof_deserializes_from_spec_example() {
-        // Non-normative example from spec §8.2
+        // Non-normative example from spec F.2
         let json = r#"{
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                "https://www.w3.org/ns/credentials/examples/v2"
+            ],
+            "type": [
+                "VerifiablePresentation"
+            ],
             "holder": "did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro",
             "proof": [{
                 "type": "DataIntegrityProof",
@@ -856,6 +980,8 @@ mod tests {
     #[test]
     fn di_vp_proof_serializes_correctly() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: Some("did:key:z6Mk".to_string()),
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -869,9 +995,11 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&proof).unwrap();
+        assert!(json.contains("\"@context\""));
+        assert!(json.contains("\"type\""));
+        assert!(json.contains("\"VerifiablePresentation\""));
         assert!(json.contains("\"holder\""));
         assert!(json.contains("\"proof\""));
-        assert!(json.contains("\"type\":\"DataIntegrityProof\""));
         assert!(json.contains("\"cryptosuite\":\"eddsa-2022\""));
     }
 
@@ -966,6 +1094,8 @@ mod tests {
     #[test]
     fn di_vp_validate_with_nonce() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -984,6 +1114,8 @@ mod tests {
     #[test]
     fn di_vp_validate_without_nonce() {
         let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
                 proof_type: "DataIntegrityProof".to_string(),
@@ -1046,6 +1178,107 @@ mod tests {
         assert_eq!(proof.attestation, "aaa.bbb.ccc");
     }
 
+    // ── KeyAttestationHeader ──────────────────────────────────────────────────
+
+    #[test]
+    fn valid_key_attestation_header() {
+        let header = KeyAttestationHeader {
+            typ: "key-attestation+jwt".to_string(),
+            alg: "ES256".to_string(),
+            x5c: Some(vec!["MIIDQjCCA...".to_string()]),
+            kid: None,
+            trust_chain: None,
+        };
+        assert!(header.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_key_attestation_wrong_typ() {
+        let header = KeyAttestationHeader {
+            typ: "JWT".to_string(),
+            alg: "ES256".to_string(),
+            x5c: None,
+            kid: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("key-attestation+jwt"));
+    }
+
+    #[test]
+    fn rejects_key_attestation_alg_none() {
+        let header = KeyAttestationHeader {
+            typ: "key-attestation+jwt".to_string(),
+            alg: "none".to_string(),
+            x5c: None,
+            kid: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("none"));
+    }
+
+    // ── KeyAttestationClaims ──────────────────────────────────────────────────
+
+    #[test]
+    fn valid_key_attestation_claims() {
+        let claims = KeyAttestationClaims {
+            iss: Some("<identifier of the issuer>".to_string()),
+            iat: 1516247022,
+            exp: Some(1541493724),
+            attested_keys: vec![serde_json::json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "TCAER19Zvu3OHF4j4W4vfSVoHIP1ILilDls7vCeGemc",
+                "y": "ZxjiWWbZMQGHVWKVQ4hbSIirsVfuecCE6t4jT9F2HZQ"
+            })],
+            key_storage: Some(vec!["iso_18045_moderate".to_string()]),
+            user_authentication: Some(vec!["iso_18045_moderate".to_string()]),
+            certification: None,
+            nonce: None,
+            status: None,
+        };
+        assert!(claims.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_key_attestation_zero_iat() {
+        let claims = KeyAttestationClaims {
+            iss: None,
+            iat: 0,
+            exp: None,
+            attested_keys: vec![serde_json::json!({"kty": "EC"})],
+            key_storage: None,
+            user_authentication: None,
+            certification: None,
+            nonce: None,
+            status: None,
+        };
+        let err = claims.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("iat"));
+    }
+
+    #[test]
+    fn rejects_key_attestation_empty_attested_keys() {
+        let claims = KeyAttestationClaims {
+            iss: None,
+            iat: 1516247022,
+            exp: None,
+            attested_keys: vec![],
+            key_storage: None,
+            user_authentication: None,
+            certification: None,
+            nonce: None,
+            status: None,
+        };
+        let err = claims.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("attested_keys"));
+    }
+
     // ── Proofs ────────────────────────────────────────────────────────────────
 
     #[test]
@@ -1082,6 +1315,8 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: Some(vec![DiVpProof {
+                context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+                types: vec!["VerifiablePresentation".to_string()],
                 holder: None,
                 proof: vec![DataIntegrityProof {
                     proof_type: "DataIntegrityProof".to_string(),
@@ -1125,12 +1360,14 @@ mod tests {
 
     #[test]
     fn rejects_proofs_with_multiple_proof_types() {
-        // Spec §8.2: "exactly one parameter named as the proof type"
+        // Spec F: "exactly one parameter named as the proof type"
         let proofs = Proofs {
             jwt: Some(vec![JwtProof {
                 jwt: "aaa.bbb.ccc".to_string(),
             }]),
             di_vp: Some(vec![DiVpProof {
+                context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+                types: vec!["VerifiablePresentation".to_string()],
                 holder: None,
                 proof: vec![DataIntegrityProof {
                     proof_type: "DataIntegrityProof".to_string(),
@@ -1183,7 +1420,27 @@ mod tests {
         };
         let err = proofs.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("must not be empty"));
+        assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn rejects_attestation_array_with_multiple_jwts() {
+        // Spec F.3: "array that contains exactly one JWT"
+        let proofs = Proofs {
+            jwt: None,
+            di_vp: None,
+            attestation: Some(vec![
+                AttestationProof {
+                    attestation: "aaa.bbb.ccc".to_string(),
+                },
+                AttestationProof {
+                    attestation: "ddd.eee.fff".to_string(),
+                },
+            ]),
+        };
+        let err = proofs.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("exactly one"));
     }
 
     #[test]
@@ -1206,6 +1463,8 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: Some(vec![DiVpProof {
+                context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+                types: vec!["VerifiablePresentation".to_string()],
                 holder: None,
                 proof: vec![], // empty proof array
             }]),
@@ -1255,6 +1514,8 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: Some(vec![DiVpProof {
+                context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+                types: vec!["VerifiablePresentation".to_string()],
                 holder: Some("did:key:z6Mk".to_string()),
                 proof: vec![DataIntegrityProof {
                     proof_type: "DataIntegrityProof".to_string(),
