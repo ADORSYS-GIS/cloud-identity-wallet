@@ -39,17 +39,18 @@ impl NonceGenerator {
     }
 
     /// Sets a 4-byte prefix for all generated nonces.
-    pub fn with_prefix(mut self, prefix: [u8; 4]) -> Self {
-        self.prefix = prefix;
-        self
+    pub fn with_prefix(self, prefix: [u8; 4]) -> Self {
+        Self { prefix, ..self }
     }
 
     /// Sets the initial value of the counter.
     ///
     /// This allows the generator to resume from a specific point.
-    pub fn with_counter(mut self, counter: u64) -> Self {
-        self.counter = AtomicU64::new(counter);
-        self
+    pub fn with_counter(self, counter: u64) -> Self {
+        Self {
+            counter: AtomicU64::new(counter),
+            ..self
+        }
     }
 
     /// Sets a limit on the number of nonces that can be generated.
@@ -57,9 +58,8 @@ impl NonceGenerator {
     /// If [`next()`] is called after the limit has been reached, it will return an error.
     ///
     /// [`next()`]: Self::next
-    pub fn with_limit(mut self, limit: u64) -> Self {
-        self.limit = limit;
-        self
+    pub fn with_limit(self, limit: u64) -> Self {
+        Self { limit, ..self }
     }
 
     /// Returns the internal prefix.
