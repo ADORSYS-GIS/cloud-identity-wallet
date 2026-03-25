@@ -2,7 +2,9 @@
 //!
 //! [OpenID4VCI Appendix C]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-C
 
+use crate::errors::EmptyClaimPathError;
 use serde::{Deserialize, Serialize, de::Deserializer};
+use serde_json::Value;
 
 /// A single element of a claims path pointer.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -22,12 +24,6 @@ impl From<String> for ClaimPathElement {
 impl From<&str> for ClaimPathElement {
     fn from(s: &str) -> Self {
         Self::String(s.to_string())
-    }
-}
-
-impl From<usize> for ClaimPathElement {
-    fn from(i: usize) -> Self {
-        Self::Index(i as u64)
     }
 }
 
@@ -94,17 +90,24 @@ impl<'de> Deserialize<'de> for ClaimPathPointer {
 }
 
 impl ClaimPathPointer {
+    /// Attempts to create a new claims path pointer.
+    ///
+    /// Returns an error if the path is empty.
+    pub fn try_new(elements: Vec<ClaimPathElement>) -> Result<Self, EmptyClaimPathError> {
+        if elements.is_empty() {
+            return Err(EmptyClaimPathError);
+        }
+        Ok(Self(elements))
+    }
+
     /// Creates a new claims path pointer.
     ///
     /// # Panics
     ///
-    /// Panics if the path is empty.
+    /// Panics if the path is empty. Use [`try_new`](Self::try_new) for a
+    /// fallible version that returns a `Result`.
     pub fn new(elements: Vec<ClaimPathElement>) -> Self {
-        assert!(
-            !elements.is_empty(),
-            "claims path pointer must be non-empty"
-        );
-        Self(elements)
+        Self::try_new(elements).expect("claims path pointer must be non-empty")
     }
 
     pub fn elements(&self) -> &[ClaimPathElement] {
@@ -134,6 +137,61 @@ impl ClaimPathPointer {
             .map(|s| ClaimPathElement::String(s.into()))
             .collect();
         Self::new(elements)
+    }
+
+    /// Selects claims from a JSON value using this path pointer.
+    ///
+    /// Returns a vector of selected values according to the OpenID4VCI spec:
+    /// - String elements navigate into object properties
+    /// - Index elements select array elements by position
+    /// - Null elements select ALL elements in an array
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use cloud_wallet_openid4vc::issuance::claim_path_pointer::ClaimPathPointer;
+    /// # use serde_json::json;
+    /// let credential = json!({
+    ///     "name": "Arthur Dent",
+    ///     "nationalities": ["British", "Betelgeusian"]
+    /// });
+    ///
+    /// // Select single claim
+    /// let path: ClaimPathPointer = serde_json::from_str(r#"["name"]"#).unwrap();
+    /// let selected = path.select(&credential);
+    /// assert_eq!(selected.len(), 1);
+    /// assert_eq!(selected[0], json!("Arthur Dent"));
+    ///
+    /// // Select array element by index
+    /// let path: ClaimPathPointer = serde_json::from_str(r#"["nationalities", 1]"#).unwrap();
+    /// let selected = path.select(&credential);
+    /// assert_eq!(selected[0], json!("Betelgeusian"));
+    /// ```
+    pub fn select(&self, value: &Value) -> Vec<Value> {
+        let mut results = vec![value.clone()];
+
+        for element in &self.0 {
+            results = results
+                .into_iter()
+                .flat_map(|v| self.select_one(&v, element))
+                .collect();
+        }
+
+        results
+    }
+
+    /// Applies a single path element to a value, returning matching values.
+    fn select_one(&self, value: &Value, element: &ClaimPathElement) -> Vec<Value> {
+        match (value, element) {
+            (Value::Object(obj), ClaimPathElement::String(key)) => {
+                obj.get(key).cloned().into_iter().collect()
+            }
+            (Value::Array(arr), ClaimPathElement::Index(idx)) => {
+                arr.get(*idx as usize).cloned().into_iter().collect()
+            }
+            (Value::Array(arr), ClaimPathElement::Null) => arr.clone(),
+            _ => vec![],
+        }
     }
 }
 
@@ -167,6 +225,7 @@ impl std::ops::Deref for ClaimPathPointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_string_elements() {
@@ -229,60 +288,72 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "claims path pointer must be non-empty")]
-    fn test_empty_path_panics() {
-        let _ = ClaimPathPointer::new(vec![]);
+    fn test_empty_path_returns_error() {
+        let result = ClaimPathPointer::try_new(vec![]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.to_string(), "claims path pointer must be non-empty");
     }
 
     /// Test case from OpenID4VCI spec Appendix C.3
     /// https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-C
+    ///
+    /// Uses the full example credential from the spec and tests that claim path
+    /// pointers correctly select the expected values.
     #[test]
-    fn test_spec_examples() {
+    fn test_spec_examples_with_full_payload() {
+        // Full example credential from OpenID4VCI spec Appendix C.3
+        let credential = json!({
+            "name": "Arthur Dent",
+            "address": {
+                "street_address": "42 Market Street",
+                "locality": "Milliways",
+                "postal_code": "12345"
+            },
+            "degrees": [
+                {
+                    "type": "Bachelor of Science",
+                    "university": "University of Betelgeuse"
+                },
+                {
+                    "type": "Master of Science",
+                    "university": "University of Betelgeuse"
+                }
+            ],
+            "nationalities": ["British", "Betelgeusian"]
+        });
+
         // ["name"]: The claim name with the value Arthur Dent is selected.
         let path: ClaimPathPointer = serde_json::from_str(r#"["name"]"#).unwrap();
-        assert_eq!(path.elements().len(), 1);
-        assert_eq!(
-            path.elements()[0],
-            ClaimPathElement::String("name".to_string())
-        );
+        let selected = path.select(&credential);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0], json!("Arthur Dent"));
 
         // ["address"]: The claim address with its sub-claims as the value is selected.
         let path: ClaimPathPointer = serde_json::from_str(r#"["address"]"#).unwrap();
-        assert_eq!(
-            path.elements()[0],
-            ClaimPathElement::String("address".to_string())
-        );
+        let selected = path.select(&credential);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["street_address"], json!("42 Market Street"));
+        assert_eq!(selected[0]["locality"], json!("Milliways"));
 
         // ["address", "street_address"]: The claim street_address with the value 42 Market Street is selected.
         let path: ClaimPathPointer =
             serde_json::from_str(r#"["address","street_address"]"#).unwrap();
-        assert_eq!(
-            path.elements()[0],
-            ClaimPathElement::String("address".to_string())
-        );
-        assert_eq!(
-            path.elements()[1],
-            ClaimPathElement::String("street_address".to_string())
-        );
+        let selected = path.select(&credential);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0], json!("42 Market Street"));
 
         // ["degrees", null, "type"]: All type claims in the degrees array are selected.
         let path: ClaimPathPointer = serde_json::from_str(r#"["degrees",null,"type"]"#).unwrap();
-        assert_eq!(
-            path.elements()[0],
-            ClaimPathElement::String("degrees".to_string())
-        );
-        assert_eq!(path.elements()[1], ClaimPathElement::Null);
-        assert_eq!(
-            path.elements()[2],
-            ClaimPathElement::String("type".to_string())
-        );
+        let selected = path.select(&credential);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0], json!("Bachelor of Science"));
+        assert_eq!(selected[1], json!("Master of Science"));
 
         // ["nationalities", 1]: The second nationality is selected.
         let path: ClaimPathPointer = serde_json::from_str(r#"["nationalities",1]"#).unwrap();
-        assert_eq!(
-            path.elements()[0],
-            ClaimPathElement::String("nationalities".to_string())
-        );
-        assert_eq!(path.elements()[1], ClaimPathElement::Index(1));
+        let selected = path.select(&credential);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0], json!("Betelgeusian"));
     }
 }

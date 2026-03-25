@@ -6,10 +6,7 @@
 //! - [Appendix A.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.2): Mobile Documents (mdoc)
 //! - [Appendix A.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.3): IETF SD-JWT VC
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_with::skip_serializing_none;
 
 /// Credential definition for W3C Verifiable Credential formats.
@@ -28,28 +25,39 @@ pub struct CredentialDefinition {
     pub context: Option<Vec<String>>,
 }
 
+/// Credential definition for JSON-LD based formats where @context is REQUIRED.
+///
+/// Used by `ldp_vc` and `jwt_vc_json-ld` formats per [Appendix A.1.2] and [Appendix A.1.3].
+///
+/// [Appendix A.1.2]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.1.2
+/// [Appendix A.1.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.1.3
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JsonLdCredentialDefinition {
+    /// The credential type values (REQUIRED).
+    #[serde(rename = "type")]
+    pub types: Vec<String>,
+
+    /// @context array for JSON-LD compatibility (REQUIRED for JSON-LD formats).
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+}
+
 /// Format-specific configuration for an IETF SD-JWT VC credential.
 ///
 /// As defined in [Appendix A.3.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.3.2).
-#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SdJwtVcCredentialConfiguration {
-    /// Verifiable Credential Type URI (REQUIRED).
+    /// Verifiable Credential Type URI (REQUIRED per OpenID4VCI Appendix A.3.2).
     pub vct: String,
-
-    /// Optional credential definition (non-spec, used by some implementations like Keycloak).
-    pub credential_definition: Option<CredentialDefinition>,
 }
 
 /// Format-specific configuration for an ISO/IEC 18013-5 mdoc credential.
-#[skip_serializing_none]
+///
+/// As defined in [Appendix A.2.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-a.2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MsoMdocCredentialConfiguration {
-    /// Document type string.
+    /// Document type string (REQUIRED per OpenID4VCI Appendix A.2.2).
     pub doctype: String,
-
-    /// Optional namespace-to-claims map.
-    pub claims: Option<HashMap<String, Value>>,
 }
 
 /// Format-specific configuration for a W3C Verifiable Credential in JWT format (not using JSON-LD).
@@ -68,7 +76,7 @@ pub struct JwtVcJsonCredentialConfiguration {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LdpVcCredentialConfiguration {
     /// Credential definition (REQUIRED, must include @context).
-    pub credential_definition: CredentialDefinition,
+    pub credential_definition: JsonLdCredentialDefinition,
 }
 
 /// Format-specific configuration for a W3C Verifiable Credential signed as JWT using JSON-LD.
@@ -77,7 +85,7 @@ pub struct LdpVcCredentialConfiguration {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JwtVcJsonLdCredentialConfiguration {
     /// Credential definition (REQUIRED, must include @context).
-    pub credential_definition: CredentialDefinition,
+    pub credential_definition: JsonLdCredentialDefinition,
 }
 
 /// Typed discriminant over all format-specific credential configurations.

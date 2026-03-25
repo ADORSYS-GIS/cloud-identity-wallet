@@ -6,6 +6,13 @@ use std::fmt;
 use color_eyre::eyre::{Report, eyre};
 use thiserror::Error;
 
+/// Error returned when attempting to create an empty [`ClaimPathPointer`].
+///
+/// [`ClaimPathPointer`]: crate::issuance::claim_path_pointer::ClaimPathPointer
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Error)]
+#[error("claims path pointer must be non-empty")]
+pub struct EmptyClaimPathError;
+
 /// A specialised [`Result`] type for this crate.
 ///
 /// [`Result`]: std::result::Result
