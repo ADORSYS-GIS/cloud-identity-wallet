@@ -277,7 +277,7 @@ impl CredentialOffer {
         let decoded = urlencoding_decode(encoded);
         serde_json::from_str(&decoded).map_err(|e| {
             Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::MalformedCredentialOffer,
                 format!("invalid JSON: {e}"),
             )
         })
@@ -332,7 +332,7 @@ impl CredentialOfferUri {
 
         let parsed_url = Url::parse(&uri).map_err(|e| {
             Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::MalformedCredentialOffer,
                 format!("invalid offer link: {e}"),
             )
         })?;
@@ -377,12 +377,11 @@ impl CredentialOfferUri {
     /// - Neither parameter is present
     /// - Parsing the credential offer fails (for by-value)
     pub fn from_query(query: &str) -> Result<Self, Error> {
-        let params: HashMap<&str, &str> = query
-            .split('&')
-            .filter_map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                Some((parts.next()?, parts.next().unwrap_or("")))
-            })
+        // Strip leading '?' if present (common when parsing raw query strings)
+        let query = query.strip_prefix('?').unwrap_or(query);
+
+        let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
 
         let has_by_value = params.contains_key("credential_offer");
@@ -391,27 +390,26 @@ impl CredentialOfferUri {
         // Mutual exclusivity check
         if has_by_value && has_by_reference {
             return Err(Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::MalformedCredentialOffer,
                 "credential_offer and credential_offer_uri are mutually exclusive",
             ));
         }
 
-        if let Some(&encoded) = params.get("credential_offer") {
+        if let Some(encoded) = params.get("credential_offer") {
             let offer = CredentialOffer::from_query_param(encoded)?;
             return Ok(Self {
                 source: CredentialOfferSource::ByValue(offer),
             });
         }
 
-        if let Some(&uri) = params.get("credential_offer_uri") {
-            let decoded = urlencoding_decode(uri);
+        if let Some(uri) = params.get("credential_offer_uri") {
             return Ok(Self {
-                source: CredentialOfferSource::ByReference(decoded),
+                source: CredentialOfferSource::ByReference(uri.clone()),
             });
         }
 
         Err(Error::message(
-            ErrorKind::InvalidCredentialOffer,
+            ErrorKind::MalformedCredentialOffer,
             "missing credential_offer or credential_offer_uri parameter",
         ))
     }
@@ -436,6 +434,18 @@ impl CredentialOfferUri {
 /// - Use media type `application/json`
 /// - NOT be a signed JWT with `"alg": "none"`
 ///
+/// ## SSRF Hardening (Caller Responsibilities)
+///
+/// The passed `http_client` is responsible for SSRF protections. Callers should configure:
+/// - **Redirect policy**: Restrict or disable redirects to prevent redirection attacks.
+///   Consider using [`reqwest::redirect::Policy::none()`] or a custom policy that
+///   validates redirect targets.
+/// - **Localhost/private IP filtering**: Consider rejecting requests to localhost,
+///   loopback addresses (127.0.0.0/8, ::1), link-local (169.254.0.0/16), and private
+///   IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) unless explicitly allowed.
+/// - **Timeouts**: Ensure the client has reasonable connect and request timeouts
+///   to prevent hanging on unresponsive servers.
+///
 /// # Errors
 ///
 /// Returns [`Error`] with [`ErrorKind::InvalidCredentialOfferUri`] for:
@@ -447,6 +457,9 @@ impl CredentialOfferUri {
 ///
 /// Returns [`Error`] with [`ErrorKind::InvalidCredentialOfferMediaType`] for:
 /// - Response with non-`application/json` media type
+///
+/// Returns [`Error`] with [`ErrorKind::MalformedCredentialOffer`] for:
+/// - Invalid JSON in response body
 ///
 /// Returns [`Error`] with [`ErrorKind::InvalidCredentialOffer`] for:
 /// - JWT with `"alg": "none"` (security violation)
@@ -516,7 +529,7 @@ pub async fn resolve_by_reference(
     // Parse JSON
     let offer: CredentialOffer = serde_json::from_str(&body).map_err(|e| {
         Error::message(
-            ErrorKind::InvalidCredentialOffer,
+            ErrorKind::MalformedCredentialOffer,
             format!("invalid JSON: {e}"),
         )
     })?;
@@ -820,7 +833,7 @@ mod tests {
         let result = CredentialOfferUri::from_query(query);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
         assert!(err.to_string().contains("mutually exclusive"));
     }
 
@@ -831,7 +844,7 @@ mod tests {
         let result = CredentialOfferUri::from_query(query);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
         assert!(err.to_string().contains("missing"));
     }
 
