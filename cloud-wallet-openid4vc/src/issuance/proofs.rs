@@ -75,23 +75,23 @@ impl JwtProofHeader {
         }
 
         // kid must be non-empty when present
-        if let Some(ref kid) = self.kid {
-            if kid.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "JWT proof header 'kid' must not be empty when present",
-                ));
-            }
+        if let Some(ref kid) = self.kid
+            && kid.is_empty()
+        {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "JWT proof header 'kid' must not be empty when present",
+            ));
         }
 
         // x5c must be non-empty when present
-        if let Some(ref x5c) = self.x5c {
-            if x5c.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "JWT proof header 'x5c' must not be empty when present",
-                ));
-            }
+        if let Some(ref x5c) = self.x5c
+            && x5c.is_empty()
+        {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "JWT proof header 'x5c' must not be empty when present",
+            ));
         }
 
         // trust_chain requires kid to be present (per spec)
