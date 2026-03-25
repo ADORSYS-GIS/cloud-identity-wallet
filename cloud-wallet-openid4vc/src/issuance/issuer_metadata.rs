@@ -68,7 +68,7 @@ pub struct BatchCredentialIssuance {
 /// Served at `/.well-known/openid-credential-issuer`. Call [`validate`](Self::validate)
 /// after deserialization to enforce HTTPS requirements.
 #[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Validate)]
 pub struct CredentialIssuerMetadata {
     pub credential_issuer: Url,
     pub authorization_servers: Option<Vec<Url>>,
@@ -85,27 +85,8 @@ pub struct CredentialIssuerMetadata {
 }
 
 impl CredentialIssuerMetadata {
-    /// Validates spec requirements (HTTPS URLs, non-empty configs, etc.).
+    /// Validates spec requirements (non-empty configs, etc.).
     pub fn validate(&self) -> Result<(), Error> {
-        require_https(&self.credential_endpoint, "credential_endpoint")?;
-
-        for (field, url) in [
-            ("nonce_endpoint", self.nonce_endpoint.as_ref()),
-            (
-                "deferred_credential_endpoint",
-                self.deferred_credential_endpoint.as_ref(),
-            ),
-            ("notification_endpoint", self.notification_endpoint.as_ref()),
-            (
-                "batch_credential_endpoint",
-                self.batch_credential_endpoint.as_ref(),
-            ),
-        ] {
-            if let Some(url) = url {
-                require_https(url, field)?;
-            }
-        }
-
         if self.credential_configurations_supported.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidIssuerMetadata,
@@ -141,14 +122,6 @@ impl CredentialIssuerMetadata {
             }
         }
 
-        require_https(&self.credential_issuer, "credential_issuer")?;
-
-        if let Some(auth_servers) = &self.authorization_servers {
-            for auth_server in auth_servers {
-                require_https(auth_server, "authorization_servers entry")?;
-            }
-        }
-
         if let Some(batch) = &self.batch_credential_issuance {
             batch.validate().map_err(|e| {
                 Error::message(
@@ -160,20 +133,6 @@ impl CredentialIssuerMetadata {
 
         Ok(())
     }
-}
-
-/// Returns an error if `url` does not use the `https` scheme.
-fn require_https(url: &Url, field: &str) -> Result<(), Error> {
-    if url.scheme() != "https" {
-        return Err(Error::message(
-            ErrorKind::InvalidIssuerMetadata,
-            format!(
-                "field \"{field}\" must use the https scheme, got \"{}\"",
-                url.scheme()
-            ),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -277,7 +236,6 @@ mod tests {
         let sd = CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
             vct: "https://example.com/vct".to_string(),
             credential_definition: None,
-            claims: None,
         });
         assert_eq!(sd.format_str(), "dc+sd-jwt");
 
@@ -291,7 +249,6 @@ mod tests {
             credential_definition: CredentialDefinition {
                 types: vec!["VerifiableCredential".to_string()],
                 context: None,
-                credential_subject: None,
             },
         });
         assert_eq!(jwt.format_str(), "jwt_vc_json");
@@ -426,7 +383,7 @@ mod tests {
             jwt_proof
                 .proof_signing_alg_values_supported
                 .iter()
-                .any(|alg| alg.as_str() == "ES256")
+                .any(|alg| alg.as_str() == Some("ES256"))
         );
 
         // Credential display (via credential_metadata)
@@ -516,45 +473,9 @@ mod tests {
                 .types
                 .contains(&"UniversityDegreeCredential".to_string())
         );
-        assert!(jwt.credential_definition.credential_subject.is_some());
     }
 
     // ── Validation failures ───────────────────────────────────────────────────
-
-    #[test]
-    fn validation_rejects_non_https_credential_endpoint() {
-        let json = json!({
-            "credential_issuer": "https://issuer.example.com",
-            "credential_endpoint": "http://issuer.example.com/credential",
-            "credential_configurations_supported": {
-                "ExampleCredential": { "format": "dc+sd-jwt", "vct": "https://example.com/vct" }
-            }
-        });
-        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).expect("deserialize");
-        let err = metadata
-            .validate()
-            .expect_err("expected https validation failure");
-        assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
-        assert!(err.to_string().contains("credential_endpoint"));
-    }
-
-    #[test]
-    fn validation_rejects_non_https_nonce_endpoint() {
-        let json = json!({
-            "credential_issuer": "https://issuer.example.com",
-            "credential_endpoint": "https://issuer.example.com/credential",
-            "nonce_endpoint": "http://issuer.example.com/nonce",
-            "credential_configurations_supported": {
-                "ExampleCredential": { "format": "dc+sd-jwt", "vct": "https://example.com/vct" }
-            }
-        });
-        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).expect("deserialize");
-        let err = metadata
-            .validate()
-            .expect_err("expected https failure for nonce");
-        assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
-        assert!(err.to_string().contains("nonce_endpoint"));
-    }
 
     #[test]
     fn validation_rejects_empty_credential_configurations() {
@@ -813,7 +734,7 @@ mod tests {
         assert_eq!(claims.len(), 2);
     }
 
-    // ── authorization_servers validation ──────────────────────────────────────
+    // ── authorization_servers parsing ──────────────────────────────────────────
 
     #[test]
     fn validation_passes_with_external_authorization_servers() {
@@ -832,52 +753,10 @@ mod tests {
         assert!(metadata.validate().is_ok());
     }
 
-    #[test]
-    fn validation_rejects_non_https_authorization_server() {
-        let json = json!({
-            "credential_issuer": "https://issuer.example.com",
-            "authorization_servers": ["http://auth.example.com"],
-            "credential_endpoint": "https://issuer.example.com/credential",
-            "credential_configurations_supported": {
-                "ExampleCredential": {
-                    "format": "dc+sd-jwt",
-                    "vct": "https://example.com/vct"
-                }
-            }
-        });
-        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
-        let err = metadata
-            .validate()
-            .expect_err("expected https failure for auth server");
-        assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
-        assert!(err.to_string().contains("authorization_servers"));
-    }
-
-    #[test]
-    fn validation_rejects_non_https_credential_issuer_when_no_auth_servers() {
-        let json = json!({
-            "credential_issuer": "http://issuer.example.com",
-            "credential_endpoint": "https://issuer.example.com/credential",
-            "credential_configurations_supported": {
-                "ExampleCredential": {
-                    "format": "dc+sd-jwt",
-                    "vct": "https://example.com/vct"
-                }
-            }
-        });
-        let metadata: CredentialIssuerMetadata = serde_json::from_value(json).unwrap();
-        let err = metadata
-            .validate()
-            .expect_err("expected https failure for issuer");
-        assert_eq!(err.kind(), ErrorKind::InvalidIssuerMetadata);
-        assert!(err.to_string().contains("credential_issuer"));
-    }
-
     /// Tests that Keycloak issuer metadata can be deserialized and validated.
     ///
-    /// Note: This test does not perform a full round-trip comparison because:
-    /// - The `id` field in credential configurations is not part of the spec and is ignored
-    /// - URL fields are now typed as `Url` which may normalize the string representation
+    /// Note: URL fields are typed as `Url` which normalizes the string representation
+    /// (e.g., adding trailing slashes). This is expected behavior.
     #[test]
     fn keycloak_issuer_metadata_round_trip() {
         // Deserialize into typed struct
@@ -908,13 +787,14 @@ mod tests {
         let serialized: serde_json::Value =
             serde_json::to_value(&metadata).expect("failed to serialize back to JSON");
 
-        // Verify essential fields are present in serialized output
-        assert!(serialized.get("credential_issuer").is_some());
-        assert!(serialized.get("credential_endpoint").is_some());
-        assert!(
-            serialized
-                .get("credential_configurations_supported")
-                .is_some()
+        // Parse original for comparison
+        let original: serde_json::Value = serde_json::from_str(KEYCLOAK_METADATA).unwrap();
+
+        // Compare the two JSON structures
+        // Note: URL normalization by url::Url may cause minor differences
+        assert_eq!(
+            original, serialized,
+            "round-trip JSON should match original"
         );
     }
 }

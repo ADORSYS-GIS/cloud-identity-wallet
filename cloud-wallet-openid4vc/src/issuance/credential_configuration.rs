@@ -36,6 +36,9 @@ pub struct ProofTypeMetadata {
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialConfiguration {
+    /// Optional identifier for this credential configuration (non-spec, used by some implementations).
+    pub id: Option<String>,
+
     /// Typed format details.
     #[serde(flatten)]
     pub format_details: CredentialFormatDetails,
