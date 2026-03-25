@@ -110,7 +110,9 @@ pub struct ClaimDescription {
     ///
     /// [Appendix C]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-C
     pub path: ClaimPathPointer,
-    pub mandatory: Option<bool>,
+    /// Boolean indicating if the claim is always included. Defaults to false when omitted.
+    #[serde(default)]
+    pub mandatory: bool,
 
     /// Per-language display properties for this claim.
     pub display: Option<Vec<ClaimDisplay>>,
