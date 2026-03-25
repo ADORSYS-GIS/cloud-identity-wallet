@@ -824,9 +824,7 @@ mod tests {
     #[test]
     fn valid_di_vp_proof() {
         let proof = DiVpProof {
-            context: vec![
-                "https://www.w3.org/ns/credentials/v2".to_string(),
-            ],
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
             types: vec!["VerifiablePresentation".to_string()],
             holder: Some("did:key:z6MkvrFpBNCoYewiaeBLgjUDvLxUtnK5R6mqh5XPvLsrPsro".to_string()),
             proof: vec![DataIntegrityProof {
@@ -846,9 +844,7 @@ mod tests {
     #[test]
     fn valid_di_vp_proof_without_holder() {
         let proof = DiVpProof {
-            context: vec![
-                "https://www.w3.org/ns/credentials/v2".to_string(),
-            ],
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
             types: vec!["VerifiablePresentation".to_string()],
             holder: None,
             proof: vec![DataIntegrityProof {
