@@ -4,6 +4,10 @@ extend-ignore-identifiers-re = []
 [default.extend-identifiers]
 
 [default.extend-words]
+# COSE (CBOR Object Signing and Encryption) is an IETF standard
+COSE = "COSE"
+Cose = "Cose"
+cose = "cose"
 
 [files]
 extend-exclude = [
