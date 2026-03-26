@@ -29,7 +29,7 @@ pub struct AuthorizationServerMetadata {
     /// URL of the authorization server's authorization endpoint (RFC 6749).
     ///
     /// REQUIRED unless no grant types are supported that use the
-    /// authorization endpoint. Modelled as Option because an AS that
+    /// authorization endpoint. Modeled as Option because an AS that
     /// supports only the Pre-Authorized Code grant type may omit it
     /// (OID4VCI §12.2.4).
     pub authorization_endpoint: Option<Url>,
@@ -50,7 +50,7 @@ pub struct AuthorizationServerMetadata {
     pub scopes_supported: Option<Vec<String>>,
 
     /// REQUIRED by RFC 8414 in responses. OAuth 2.0 response_type values
-    /// this server supports. Modelled as Option to accommodate the OID4VCI
+    /// this server supports. Modeled as Option to accommodate the OID4VCI
     /// exception for Pre-Authorized Code only servers (§12.2.4).
     pub response_types_supported: Option<Vec<String>>,
 
