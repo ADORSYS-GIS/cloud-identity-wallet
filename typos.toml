@@ -4,9 +4,14 @@ extend-ignore-identifiers-re = []
 [default.extend-identifiers]
 
 [default.extend-words]
+# COSE (CBOR Object Signing and Encryption) is an IETF standard
+COSE = "COSE"
+Cose = "Cose"
+cose = "cose"
 
 [files]
 extend-exclude = [
   "cloud-wallet-crypto/src/jwk.rs",
-  "cloud-wallet-crypto/src/jwk/tests.rs"
+  "cloud-wallet-crypto/src/jwk/tests.rs",
+  "cloud-wallet-openid4vc/test_data/issuer_metadata.json"
 ]
