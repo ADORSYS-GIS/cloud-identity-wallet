@@ -6,6 +6,13 @@ use std::fmt;
 use color_eyre::eyre::{Report, eyre};
 use thiserror::Error;
 
+/// Error returned when attempting to create an empty [`ClaimPathPointer`].
+///
+/// [`ClaimPathPointer`]: crate::issuance::claim_path_pointer::ClaimPathPointer
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Error)]
+#[error("claims path pointer must be non-empty")]
+pub struct EmptyClaimPathError;
+
 /// A specialised [`Result`] type for this crate.
 ///
 /// [`Result`]: std::result::Result
@@ -167,6 +174,10 @@ pub enum ErrorKind {
     /// A credential offer reference returned an invalid media type.
     #[error("Invalid credential offer media type")]
     InvalidCredentialOfferMediaType,
+
+    /// Credential Issuer Metadata failed structural validation.
+    #[error("Invalid issuer metadata")]
+    InvalidIssuerMetadata,
 
     /// An error that doesn't fit into any other category.
     #[error("Other error")]

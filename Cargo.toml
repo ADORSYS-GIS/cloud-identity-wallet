@@ -29,6 +29,7 @@ invalid_html_tags = "deny"
 [workspace.dependencies]
 # Serialization / Deserialization
 serde = "1"
+serde_with = "3"
 
 # Error handling
 color-eyre = "0.6"
