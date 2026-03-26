@@ -146,27 +146,6 @@ pub struct JwtProof {
     pub jwt: String,
 }
 
-impl JwtProof {
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.jwt.is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "JWT proof string must not be empty",
-            ));
-        }
-
-        let parts: Vec<&str> = self.jwt.splitn(4, '.').collect();
-        if parts.len() != 3 {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "JWT proof must be a compact serialization with three dot-separated parts",
-            ));
-        }
-
-        Ok(())
-    }
-}
-
 /// Data Integrity Proof. challenge required when c_nonce provided, MUST NOT be present otherwise.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,16 +443,13 @@ impl Proofs {
             ));
         }
 
-        if let Some(ref proofs) = self.jwt {
-            if proofs.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidProof,
-                    "proofs.jwt must not be empty",
-                ));
-            }
-            for proof in proofs {
-                proof.validate()?;
-            }
+        if let Some(ref proofs) = self.jwt
+            && proofs.is_empty()
+        {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                "proofs.jwt must not be empty",
+            ));
         }
 
         if let Some(ref proofs) = self.di_vp {
@@ -832,35 +808,6 @@ mod tests {
         };
         let json = serde_json::to_string(&claims).unwrap();
         assert!(json.contains("\"iss\":\"client123\""));
-    }
-
-    // ── JwtProof ──────────────────────────────────────────────────────────────
-
-    #[test]
-    fn valid_jwt_proof_entry() {
-        let proof = JwtProof {
-            jwt: "aaa.bbb.ccc".to_string(),
-        };
-        assert!(proof.validate().is_ok());
-    }
-
-    #[test]
-    fn rejects_empty_jwt_string() {
-        let proof = JwtProof { jwt: String::new() };
-        assert_eq!(
-            proof.validate().unwrap_err().kind(),
-            ErrorKind::InvalidProof
-        );
-    }
-
-    #[test]
-    fn rejects_jwt_without_three_parts() {
-        let proof = JwtProof {
-            jwt: "aaa.bbb".to_string(),
-        };
-        let err = proof.validate().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidProof);
-        assert!(err.to_string().contains("three"));
     }
 
     // ── DiVpProof ─────────────────────────────────────────────────────────────
@@ -1601,21 +1548,6 @@ mod tests {
         let err = proofs.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
         assert!(err.to_string().contains("exactly one"));
-    }
-
-    #[test]
-    fn invalid_jwt_entry_propagates_error() {
-        let proofs = Proofs {
-            jwt: Some(vec![JwtProof {
-                jwt: "not-a-valid-jwt".to_string(),
-            }]),
-            di_vp: None,
-            attestation: None,
-        };
-        assert_eq!(
-            proofs.validate().unwrap_err().kind(),
-            ErrorKind::InvalidProof
-        );
     }
 
     #[test]
