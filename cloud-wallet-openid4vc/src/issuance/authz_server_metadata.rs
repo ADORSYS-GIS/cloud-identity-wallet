@@ -402,7 +402,9 @@ mod tests {
     fn minimal_metadata() -> AuthorizationServerMetadata {
         AuthorizationServerMetadata {
             issuer: Url::parse("https://server.example.com").unwrap(),
-            authorization_endpoint: Some(Url::parse("https://server.example.com/authorize").unwrap()),
+            authorization_endpoint: Some(
+                Url::parse("https://server.example.com/authorize").unwrap(),
+            ),
             token_endpoint: Some(Url::parse("https://server.example.com/token").unwrap()),
             jwks_uri: None,
             registration_endpoint: None,
