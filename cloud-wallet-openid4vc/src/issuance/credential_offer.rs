@@ -999,4 +999,20 @@ mod tests {
         let json = r#"{"credential_issuer":"https://issuer.example.com"}"#;
         assert!(!looks_like_jwt_with_none(json));
     }
+
+    #[test]
+    #[cfg(feature = "http")]
+    fn does_not_detect_valid_credential_offer_json() {
+        // Happy path: complete valid credential offer JSON should not be flagged
+        let json = r#"{
+            "credential_issuer": "https://credential-issuer.example.com",
+            "credential_configuration_ids": ["UniversityDegreeCredential"],
+            "grants": {
+                "authorization_code": {
+                    "issuer_state": "test-state"
+                }
+            }
+        }"#;
+        assert!(!looks_like_jwt_with_none(json));
+    }
 }
