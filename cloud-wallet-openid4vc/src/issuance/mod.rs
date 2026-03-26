@@ -1,3 +1,3 @@
-pub mod auth_server_metadata;
+pub mod authz_server_metadata;
 
 pub mod credential_offer;
