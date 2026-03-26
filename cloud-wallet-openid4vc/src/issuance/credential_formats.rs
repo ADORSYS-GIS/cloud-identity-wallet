@@ -18,11 +18,6 @@ pub struct CredentialDefinition {
     /// The credential type values (REQUIRED).
     #[serde(rename = "type")]
     pub types: Vec<String>,
-
-    /// Optional @context array for JSON-LD compatibility.
-    /// REQUIRED for `ldp_vc` and `jwt_vc_json-ld` formats.
-    #[serde(rename = "@context")]
-    pub context: Option<Vec<String>>,
 }
 
 /// Credential definition for JSON-LD based formats where @context is REQUIRED.
