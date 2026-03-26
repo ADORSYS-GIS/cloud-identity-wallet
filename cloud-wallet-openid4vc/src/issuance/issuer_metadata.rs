@@ -247,7 +247,6 @@ mod tests {
         let jwt = CredentialFormatDetails::JwtVcJson(JwtVcJsonCredentialConfiguration {
             credential_definition: CredentialDefinition {
                 types: vec!["VerifiableCredential".to_string()],
-                context: None,
             },
         });
         assert_eq!(jwt.format_str(), "jwt_vc_json");
