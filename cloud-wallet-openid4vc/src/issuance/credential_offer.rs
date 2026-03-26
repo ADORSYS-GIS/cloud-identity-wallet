@@ -559,10 +559,10 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
         && let Ok(header_json) = serde_json::from_str::<serde_json::Value>(&header_str)
     {
         // Check if "alg" field exists and equals "none" (case-insensitive)
-        if let Some(alg) = header_json.get("alg").and_then(|v| v.as_str()) {
-            if alg.to_lowercase() == "none" {
-                return true;
-            }
+        if let Some(alg) = header_json.get("alg").and_then(|v| v.as_str())
+            && alg.to_lowercase() == "none"
+        {
+            return true;
         }
     }
 
