@@ -159,13 +159,6 @@ pub enum ErrorKind {
     #[error("Invalid authorization server metadata")]
     InvalidAuthorizationServerMetadata,
 
-    /// A token response failed structural validation (e.g. missing `access_token` or
-    /// `token_type`).
-    ///
-    /// Defined by [RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1).
-    #[error("Invalid token response")]
-    InvalidTokenResponse,
-
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,

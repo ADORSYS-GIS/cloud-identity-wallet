@@ -186,7 +186,7 @@ assert_eq!(digest.as_ref().len(), 32); // SHA-256 = 32 bytes
 
 > **Note**: JWK support requires the `jwk` feature flag.
 
-```rust
+```rust,ignore
 use cloud_wallet_crypto::{
     ecdsa::{KeyPair, Curve},
     jwk::{Jwk, Parameters, Algorithm, Signing},
