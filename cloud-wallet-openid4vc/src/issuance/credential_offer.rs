@@ -464,7 +464,6 @@ impl CredentialOfferUri {
 /// Returns [`Error`] with [`ErrorKind::InvalidCredentialOffer`] for:
 /// - JWT with `"alg": "none"` (security violation)
 /// - Validation failures
-#[cfg(feature = "http")]
 pub async fn resolve_by_reference(
     uri: &str,
     http_client: &reqwest::Client,
@@ -543,7 +542,8 @@ pub async fn resolve_by_reference(
 /// Checks if the content looks like a JWT with "alg": "none".
 ///
 /// This is a security check per the specification to reject insecure JWTs.
-#[cfg(feature = "http")]
+/// Uses proper JSON parsing to robustly detect the algorithm regardless of
+/// JSON formatting (whitespace, key ordering, etc.).
 fn looks_like_jwt_with_none(content: &str) -> bool {
     let trimmed = content.trim();
 
@@ -553,14 +553,16 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
         return false;
     }
 
-    // Try to decode the header (first part)
+    // Try to decode and parse the header (first part) as JSON
     if let Ok(header_bytes) = base64url_decode_no_padding(parts[0])
         && let Ok(header_str) = String::from_utf8(header_bytes)
+        && let Ok(header_json) = serde_json::from_str::<serde_json::Value>(&header_str)
     {
-        // Check for "alg":"none" pattern (case-insensitive)
-        let header_lower = header_str.to_lowercase();
-        if header_lower.contains(r#""alg":"none""#) || header_lower.contains(r#""alg" : "none""#) {
-            return true;
+        // Check if "alg" field exists and equals "none" (case-insensitive)
+        if let Some(alg) = header_json.get("alg").and_then(|v| v.as_str()) {
+            if alg.to_lowercase() == "none" {
+                return true;
+            }
         }
     }
 
@@ -568,7 +570,6 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
 }
 
 /// Decodes base64url without padding.
-#[cfg(feature = "http")]
 fn base64url_decode_no_padding(input: &str) -> Result<Vec<u8>, ()> {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -978,7 +979,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
     fn detects_jwt_with_alg_none() {
         // Header with "alg": "none" encoded in base64url
         let jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature";
@@ -986,7 +986,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
     fn does_not_detect_normal_jwt() {
         // Header with "alg": "RS256" encoded in base64url
         let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature";
@@ -994,14 +993,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
     fn does_not_detect_non_jwt() {
         let json = r#"{"credential_issuer":"https://issuer.example.com"}"#;
         assert!(!looks_like_jwt_with_none(json));
     }
 
     #[test]
-    #[cfg(feature = "http")]
     fn does_not_detect_valid_credential_offer_json() {
         // Happy path: complete valid credential offer JSON should not be flagged
         let json = r#"{
