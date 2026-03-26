@@ -8,9 +8,11 @@ edition.workspace = true
 thiserror.workspace = true
 color-eyre.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_with = "3"
+serde_with.workspace = true
 serde_json = "1"
 uuid.workspace = true
 time.workspace = true
 url.workspace = true
 percent-encoding = "2"
+validator = { version = "0.20", features = ["derive"] }
+csscolorparser = { version = "0.8", features = ["serde"] }
