@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 use url::Url;
 
 use crate::errors::{Error, ErrorKind};
@@ -14,6 +15,7 @@ use crate::errors::{Error, ErrorKind};
 /// The OID4VCI-specific extension parameter
 /// pre-authorized_grant_anonymous_access_supported is defined in
 /// [OID4VCI §12.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-oauth-20-authorization-serv).
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationServerMetadata {
     //  RFC 8414 REQUIRED fields
@@ -22,7 +24,7 @@ pub struct AuthorizationServerMetadata {
     /// MUST use the https scheme and contain no query or fragment
     /// components. The wallet MUST verify this matches the URL used to
     /// retrieve the metadata document (RFC 8414 §3.3).
-    pub issuer: String,
+    pub issuer: Url,
 
     /// URL of the authorization server's authorization endpoint (RFC 6749).
     ///
@@ -30,99 +32,89 @@ pub struct AuthorizationServerMetadata {
     /// authorization endpoint. Modelled as Option because an AS that
     /// supports only the Pre-Authorized Code grant type may omit it
     /// (OID4VCI §12.2.4).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorization_endpoint: Option<String>,
+    pub authorization_endpoint: Option<Url>,
 
     /// URL of the authorization server's token endpoint (RFC 6749).
     ///
     /// REQUIRED unless only the implicit grant type is supported.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_endpoint: Option<String>,
+    pub token_endpoint: Option<Url>,
 
     //  RFC 8414 OPTIONAL fields
     /// OPTIONAL. URL of the authorization server's JWK Set document.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jwks_uri: Option<String>,
+    pub jwks_uri: Option<Url>,
 
     /// OPTIONAL. URL of the OAuth 2.0 Dynamic Client Registration endpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub registration_endpoint: Option<String>,
+    pub registration_endpoint: Option<Url>,
 
     /// RECOMMENDED. OAuth 2.0 scope values this server supports.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes_supported: Option<Vec<String>>,
 
     /// REQUIRED by RFC 8414 in responses. OAuth 2.0 response_type values
     /// this server supports. Modelled as Option to accommodate the OID4VCI
     /// exception for Pre-Authorized Code only servers (§12.2.4).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_types_supported: Option<Vec<String>>,
 
     /// OPTIONAL. OAuth 2.0 response_mode values this server supports.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_modes_supported: Option<Vec<String>>,
 
     /// OPTIONAL. OAuth 2.0 grant type values this server supports.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_types_supported: Option<Vec<String>>,
 
     /// OPTIONAL. Client authentication methods supported by the token endpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
 
     /// OPTIONAL. JWS signing algorithms supported by the token endpoint for
     /// JWT client authentication.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
 
     /// OPTIONAL. URL of a page with human-readable developer documentation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_documentation: Option<String>,
+    pub service_documentation: Option<Url>,
 
     /// OPTIONAL. BCP 47 language tags for supported UI languages.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_locales_supported: Option<Vec<String>>,
 
     /// OPTIONAL. URL of the server's policy on how clients may use provided
     /// data.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub op_policy_uri: Option<String>,
+    pub op_policy_uri: Option<Url>,
 
     /// OPTIONAL. URL of the server's terms of service.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub op_tos_uri: Option<String>,
+    pub op_tos_uri: Option<Url>,
 
     /// OPTIONAL. URL of the OAuth 2.0 token revocation endpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revocation_endpoint: Option<String>,
+    pub revocation_endpoint: Option<Url>,
 
     /// OPTIONAL. Client authentication methods supported by the revocation
     /// endpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub revocation_endpoint_auth_methods_supported: Option<Vec<String>>,
 
     /// OPTIONAL. JWS signing algorithms supported by the revocation endpoint
     /// for JWT client authentication.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub revocation_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
 
     /// OPTIONAL. URL of the OAuth 2.0 token introspection endpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub introspection_endpoint: Option<String>,
+    pub introspection_endpoint: Option<Url>,
 
     /// OPTIONAL. Client authentication methods supported by the introspection
     /// endpoint.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub introspection_endpoint_auth_methods_supported: Option<Vec<String>>,
 
     /// OPTIONAL. JWS signing algorithms supported by the introspection
     /// endpoint for JWT client authentication.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub introspection_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
 
     /// OPTIONAL. PKCE code challenge methods this server supports.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub code_challenge_methods_supported: Option<Vec<String>>,
+
+    // RFC 9126 (Pushed Authorization Requests) parameters
+    /// OPTIONAL. URL of the pushed authorization request endpoint.
+    ///
+    /// Defined in [RFC 9126 §5](https://datatracker.ietf.org/doc/html/rfc9126#section-5).
+    pub pushed_authorization_request_endpoint: Option<Url>,
+
+    /// OPTIONAL. Whether the AS requires pushed authorization requests.
+    ///
+    /// Defined in [RFC 9126 §5](https://datatracker.ietf.org/doc/html/rfc9126#section-5).
+    pub require_pushed_authorization_requests: Option<bool>,
 
     //  OID4VCI §12.3 extension
     /// OPTIONAL. Whether the AS accepts a Token Request with a
@@ -147,6 +139,17 @@ pub struct AuthorizationServerMetadata {
     pub extra_fields: std::collections::HashMap<String, serde_json::Value>,
 }
 
+fn validate_https_url(url: &Url, field: &str) -> Result<(), Error> {
+    if url.scheme() != "https" {
+        return Err(Error::message(
+            ErrorKind::InvalidAuthorizationServerMetadata,
+            format!("'{field}' must use the https scheme"),
+        ));
+    }
+
+    Ok(())
+}
+
 impl AuthorizationServerMetadata {
     /// Validates the Authorization Server Metadata.
     ///
@@ -161,14 +164,13 @@ impl AuthorizationServerMetadata {
     pub fn validate(&self) -> Result<(), Error> {
         validate_https_url(&self.issuer, "issuer")?;
 
-        let parsed = Url::parse(&self.issuer).expect("already validated above");
-        if parsed.query().is_some() {
+        if self.issuer.query().is_some() {
             return Err(Error::message(
                 ErrorKind::InvalidAuthorizationServerMetadata,
                 "issuer must not contain a query component",
             ));
         }
-        if parsed.fragment().is_some() {
+        if self.issuer.fragment().is_some() {
             return Err(Error::message(
                 ErrorKind::InvalidAuthorizationServerMetadata,
                 "issuer must not contain a fragment component",
@@ -181,6 +183,38 @@ impl AuthorizationServerMetadata {
 
         if let Some(ref url) = self.authorization_endpoint {
             validate_https_url(url, "authorization_endpoint")?;
+        }
+
+        if let Some(ref url) = self.jwks_uri {
+            validate_https_url(url, "jwks_uri")?;
+        }
+
+        if let Some(ref url) = self.registration_endpoint {
+            validate_https_url(url, "registration_endpoint")?;
+        }
+
+        if let Some(ref url) = self.service_documentation {
+            validate_https_url(url, "service_documentation")?;
+        }
+
+        if let Some(ref url) = self.op_policy_uri {
+            validate_https_url(url, "op_policy_uri")?;
+        }
+
+        if let Some(ref url) = self.op_tos_uri {
+            validate_https_url(url, "op_tos_uri")?;
+        }
+
+        if let Some(ref url) = self.revocation_endpoint {
+            validate_https_url(url, "revocation_endpoint")?;
+        }
+
+        if let Some(ref url) = self.introspection_endpoint {
+            validate_https_url(url, "introspection_endpoint")?;
+        }
+
+        if let Some(ref url) = self.pushed_authorization_request_endpoint {
+            validate_https_url(url, "pushed_authorization_request_endpoint")?;
         }
 
         Ok(())
@@ -209,10 +243,9 @@ impl AuthorizationServerMetadata {
 pub struct TokenResponseAuthorizationDetails {
     /// REQUIRED. MUST be openid_credential.
     #[serde(rename = "type")]
-    pub kind: String,
+    pub r#type: String,
 
     /// The Credential Configuration identifier this entry relates to.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_configuration_id: Option<String>,
 
     /// REQUIRED when authorization_details was used. Non-empty array of
@@ -221,8 +254,12 @@ pub struct TokenResponseAuthorizationDetails {
     ///
     /// The wallet MUST use these identifiers as the credential_identifier
     /// parameter in subsequent Credential Requests (OID4VCI §8.2).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_identifiers: Option<Vec<String>>,
+
+    /// OPTIONAL. Array of strings denoting the claims requested/authorized.
+    ///
+    /// Defined in [OID4VCI §6.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response).
+    pub claims: Option<Vec<String>>,
 }
 
 impl TokenResponseAuthorizationDetails {
@@ -235,12 +272,12 @@ impl TokenResponseAuthorizationDetails {
     /// - credential_identifiers is present but empty
     #[must_use = "validation result must be checked"]
     pub fn validate(&self) -> Result<(), Error> {
-        if self.kind != "openid_credential" {
+        if self.r#type != "openid_credential" {
             return Err(Error::message(
                 ErrorKind::InvalidTokenResponse,
                 format!(
                     "authorization_details type must be 'openid_credential', got '{}'",
-                    self.kind
+                    self.r#type
                 ),
             ));
         }
@@ -273,15 +310,12 @@ pub struct TokenResponse {
     pub token_type: String,
 
     /// RECOMMENDED. Lifetime of the access token in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<u64>,
 
     /// OPTIONAL. Refresh token for obtaining new access tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
 
     /// OPTIONAL. Scope of the access token.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
 
     /// REQUIRED when authorization_details was used in the Authorization
@@ -289,7 +323,6 @@ pub struct TokenResponse {
     ///
     /// Each entry contains credential_identifiers the wallet MUST use in
     /// subsequent Credential Requests.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_details: Option<Vec<TokenResponseAuthorizationDetails>>,
 }
 
@@ -360,24 +393,6 @@ impl TokenResponse {
 
 // helpers
 
-fn validate_https_url(url: &str, field: &str) -> Result<(), Error> {
-    let parsed = Url::parse(url).map_err(|_| {
-        Error::message(
-            ErrorKind::InvalidAuthorizationServerMetadata,
-            format!("'{field}' is not a valid URL: {url}"),
-        )
-    })?;
-
-    if parsed.scheme() != "https" {
-        return Err(Error::message(
-            ErrorKind::InvalidAuthorizationServerMetadata,
-            format!("'{field}' must use the https scheme"),
-        ));
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,9 +401,9 @@ mod tests {
 
     fn minimal_metadata() -> AuthorizationServerMetadata {
         AuthorizationServerMetadata {
-            issuer: "https://server.example.com".to_string(),
-            authorization_endpoint: Some("https://server.example.com/authorize".to_string()),
-            token_endpoint: Some("https://server.example.com/token".to_string()),
+            issuer: Url::parse("https://server.example.com").unwrap(),
+            authorization_endpoint: Some(Url::parse("https://server.example.com/authorize").unwrap()),
+            token_endpoint: Some(Url::parse("https://server.example.com/token").unwrap()),
             jwks_uri: None,
             registration_endpoint: None,
             scopes_supported: None,
@@ -408,6 +423,8 @@ mod tests {
             introspection_endpoint_auth_methods_supported: None,
             introspection_endpoint_auth_signing_alg_values_supported: None,
             code_challenge_methods_supported: None,
+            pushed_authorization_request_endpoint: None,
+            require_pushed_authorization_requests: None,
             pre_authorized_grant_anonymous_access_supported: None,
             extra_fields: std::collections::HashMap::new(),
         }
@@ -430,7 +447,7 @@ mod tests {
     #[test]
     fn rejects_http_issuer() {
         let mut m = minimal_metadata();
-        m.issuer = "http://server.example.com".to_string();
+        m.issuer = Url::parse("http://server.example.com").unwrap();
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
         assert!(err.to_string().contains("https scheme"));
@@ -438,21 +455,15 @@ mod tests {
 
     #[test]
     fn rejects_invalid_url_issuer() {
-        let mut m = minimal_metadata();
-        m.issuer = "not-a-url".to_string();
-        let err = m.validate().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
-        assert!(
-            err.to_string().contains("'issuer' is not a valid URL"),
-            "expected error to state that issuer is not a valid URL, got: {}",
-            err
-        );
+        let json = r#"{ "issuer": "not-a-url" }"#;
+        let err = serde_json::from_str::<AuthorizationServerMetadata>(json).unwrap_err();
+        assert!(err.to_string().contains("relative URL without a base"));
     }
 
     #[test]
     fn rejects_issuer_with_query() {
         let mut m = minimal_metadata();
-        m.issuer = "https://server.example.com?foo=bar".to_string();
+        m.issuer = Url::parse("https://server.example.com?foo=bar").unwrap();
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
         assert!(
@@ -466,7 +477,7 @@ mod tests {
     #[test]
     fn rejects_issuer_with_fragment() {
         let mut m = minimal_metadata();
-        m.issuer = "https://server.example.com#section".to_string();
+        m.issuer = Url::parse("https://server.example.com#section").unwrap();
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
         assert!(
@@ -480,7 +491,7 @@ mod tests {
     #[test]
     fn rejects_http_token_endpoint() {
         let mut m = minimal_metadata();
-        m.token_endpoint = Some("http://server.example.com/token".to_string());
+        m.token_endpoint = Some(Url::parse("http://server.example.com/token").unwrap());
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
         assert!(
@@ -494,7 +505,7 @@ mod tests {
     #[test]
     fn rejects_http_authorization_endpoint() {
         let mut m = minimal_metadata();
-        m.authorization_endpoint = Some("http://server.example.com/authorize".to_string());
+        m.authorization_endpoint = Some(Url::parse("http://server.example.com/authorize").unwrap());
         let err = m.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationServerMetadata);
         assert!(
@@ -517,7 +528,7 @@ mod tests {
     #[test]
     fn valid_issuer_with_path_component() {
         let mut m = minimal_metadata();
-        m.issuer = "https://server.example.com/tenant1".to_string();
+        m.issuer = Url::parse("https://server.example.com/tenant1").unwrap();
         assert!(m.validate().is_ok());
     }
 
@@ -584,9 +595,9 @@ mod tests {
         }"#;
         let m: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
         assert!(m.validate().is_ok());
-        assert_eq!(m.issuer, "https://server.example.com");
+        assert_eq!(m.issuer.as_str(), "https://server.example.com/");
         assert_eq!(
-            m.token_endpoint.as_deref(),
+            m.token_endpoint.as_ref().map(|u| u.as_str()),
             Some("https://server.example.com/token")
         );
         assert_eq!(m.scopes_supported.as_ref().unwrap().len(), 3);
@@ -631,9 +642,10 @@ mod tests {
     #[test]
     fn valid_authorization_details_entry() {
         let entry = TokenResponseAuthorizationDetails {
-            kind: "openid_credential".to_string(),
+            r#type: "openid_credential".to_string(),
             credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
             credential_identifiers: Some(vec!["CivilEngineeringDegree-2023".to_string()]),
+            claims: None,
         };
         assert!(entry.validate().is_ok());
     }
@@ -641,9 +653,10 @@ mod tests {
     #[test]
     fn rejects_wrong_type_in_authorization_details() {
         let entry = TokenResponseAuthorizationDetails {
-            kind: "some_other_type".to_string(),
+            r#type: "some_other_type".to_string(),
             credential_configuration_id: None,
             credential_identifiers: None,
+            claims: None,
         };
         let err = entry.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
@@ -653,9 +666,10 @@ mod tests {
     #[test]
     fn rejects_empty_credential_identifiers() {
         let entry = TokenResponseAuthorizationDetails {
-            kind: "openid_credential".to_string(),
+            r#type: "openid_credential".to_string(),
             credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
             credential_identifiers: Some(vec![]),
+            claims: None,
         };
         let err = entry.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
@@ -666,9 +680,10 @@ mod tests {
     fn valid_entry_without_credential_identifiers() {
         // Scope flow: identifiers may not be returned
         let entry = TokenResponseAuthorizationDetails {
-            kind: "openid_credential".to_string(),
+            r#type: "openid_credential".to_string(),
             credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
             credential_identifiers: None,
+            claims: None,
         };
         assert!(entry.validate().is_ok());
     }
@@ -676,13 +691,14 @@ mod tests {
     #[test]
     fn authorization_details_type_field_serializes_as_type() {
         let entry = TokenResponseAuthorizationDetails {
-            kind: "openid_credential".to_string(),
+            r#type: "openid_credential".to_string(),
             credential_configuration_id: None,
             credential_identifiers: None,
+            claims: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"type\":\"openid_credential\""));
-        assert!(!json.contains("\"kind\""));
+        assert!(!json.contains("\"r#type\""));
     }
 
     // TokenResponse::validate
@@ -709,12 +725,13 @@ mod tests {
             refresh_token: None,
             scope: None,
             authorization_details: Some(vec![TokenResponseAuthorizationDetails {
-                kind: "openid_credential".to_string(),
+                r#type: "openid_credential".to_string(),
                 credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
                 credential_identifiers: Some(vec![
                     "CivilEngineeringDegree-2023".to_string(),
                     "ElectricalEngineeringDegree-2023".to_string(),
                 ]),
+                claims: None,
             }]),
         };
         assert!(resp.validate().is_ok());
@@ -774,9 +791,10 @@ mod tests {
             refresh_token: None,
             scope: None,
             authorization_details: Some(vec![TokenResponseAuthorizationDetails {
-                kind: "wrong_type".to_string(),
+                r#type: "wrong_type".to_string(),
                 credential_configuration_id: None,
                 credential_identifiers: None,
+                claims: None,
             }]),
         };
         assert_eq!(
@@ -812,7 +830,7 @@ mod tests {
         assert_eq!(resp.expires_in, Some(86400));
         let details = resp.authorization_details.as_ref().unwrap();
         assert_eq!(details.len(), 1);
-        assert_eq!(details[0].kind, "openid_credential");
+        assert_eq!(details[0].r#type, "openid_credential");
         assert_eq!(
             details[0].credential_configuration_id.as_deref(),
             Some("UniversityDegreeCredential")
@@ -855,17 +873,19 @@ mod tests {
             scope: None,
             authorization_details: Some(vec![
                 TokenResponseAuthorizationDetails {
-                    kind: "openid_credential".to_string(),
+                    r#type: "openid_credential".to_string(),
                     credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
                     credential_identifiers: Some(vec![
                         "Degree-A".to_string(),
                         "Degree-B".to_string(),
                     ]),
+                    claims: None,
                 },
                 TokenResponseAuthorizationDetails {
-                    kind: "openid_credential".to_string(),
+                    r#type: "openid_credential".to_string(),
                     credential_configuration_id: Some("mDLCredential".to_string()),
                     credential_identifiers: Some(vec!["mDL-1".to_string()]),
+                    claims: None,
                 },
             ]),
         };
@@ -898,9 +918,10 @@ mod tests {
             refresh_token: None,
             scope: None,
             authorization_details: Some(vec![TokenResponseAuthorizationDetails {
-                kind: "openid_credential".to_string(),
+                r#type: "openid_credential".to_string(),
                 credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
                 credential_identifiers: Some(vec!["Degree-A".to_string()]),
+                claims: None,
             }]),
         };
         assert!(resp.credential_identifiers_for("mDLCredential").is_none());
@@ -937,7 +958,8 @@ mod tests {
 
         assert_eq!(
             original_value, round_tripped_value,
-            "round-tripped JSON must be semantically identical to the original"
+            "round-tripped J
+            SON must be semantically identical to the original"
         );
     }
 }
