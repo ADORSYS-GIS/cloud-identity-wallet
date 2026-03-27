@@ -109,7 +109,7 @@ impl std::ops::Index<&str> for Claims {
 
 /// A pointer to an issuer-maintained status list entry for this credential.
 ///
-/// Modeled on the Token Status List draft (draft-ietf-oauth-status-list).
+/// Modelled on the Token Status List draft (draft-ietf-oauth-status-list).
 /// The wallet uses this reference to poll or resolve the current status of the
 /// credential from the issuer's infrastructure.
 ///
