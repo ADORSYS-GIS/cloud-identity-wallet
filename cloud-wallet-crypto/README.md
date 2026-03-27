@@ -45,7 +45,7 @@ A C compiler (e.g. **`clang`** or **`gcc`** ) is required for building the libra
 
 ### Basic Example
 
-```rust,ignore
+```rust
 use cloud_wallet_crypto::{
     aead::{Algorithm, Key},
     ecdsa::{self, Curve},
