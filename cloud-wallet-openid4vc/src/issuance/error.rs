@@ -96,14 +96,6 @@ pub struct CredentialErrorResponse {
     /// Error URI with more details.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_uri: Option<String>,
-
-    /// Nonce for retry with a new proof.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub c_nonce: Option<String>,
-
-    /// Time in seconds until the nonce expires.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub c_nonce_expires_in: Option<u64>,
 }
 
 impl CredentialErrorResponse {
@@ -113,21 +105,12 @@ impl CredentialErrorResponse {
             error,
             error_description: None,
             error_uri: None,
-            c_nonce: None,
-            c_nonce_expires_in: None,
         }
     }
 
     /// Adds an error description.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.error_description = Some(description.into());
-        self
-    }
-
-    /// Adds a nonce for retry.
-    pub fn with_nonce(mut self, nonce: impl Into<String>, expires_in: u64) -> Self {
-        self.c_nonce = Some(nonce.into());
-        self.c_nonce_expires_in = Some(expires_in);
         self
     }
 }
@@ -174,23 +157,19 @@ mod tests {
     #[test]
     fn serialize_credential_error_response() {
         let error = CredentialErrorResponse::new(CredentialErrorCode::InvalidProof)
-            .with_description("The proof is invalid or missing")
-            .with_nonce("new-nonce", 300);
+            .with_description("The proof is invalid or missing");
 
         let json = serde_json::to_string(&error).expect("Failed to serialize");
 
         assert!(json.contains("\"error\":\"invalid_proof\""));
         assert!(json.contains("\"error_description\":\"The proof is invalid or missing\""));
-        assert!(json.contains("\"c_nonce\":\"new-nonce\""));
     }
 
     #[test]
     fn deserialize_credential_error_response() {
         let json = r#"{
             "error": "invalid_proof",
-            "error_description": "The proof is invalid",
-            "c_nonce": "new-nonce",
-            "c_nonce_expires_in": 300
+            "error_description": "The proof is invalid"
         }"#;
 
         let error: CredentialErrorResponse =
@@ -201,7 +180,7 @@ mod tests {
             error.error_description,
             Some("The proof is invalid".to_string())
         );
-        assert_eq!(error.c_nonce, Some("new-nonce".to_string()));
+        assert_eq!(error.error_uri, None);
     }
 
     #[test]

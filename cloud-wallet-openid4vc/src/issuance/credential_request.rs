@@ -7,128 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, ErrorKind};
 
-/// Proof type identifier.
-///
-/// Identifies the format of the proof provided in a credential request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProofType {
-    /// JWT-based proof.
-    ///
-    /// The proof is a JWT signed by the holder's key.
-    Jwt,
-    /// Data Integrity Proof.
-    DiVp,
-    /// Key attestation proof.
-    Attestation,
-}
-
-/// JWT proof for credential request.
-///
-/// Contains a JWT signed by the holder's key to prove possession
-/// of the key that will be bound to the credential.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JwtProof {
-    /// The JWT proving possession of the holder's key.
-    ///
-    /// The JWT MUST contain an `aud` (audience) claim with the value of the
-    /// Credential Issuer's identifier, and an `iat` (issued at) claim.
-    /// It MAY contain a `nonce` claim obtained from the nonce endpoint.
-    pub jwt: String,
-}
-
-/// Data Integrity proof for credential request.
-///
-/// Contains a Verifiable Presentation secured using Data Integrity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiVpProof {
-    /// The Verifiable Presentation.
-    pub di_vp: serde_json::Value,
-}
-
-/// Key attestation proof for credential request.
-///
-/// Contains a key attestation that proves properties about the holder's key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AttestationProof {
-    /// The key attestation JWT.
-    pub attestation: String,
-}
-
-/// Proof object for credential request.
-///
-/// Contains proof of possession of a key that will be bound to the credential.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "proof_type", rename_all = "snake_case")]
-pub enum Proof {
-    /// JWT proof.
-    Jwt(JwtProof),
-    /// Data Integrity proof.
-    DiVp(DiVpProof),
-    /// Key attestation proof.
-    Attestation(AttestationProof),
-}
-
-impl Proof {
-    /// Returns the proof type identifier.
-    pub fn proof_type(&self) -> ProofType {
-        match self {
-            Proof::Jwt(_) => ProofType::Jwt,
-            Proof::DiVp(_) => ProofType::DiVp,
-            Proof::Attestation(_) => ProofType::Attestation,
-        }
-    }
-
-    /// Validates the proof.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the proof is empty or invalid.
-    pub fn validate(&self) -> Result<(), Error> {
-        match self {
-            Proof::Jwt(jwt) => {
-                if jwt.jwt.is_empty() {
-                    return Err(Error::message(
-                        ErrorKind::InvalidCredentialRequest,
-                        "jwt proof must not be empty",
-                    ));
-                }
-            }
-            Proof::DiVp(di) => {
-                if di.di_vp.is_null() {
-                    return Err(Error::message(
-                        ErrorKind::InvalidCredentialRequest,
-                        "di_vp proof must not be empty",
-                    ));
-                }
-            }
-            Proof::Attestation(att) => {
-                if att.attestation.is_empty() {
-                    return Err(Error::message(
-                        ErrorKind::InvalidCredentialRequest,
-                        "attestation proof must not be empty",
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ProofOrProofs {
-    Single { proof: Proof },
-    Multiple { proofs: Proofs },
-}
-
 /// Multiple key proofs for requesting several credentials in one request.
 ///
-/// The `proofs` field in a Credential Request allows requesting N credentials
-/// with N distinct key proofs in a single call to the credential endpoint.
+/// The `proofs` field in a Credential Request allows requesting multiple
+/// credentials in a single call to the credential endpoint using exactly one
+/// proof type key.
 /// Defined in [OpenID4VCI §8.2.1.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
-///
-/// Mutually exclusive with `proof`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Proofs {
     /// JWT proofs — one entry per requested credential.
@@ -145,6 +29,24 @@ pub struct Proofs {
 }
 
 impl Proofs {
+    /// Adds a JWT proof.
+    pub fn with_jwt(mut self, jwt: impl Into<String>) -> Self {
+        self.jwt.push(jwt.into());
+        self
+    }
+
+    /// Adds a Data Integrity proof.
+    pub fn with_di_vp(mut self, di_vp: serde_json::Value) -> Self {
+        self.di_vp.push(di_vp);
+        self
+    }
+
+    /// Adds a key attestation proof.
+    pub fn with_attestation(mut self, attestation: impl Into<String>) -> Self {
+        self.attestation.push(attestation.into());
+        self
+    }
+
     /// Returns the total number of proofs across all proof types.
     pub fn len(&self) -> usize {
         self.jwt.len() + self.di_vp.len() + self.attestation.len()
@@ -167,15 +69,170 @@ impl Proofs {
                 "proofs must contain at least one proof entry",
             ));
         }
+
+        let proof_type_count = usize::from(!self.jwt.is_empty())
+            + usize::from(!self.di_vp.is_empty())
+            + usize::from(!self.attestation.is_empty());
+
+        if proof_type_count != 1 {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "proofs must contain exactly one non-empty proof type",
+            ));
+        }
+
+        if self.jwt.iter().any(String::is_empty) {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "jwt proofs must not contain empty entries",
+            ));
+        }
+
+        if self.di_vp.iter().any(|proof| !proof.is_object()) {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "di_vp proofs must contain JSON objects",
+            ));
+        }
+
+        if self.attestation.len() > 1 {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "attestation proofs must contain exactly one entry when present",
+            ));
+        }
+
+        if self.attestation.iter().any(String::is_empty) {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "attestation proofs must not contain empty entries",
+            ));
+        }
+
         Ok(())
     }
 }
 
+/// Response encryption parameters supplied by the Wallet.
+///
+/// Defined in [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialResponseEncryption {
+    /// Single public JWK used to encrypt the Credential Response.
+    pub jwk: serde_json::Value,
+
+    /// JWE `enc` algorithm to use for the encrypted Credential Response.
+    pub enc: String,
+
+    /// Optional JWE `zip` compression algorithm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zip: Option<String>,
+}
+
+impl CredentialResponseEncryption {
+    /// Creates a new response-encryption configuration.
+    pub fn new(jwk: serde_json::Value, enc: impl Into<String>) -> Self {
+        Self {
+            jwk,
+            enc: enc.into(),
+            zip: None,
+        }
+    }
+
+    /// Sets the JWE `zip` compression algorithm.
+    pub fn with_zip(mut self, zip: impl Into<String>) -> Self {
+        self.zip = Some(zip.into());
+        self
+    }
+
+    /// Validates the response-encryption configuration.
+    pub fn validate(&self) -> Result<(), Error> {
+        if !self.jwk.is_object() {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "credential_response_encryption.jwk must be a JSON object",
+            ));
+        }
+
+        if self.enc.is_empty() {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "credential_response_encryption.enc must not be empty",
+            ));
+        }
+
+        if self.zip.as_deref().is_some_and(str::is_empty) {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "credential_response_encryption.zip must not be empty when present",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Mutually exclusive credential identifiers defined by OpenID4VCI §8.2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CredIdOrCredConfigId {
     CredentialIdentifier { credential_identifier: String },
     CredentialConfigurationId { credential_configuration_id: String },
+}
+
+impl CredIdOrCredConfigId {
+    /// Creates a `credential_identifier` selector.
+    pub fn credential_identifier(id: impl Into<String>) -> Self {
+        Self::CredentialIdentifier {
+            credential_identifier: id.into(),
+        }
+    }
+
+    /// Creates a `credential_configuration_id` selector.
+    pub fn credential_configuration_id(id: impl Into<String>) -> Self {
+        Self::CredentialConfigurationId {
+            credential_configuration_id: id.into(),
+        }
+    }
+
+    /// Returns the `credential_identifier` value when present.
+    pub fn as_credential_identifier(&self) -> Option<&str> {
+        match self {
+            Self::CredentialIdentifier {
+                credential_identifier,
+            } => Some(credential_identifier),
+            Self::CredentialConfigurationId { .. } => None,
+        }
+    }
+
+    /// Returns the `credential_configuration_id` value when present.
+    pub fn as_credential_configuration_id(&self) -> Option<&str> {
+        match self {
+            Self::CredentialIdentifier { .. } => None,
+            Self::CredentialConfigurationId {
+                credential_configuration_id,
+            } => Some(credential_configuration_id),
+        }
+    }
+
+    /// Validates that the selected identifier is non-empty.
+    pub fn validate(&self) -> Result<(), Error> {
+        match self {
+            Self::CredentialIdentifier {
+                credential_identifier,
+            } if credential_identifier.is_empty() => Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "credential_identifier must not be empty",
+            )),
+            Self::CredentialConfigurationId {
+                credential_configuration_id,
+            } if credential_configuration_id.is_empty() => Err(Error::message(
+                ErrorKind::InvalidCredentialRequest,
+                "credential_configuration_id must not be empty",
+            )),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Credential request payload.
@@ -185,113 +242,102 @@ pub enum CredIdOrCredConfigId {
 /// [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRequest {
-    /// The credential format identifier.
-    ///
-    /// Identifies the format of the credential being requested.
-    /// Common values include: `jwt_vc_json`, `vc+sd-jwt`, `mso_mdoc`.
-    pub format: String,
+    /// Requested credential identifier or configuration identifier.
+    #[serde(flatten)]
+    pub id: CredIdOrCredConfigId,
 
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub proof: Option<ProofOrProofs>,
-
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub id: Option<CredIdOrCredConfigId>,
-
-    /// Verifiable Credential Type identifier (for `dc+sd-jwt` format).
-    ///
-    /// Specifies the type of credential being requested.
+    /// Optional key proofs for credential binding.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vct: Option<String>,
+    pub proofs: Option<Proofs>,
 
-    /// Document type (for `mso_mdoc` format).
-    ///
-    /// Specifies the mdoc doctype being requested.
+    /// Optional parameters used to encrypt the Credential Response.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub doctype: Option<String>,
-
-    /// Claims to include in the credential.
-    ///
-    /// Allows the wallet to request specific claims to be disclosed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub claims: Option<serde_json::Value>,
+    pub credential_response_encryption: Option<CredentialResponseEncryption>,
 }
 
 impl CredentialRequest {
-    /// Creates a new credential request with the specified format.
-    pub fn new(format: impl Into<String>) -> Self {
+    /// Creates a new credential request.
+    pub fn new(id: CredIdOrCredConfigId) -> Self {
         Self {
-            format: format.into(),
-            proof: None,
-            id: None,
-            vct: None,
-            doctype: None,
-            claims: None,
+            id,
+            proofs: None,
+            credential_response_encryption: None,
         }
     }
 
-    /// Adds a JWT proof to the request.
+    /// Creates a request addressed by `credential_identifier`.
+    pub fn from_credential_identifier(id: impl Into<String>) -> Self {
+        Self::new(CredIdOrCredConfigId::credential_identifier(id))
+    }
+
+    /// Creates a request addressed by `credential_configuration_id`.
+    pub fn from_credential_configuration_id(id: impl Into<String>) -> Self {
+        Self::new(CredIdOrCredConfigId::credential_configuration_id(id))
+    }
+
+    /// Adds a JWT proof to the request's `proofs` object.
     pub fn with_jwt_proof(mut self, jwt: impl Into<String>) -> Self {
-        self.proof = Some(ProofOrProofs::Single {
-            proof: Proof::Jwt(JwtProof { jwt: jwt.into() }),
-        });
+        self.proofs = Some(self.proofs.take().unwrap_or_default().with_jwt(jwt));
         self
     }
 
+    /// Adds a Data Integrity proof to the request's `proofs` object.
+    pub fn with_di_vp_proof(mut self, di_vp: serde_json::Value) -> Self {
+        self.proofs = Some(self.proofs.take().unwrap_or_default().with_di_vp(di_vp));
+        self
+    }
+
+    /// Adds a key attestation proof to the request's `proofs` object.
+    pub fn with_attestation_proof(mut self, attestation: impl Into<String>) -> Self {
+        self.proofs = Some(
+            self.proofs
+                .take()
+                .unwrap_or_default()
+                .with_attestation(attestation),
+        );
+        self
+    }
+
+    /// Replaces the request `proofs` object.
     pub fn with_proofs(mut self, proofs: Proofs) -> Self {
-        self.proof = Some(ProofOrProofs::Multiple { proofs });
+        self.proofs = Some(proofs);
         self
     }
 
-    /// Adds a credential identifier to the request.
-    pub fn with_credential_identifier(mut self, id: impl Into<String>) -> Self {
-        self.id = Some(CredIdOrCredConfigId::CredentialIdentifier {
-            credential_identifier: id.into(),
-        });
+    /// Sets Credential Response encryption parameters.
+    pub fn with_credential_response_encryption(
+        mut self,
+        encryption: CredentialResponseEncryption,
+    ) -> Self {
+        self.credential_response_encryption = Some(encryption);
         self
     }
 
-    /// Adds a credential configuration ID to the request.
-    pub fn with_credential_configuration_id(mut self, id: impl Into<String>) -> Self {
-        self.id = Some(CredIdOrCredConfigId::CredentialConfigurationId {
-            credential_configuration_id: id.into(),
-        });
-        self
+    /// Returns the `credential_identifier` value when present.
+    pub fn credential_identifier(&self) -> Option<&str> {
+        self.id.as_credential_identifier()
     }
 
-    pub fn proof(&self) -> Option<&Proof> {
-        match self.proof.as_ref()? {
-            ProofOrProofs::Single { proof } => Some(proof),
-            ProofOrProofs::Multiple { .. } => None,
-        }
-    }
-
-    pub fn proofs(&self) -> Option<&Proofs> {
-        match self.proof.as_ref()? {
-            ProofOrProofs::Single { .. } => None,
-            ProofOrProofs::Multiple { proofs } => Some(proofs),
-        }
+    /// Returns the `credential_configuration_id` value when present.
+    pub fn credential_configuration_id(&self) -> Option<&str> {
+        self.id.as_credential_configuration_id()
     }
 
     /// Validates the credential request.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - `format` is empty
-    /// - `proof` is present but invalid
+    /// Returns an error if the identifier, proofs, or encryption parameters
+    /// are malformed.
     pub fn validate(&self) -> Result<(), Error> {
-        if self.format.is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidCredentialRequest,
-                "format must not be empty",
-            ));
+        self.id.validate()?;
+
+        if let Some(ref proofs) = self.proofs {
+            proofs.validate()?;
         }
 
-        if let Some(ref p) = self.proof {
-            match p {
-                ProofOrProofs::Single { proof } => proof.validate()?,
-                ProofOrProofs::Multiple { proofs } => proofs.validate()?,
-            }
+        if let Some(ref encryption) = self.credential_response_encryption {
+            encryption.validate()?;
         }
 
         Ok(())
@@ -301,61 +347,63 @@ impl CredentialRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn serialize_credential_request_with_jwt_proof() {
-        let request = CredentialRequest::new("vc+sd-jwt")
-            .with_jwt_proof("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...");
+        let request = CredentialRequest::from_credential_configuration_id("org.iso.18013.5.1.mDL")
+            .with_jwt_proof("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...")
+            .with_credential_response_encryption(CredentialResponseEncryption::new(
+                json!({ "kty": "EC", "crv": "P-256", "x": "abc", "y": "def" }),
+                "A256GCM",
+            ));
 
         let json = serde_json::to_string(&request).expect("Failed to serialize");
 
-        assert!(json.contains("\"format\":\"vc+sd-jwt\""));
-        assert!(json.contains("\"proof_type\":\"jwt\""));
-        assert!(json.contains("\"jwt\":\"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9"));
+        assert!(json.contains("\"credential_configuration_id\":\"org.iso.18013.5.1.mDL\""));
+        assert!(
+            json.contains("\"proofs\":{\"jwt\":[\"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...\"]}")
+        );
+        assert!(json.contains("\"credential_response_encryption\":"));
+        assert!(json.contains("\"enc\":\"A256GCM\""));
     }
 
     #[test]
     fn deserialize_credential_request() {
         let json = r#"{
-            "format": "vc+sd-jwt",
-            "proof": {
-                "proof_type": "jwt",
-                "jwt": "eyJhbGciOiJFUzI1NiJ9..."
+            "credential_identifier": "credential-123",
+            "proofs": {
+                "jwt": ["eyJhbGciOiJFUzI1NiJ9..."]
+            },
+            "credential_response_encryption": {
+                "jwk": {"kty": "OKP", "crv": "Ed25519", "x": "abc"},
+                "enc": "A256GCM",
+                "zip": "DEF"
             }
         }"#;
 
         let request: CredentialRequest = serde_json::from_str(json).expect("Failed to deserialize");
 
-        assert_eq!(request.format, "vc+sd-jwt");
-        assert!(request.proof().is_some());
-
-        let proof = request.proof().unwrap();
-        assert_eq!(proof.proof_type(), ProofType::Jwt);
+        assert_eq!(request.credential_identifier(), Some("credential-123"));
+        assert_eq!(request.credential_configuration_id(), None);
+        assert_eq!(
+            request.proofs.as_ref().unwrap().jwt,
+            vec!["eyJhbGciOiJFUzI1NiJ9..."]
+        );
+        assert_eq!(
+            request
+                .credential_response_encryption
+                .as_ref()
+                .unwrap()
+                .zip
+                .as_deref(),
+            Some("DEF")
+        );
     }
 
     #[test]
-    fn serialize_credential_request_with_vct() {
-        let mut request = CredentialRequest::new("dc+sd-jwt");
-        request.vct = Some("UniversityDegreeCredential".to_string());
-
-        let json = serde_json::to_string(&request).expect("Failed to serialize");
-
-        assert!(json.contains("\"vct\":\"UniversityDegreeCredential\""));
-    }
-
-    #[test]
-    fn serialize_credential_request_with_doctype() {
-        let mut request = CredentialRequest::new("mso_mdoc");
-        request.doctype = Some("org.iso.18013.5.1.mDL".to_string());
-
-        let json = serde_json::to_string(&request).expect("Failed to serialize");
-
-        assert!(json.contains("\"doctype\":\"org.iso.18013.5.1.mDL\""));
-    }
-
-    #[test]
-    fn validate_empty_format() {
-        let request = CredentialRequest::new("");
+    fn validate_empty_identifier() {
+        let request = CredentialRequest::from_credential_identifier("");
         let result = request.validate();
 
         assert!(result.is_err());
@@ -367,7 +415,73 @@ mod tests {
 
     #[test]
     fn validate_empty_jwt_proof() {
-        let request = CredentialRequest::new("vc+sd-jwt").with_jwt_proof("");
+        let request = CredentialRequest::from_credential_configuration_id("UniversityDegree")
+            .with_jwt_proof("");
+        let result = request.validate();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            ErrorKind::InvalidCredentialRequest
+        );
+    }
+
+    #[test]
+    fn validate_invalid_di_vp_proof() {
+        let request = CredentialRequest::from_credential_configuration_id("UniversityDegree")
+            .with_di_vp_proof(serde_json::Value::String("not-an-object".to_string()));
+        let result = request.validate();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            ErrorKind::InvalidCredentialRequest
+        );
+    }
+
+    #[test]
+    fn validate_multiple_attestation_proofs() {
+        let request = CredentialRequest::from_credential_configuration_id("UniversityDegree")
+            .with_proofs(
+                Proofs::default()
+                    .with_attestation("attestation-1")
+                    .with_attestation("attestation-2"),
+            );
+
+        let result = request.validate();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            ErrorKind::InvalidCredentialRequest
+        );
+    }
+
+    #[test]
+    fn validate_multiple_proof_types() {
+        let request = CredentialRequest::from_credential_configuration_id("UniversityDegree")
+            .with_proofs(
+                Proofs::default()
+                    .with_jwt("valid-jwt-token")
+                    .with_di_vp(json!({"type": ["VerifiablePresentation"]})),
+            );
+
+        let result = request.validate();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            ErrorKind::InvalidCredentialRequest
+        );
+    }
+
+    #[test]
+    fn validate_invalid_response_encryption() {
+        let request = CredentialRequest::from_credential_configuration_id("UniversityDegree")
+            .with_credential_response_encryption(CredentialResponseEncryption::new(
+                serde_json::Value::String("not-a-jwk-object".to_string()),
+                "A256GCM",
+            ));
 
         let result = request.validate();
 
@@ -380,45 +494,13 @@ mod tests {
 
     #[test]
     fn validate_valid_request() {
-        let request = CredentialRequest::new("vc+sd-jwt").with_jwt_proof("valid-jwt-token");
+        let request = CredentialRequest::from_credential_configuration_id("UniversityDegree")
+            .with_proofs(Proofs::default().with_jwt("valid-jwt-token"))
+            .with_credential_response_encryption(
+                CredentialResponseEncryption::new(json!({ "kty": "EC" }), "A256GCM")
+                    .with_zip("DEF"),
+            );
 
         assert!(request.validate().is_ok());
-    }
-
-    #[test]
-    fn proof_type_serialization() {
-        assert_eq!(serde_json::to_string(&ProofType::Jwt).unwrap(), "\"jwt\"");
-        assert_eq!(
-            serde_json::to_string(&ProofType::DiVp).unwrap(),
-            "\"di_vp\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ProofType::Attestation).unwrap(),
-            "\"attestation\""
-        );
-    }
-
-    #[test]
-    fn di_vp_proof_serialization() {
-        let proof = Proof::DiVp(DiVpProof {
-            di_vp: serde_json::json!({"@context": "..."}),
-        });
-
-        let json = serde_json::to_string(&proof).expect("Failed to serialize");
-
-        assert!(json.contains("\"proof_type\":\"di_vp\""));
-        assert!(json.contains("\"di_vp\":{"));
-    }
-
-    #[test]
-    fn attestation_proof_serialization() {
-        let proof = Proof::Attestation(AttestationProof {
-            attestation: "attestation-jwt".to_string(),
-        });
-
-        let json = serde_json::to_string(&proof).expect("Failed to serialize");
-
-        assert!(json.contains("\"proof_type\":\"attestation\""));
-        assert!(json.contains("\"attestation\":\"attestation-jwt\""));
     }
 }
