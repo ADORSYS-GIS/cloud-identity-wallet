@@ -1,7 +1,4 @@
-//! Credential Response data models for OpenID4VCI.
-//!
-//! This module implements the response data models as defined in
-//! [OpenID4VCI Section 8.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-response).
+//! Credential Response models for OpenID4VCI §§8.3, 9.2.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +18,89 @@ impl CredentialObject {
 
     pub fn new_string(credential: impl Into<String>) -> Self {
         Self::new(serde_json::Value::String(credential.into()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct RawCredentialResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credentials: Option<Vec<CredentialObject>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interval: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notification_id: Option<String>,
+}
+
+enum ParsedCredentialResponse {
+    Immediate(ImmediateCredentialResponse),
+    Deferred(DeferredPending),
+}
+
+fn immediate_from_parts(
+    credentials: Vec<CredentialObject>,
+    notification_id: Option<String>,
+) -> Result<ImmediateCredentialResponse, String> {
+    if credentials.is_empty() {
+        return Err("credentials must contain at least one credential".to_string());
+    }
+
+    Ok(ImmediateCredentialResponse {
+        credentials,
+        notification_id,
+    })
+}
+
+fn deferred_from_parts(
+    transaction_id: String,
+    interval: u64,
+    notification_id: Option<String>,
+) -> Result<DeferredPending, String> {
+    if interval == 0 {
+        return Err("interval must be positive".to_string());
+    }
+
+    if notification_id.is_some() {
+        return Err("notification_id must not be used when credentials are absent".to_string());
+    }
+
+    Ok(DeferredPending {
+        transaction_id,
+        interval,
+    })
+}
+
+fn parse_raw_credential_response(
+    raw: RawCredentialResponse,
+) -> Result<ParsedCredentialResponse, String> {
+    match (
+        raw.credentials,
+        raw.transaction_id,
+        raw.interval,
+        raw.notification_id,
+    ) {
+        (Some(credentials), None, None, notification_id) => {
+            immediate_from_parts(credentials, notification_id)
+                .map(ParsedCredentialResponse::Immediate)
+        }
+        (None, Some(transaction_id), Some(interval), notification_id) => {
+            deferred_from_parts(transaction_id, interval, notification_id)
+                .map(ParsedCredentialResponse::Deferred)
+        }
+        (Some(_), _, Some(_), _) | (Some(_), Some(_), _, _) => {
+            Err("credentials is mutually exclusive with transaction_id and interval".to_string())
+        }
+        (None, Some(_), None, _) | (None, None, Some(_), _) => {
+            Err("interval and transaction_id must be used together".to_string())
+        }
+        (None, None, None, Some(_)) => {
+            Err("notification_id must not be used when credentials are absent".to_string())
+        }
+        (None, None, None, None) => Err(
+            "credential response must contain either credentials or transaction_id with interval"
+                .to_string(),
+        ),
     }
 }
 
@@ -73,28 +153,88 @@ impl DeferredPending {
 /// Per §8.3, this is either an immediate response with `credentials`, or a deferred response
 /// with `transaction_id` and `interval`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(try_from = "RawCredentialResponse", into = "RawCredentialResponse")]
 pub enum CredentialResponse {
     Immediate(ImmediateCredentialResponse),
     Deferred(DeferredPending),
+}
+
+impl TryFrom<RawCredentialResponse> for CredentialResponse {
+    type Error = String;
+
+    fn try_from(raw: RawCredentialResponse) -> Result<Self, Self::Error> {
+        match parse_raw_credential_response(raw)? {
+            ParsedCredentialResponse::Immediate(response) => Ok(Self::Immediate(response)),
+            ParsedCredentialResponse::Deferred(response) => Ok(Self::Deferred(response)),
+        }
+    }
+}
+
+impl From<CredentialResponse> for RawCredentialResponse {
+    fn from(value: CredentialResponse) -> Self {
+        match value {
+            CredentialResponse::Immediate(response) => Self {
+                credentials: Some(response.credentials),
+                transaction_id: None,
+                interval: None,
+                notification_id: response.notification_id,
+            },
+            CredentialResponse::Deferred(response) => Self {
+                credentials: None,
+                transaction_id: Some(response.transaction_id),
+                interval: Some(response.interval),
+                notification_id: None,
+            },
+        }
+    }
 }
 
 /// The two possible outcomes when polling the deferred credential endpoint.
 ///
 /// Defined in [OpenID4VCI §9.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-deferred-credential-endpoint).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(try_from = "RawCredentialResponse", into = "RawCredentialResponse")]
 pub enum DeferredCredentialResult {
-    // Pending MUST come first — serde tries variants in order.
     /// The credential is not yet available. Retry after `interval` seconds.
     Pending(DeferredPending),
     /// The credential is ready.
     Ready(ImmediateCredentialResponse),
 }
 
+impl TryFrom<RawCredentialResponse> for DeferredCredentialResult {
+    type Error = String;
+
+    fn try_from(raw: RawCredentialResponse) -> Result<Self, Self::Error> {
+        match parse_raw_credential_response(raw)? {
+            ParsedCredentialResponse::Immediate(response) => Ok(Self::Ready(response)),
+            ParsedCredentialResponse::Deferred(response) => Ok(Self::Pending(response)),
+        }
+    }
+}
+
+impl From<DeferredCredentialResult> for RawCredentialResponse {
+    fn from(value: DeferredCredentialResult) -> Self {
+        match value {
+            DeferredCredentialResult::Pending(response) => Self {
+                credentials: None,
+                transaction_id: Some(response.transaction_id),
+                interval: Some(response.interval),
+                notification_id: None,
+            },
+            DeferredCredentialResult::Ready(response) => Self {
+                credentials: Some(response.credentials),
+                transaction_id: None,
+                interval: None,
+                notification_id: response.notification_id,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn serialize_credential_response() {
@@ -102,10 +242,18 @@ mod tests {
             CredentialObject::new_string("eyJhbGciOiJFUzI1NiJ9..."),
         ]));
 
-        let json = serde_json::to_string(&response).expect("Failed to serialize");
+        let json = serde_json::to_value(&response).expect("Failed to serialize");
 
-        assert!(json.contains("\"credentials\":[{"));
-        assert!(json.contains("\"credential\":\"eyJhbGciOiJFUzI1NiJ9"));
+        assert_eq!(
+            json,
+            json!({
+                "credentials": [
+                    {
+                        "credential": "eyJhbGciOiJFUzI1NiJ9..."
+                    }
+                ]
+            })
+        );
     }
 
     #[test]
@@ -135,10 +283,15 @@ mod tests {
     fn serialize_deferred_pending() {
         let response = DeferredPending::new("tx-123", 5);
 
-        let json = serde_json::to_string(&response).expect("Failed to serialize");
+        let json = serde_json::to_value(&response).expect("Failed to serialize");
 
-        assert!(json.contains("\"transaction_id\":\"tx-123\""));
-        assert!(json.contains("\"interval\":5"));
+        assert_eq!(
+            json,
+            json!({
+                "transaction_id": "tx-123",
+                "interval": 5
+            })
+        );
     }
 
     #[test]
@@ -194,5 +347,37 @@ mod tests {
             }
             DeferredCredentialResult::Pending(_) => panic!("Expected Ready variant"),
         }
+    }
+
+    #[test]
+    fn deserialize_credential_response_rejects_mixed_shapes() {
+        let json = r#"{
+            "credentials": [
+                {"credential": "eyJhbGciOiJFUzI1NiJ9..."}
+            ],
+            "transaction_id": "tx-123",
+            "interval": 5
+        }"#;
+
+        let error = serde_json::from_str::<CredentialResponse>(json).unwrap_err();
+
+        assert!(error.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn deserialize_deferred_result_rejects_notification_without_credentials() {
+        let json = r#"{
+            "transaction_id": "tx-123",
+            "interval": 5,
+            "notification_id": "notify-123"
+        }"#;
+
+        let error = serde_json::from_str::<DeferredCredentialResult>(json).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("notification_id must not be used when credentials are absent")
+        );
     }
 }

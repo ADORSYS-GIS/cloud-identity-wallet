@@ -1,14 +1,8 @@
-//! Credential Error Response data models for OpenID4VCI.
-//!
-//! This module implements the error response models as defined in
-//! [OpenID4VCI Section 8.3.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-error-response).
+//! Credential error models for OpenID4VCI §§8.3.1, 9.3.
 
 use serde::{Deserialize, Serialize};
 
-/// Credential error codes.
-///
-/// Error codes returned by the credential endpoint.
-/// Defined in [OpenID4VCI Section 8.3.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-error-response).
+/// Normative credential-endpoint error codes from OpenID4VCI §8.3.1.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialErrorCode {
@@ -42,9 +36,7 @@ impl std::fmt::Display for CredentialErrorCode {
     }
 }
 
-/// Deferred credential error codes.
-///
-/// Defined in [OpenID4VCI Section 9.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-deferred-credential-error-response).
+/// Deferred-endpoint error codes from OpenID4VCI §9.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeferredCredentialErrorCode {
@@ -153,16 +145,22 @@ impl std::error::Error for DeferredCredentialErrorResponse {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn serialize_credential_error_response() {
         let error = CredentialErrorResponse::new(CredentialErrorCode::InvalidProof)
             .with_description("The proof is invalid or missing");
 
-        let json = serde_json::to_string(&error).expect("Failed to serialize");
+        let json = serde_json::to_value(&error).expect("Failed to serialize");
 
-        assert!(json.contains("\"error\":\"invalid_proof\""));
-        assert!(json.contains("\"error_description\":\"The proof is invalid or missing\""));
+        assert_eq!(
+            json,
+            json!({
+                "error": "invalid_proof",
+                "error_description": "The proof is invalid or missing"
+            })
+        );
     }
 
     #[test]
@@ -205,5 +203,79 @@ mod tests {
             format!("{}", DeferredCredentialErrorCode::InvalidTransactionId),
             "invalid_transaction_id"
         );
+    }
+
+    #[test]
+    fn credential_error_codes_match_spec_wire_values() {
+        let cases = [
+            (
+                CredentialErrorCode::InvalidCredentialRequest,
+                "invalid_credential_request",
+            ),
+            (
+                CredentialErrorCode::UnknownCredentialConfiguration,
+                "unknown_credential_configuration",
+            ),
+            (
+                CredentialErrorCode::UnknownCredentialIdentifier,
+                "unknown_credential_identifier",
+            ),
+            (CredentialErrorCode::InvalidProof, "invalid_proof"),
+            (CredentialErrorCode::InvalidNonce, "invalid_nonce"),
+            (
+                CredentialErrorCode::InvalidEncryptionParameters,
+                "invalid_encryption_parameters",
+            ),
+            (
+                CredentialErrorCode::CredentialRequestDenied,
+                "credential_request_denied",
+            ),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(
+                serde_json::to_value(code).expect("Failed to serialize"),
+                serde_json::Value::String(expected.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn deferred_error_codes_match_spec_wire_values() {
+        let cases = [
+            (
+                DeferredCredentialErrorCode::InvalidCredentialRequest,
+                "invalid_credential_request",
+            ),
+            (
+                DeferredCredentialErrorCode::UnknownCredentialConfiguration,
+                "unknown_credential_configuration",
+            ),
+            (
+                DeferredCredentialErrorCode::UnknownCredentialIdentifier,
+                "unknown_credential_identifier",
+            ),
+            (DeferredCredentialErrorCode::InvalidProof, "invalid_proof"),
+            (DeferredCredentialErrorCode::InvalidNonce, "invalid_nonce"),
+            (
+                DeferredCredentialErrorCode::InvalidEncryptionParameters,
+                "invalid_encryption_parameters",
+            ),
+            (
+                DeferredCredentialErrorCode::CredentialRequestDenied,
+                "credential_request_denied",
+            ),
+            (
+                DeferredCredentialErrorCode::InvalidTransactionId,
+                "invalid_transaction_id",
+            ),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(
+                serde_json::to_value(code).expect("Failed to serialize"),
+                serde_json::Value::String(expected.to_string())
+            );
+        }
     }
 }
