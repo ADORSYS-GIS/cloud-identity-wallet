@@ -1,18 +1,10 @@
-//! Credential Request data models for OpenID4VCI.
-//!
-//! This module implements the request data models as defined in
-//! [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
+//! Credential Request models for OpenID4VCI §8.2.
 
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, ErrorKind};
 
-/// Multiple key proofs for requesting several credentials in one request.
-///
-/// The `proofs` field in a Credential Request allows requesting multiple
-/// credentials in a single call to the credential endpoint using exactly one
-/// proof type key.
-/// Defined in [OpenID4VCI §8.2.1.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
+/// The `proofs` object defined by OpenID4VCI §8.2.1.1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Proofs {
     /// JWT proofs — one entry per requested credential.
@@ -113,9 +105,7 @@ impl Proofs {
     }
 }
 
-/// Response encryption parameters supplied by the Wallet.
-///
-/// Defined in [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
+/// Response-encryption parameters supplied by the Wallet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialResponseEncryption {
     /// Single public JWK used to encrypt the Credential Response.
@@ -172,12 +162,61 @@ impl CredentialResponseEncryption {
     }
 }
 
-/// Mutually exclusive credential identifiers defined by OpenID4VCI §8.2.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct RawCredIdOrCredConfigId {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credential_identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credential_configuration_id: Option<String>,
+}
+
+/// Mutually exclusive credential selectors defined by OpenID4VCI §8.2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(try_from = "RawCredIdOrCredConfigId", into = "RawCredIdOrCredConfigId")]
 pub enum CredIdOrCredConfigId {
     CredentialIdentifier { credential_identifier: String },
     CredentialConfigurationId { credential_configuration_id: String },
+}
+
+impl TryFrom<RawCredIdOrCredConfigId> for CredIdOrCredConfigId {
+    type Error = String;
+
+    fn try_from(raw: RawCredIdOrCredConfigId) -> Result<Self, Self::Error> {
+        match (raw.credential_identifier, raw.credential_configuration_id) {
+            (Some(credential_identifier), None) => Ok(Self::CredentialIdentifier {
+                credential_identifier,
+            }),
+            (None, Some(credential_configuration_id)) => Ok(Self::CredentialConfigurationId {
+                credential_configuration_id,
+            }),
+            (Some(_), Some(_)) => Err(
+                "credential_identifier and credential_configuration_id are mutually exclusive"
+                    .to_string(),
+            ),
+            (None, None) => {
+                Err("credential_identifier or credential_configuration_id is required".to_string())
+            }
+        }
+    }
+}
+
+impl From<CredIdOrCredConfigId> for RawCredIdOrCredConfigId {
+    fn from(value: CredIdOrCredConfigId) -> Self {
+        match value {
+            CredIdOrCredConfigId::CredentialIdentifier {
+                credential_identifier,
+            } => Self {
+                credential_identifier: Some(credential_identifier),
+                credential_configuration_id: None,
+            },
+            CredIdOrCredConfigId::CredentialConfigurationId {
+                credential_configuration_id,
+            } => Self {
+                credential_identifier: None,
+                credential_configuration_id: Some(credential_configuration_id),
+            },
+        }
+    }
 }
 
 impl CredIdOrCredConfigId {
@@ -235,11 +274,7 @@ impl CredIdOrCredConfigId {
     }
 }
 
-/// Credential request payload.
-///
-/// The request sent to the credential endpoint to obtain a credential.
-/// This is the main request object defined in
-/// [OpenID4VCI Section 8.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request).
+/// The JSON body sent to the credential endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRequest {
     /// Requested credential identifier or configuration identifier.
@@ -358,14 +393,21 @@ mod tests {
                 "A256GCM",
             ));
 
-        let json = serde_json::to_string(&request).expect("Failed to serialize");
+        let json = serde_json::to_value(&request).expect("Failed to serialize");
 
-        assert!(json.contains("\"credential_configuration_id\":\"org.iso.18013.5.1.mDL\""));
-        assert!(
-            json.contains("\"proofs\":{\"jwt\":[\"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...\"]}")
+        assert_eq!(
+            json,
+            json!({
+                "credential_configuration_id": "org.iso.18013.5.1.mDL",
+                "proofs": {
+                    "jwt": ["eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."]
+                },
+                "credential_response_encryption": {
+                    "jwk": { "kty": "EC", "crv": "P-256", "x": "abc", "y": "def" },
+                    "enc": "A256GCM"
+                }
+            })
         );
-        assert!(json.contains("\"credential_response_encryption\":"));
-        assert!(json.contains("\"enc\":\"A256GCM\""));
     }
 
     #[test]
@@ -399,6 +441,18 @@ mod tests {
                 .as_deref(),
             Some("DEF")
         );
+    }
+
+    #[test]
+    fn deserialize_credential_request_rejects_both_identifier_fields() {
+        let json = r#"{
+            "credential_identifier": "credential-123",
+            "credential_configuration_id": "UniversityDegree"
+        }"#;
+
+        let error = serde_json::from_str::<CredentialRequest>(json).unwrap_err();
+
+        assert!(error.to_string().contains("mutually exclusive"));
     }
 
     #[test]
