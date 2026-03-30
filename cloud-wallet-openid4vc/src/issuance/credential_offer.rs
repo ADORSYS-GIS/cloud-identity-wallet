@@ -564,16 +564,16 @@ pub async fn resolve_by_reference(
     const MAX_CREDENTIAL_OFFER_SIZE: u64 = 64 * 1024; // 64 KB
 
     // Check Content-Length header before reading body
-    if let Some(content_length) = response.content_length() {
-        if content_length > MAX_CREDENTIAL_OFFER_SIZE {
-            return Err(Error::message(
-                ErrorKind::CredentialOfferFetchFailed,
-                format!(
-                    "credential offer body size {} bytes exceeds maximum allowed {} bytes",
-                    content_length, MAX_CREDENTIAL_OFFER_SIZE
-                ),
-            ));
-        }
+    if let Some(content_length) = response.content_length()
+        && content_length > MAX_CREDENTIAL_OFFER_SIZE
+    {
+        return Err(Error::message(
+            ErrorKind::CredentialOfferFetchFailed,
+            format!(
+                "credential offer body size {} bytes exceeds maximum allowed {} bytes",
+                content_length, MAX_CREDENTIAL_OFFER_SIZE
+            ),
+        ));
     }
 
     // Get body as bytes and verify actual size (in case Content-Length was absent/wrong)
