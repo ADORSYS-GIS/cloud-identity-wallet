@@ -376,7 +376,7 @@ impl CredentialOfferUri {
         }
 
         Err(Error::message(
-            ErrorKind::InvalidCredentialOffer,
+            ErrorKind::MalformedCredentialOffer,
             "missing credential_offer or credential_offer_uri parameter",
         ))
     }
@@ -503,11 +503,38 @@ pub async fn resolve_by_reference(
     }
 
     // Fetch the offer
+    // Note: Redirect policy is configured at the Client level, not per-request.
+    // We re-validate the final URL after the request to detect redirect attacks.
     let response = http_client
         .get(uri)
         .send()
         .await
         .map_err(|e| Error::new(ErrorKind::CredentialOfferFetchFailed, e))?;
+
+    // Re-validate the final URL to detect redirect attacks.
+    // If the caller passed a redirect-following client, a 30x could bounce
+    // this request to a different host. We check that the final URL still
+    // uses HTTPS and matches the originally validated host.
+    let final_url = response.url().clone();
+    if final_url.scheme() != "https" {
+        return Err(Error::message(
+            ErrorKind::InvalidCredentialOfferUri,
+            format!(
+                "redirect changed scheme from https to '{}'",
+                final_url.scheme()
+            ),
+        ));
+    }
+    if final_url.host() != parsed.host() {
+        return Err(Error::message(
+            ErrorKind::InvalidCredentialOfferUri,
+            format!(
+                "redirect changed host from '{}' to '{}'",
+                parsed.host().map(|h| h.to_string()).unwrap_or_default(),
+                final_url.host().map(|h| h.to_string()).unwrap_or_default()
+            ),
+        ));
+    }
 
     // Check response status
     if !response.status().is_success() {
@@ -531,11 +558,43 @@ pub async fn resolve_by_reference(
         ));
     }
 
-    // Get response body
-    let body = response
-        .text()
+    // Get response body with size limit to prevent unbounded memory allocation.
+    // Credential offers are typically small JSON objects; a 64KB limit is generous
+    // while protecting against malicious endpoints returning arbitrarily large payloads.
+    const MAX_CREDENTIAL_OFFER_SIZE: u64 = 64 * 1024; // 64 KB
+
+    // Check Content-Length header before reading body
+    if let Some(content_length) = response.content_length() {
+        if content_length > MAX_CREDENTIAL_OFFER_SIZE {
+            return Err(Error::message(
+                ErrorKind::CredentialOfferFetchFailed,
+                format!(
+                    "credential offer body size {} bytes exceeds maximum allowed {} bytes",
+                    content_length, MAX_CREDENTIAL_OFFER_SIZE
+                ),
+            ));
+        }
+    }
+
+    // Get body as bytes and verify actual size (in case Content-Length was absent/wrong)
+    let bytes = response
+        .bytes()
         .await
         .map_err(|e| Error::new(ErrorKind::CredentialOfferFetchFailed, e))?;
+
+    if bytes.len() > MAX_CREDENTIAL_OFFER_SIZE as usize {
+        return Err(Error::message(
+            ErrorKind::CredentialOfferFetchFailed,
+            format!(
+                "credential offer body size {} bytes exceeds maximum allowed {} bytes",
+                bytes.len(),
+                MAX_CREDENTIAL_OFFER_SIZE
+            ),
+        ));
+    }
+
+    // Convert bytes to text
+    let body = String::from_utf8_lossy(&bytes).into_owned();
 
     // Security check: reject JWT with "alg": "none"
     if looks_like_jwt_with_none(&body) {
