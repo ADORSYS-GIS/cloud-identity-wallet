@@ -7,6 +7,21 @@ use crate::errors::{Error, ErrorKind};
 
 const JWT_PROOF_TYPE_HEADER: &str = "openid4vci-proof+jwt";
 
+/// Returns true if the algorithm is forbidden per OpenID4VCI spec.
+/// Forbidden algorithms are: "none" (case-insensitive) and symmetric/MAC algorithms.
+/// Symmetric algorithms are identified by the "HS" prefix (HMAC) in IANA.JOSE registry.
+fn is_forbidden_algorithm(alg: &str) -> bool {
+    let alg_lower = alg.to_lowercase();
+    // "none" is forbidden
+    if alg_lower == "none" {
+        return true;
+    }
+    // Symmetric/MAC algorithms use "HS" prefix (HMAC-SHA variants: HS256, HS384, HS512)
+    // Also check for other symmetric algorithms: "A*GCM", "A*CBC" (AES) used for encryption
+    // but these are typically not used for signing. Focus on HMAC variants.
+    alg_lower.starts_with("hs")
+}
+
 /// Proof type identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,10 +64,20 @@ impl JwtProofHeader {
             ));
         }
 
-        if self.alg.is_empty() || self.alg.eq_ignore_ascii_case("none") {
+        if self.alg.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
-                "JWT proof alg must not be empty or 'none'",
+                "JWT proof alg must not be empty",
+            ));
+        }
+        // Appendix F.1: alg MUST NOT be none or an identifier for a symmetric algorithm (MAC)
+        if is_forbidden_algorithm(&self.alg) {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                format!(
+                    "JWT proof alg must not be 'none' or a symmetric/MAC algorithm, got '{}'",
+                    self.alg
+                ),
             ));
         }
 
@@ -141,9 +166,17 @@ impl JwtProofClaims {
 }
 
 /// Compact-serialized JWT string entry in `proofs.jwt` array.
+/// Uses transparent serialization to match spec wire format: `{"jwt": ["aaa.bbb.ccc"]}`
+/// instead of `{"jwt": [{"jwt": "aaa.bbb.ccc"}]}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JwtProof {
-    pub jwt: String,
+#[serde(transparent)]
+pub struct JwtProof(pub String);
+
+impl JwtProof {
+    /// Returns the inner JWT string.
+    pub fn jwt(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Data Integrity Proof. challenge required when c_nonce provided, MUST NOT be present otherwise.
@@ -170,10 +203,14 @@ pub struct DataIntegrityProof {
 
 impl DataIntegrityProof {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.proof_type.is_empty() {
+        // VC Data Integrity 1.0 requires type to be exactly "DataIntegrityProof"
+        if self.proof_type != "DataIntegrityProof" {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
-                "type must not be empty",
+                format!(
+                    "type must be 'DataIntegrityProof', got '{}'",
+                    self.proof_type
+                ),
             ));
         }
         if self.cryptosuite.is_empty() {
@@ -290,13 +327,11 @@ impl DiVpProof {
     }
 
     /// Validates challenge against c_nonce for all proofs.
+    /// Also validates VP-level constraints by calling validate() first.
     pub fn validate_with_nonce(&self, c_nonce: Option<&str>) -> Result<(), Error> {
-        if self.proof.is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidProof,
-                "di_vp must contain at least one proof",
-            ));
-        }
+        // First validate VP-level constraints (@context, type, non-empty proof)
+        self.validate()?;
+        // Then validate challenge/nonce requirements for each proof
         for proof in &self.proof {
             proof.validate_with_nonce(c_nonce)?;
         }
@@ -304,21 +339,29 @@ impl DiVpProof {
     }
 }
 
-/// Key attestation JWT. typ header must be openid4vci-proof+jwt with key_attestation header.
+/// Key attestation JWT. typ header must be key-attestation+jwt.
+/// Uses transparent serialization to match spec wire format: `{"attestation": ["aaa.bbb.ccc"]}`
+/// instead of `{"attestation": [{"attestation": "aaa.bbb.ccc"}]}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AttestationProof {
-    pub attestation: String,
+#[serde(transparent)]
+pub struct AttestationProof(pub String);
+
+impl AttestationProof {
+    /// Returns the inner attestation JWT string.
+    pub fn attestation(&self) -> &str {
+        &self.0
+    }
 }
 
 impl AttestationProof {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.attestation.is_empty() {
+        if self.0.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
                 "attestation must not be empty",
             ));
         }
-        let parts: Vec<&str> = self.attestation.splitn(4, '.').collect();
+        let parts: Vec<&str> = self.0.splitn(4, '.').collect();
         if parts.len() != 3 {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
@@ -358,10 +401,20 @@ impl KeyAttestationHeader {
                 ),
             ));
         }
-        if self.alg.is_empty() || self.alg.eq_ignore_ascii_case("none") {
+        if self.alg.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidProof,
-                "Key attestation alg must not be empty or 'none'",
+                "Key attestation alg must not be empty",
+            ));
+        }
+        // Appendix D.1: alg MUST NOT be none or an identifier for a symmetric algorithm (MAC)
+        if is_forbidden_algorithm(&self.alg) {
+            return Err(Error::message(
+                ErrorKind::InvalidProof,
+                format!(
+                    "Key attestation alg must not be 'none' or a symmetric/MAC algorithm, got '{}'",
+                    self.alg
+                ),
             ));
         }
         Ok(())
@@ -599,10 +652,43 @@ mod tests {
             key_attestation: None,
             trust_chain: None,
         };
-        assert_eq!(
-            header.validate().unwrap_err().kind(),
-            ErrorKind::InvalidProof
-        );
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("symmetric/MAC"));
+    }
+
+    #[test]
+    fn rejects_alg_hs256() {
+        // Appendix F.1: alg MUST NOT be a symmetric/MAC algorithm
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "HS256".to_string(),
+            jwk: None,
+            kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("symmetric/MAC"));
+    }
+
+    #[test]
+    fn rejects_alg_hs512() {
+        // Test other HMAC variants
+        let header = JwtProofHeader {
+            typ: "openid4vci-proof+jwt".to_string(),
+            alg: "HS512".to_string(),
+            jwk: None,
+            kid: Some("key-1".to_string()),
+            x5c: None,
+            key_attestation: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("symmetric/MAC"));
     }
 
     #[test]
@@ -808,6 +894,46 @@ mod tests {
         };
         let json = serde_json::to_string(&claims).unwrap();
         assert!(json.contains("\"iss\":\"client123\""));
+    }
+
+    // ── JwtProof (transparent newtype) ──────────────────────────────────────────
+
+    #[test]
+    fn jwt_proof_serializes_as_string() {
+        // Transparent newtype serializes as just a string
+        let proof = JwtProof("aaa.bbb.ccc".to_string());
+        let json = serde_json::to_string(&proof).unwrap();
+        assert_eq!(json, "\"aaa.bbb.ccc\"");
+    }
+
+    #[test]
+    fn jwt_proof_deserializes_from_string() {
+        // Transparent newtype deserializes from just a string
+        let proof: JwtProof = serde_json::from_str("\"aaa.bbb.ccc\"").unwrap();
+        assert_eq!(proof.0, "aaa.bbb.ccc");
+    }
+
+    #[test]
+    fn proofs_deserializes_spec_compliant_jwt_format() {
+        // Spec F.1: proofs.jwt is an array of JWT strings
+        let json = r#"{"jwt": ["aaa.bbb.ccc", "ddd.eee.fff"]}"#;
+        let proofs: Proofs = serde_json::from_str(json).unwrap();
+        assert!(proofs.jwt.is_some());
+        let jwt_proofs = proofs.jwt.unwrap();
+        assert_eq!(jwt_proofs.len(), 2);
+        assert_eq!(jwt_proofs[0].0, "aaa.bbb.ccc");
+        assert_eq!(jwt_proofs[1].0, "ddd.eee.fff");
+    }
+
+    #[test]
+    fn proofs_deserializes_spec_compliant_attestation_format() {
+        // Spec F.3: proofs.attestation is an array containing exactly one JWT string
+        let json = r#"{"attestation": ["aaa.bbb.ccc"]}"#;
+        let proofs: Proofs = serde_json::from_str(json).unwrap();
+        assert!(proofs.attestation.is_some());
+        let att_proofs = proofs.attestation.unwrap();
+        assert_eq!(att_proofs.len(), 1);
+        assert_eq!(att_proofs[0].0, "aaa.bbb.ccc");
     }
 
     // ── DiVpProof ─────────────────────────────────────────────────────────────
@@ -1238,21 +1364,87 @@ mod tests {
         assert!(proof.validate_with_nonce(None).is_ok());
     }
 
+    #[test]
+    fn di_vp_validate_with_nonce_checks_vp_level_constraints() {
+        // validate_with_nonce should also check VP-level constraints
+        // This VP has empty @context which should fail
+        let proof = DiVpProof {
+            context: vec![], // empty @context - should fail
+            types: vec!["VerifiablePresentation".to_string()],
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: Some("server-nonce".to_string()),
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate_with_nonce(Some("server-nonce")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("@context"));
+    }
+
+    #[test]
+    fn di_vp_validate_with_nonce_checks_type_constraint() {
+        // validate_with_nonce should check that type includes VerifiablePresentation
+        let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["SomeOtherType".to_string()], // missing VerifiablePresentation
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "DataIntegrityProof".to_string(),
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: Some("server-nonce".to_string()),
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate_with_nonce(Some("server-nonce")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("VerifiablePresentation"));
+    }
+
+    #[test]
+    fn rejects_di_vp_proof_wrong_type_not_dataintegrityproof() {
+        // VC Data Integrity 1.0 requires type to be exactly "DataIntegrityProof"
+        let proof = DiVpProof {
+            context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
+            types: vec!["VerifiablePresentation".to_string()],
+            holder: None,
+            proof: vec![DataIntegrityProof {
+                proof_type: "Ed25519Signature2020".to_string(), // wrong type
+                cryptosuite: "eddsa-2022".to_string(),
+                proof_purpose: "authentication".to_string(),
+                verification_method: "did:key:z6Mk#z6Mk".to_string(),
+                created: "2023-03-01T14:56:29.280619Z".to_string(),
+                challenge: None,
+                domain: "https://issuer.example.com".to_string(),
+                proof_value: "z5hrbHz".to_string(),
+            }],
+        };
+        let err = proof.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("DataIntegrityProof"));
+    }
+
     // ── AttestationProof ──────────────────────────────────────────────────────
 
     #[test]
     fn valid_attestation_proof() {
-        let proof = AttestationProof {
-            attestation: "aaa.bbb.ccc".to_string(),
-        };
+        let proof = AttestationProof("aaa.bbb.ccc".to_string());
         assert!(proof.validate().is_ok());
     }
 
     #[test]
     fn rejects_empty_attestation_string() {
-        let proof = AttestationProof {
-            attestation: String::new(),
-        };
+        let proof = AttestationProof(String::new());
         assert_eq!(
             proof.validate().unwrap_err().kind(),
             ErrorKind::InvalidProof
@@ -1261,28 +1453,25 @@ mod tests {
 
     #[test]
     fn rejects_attestation_without_three_parts() {
-        let proof = AttestationProof {
-            attestation: "aaa.bbb".to_string(),
-        };
+        let proof = AttestationProof("aaa.bbb".to_string());
         let err = proof.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
         assert!(err.to_string().contains("three"));
     }
 
     #[test]
-    fn attestation_proof_serializes_with_attestation_key() {
-        let proof = AttestationProof {
-            attestation: "aaa.bbb.ccc".to_string(),
-        };
+    fn attestation_proof_serializes_as_string() {
+        // Transparent newtype serializes as just a string
+        let proof = AttestationProof("aaa.bbb.ccc".to_string());
         let json = serde_json::to_string(&proof).unwrap();
-        assert!(json.contains("\"attestation\":\"aaa.bbb.ccc\""));
+        assert_eq!(json, "\"aaa.bbb.ccc\"");
     }
 
     #[test]
-    fn attestation_proof_deserializes_correctly() {
-        let json = r#"{"attestation":"aaa.bbb.ccc"}"#;
-        let proof: AttestationProof = serde_json::from_str(json).unwrap();
-        assert_eq!(proof.attestation, "aaa.bbb.ccc");
+    fn attestation_proof_deserializes_from_string() {
+        // Transparent newtype deserializes from just a string
+        let proof: AttestationProof = serde_json::from_str("\"aaa.bbb.ccc\"").unwrap();
+        assert_eq!(proof.0, "aaa.bbb.ccc");
     }
 
     // ── KeyAttestationHeader ──────────────────────────────────────────────────
@@ -1325,6 +1514,21 @@ mod tests {
         let err = header.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidProof);
         assert!(err.to_string().contains("none"));
+    }
+
+    #[test]
+    fn rejects_key_attestation_alg_hs256() {
+        // Appendix D.1: alg MUST NOT be a symmetric/MAC algorithm
+        let header = KeyAttestationHeader {
+            typ: "key-attestation+jwt".to_string(),
+            alg: "HS256".to_string(),
+            x5c: None,
+            kid: None,
+            trust_chain: None,
+        };
+        let err = header.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidProof);
+        assert!(err.to_string().contains("symmetric/MAC"));
     }
 
     // ── KeyAttestationClaims ──────────────────────────────────────────────────
@@ -1391,9 +1595,7 @@ mod tests {
     #[test]
     fn valid_proofs_with_single_jwt() {
         let proofs = Proofs {
-            jwt: Some(vec![JwtProof {
-                jwt: "aaa.bbb.ccc".to_string(),
-            }]),
+            jwt: Some(vec![JwtProof("aaa.bbb.ccc".to_string())]),
             di_vp: None,
             attestation: None,
         };
@@ -1404,12 +1606,8 @@ mod tests {
     fn valid_proofs_with_multiple_jwts() {
         let proofs = Proofs {
             jwt: Some(vec![
-                JwtProof {
-                    jwt: "aaa.bbb.ccc".to_string(),
-                },
-                JwtProof {
-                    jwt: "ddd.eee.fff".to_string(),
-                },
+                JwtProof("aaa.bbb.ccc".to_string()),
+                JwtProof("ddd.eee.fff".to_string()),
             ]),
             di_vp: None,
             attestation: None,
@@ -1446,9 +1644,7 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: None,
-            attestation: Some(vec![AttestationProof {
-                attestation: "aaa.bbb.ccc".to_string(),
-            }]),
+            attestation: Some(vec![AttestationProof("aaa.bbb.ccc".to_string())]),
         };
         assert!(proofs.validate().is_ok());
     }
@@ -1469,9 +1665,7 @@ mod tests {
     fn rejects_proofs_with_multiple_proof_types() {
         // Spec F: "exactly one parameter named as the proof type"
         let proofs = Proofs {
-            jwt: Some(vec![JwtProof {
-                jwt: "aaa.bbb.ccc".to_string(),
-            }]),
+            jwt: Some(vec![JwtProof("aaa.bbb.ccc".to_string())]),
             di_vp: Some(vec![DiVpProof {
                 context: vec!["https://www.w3.org/ns/credentials/v2".to_string()],
                 types: vec!["VerifiablePresentation".to_string()],
@@ -1537,12 +1731,8 @@ mod tests {
             jwt: None,
             di_vp: None,
             attestation: Some(vec![
-                AttestationProof {
-                    attestation: "aaa.bbb.ccc".to_string(),
-                },
-                AttestationProof {
-                    attestation: "ddd.eee.fff".to_string(),
-                },
+                AttestationProof("aaa.bbb.ccc".to_string()),
+                AttestationProof("ddd.eee.fff".to_string()),
             ]),
         };
         let err = proofs.validate().unwrap_err();
@@ -1573,9 +1763,7 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: None,
-            attestation: Some(vec![AttestationProof {
-                attestation: "bad".to_string(),
-            }]),
+            attestation: Some(vec![AttestationProof("bad".to_string())]),
         };
         assert_eq!(
             proofs.validate().unwrap_err().kind(),
@@ -1588,15 +1776,14 @@ mod tests {
     #[test]
     fn proofs_serializes_jwt_key_only() {
         let proofs = Proofs {
-            jwt: Some(vec![JwtProof {
-                jwt: "aaa.bbb.ccc".to_string(),
-            }]),
+            jwt: Some(vec![JwtProof("aaa.bbb.ccc".to_string())]),
             di_vp: None,
             attestation: None,
         };
         let json = serde_json::to_string(&proofs).unwrap();
+        // With transparent newtype, jwt array should contain strings directly
         assert!(json.contains("\"jwt\""));
-        assert!(json.contains("aaa.bbb.ccc"));
+        assert!(json.contains("[\"aaa.bbb.ccc\"]"));
         assert!(!json.contains("\"di_vp\""));
         assert!(!json.contains("\"attestation\""));
     }
@@ -1633,12 +1820,12 @@ mod tests {
         let proofs = Proofs {
             jwt: None,
             di_vp: None,
-            attestation: Some(vec![AttestationProof {
-                attestation: "aaa.bbb.ccc".to_string(),
-            }]),
+            attestation: Some(vec![AttestationProof("aaa.bbb.ccc".to_string())]),
         };
         let json = serde_json::to_string(&proofs).unwrap();
+        // With transparent newtype, attestation array should contain strings directly
         assert!(json.contains("\"attestation\""));
+        assert!(json.contains("[\"aaa.bbb.ccc\"]"));
         assert!(!json.contains("\"jwt\""));
         assert!(!json.contains("\"di_vp\""));
     }

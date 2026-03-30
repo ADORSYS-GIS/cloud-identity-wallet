@@ -41,7 +41,7 @@ serde_with = "3"
 tracing = "0.1"
 
 time = "0.3"
-url = "2.5"
+url = { version = "2.5", features = ["serde"] }
 uuid = "1"
 zeroize = "1.8"
 
