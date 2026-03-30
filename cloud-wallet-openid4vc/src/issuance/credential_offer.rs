@@ -161,20 +161,13 @@ pub struct Grants {
 impl Grants {
     /// Validates all grant parameters.
     ///
+    /// Per OpenID4VCI Section 4.1.1, an empty grants object is valid - the wallet
+    /// must determine supported grant types from issuer metadata in that case.
+    ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - No grant types are present (both are None)
-    /// - Any grant has invalid parameters
+    /// Returns an error if any grant has invalid parameters.
     pub fn validate(&self) -> Result<(), Error> {
-        // At least one grant type must be present
-        if self.authorization_code.is_none() && self.pre_authorized_code.is_none() {
-            return Err(Error::message(
-                ErrorKind::InvalidCredentialOffer,
-                "grants object must contain at least one grant type",
-            ));
-        }
-
         if let Some(ref grant) = self.pre_authorized_code {
             grant.validate()?;
         }
@@ -218,8 +211,11 @@ impl CredentialOffer {
     /// Returns an error if:
     /// - `credential_issuer` is not a valid HTTPS URL
     /// - `credential_configuration_ids` is empty or contains duplicates
-    /// - `grants` object is present but contains no grant types
-    /// - Any grant has invalid parameters
+    /// - Any grant has invalid parameters (e.g., tx_code description too long)
+    ///
+    /// Per OpenID4VCI Section 4.1.1:
+    /// - If `grants` is absent or empty, the wallet must determine grant types from issuer metadata
+    /// - When multiple grants are present, it's at the wallet's discretion which one to use
     pub fn validate(&self) -> Result<(), Error> {
         let parsed = Url::parse(&self.credential_issuer).map_err(|_| {
             Error::message(
@@ -272,15 +268,19 @@ impl CredentialOffer {
     ///
     /// # Errors
     ///
-    /// Returns an error if the URL decoding or JSON parsing fails.
+    /// Returns an error if:
+    /// - URL decoding or JSON parsing fails
+    /// - The parsed offer fails validation (e.g., non-HTTPS issuer, empty configuration IDs)
     pub fn from_query_param(encoded: &str) -> Result<Self, Error> {
         let decoded = urlencoding_decode(encoded);
-        serde_json::from_str(&decoded).map_err(|e| {
+        let offer: Self = serde_json::from_str(&decoded).map_err(|e| {
             Error::message(
                 ErrorKind::MalformedCredentialOffer,
                 format!("invalid JSON: {e}"),
             )
-        })
+        })?;
+        offer.validate()?;
+        Ok(offer)
     }
 }
 
@@ -319,9 +319,18 @@ impl CredentialOfferUri {
     /// - A full URI like `openid-credential-offer://?credential_offer=...`
     /// - A query string like `credential_offer=...` (will prepend the scheme)
     ///
+    /// # Mutual Exclusivity
+    ///
+    /// Per the OpenID4VCI specification, `credential_offer` and `credential_offer_uri`
+    /// are mutually exclusive. If both are present, an error is returned.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the URI is malformed or required parameters are missing.
+    /// Returns an error if:
+    /// - Both `credential_offer` and `credential_offer_uri` are present
+    /// - Neither parameter is present
+    /// - The URI is malformed
+    /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
         // Prepend scheme if not already present
         let uri = if link.contains("://") {
@@ -341,6 +350,17 @@ impl CredentialOfferUri {
             .query_pairs()
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
+
+        let has_by_value = params.contains_key("credential_offer");
+        let has_by_reference = params.contains_key("credential_offer_uri");
+
+        // Mutual exclusivity check
+        if has_by_value && has_by_reference {
+            return Err(Error::message(
+                ErrorKind::MalformedCredentialOffer,
+                "credential_offer and credential_offer_uri are mutually exclusive",
+            ));
+        }
 
         if let Some(encoded) = params.get("credential_offer") {
             let offer = CredentialOffer::from_query_param(encoded)?;
@@ -781,6 +801,18 @@ mod tests {
     }
 
     #[test]
+    fn from_query_param_validates_offer() {
+        // HTTP issuer should be rejected by validation in from_query_param
+        let encoded = "%7B%22credential_issuer%22%3A%22http%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let result = CredentialOffer::from_query_param(encoded);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("https scheme"));
+    }
+
+    #[test]
     fn parse_credential_offer_uri_by_value() {
         // Test with query string only (scheme prepended automatically)
         let query_part = "credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
@@ -832,6 +864,18 @@ mod tests {
         let query = "credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D&credential_offer_uri=https%3A%2F%2Fserver.example.com%2Foffer";
 
         let result = CredentialOfferUri::from_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn from_offer_link_rejects_both_parameters() {
+        // Both credential_offer and credential_offer_uri in full URI - must be rejected
+        let full_uri = "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D&credential_offer_uri=https%3A%2F%2Fserver.example.com%2Foffer";
+
+        let result = CredentialOfferUri::from_offer_link(full_uri);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
@@ -961,7 +1005,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_empty_grants_rejected() {
+    fn validate_empty_grants_allowed() {
+        // Per OpenID4VCI Section 4.1.1, empty grants object is valid -
+        // wallet must determine grant types from issuer metadata
         let offer = CredentialOffer {
             credential_issuer: "https://issuer.example.com".to_string(),
             credential_configuration_ids: vec!["MyCredential".to_string()],
@@ -971,11 +1017,7 @@ mod tests {
             }),
         };
 
-        let result = offer.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
-        assert!(err.to_string().contains("at least one grant type"));
+        assert!(offer.validate().is_ok());
     }
 
     #[test]
