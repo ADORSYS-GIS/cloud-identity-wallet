@@ -13,6 +13,6 @@ serde_json.workspace = true
 serde_with.workspace = true
 thiserror.workspace = true
 time.workspace = true
-url.workspace = true
+url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }
