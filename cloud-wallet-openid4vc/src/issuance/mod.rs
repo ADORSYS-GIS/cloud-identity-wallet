@@ -8,3 +8,4 @@ pub mod credential_formats;
 pub mod credential_offer;
 pub mod css_color;
 pub mod issuer_metadata;
+pub mod query_params;

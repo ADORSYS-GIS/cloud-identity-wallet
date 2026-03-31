@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-
-use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{Error, ErrorKind};
+use crate::issuance::query_params::QueryParams;
 
-// ── Successful Authorization Response ────────────────────────────────────────
+/// Recognized query parameters in an authorization response.
+const RECOGNIZED_PARAMS: &[&str] = &["code", "state"];
 
 /// A successful Authorization Response as defined in [RFC 6749 §4.1.2].
 ///
@@ -47,8 +46,6 @@ impl AuthorizationCode {
     }
 }
 
-// ── Authorization Response ──────────────────────────────────────────────────
-
 /// A parsed Authorization Response from the Authorization Code Flow.
 ///
 /// Per [OpenID4VCI §5.2] and [RFC 6749 §4.1.2], after the End-User grants
@@ -70,8 +67,14 @@ impl AuthorizationResponse {
     /// Accepts a raw query string such as `"code=abc&state=xyz"` (without the
     /// leading `?`). Percent-encoded values and `+`-as-space are decoded before
     /// parsing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when:
+    /// - The `code` parameter is absent or empty.
+    /// - A recognized parameter (`code`, `state`) appears more than once.
     pub fn from_query(query: &str) -> Result<Self, Error> {
-        let params = parse_query_params(query);
+        let params = QueryParams::parse(query, RECOGNIZED_PARAMS)?;
 
         let code = params.get("code").ok_or_else(|| {
             Error::message(
@@ -89,8 +92,8 @@ impl AuthorizationResponse {
 
         Ok(Self {
             code: AuthorizationCode {
-                code: code.clone(),
-                state: params.get("state").cloned(),
+                code: code.to_owned(),
+                state: params.get("state").map(ToOwned::to_owned),
             },
         })
     }
@@ -107,6 +110,7 @@ impl AuthorizationResponse {
     /// - The URI cannot be parsed.
     /// - The URI contains no query string.
     /// - The `code` parameter is absent or empty.
+    /// - A recognized parameter appears more than once.
     pub fn from_redirect_uri(redirect_uri: &str) -> Result<Self, Error> {
         let parsed = Url::parse(redirect_uri).map_err(|_| {
             Error::message(
@@ -126,43 +130,9 @@ impl AuthorizationResponse {
     }
 }
 
-// ── Query parsing helpers ─────────────────────────────────────────────────────
-
-/// Parses a `application/x-www-form-urlencoded` query string into a map.
-///
-/// Handles percent-encoding and `+`-as-space decoding for each key and value.
-fn parse_query_params(query: &str) -> HashMap<String, String> {
-    query
-        .split('&')
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            let key = parts.next()?.trim();
-            let value = parts.next().unwrap_or("");
-
-            if key.is_empty() {
-                return None;
-            }
-
-            Some((decode_form_value(key), decode_form_value(value)))
-        })
-        .collect()
-}
-
-/// Decodes a single `application/x-www-form-urlencoded` value.
-///
-/// Replaces `+` with a space, then applies percent-decoding.
-fn decode_form_value(s: &str) -> String {
-    let plus_decoded = s.replace('+', " ");
-    percent_decode_str(&plus_decoded)
-        .decode_utf8_lossy()
-        .into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── AuthorizationCode ─────────────────────────────────────────────────
 
     #[test]
     fn authorization_code_validates_non_empty_code() {
@@ -183,8 +153,6 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
         assert!(err.to_string().contains("empty"));
     }
-
-    // ── AuthorizationResponse::from_query ─────────────────────────────────
 
     #[test]
     fn from_query_parses_response_with_state() {
@@ -253,6 +221,21 @@ mod tests {
         assert_eq!(response.code.state.as_deref(), Some("s"));
     }
 
+    #[test]
+    fn from_query_rejects_duplicate_code_parameter() {
+        let err = AuthorizationResponse::from_query("code=first&code=second").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate 'code'"));
+    }
+
+    #[test]
+    fn from_query_rejects_duplicate_state_parameter() {
+        let err =
+            AuthorizationResponse::from_query("code=abc&state=first&state=second").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate 'state'"));
+    }
+
     // ── AuthorizationResponse::from_redirect_uri ──────────────────────────
 
     #[test]
@@ -284,6 +267,15 @@ mod tests {
             AuthorizationResponse::from_redirect_uri("https://wallet.example.org/cb?state=xyz")
                 .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+    }
+
+    #[test]
+    fn from_redirect_uri_rejects_duplicate_code() {
+        let err =
+            AuthorizationResponse::from_redirect_uri("https://wallet.example.org/cb?code=a&code=b")
+                .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate 'code'"));
     }
 
     // ── Spec non-normative examples ───────────────────────────────────────
