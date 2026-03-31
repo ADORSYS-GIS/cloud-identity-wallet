@@ -262,9 +262,32 @@ impl CredentialOffer {
         Ok(())
     }
 
-    /// Parses a credential offer from a URL query parameter value.
+    /// Parses a credential offer from a JSON string.
     ///
-    /// The `credential_offer` parameter contains a URL-encoded JSON object.
+    /// This method expects an already-decoded JSON string (not URL-encoded).
+    /// Use this when the JSON has already been extracted from URL parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - JSON parsing fails
+    /// - The parsed offer fails validation (e.g., non-HTTPS issuer, empty configuration IDs)
+    pub fn from_json_str(json: &str) -> Result<Self, Error> {
+        let offer: Self = serde_json::from_str(json).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!("invalid JSON: {e}"),
+            )
+        })?;
+        offer.validate()?;
+        Ok(offer)
+    }
+
+    /// Parses a credential offer from a raw URL-encoded query parameter value.
+    ///
+    /// This method handles the case where the credential_offer parameter value
+    /// is still URL-encoded (e.g., extracted directly from a raw query string before
+    /// any percent-decoding has been applied).
     ///
     /// # Errors
     ///
@@ -273,14 +296,7 @@ impl CredentialOffer {
     /// - The parsed offer fails validation (e.g., non-HTTPS issuer, empty configuration IDs)
     pub fn from_query_param(encoded: &str) -> Result<Self, Error> {
         let decoded = urlencoding_decode(encoded);
-        let offer: Self = serde_json::from_str(&decoded).map_err(|e| {
-            Error::message(
-                ErrorKind::MalformedCredentialOffer,
-                format!("invalid JSON: {e}"),
-            )
-        })?;
-        offer.validate()?;
-        Ok(offer)
+        Self::from_json_str(&decoded)
     }
 }
 
@@ -341,7 +357,7 @@ impl CredentialOfferUri {
 
         let parsed_url = Url::parse(&uri).map_err(|e| {
             Error::message(
-                ErrorKind::MalformedCredentialOffer,
+                ErrorKind::InvalidCredentialOffer,
                 format!("invalid offer link: {e}"),
             )
         })?;
@@ -357,13 +373,14 @@ impl CredentialOfferUri {
         // Mutual exclusivity check
         if has_by_value && has_by_reference {
             return Err(Error::message(
-                ErrorKind::MalformedCredentialOffer,
+                ErrorKind::InvalidCredentialOffer,
                 "credential_offer and credential_offer_uri are mutually exclusive",
             ));
         }
 
-        if let Some(encoded) = params.get("credential_offer") {
-            let offer = CredentialOffer::from_query_param(encoded)?;
+        // query_pairs() already percent-decodes parameter values, so parse JSON directly
+        if let Some(json) = params.get("credential_offer") {
+            let offer = CredentialOffer::from_json_str(json)?;
             return Ok(Self {
                 source: CredentialOfferSource::ByValue(offer),
             });
@@ -376,7 +393,7 @@ impl CredentialOfferUri {
         }
 
         Err(Error::message(
-            ErrorKind::MalformedCredentialOffer,
+            ErrorKind::InvalidCredentialOffer,
             "missing credential_offer or credential_offer_uri parameter",
         ))
     }
@@ -410,13 +427,14 @@ impl CredentialOfferUri {
         // Mutual exclusivity check
         if has_by_value && has_by_reference {
             return Err(Error::message(
-                ErrorKind::MalformedCredentialOffer,
+                ErrorKind::InvalidCredentialOffer,
                 "credential_offer and credential_offer_uri are mutually exclusive",
             ));
         }
 
-        if let Some(encoded) = params.get("credential_offer") {
-            let offer = CredentialOffer::from_query_param(encoded)?;
+        // form_urlencoded::parse() already percent-decodes parameter values, so parse JSON directly
+        if let Some(json) = params.get("credential_offer") {
+            let offer = CredentialOffer::from_json_str(json)?;
             return Ok(Self {
                 source: CredentialOfferSource::ByValue(offer),
             });
@@ -429,7 +447,7 @@ impl CredentialOfferUri {
         }
 
         Err(Error::message(
-            ErrorKind::MalformedCredentialOffer,
+            ErrorKind::InvalidCredentialOffer,
             "missing credential_offer or credential_offer_uri parameter",
         ))
     }
@@ -468,33 +486,28 @@ impl CredentialOfferUri {
 ///
 /// # Errors
 ///
-/// Returns [`Error`] with [`ErrorKind::InvalidCredentialOfferUri`] for:
+/// Returns [`Error`] with [`ErrorKind::InvalidCredentialOffer`] for:
 /// - Non-HTTPS URIs
+/// - Invalid media type in response
+/// - Invalid JSON in response body
+/// - JWT with `"alg": "none"` (security violation)
+/// - Validation failures
 ///
 /// Returns [`Error`] with [`ErrorKind::CredentialOfferFetchFailed`] for:
 /// - HTTP request failures
 /// - Non-200 responses
-///
-/// Returns [`Error`] with [`ErrorKind::InvalidCredentialOfferMediaType`] for:
-/// - Response with non-`application/json` media type
-///
-/// Returns [`Error`] with [`ErrorKind::MalformedCredentialOffer`] for:
-/// - Invalid JSON in response body
-///
-/// Returns [`Error`] with [`ErrorKind::InvalidCredentialOffer`] for:
-/// - JWT with `"alg": "none"` (security violation)
-/// - Validation failures
+/// - Response body exceeds size limit
 pub async fn resolve_by_reference(
     uri: &str,
     http_client: &reqwest::Client,
 ) -> Result<CredentialOffer, Error> {
     // Validate URI scheme
     let parsed =
-        Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOfferUri, e))?;
+        Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
 
     if parsed.scheme() != "https" {
         return Err(Error::message(
-            ErrorKind::InvalidCredentialOfferUri,
+            ErrorKind::InvalidCredentialOffer,
             format!(
                 "credential_offer_uri must use https scheme, got '{}'",
                 parsed.scheme()
@@ -505,7 +518,7 @@ pub async fn resolve_by_reference(
     // Fetch the offer
     // Note: Redirect policy is configured at the Client level, not per-request.
     // We re-validate the final URL after the request to detect redirect attacks.
-    let response = http_client
+    let mut response = http_client
         .get(uri)
         .send()
         .await
@@ -518,7 +531,7 @@ pub async fn resolve_by_reference(
     let final_url = response.url().clone();
     if final_url.scheme() != "https" {
         return Err(Error::message(
-            ErrorKind::InvalidCredentialOfferUri,
+            ErrorKind::InvalidCredentialOffer,
             format!(
                 "redirect changed scheme from https to '{}'",
                 final_url.scheme()
@@ -527,7 +540,7 @@ pub async fn resolve_by_reference(
     }
     if final_url.host() != parsed.host() {
         return Err(Error::message(
-            ErrorKind::InvalidCredentialOfferUri,
+            ErrorKind::InvalidCredentialOffer,
             format!(
                 "redirect changed host from '{}' to '{}'",
                 parsed.host().map(|h| h.to_string()).unwrap_or_default(),
@@ -544,57 +557,53 @@ pub async fn resolve_by_reference(
         ));
     }
 
-    // Validate content type
+    // Validate content type - must be exactly "application/json" (ignoring parameters like charset)
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if !content_type.starts_with("application/json") {
+    // Extract media-type essence (before any ";" for parameters)
+    let media_type_essence = content_type.split(';').next().unwrap_or("").trim();
+    if media_type_essence != "application/json" {
         return Err(Error::message(
-            ErrorKind::InvalidCredentialOfferMediaType,
-            format!("expected application/json, got '{}'", content_type),
+            ErrorKind::InvalidCredentialOffer,
+            format!("expected media type application/json, got '{}'", media_type_essence),
         ));
     }
 
     // Get response body with size limit to prevent unbounded memory allocation.
     // Credential offers are typically small JSON objects; a 64KB limit is generous
     // while protecting against malicious endpoints returning arbitrarily large payloads.
-    const MAX_CREDENTIAL_OFFER_SIZE: u64 = 64 * 1024; // 64 KB
+    const MAX_CREDENTIAL_OFFER_SIZE: usize = 64 * 1024; // 64 KB
 
-    // Check Content-Length header before reading body
-    if let Some(content_length) = response.content_length()
-        && content_length > MAX_CREDENTIAL_OFFER_SIZE
-    {
-        return Err(Error::message(
-            ErrorKind::CredentialOfferFetchFailed,
-            format!(
-                "credential offer body size {} bytes exceeds maximum allowed {} bytes",
-                content_length, MAX_CREDENTIAL_OFFER_SIZE
-            ),
-        ));
+    // Use chunk() to read body incrementally, enforcing size limit during read.
+    // This prevents unbounded allocation when Content-Length is absent or misleading.
+    let mut accumulated = Vec::with_capacity(1024);
+
+    while let Ok(Some(chunk)) = response.chunk().await {
+        // Check size limit before extending to prevent over-allocation
+        if accumulated.len().saturating_add(chunk.len()) > MAX_CREDENTIAL_OFFER_SIZE {
+            return Err(Error::message(
+                ErrorKind::CredentialOfferFetchFailed,
+                format!(
+                    "credential offer body exceeds maximum allowed {} bytes",
+                    MAX_CREDENTIAL_OFFER_SIZE
+                ),
+            ));
+        }
+        accumulated.extend_from_slice(&chunk);
     }
 
-    // Get body as bytes and verify actual size (in case Content-Length was absent/wrong)
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| Error::new(ErrorKind::CredentialOfferFetchFailed, e))?;
-
-    if bytes.len() > MAX_CREDENTIAL_OFFER_SIZE as usize {
-        return Err(Error::message(
-            ErrorKind::CredentialOfferFetchFailed,
-            format!(
-                "credential offer body size {} bytes exceeds maximum allowed {} bytes",
-                bytes.len(),
-                MAX_CREDENTIAL_OFFER_SIZE
-            ),
-        ));
-    }
-
-    // Convert bytes to text
-    let body = String::from_utf8_lossy(&bytes).into_owned();
+    // Reject non-UTF-8 bytes instead of normalizing them.
+    // JSON must be valid UTF-8; lossy conversion could turn malformed data into valid-looking JSON.
+    let body = String::from_utf8(accumulated).map_err(|e| {
+        Error::message(
+            ErrorKind::InvalidCredentialOffer,
+            format!("response body is not valid UTF-8: {e}"),
+        )
+    })?;
 
     // Security check: reject JWT with "alg": "none"
     if looks_like_jwt_with_none(&body) {
@@ -607,7 +616,7 @@ pub async fn resolve_by_reference(
     // Parse JSON
     let offer: CredentialOffer = serde_json::from_str(&body).map_err(|e| {
         Error::message(
-            ErrorKind::MalformedCredentialOffer,
+            ErrorKind::InvalidCredentialOffer,
             format!("invalid JSON: {e}"),
         )
     })?;
@@ -621,39 +630,52 @@ pub async fn resolve_by_reference(
 /// Checks if the content looks like a JWT with "alg": "none".
 ///
 /// This is a security check per the specification to reject insecure JWTs.
-/// Uses proper JSON parsing to robustly detect the algorithm regardless of
-/// JSON formatting (whitespace, key ordering, etc.).
+/// Uses the jsonwebtoken crate for robust header parsing when possible,
+/// but also handles the "none" algorithm which jsonwebtoken intentionally
+/// doesn't support as a security measure.
 fn looks_like_jwt_with_none(content: &str) -> bool {
-    let trimmed = content.trim();
+    use jsonwebtoken::decode_header;
 
-    // JWTs have three base64url-encoded parts separated by dots
+    // jsonwebtoken will reject JWTs with "alg": "none" as invalid,
+    // so if decode_header succeeds, it's not a "none" algorithm JWT.
+    // We only need to manually check if decoding fails.
+    if decode_header(content).is_ok() {
+        return false;
+    }
+
+    // If decoding failed, check if it's a JWT with "alg": "none"
+    // by manually inspecting the header
+    let trimmed = content.trim();
     let parts: Vec<&str> = trimmed.split('.').collect();
     if parts.len() != 3 {
         return false;
     }
 
-    // Try to decode and parse the header (first part) as JSON
-    if let Ok(header_bytes) = base64url_decode_no_padding(parts[0])
+    // Try to decode the header manually
+    if let Ok(header_bytes) = base64url_decode(parts[0])
         && let Ok(header_str) = String::from_utf8(header_bytes)
         && let Ok(header_json) = serde_json::from_str::<serde_json::Value>(&header_str)
+        && let Some(alg) = header_json.get("alg").and_then(|v| v.as_str())
     {
-        // Check if "alg" field exists and equals "none" (case-insensitive)
-        if let Some(alg) = header_json.get("alg").and_then(|v| v.as_str())
-            && alg.to_lowercase() == "none"
-        {
-            return true;
-        }
+        return alg.eq_ignore_ascii_case("none");
     }
 
     false
 }
 
-/// Decodes base64url without padding.
-fn base64url_decode_no_padding(input: &str) -> Result<Vec<u8>, ()> {
+/// Decodes base64url with or without padding.
+fn base64url_decode(input: &str) -> Result<Vec<u8>, ()> {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-    URL_SAFE_NO_PAD.decode(input).map_err(|_| ())
+    // Try without padding first, then with padding
+    URL_SAFE_NO_PAD
+        .decode(input)
+        .or_else(|_| {
+            use base64::engine::general_purpose::URL_SAFE;
+            URL_SAFE.decode(input)
+        })
+        .map_err(|_| ())
 }
 
 #[cfg(test)]
@@ -925,7 +947,7 @@ mod tests {
         let result = CredentialOfferUri::from_query(query);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
         assert!(err.to_string().contains("mutually exclusive"));
     }
 
@@ -937,7 +959,7 @@ mod tests {
         let result = CredentialOfferUri::from_offer_link(full_uri);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
         assert!(err.to_string().contains("mutually exclusive"));
     }
 
@@ -948,7 +970,7 @@ mod tests {
         let result = CredentialOfferUri::from_query(query);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::MalformedCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
         assert!(err.to_string().contains("missing"));
     }
 
@@ -1112,5 +1134,38 @@ mod tests {
             }
         }"#;
         assert!(!looks_like_jwt_with_none(json));
+    }
+
+    #[test]
+    fn happy_path_parses_valid_credential_offer_from_json() {
+        // Happy path: a valid credential offer JSON parses successfully
+        let json = r#"{
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["UniversityDegreeCredential"],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": "abc123"
+                }
+            }
+        }"#;
+
+        let offer = CredentialOffer::from_json_str(json).expect("should parse valid offer");
+        assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+        assert_eq!(offer.credential_configuration_ids, vec!["UniversityDegreeCredential"]);
+        assert!(offer.grants.is_some());
+    }
+
+    #[test]
+    fn happy_path_parses_minimal_credential_offer() {
+        // Happy path: minimal valid credential offer
+        let json = r#"{
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["MyCredential"]
+        }"#;
+
+        let offer = CredentialOffer::from_json_str(json).expect("should parse minimal offer");
+        assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+        assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
+        assert!(offer.grants.is_none());
     }
 }

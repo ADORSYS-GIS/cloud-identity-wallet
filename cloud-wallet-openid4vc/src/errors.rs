@@ -151,29 +151,27 @@ pub enum ErrorKind {
     #[error("Invalid credential")]
     InvalidCredential,
 
-    /// A credential offer failed validation or parsing.
+    /// A credential offer failed validation, parsing, or retrieval.
+    ///
+    /// This encompasses:
+    /// - Malformed JSON or URL encoding
+    /// - Invalid URI scheme (non-HTTPS)
+    /// - Invalid media type in response
+    /// - Validation failures (e.g., empty configuration IDs)
     #[error("Invalid credential offer")]
     InvalidCredentialOffer,
+
+    /// A credential offer could not be fetched from a reference URI.
+    ///
+    /// This is distinct from [`InvalidCredentialOffer`](Self::InvalidCredentialOffer)
+    /// as it indicates a network-level failure that may be retried.
+    #[error("Failed to fetch credential offer")]
+    CredentialOfferFetchFailed,
 
     /// An operation was attempted on a credential that has been revoked.
     #[error("Credential is revoked")]
     CredentialRevoked,
 
-    /// A credential offer could not be parsed (malformed JSON or URL encoding).
-    #[error("Malformed credential offer")]
-    MalformedCredentialOffer,
-
-    /// A credential offer URI is invalid (e.g. non-HTTPS scheme).
-    #[error("Invalid credential offer URI")]
-    InvalidCredentialOfferUri,
-
-    /// A credential offer could not be fetched from the reference URI.
-    #[error("Failed to fetch credential offer")]
-    CredentialOfferFetchFailed,
-
-    /// A credential offer reference returned an invalid media type.
-    #[error("Invalid credential offer media type")]
-    InvalidCredentialOfferMediaType,
     /// Authorization server metadata failed structural validation (e.g. missing required
     /// fields, `issuer` not using `https`, empty `response_types_supported`).
     ///
