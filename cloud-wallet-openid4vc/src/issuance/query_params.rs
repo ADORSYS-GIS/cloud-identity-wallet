@@ -16,8 +16,8 @@ impl QueryParams {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::InvalidCredentialOffer`] if a key that appears in
-    /// `recognized` is present more than once.
+    /// Returns [`ErrorKind::InvalidAuthorizationResponse`] if a key that
+    /// appears in `recognized` is present more than once.
     pub fn parse(query: &str, recognized: &[&str]) -> Result<Self, Error> {
         let pairs: Vec<(String, String)> = query
             .split('&')
@@ -39,7 +39,7 @@ impl QueryParams {
             let count = pairs.iter().filter(|(k, _)| k == key).count();
             if count > 1 {
                 return Err(Error::message(
-                    ErrorKind::InvalidCredentialOffer,
+                    ErrorKind::InvalidAuthorizationResponse,
                     format!("duplicate '{key}' parameter in authorization response"),
                 ));
             }
@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_recognized_key() {
         let err = QueryParams::parse("code=a&code=b", RECOGNIZED).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("duplicate 'code'"));
     }
 
