@@ -502,8 +502,7 @@ pub async fn resolve_by_reference(
     http_client: &reqwest::Client,
 ) -> Result<CredentialOffer, Error> {
     // Validate URI scheme
-    let parsed =
-        Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
+    let parsed = Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
 
     if parsed.scheme() != "https" {
         return Err(Error::message(
@@ -569,7 +568,10 @@ pub async fn resolve_by_reference(
     if media_type_essence != "application/json" {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOffer,
-            format!("expected media type application/json, got '{}'", media_type_essence),
+            format!(
+                "expected media type application/json, got '{}'",
+                media_type_essence
+            ),
         ));
     }
 
@@ -1151,7 +1153,10 @@ mod tests {
 
         let offer = CredentialOffer::from_json_str(json).expect("should parse valid offer");
         assert_eq!(offer.credential_issuer, "https://issuer.example.com");
-        assert_eq!(offer.credential_configuration_ids, vec!["UniversityDegreeCredential"]);
+        assert_eq!(
+            offer.credential_configuration_ids,
+            vec!["UniversityDegreeCredential"]
+        );
         assert!(offer.grants.is_some());
     }
 
