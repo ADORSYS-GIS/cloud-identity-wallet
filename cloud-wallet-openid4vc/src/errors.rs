@@ -155,6 +155,15 @@ pub enum ErrorKind {
     #[error("Invalid credential offer")]
     InvalidCredentialOffer,
 
+    /// An authorization response returned by the Authorization Server failed
+    /// validation or parsing (e.g. missing `code` parameter, duplicate
+    /// recognized parameters, non-parseable redirect URI).
+    ///
+    /// Defined by [RFC 6749 §4.1.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.1.2)
+    /// and [OpenID4VCI §5.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-authorization-re).
+    #[error("Invalid authorization response")]
+    InvalidAuthorizationResponse,
+
     /// An operation was attempted on a credential that has been revoked.
     #[error("Credential is revoked")]
     CredentialRevoked,
