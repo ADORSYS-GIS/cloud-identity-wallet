@@ -11,8 +11,8 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-aws-lc-rs = "1"
-base64ct = { version = "1.8", features = ["alloc"], optional = true }
+aws-lc-rs = "1.15"
+base64ct = { workspace = true, features = ["alloc"], optional = true }
 color-eyre.workspace = true
 num-bigint = { version = "0.4", optional = true }
 pkcs8 = { version = "0.10", features = ["std"] }
