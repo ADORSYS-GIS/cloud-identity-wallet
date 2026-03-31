@@ -1,24 +1,8 @@
 //! Credential Response models for OpenID4VCI §§8.3, 9.2.
 
-use std::{fmt, num::NonZeroU64};
+use std::num::NonZeroU64;
 
-use serde::{
-    Deserialize, Deserializer, Serialize, Serializer,
-    de::{self, MapAccess, Visitor},
-};
-
-const CREDENTIAL_RESPONSE_FIELDS: &[&str] = &[
-    "credentials",
-    "transaction_id",
-    "interval",
-    "notification_id",
-];
-type CredentialResponseFields = (
-    Option<Vec<CredentialObject>>,
-    Option<String>,
-    Option<NonZeroU64>,
-    Option<String>,
-);
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 fn deserialize_non_empty_credentials<'de, D>(
     deserializer: D,
@@ -35,114 +19,6 @@ where
     }
 
     Ok(credentials)
-}
-
-fn parse_credential_response_fields<'de, A>(
-    mut map: A,
-) -> Result<CredentialResponseFields, A::Error>
-where
-    A: MapAccess<'de>,
-{
-    let mut credentials = None;
-    let mut transaction_id = None;
-    let mut interval = None;
-    let mut notification_id = None;
-
-    while let Some(key) = map.next_key::<String>()? {
-        match key.as_str() {
-            "credentials" => {
-                if credentials.is_some() {
-                    return Err(de::Error::duplicate_field("credentials"));
-                }
-
-                let value = map.next_value::<Vec<CredentialObject>>()?;
-
-                if value.is_empty() {
-                    return Err(de::Error::custom(
-                        "credentials must contain at least one credential",
-                    ));
-                }
-
-                credentials = Some(value);
-            }
-            "transaction_id" => {
-                if transaction_id.is_some() {
-                    return Err(de::Error::duplicate_field("transaction_id"));
-                }
-
-                transaction_id = Some(map.next_value::<String>()?);
-            }
-            "interval" => {
-                if interval.is_some() {
-                    return Err(de::Error::duplicate_field("interval"));
-                }
-
-                interval = Some(map.next_value::<NonZeroU64>()?);
-            }
-            "notification_id" => {
-                if notification_id.is_some() {
-                    return Err(de::Error::duplicate_field("notification_id"));
-                }
-
-                notification_id = Some(map.next_value::<String>()?);
-            }
-            _ => return Err(de::Error::unknown_field(&key, CREDENTIAL_RESPONSE_FIELDS)),
-        }
-    }
-
-    Ok((credentials, transaction_id, interval, notification_id))
-}
-
-fn credential_response_from_parts<E>(
-    credentials: Option<Vec<CredentialObject>>,
-    transaction_id: Option<String>,
-    interval: Option<NonZeroU64>,
-    notification_id: Option<String>,
-) -> Result<CredentialResponse, E>
-where
-    E: de::Error,
-{
-    match (credentials, transaction_id, interval, notification_id) {
-        (Some(credentials), None, None, notification_id) => {
-            Ok(CredentialResponse::Immediate(ImmediateCredentialResponse {
-                credentials,
-                notification_id,
-            }))
-        }
-        (None, Some(transaction_id), Some(interval), None) => {
-            Ok(CredentialResponse::Deferred(DeferredPending {
-                transaction_id,
-                interval,
-            }))
-        }
-        (Some(_), _, Some(_), _) | (Some(_), Some(_), _, _) => Err(de::Error::custom(
-            "credentials is mutually exclusive with transaction_id and interval",
-        )),
-        (None, Some(_), None, _) | (None, None, Some(_), _) => Err(de::Error::custom(
-            "interval and transaction_id must be used together",
-        )),
-        (None, Some(_), Some(_), Some(_)) | (None, None, None, Some(_)) => Err(de::Error::custom(
-            "notification_id must not be used when credentials are absent",
-        )),
-        (None, None, None, None) => Err(de::Error::custom(
-            "credential response must contain either credentials or transaction_id with interval",
-        )),
-    }
-}
-
-fn deferred_credential_result_from_parts<E>(
-    credentials: Option<Vec<CredentialObject>>,
-    transaction_id: Option<String>,
-    interval: Option<NonZeroU64>,
-    notification_id: Option<String>,
-) -> Result<DeferredCredentialResult, E>
-where
-    E: de::Error,
-{
-    match credential_response_from_parts(credentials, transaction_id, interval, notification_id)? {
-        CredentialResponse::Immediate(response) => Ok(DeferredCredentialResult::Ready(response)),
-        CredentialResponse::Deferred(response) => Ok(DeferredCredentialResult::Pending(response)),
-    }
 }
 
 /// One issued credential object.
@@ -219,117 +95,23 @@ impl DeferredPending {
 ///
 /// Per §8.3, this is either an immediate response with `credentials`, or a deferred response
 /// with `transaction_id` and `interval`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum CredentialResponse {
     Immediate(ImmediateCredentialResponse),
     Deferred(DeferredPending),
 }
 
-impl Serialize for CredentialResponse {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Immediate(response) => response.serialize(serializer),
-            Self::Deferred(response) => response.serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for CredentialResponse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct CredentialResponseVisitor;
-
-        impl<'de> Visitor<'de> for CredentialResponseVisitor {
-            type Value = CredentialResponse;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(
-                    "a credential response containing either credentials or transaction_id with interval",
-                )
-            }
-
-            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let (credentials, transaction_id, interval, notification_id) =
-                    parse_credential_response_fields(map)?;
-
-                credential_response_from_parts(
-                    credentials,
-                    transaction_id,
-                    interval,
-                    notification_id,
-                )
-            }
-        }
-
-        deserializer.deserialize_map(CredentialResponseVisitor)
-    }
-}
-
 /// The two possible outcomes when polling the deferred credential endpoint.
 ///
 /// Defined in [OpenID4VCI §9.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-deferred-credential-endpoint).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum DeferredCredentialResult {
     /// The credential is not yet available. Retry after `interval` seconds.
     Pending(DeferredPending),
     /// The credential is ready.
     Ready(ImmediateCredentialResponse),
-}
-
-impl Serialize for DeferredCredentialResult {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Pending(response) => response.serialize(serializer),
-            Self::Ready(response) => response.serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for DeferredCredentialResult {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct DeferredCredentialResultVisitor;
-
-        impl<'de> Visitor<'de> for DeferredCredentialResultVisitor {
-            type Value = DeferredCredentialResult;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(
-                    "a deferred credential response containing either pending or ready fields",
-                )
-            }
-
-            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let (credentials, transaction_id, interval, notification_id) =
-                    parse_credential_response_fields(map)?;
-
-                deferred_credential_result_from_parts(
-                    credentials,
-                    transaction_id,
-                    interval,
-                    notification_id,
-                )
-            }
-        }
-
-        deserializer.deserialize_map(DeferredCredentialResultVisitor)
-    }
 }
 
 #[cfg(test)]
@@ -462,9 +244,7 @@ mod tests {
             "interval": 5
         }"#;
 
-        let error = serde_json::from_str::<CredentialResponse>(json).unwrap_err();
-
-        assert!(error.to_string().contains("mutually exclusive"));
+        assert!(serde_json::from_str::<CredentialResponse>(json).is_err());
     }
 
     #[test]
@@ -475,13 +255,7 @@ mod tests {
             "notification_id": "notify-123"
         }"#;
 
-        let error = serde_json::from_str::<DeferredCredentialResult>(json).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("notification_id must not be used when credentials are absent")
-        );
+        assert!(serde_json::from_str::<DeferredCredentialResult>(json).is_err());
     }
 
     #[test]
@@ -491,8 +265,6 @@ mod tests {
             "interval": 0
         }"#;
 
-        let error = serde_json::from_str::<DeferredCredentialResult>(json).unwrap_err();
-
-        assert!(error.to_string().contains("nonzero"));
+        assert!(serde_json::from_str::<DeferredCredentialResult>(json).is_err());
     }
 }
