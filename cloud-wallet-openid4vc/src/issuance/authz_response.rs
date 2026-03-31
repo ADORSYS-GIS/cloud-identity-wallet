@@ -34,11 +34,11 @@ impl AuthorizationCode {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::InvalidCredentialOffer`] if `code` is blank.
+    /// Returns [`ErrorKind::InvalidAuthorizationResponse`] if `code` is blank.
     pub fn validate(&self) -> Result<(), Error> {
         if self.code.trim().is_empty() {
             return Err(Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::InvalidAuthorizationResponse,
                 "authorization code must not be empty",
             ));
         }
@@ -78,14 +78,14 @@ impl AuthorizationResponse {
 
         let code = params.get("code").ok_or_else(|| {
             Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::InvalidAuthorizationResponse,
                 "authorization response is missing the required 'code' parameter",
             )
         })?;
 
         if code.trim().is_empty() {
             return Err(Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::InvalidAuthorizationResponse,
                 "authorization code must not be empty",
             ));
         }
@@ -114,14 +114,14 @@ impl AuthorizationResponse {
     pub fn from_redirect_uri(redirect_uri: &str) -> Result<Self, Error> {
         let parsed = Url::parse(redirect_uri).map_err(|_| {
             Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::InvalidAuthorizationResponse,
                 format!("'{redirect_uri}' is not a valid URI"),
             )
         })?;
 
         let query = parsed.query().ok_or_else(|| {
             Error::message(
-                ErrorKind::InvalidCredentialOffer,
+                ErrorKind::InvalidAuthorizationResponse,
                 "redirect URI has no query string",
             )
         })?;
@@ -150,7 +150,7 @@ mod tests {
             state: None,
         };
         let err = invalid.validate().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("empty"));
     }
 
@@ -174,21 +174,21 @@ mod tests {
     #[test]
     fn from_query_rejects_missing_code() {
         let err = AuthorizationResponse::from_query("state=xyz").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("'code'"));
     }
 
     #[test]
     fn from_query_rejects_empty_code() {
         let err = AuthorizationResponse::from_query("code=").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("empty"));
     }
 
     #[test]
     fn from_query_rejects_blank_code() {
         let err = AuthorizationResponse::from_query("code=%20%20").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("empty"));
     }
 
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn from_query_rejects_duplicate_code_parameter() {
         let err = AuthorizationResponse::from_query("code=first&code=second").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("duplicate 'code'"));
     }
 
@@ -232,11 +232,9 @@ mod tests {
     fn from_query_rejects_duplicate_state_parameter() {
         let err =
             AuthorizationResponse::from_query("code=abc&state=first&state=second").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("duplicate 'state'"));
     }
-
-    // ── AuthorizationResponse::from_redirect_uri ──────────────────────────
 
     #[test]
     fn from_redirect_uri_parses_successful_redirect() {
@@ -250,14 +248,14 @@ mod tests {
     #[test]
     fn from_redirect_uri_rejects_invalid_uri() {
         let err = AuthorizationResponse::from_redirect_uri("not a uri").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
     }
 
     #[test]
     fn from_redirect_uri_rejects_uri_without_query() {
         let err =
             AuthorizationResponse::from_redirect_uri("https://wallet.example.org/cb").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("no query string"));
     }
 
@@ -266,7 +264,7 @@ mod tests {
         let err =
             AuthorizationResponse::from_redirect_uri("https://wallet.example.org/cb?state=xyz")
                 .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
     }
 
     #[test]
@@ -274,11 +272,9 @@ mod tests {
         let err =
             AuthorizationResponse::from_redirect_uri("https://wallet.example.org/cb?code=a&code=b")
                 .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("duplicate 'code'"));
     }
-
-    // ── Spec non-normative examples ───────────────────────────────────────
 
     /// From OpenID4VCI §5.2 — Successful Authorization Response.
     #[test]
