@@ -170,6 +170,10 @@ pub enum ErrorKind {
     #[error("Invalid issuer metadata")]
     InvalidIssuerMetadata,
 
+    /// Authorization Request failed structural validation.
+    #[error("Invalid authorization request")]
+    InvalidAuthorizationRequest,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,

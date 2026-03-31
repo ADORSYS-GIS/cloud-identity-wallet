@@ -936,12 +936,15 @@ dependencies = [
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
  "color-eyre",
  "csscolorparser",
+ "getrandom 0.2.17",
  "percent-encoding",
  "serde",
  "serde_json",
  "serde_with",
+ "sha2",
  "thiserror 2.0.18",
  "time",
  "url",
