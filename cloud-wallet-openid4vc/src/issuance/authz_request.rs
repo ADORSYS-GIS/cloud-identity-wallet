@@ -292,7 +292,7 @@ impl AuthorizationRequest {
 /// # Example
 ///
 /// ```
-/// # use cloud_wallet_openid4vc::issuance::authorization_request::*;
+/// # use cloud_wallet_openid4vc::issuance::authz_request::*;
 /// let request = AuthorizationRequestBuilder::new("s6BhdRkqt3")
 ///     .with_redirect_uri("https://wallet.example.org/cb")
 ///     .with_authorization_detail(
