@@ -167,6 +167,11 @@ pub enum ErrorKind {
     /// as it indicates a network-level failure that may be retried.
     #[error("Failed to fetch credential offer")]
     CredentialOfferFetchFailed,
+
+    /// A credential request failed validation or parsing.
+    #[error("Invalid credential request")]
+    InvalidCredentialRequest,
+  
     /// An authorization response returned by the Authorization Server failed
     /// validation or parsing (e.g. missing `code` parameter, duplicate
     /// recognized parameters, non-parseable redirect URI).
