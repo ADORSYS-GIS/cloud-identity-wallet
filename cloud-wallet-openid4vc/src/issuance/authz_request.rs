@@ -173,9 +173,15 @@ impl PkceParams {
     ///
     /// Generates 32 cryptographically random bytes, base64url-encodes them as the verifier,
     /// then derives `code_challenge = BASE64URL(SHA256(code_verifier))`.
-    pub fn generate() -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the system's cryptographically secure RNG is unavailable,
+    /// which is rare but can occur on systems without proper entropy sources.
+    pub fn generate() -> Result<Self> {
         let mut bytes = [0u8; 32];
-        getrandom::getrandom(&mut bytes).expect("RNG failure");
+        getrandom::fill(&mut bytes)
+            .map_err(|e| Error::message(ErrorKind::InvalidAuthorizationRequest, e.to_string()))?;
 
         // verifier = base64url(random_bytes)
         let code_verifier = Base64UrlUnpadded::encode_string(&bytes);
@@ -186,11 +192,11 @@ impl PkceParams {
         let hash = hasher.finalize();
         let code_challenge = Base64UrlUnpadded::encode_string(&hash);
 
-        Self {
+        Ok(Self {
             code_verifier,
             code_challenge,
             method: CodeChallengeMethod::S256,
-        }
+        })
     }
 }
 
@@ -232,6 +238,11 @@ impl AuthorizationRequest {
     ///
     /// Objects (e.g. `authorization_details`) are JSON-serialized as required by
     /// [OID4VCI §5.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-authorization-request).
+    ///
+    /// # Note
+    ///
+    /// Values are **not** percent-encoded. Callers constructing a URL query string
+    /// are responsible for encoding each value (e.g., using `percent_encoding::utf8_percent_encode`).
     pub fn to_query_pairs(&self) -> Vec<(String, String)> {
         let mut pairs = Vec::new();
         pairs.push(("response_type".to_string(), self.response_type.clone()));
@@ -287,7 +298,7 @@ impl AuthorizationRequest {
 ///     .with_authorization_detail(
 ///         AuthorizationDetail::for_configuration("UniversityDegreeCredential")
 ///     )
-///     .with_pkce(PkceParams::generate())
+///     .with_pkce(PkceParams::generate().unwrap())
 ///     .build()
 ///     .unwrap();
 /// assert_eq!(request.response_type, "code");
@@ -432,9 +443,6 @@ pub fn scope_for_credential_configuration<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── builder correctness ──────────────────────────────────────────────────
-
     #[test]
     fn builder_minimal_valid_with_scope() {
         let request = AuthorizationRequestBuilder::new("wallet-client")
@@ -490,7 +498,7 @@ mod tests {
 
     #[test]
     fn builder_with_pkce_contains_challenge() {
-        let pkce = PkceParams::generate();
+        let pkce = PkceParams::generate().unwrap();
         let chal = pkce.code_challenge.clone();
 
         let request = AuthorizationRequestBuilder::new("client")
@@ -633,7 +641,7 @@ mod tests {
 
     #[test]
     fn pkce_generation_produces_valid_base64url() {
-        let pkce = PkceParams::generate();
+        let pkce = PkceParams::generate().unwrap();
 
         // Should be valid base64url — no +, /, or padding =
         assert!(!pkce.code_verifier.contains('+'));
