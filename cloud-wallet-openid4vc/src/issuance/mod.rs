@@ -1,5 +1,5 @@
 //! OpenID4VCI protocol data models.
-pub mod authorization_request;
+pub mod authz_request;
 pub mod authz_response;
 pub mod authz_server_metadata;
 pub mod claim_path_pointer;
