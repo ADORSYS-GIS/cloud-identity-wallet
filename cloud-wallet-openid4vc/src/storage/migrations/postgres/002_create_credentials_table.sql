@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     issuer VARCHAR(255) NOT NULL,
     subject VARCHAR(255),
 
-    credential_types JSONB NOT NULL,
+    credential_types TEXT NOT NULL,
     format VARCHAR(32) NOT NULL,
     external_id VARCHAR(255),
 
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     raw_credential BYTEA NOT NULL,
     payload_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
 
-    UNIQUE (tenant_id, external_id)
+    UNIQUE (tenant_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_credentials_tenant_id ON credentials(tenant_id);
