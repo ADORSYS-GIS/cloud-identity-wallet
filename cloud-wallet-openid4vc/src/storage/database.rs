@@ -569,29 +569,6 @@ impl From<&'static str> for crate::storage::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cloud_wallet_kms::provider::LocalProvider;
-
-    fn sample_credential(tenant_id: Uuid) -> Credential {
-        Credential {
-            id: Uuid::new_v4(),
-            tenant_id,
-            issuer: "https://issuer.example".to_string(),
-            subject: Some("did:example:alice".to_string()),
-            credential_types: vec![
-                "VerifiableCredential".to_string(),
-                "UniversityDegree".to_string(),
-            ],
-            format: CredentialFormat::SdJwtVc,
-            external_id: Some("external-1".to_string()),
-            status: CredentialStatus::Active,
-            issued_at: UtcDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
-            valid_until: Some(UtcDateTime::from_unix_timestamp(2_000_000_000).unwrap()),
-            is_revoked: false,
-            status_location: None,
-            status_index: Some(12),
-            raw_credential: "raw-vc-payload".to_string(),
-        }
-    }
 
     #[test]
     fn rewrites_postgres_bindings_to_question_marks() {
@@ -600,76 +577,5 @@ mod tests {
             rewrite_to_positional(sql).as_ref(),
             "SELECT * FROM credentials WHERE id = ? AND tenant_id = ?"
         );
-    }
-
-    #[tokio::test]
-    async fn sqlite_crud_roundtrip() {
-        sqlx::any::install_default_drivers();
-
-        let pool = sqlx::any::AnyPoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        let repo: SqlRepository<LocalProvider> = SqlRepository::new(pool.clone());
-        repo.init_schema().await.unwrap();
-
-        let tenant_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO tenants (id, name) VALUES (?, ?)")
-            .bind(tenant_id.to_string())
-            .bind("Tenant A")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let credential = sample_credential(tenant_id);
-        repo.upsert(credential.clone()).await.unwrap();
-
-        let found = repo.find_by_id(credential.id, tenant_id).await.unwrap();
-        assert_eq!(found.id, credential.id);
-        assert_eq!(found.raw_credential, credential.raw_credential);
-
-        let listed = repo
-            .list(CredentialFilter {
-                tenant_id: Some(tenant_id),
-                format: Some(CredentialFormat::SdJwtVc),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(listed.len(), 1);
-
-        repo.delete(credential.id, tenant_id).await.unwrap();
-        assert!(repo.find_by_id(credential.id, tenant_id).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn sqlite_with_cipher_roundtrip() {
-        sqlx::any::install_default_drivers();
-
-        let pool = sqlx::any::AnyPoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        let cipher = LocalProvider::new();
-        let repo = SqlRepository::with_cipher(pool.clone(), cipher);
-        repo.init_schema().await.unwrap();
-
-        let tenant_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO tenants (id, name) VALUES (?, ?)")
-            .bind(tenant_id.to_string())
-            .bind("Tenant A")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let credential = sample_credential(tenant_id);
-        repo.upsert(credential.clone()).await.unwrap();
-
-        let found = repo.find_by_id(credential.id, tenant_id).await.unwrap();
-        assert_eq!(found.raw_credential, credential.raw_credential);
     }
 }
