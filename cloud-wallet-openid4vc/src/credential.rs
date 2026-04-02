@@ -2,7 +2,6 @@ pub mod tenants;
 
 use core::str::FromStr;
 
-use serde_json::Value;
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -96,7 +95,7 @@ pub struct Credential {
     pub issuer: String,
     pub subject: Option<String>,
 
-    pub credential_types: Value,
+    pub credential_types: Vec<String>,
     pub format: CredentialFormat,
     pub external_id: Option<String>,
 
@@ -108,5 +107,5 @@ pub struct Credential {
     pub status_location: Option<Url>,
     pub status_index: Option<i64>,
 
-    pub raw_credential: Box<[u8]>,
+    pub raw_credential: String,
 }
