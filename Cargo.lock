@@ -936,14 +936,19 @@ dependencies = [
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "cloud-wallet-kms",
  "color-eyre",
  "csscolorparser",
+ "dashmap",
  "percent-encoding",
  "serde",
  "serde_json",
  "serde_with",
+ "sqlx",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "url",
  "uuid",
  "validator",
@@ -3943,10 +3948,12 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
  "webpki-roots 0.26.11",
 ]
 
@@ -4026,7 +4033,9 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
+ "time",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4063,7 +4072,9 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
+ "time",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4087,8 +4098,10 @@ dependencies = [
  "serde_urlencoded",
  "sqlx-core",
  "thiserror 2.0.18",
+ "time",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
