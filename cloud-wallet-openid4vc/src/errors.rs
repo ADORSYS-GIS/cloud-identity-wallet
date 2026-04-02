@@ -151,13 +151,46 @@ pub enum ErrorKind {
     #[error("Invalid credential")]
     InvalidCredential,
 
-    /// A credential offer failed validation or parsing.
+    /// A credential offer failed validation, parsing, or retrieval.
+    ///
+    /// This encompasses:
+    /// - Malformed JSON or URL encoding
+    /// - Invalid URI scheme (non-HTTPS)
+    /// - Invalid media type in response
+    /// - Validation failures (e.g., empty configuration IDs)
     #[error("Invalid credential offer")]
     InvalidCredentialOffer,
+
+    /// A credential offer could not be fetched from a reference URI.
+    ///
+    /// This is distinct from [`InvalidCredentialOffer`](Self::InvalidCredentialOffer)
+    /// as it indicates a network-level failure that may be retried.
+    #[error("Failed to fetch credential offer")]
+    CredentialOfferFetchFailed,
+
+    /// A credential request failed validation or parsing.
+    #[error("Invalid credential request")]
+    InvalidCredentialRequest,
+
+    /// An authorization response returned by the Authorization Server failed
+    /// validation or parsing (e.g. missing `code` parameter, duplicate
+    /// recognized parameters, non-parseable redirect URI).
+    ///
+    /// Defined by [RFC 6749 §4.1.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.1.2)
+    /// and [OpenID4VCI §5.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-authorization-re).
+    #[error("Invalid authorization response")]
+    InvalidAuthorizationResponse,
 
     /// An operation was attempted on a credential that has been revoked.
     #[error("Credential is revoked")]
     CredentialRevoked,
+
+    /// Authorization server metadata failed structural validation (e.g. missing required
+    /// fields, `issuer` not using `https`, empty `response_types_supported`).
+    ///
+    /// Defined by [RFC 8414 §2](https://www.rfc-editor.org/rfc/rfc8414#section-2).
+    #[error("Invalid authorization server metadata")]
+    InvalidAuthorizationServerMetadata,
 
     /// Credential Issuer Metadata failed structural validation.
     #[error("Invalid issuer metadata")]
