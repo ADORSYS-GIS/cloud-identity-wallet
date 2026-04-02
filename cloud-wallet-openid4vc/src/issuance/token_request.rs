@@ -271,7 +271,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-
     fn form_map(
         pairs: Vec<(&'static str, String)>,
     ) -> std::collections::HashMap<&'static str, String> {
