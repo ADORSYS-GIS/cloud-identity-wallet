@@ -11,6 +11,7 @@ use crate::storage::{CredentialFilter, CredentialRepository, Error, Result};
 #[derive(Clone)]
 struct StoredCredential {
     credential: Credential,
+    raw_credential: Vec<u8>,
     payload_encrypted: bool,
 }
 
@@ -58,13 +59,9 @@ impl<K: KmsProvider> InMemoryRepository<K> {
         }
     }
 
-    async fn maybe_encrypt(&self, credential: &mut Credential) -> Result<bool> {
+    async fn maybe_encrypt(&self, id: &Uuid, raw_credential: &mut Vec<u8>) -> Result<bool> {
         if let Some(cipher) = &self.cipher {
-            let mut new_credential = credential.raw_credential.to_vec();
-            cipher
-                .encrypt(credential.id.as_bytes(), &mut new_credential)
-                .await?;
-            credential.raw_credential = new_credential.into_boxed_slice();
+            cipher.encrypt(id.as_bytes(), raw_credential).await?;
             Ok(true)
         } else {
             Ok(false)
@@ -73,15 +70,15 @@ impl<K: KmsProvider> InMemoryRepository<K> {
 
     async fn maybe_decrypt(&self, entry: &StoredCredential) -> Result<Credential> {
         let mut credential = entry.credential.clone();
+        let mut raw_credential = entry.raw_credential.clone();
 
         if entry.payload_encrypted {
             let Some(cipher) = &self.cipher else {
                 return Err(Error::Other(
-                    "credential payload is encrypted but no cipher is configured".to_string(),
+                    "credential payload is encrypted but no cipher is configured".into(),
                 ));
             };
 
-            let mut raw_credential = credential.raw_credential.into_vec();
             let dst = raw_credential.as_ptr() as usize;
             let plaintext = cipher
                 .decrypt(credential.id.as_bytes(), raw_credential.as_mut_slice())
@@ -89,12 +86,11 @@ impl<K: KmsProvider> InMemoryRepository<K> {
             let src = plaintext.as_ptr() as usize;
             let plaintext_len = plaintext.len();
             let offset = src.checked_sub(dst).ok_or_else(|| {
-                Error::InvalidData("decrypted plaintext is not backed by source buffer".to_string())
+                Error::InvalidData("decrypted plaintext is not backed by source buffer".into())
             })?;
             compact_plaintext_in_place(&mut raw_credential, offset, plaintext_len)?;
-            credential.raw_credential = raw_credential.into_boxed_slice();
         }
-
+        credential.raw_credential = raw_credential_from_bytes(raw_credential)?;
         Ok(credential)
     }
 }
@@ -118,19 +114,28 @@ fn compact_plaintext_in_place(
     Ok(())
 }
 
+fn raw_credential_from_bytes(value: Vec<u8>) -> Result<String> {
+    String::from_utf8(value).map_err(|e| Error::InvalidData(format!("invalid raw credential: {e}")))
+}
+
 #[async_trait]
 impl<K: KmsProvider> CredentialRepository for InMemoryRepository<K> {
-    async fn upsert(&self, mut credential: Credential) -> Result<()> {
-        let payload_encrypted = self.maybe_encrypt(&mut credential).await?;
+    async fn upsert(&self, mut credential: Credential) -> Result<Uuid> {
+        let credential_id = credential.id;
+        let mut raw_credential = std::mem::take(&mut credential.raw_credential).into_bytes();
+        let payload_encrypted = self
+            .maybe_encrypt(&credential.id, &mut raw_credential)
+            .await?;
         let key = (credential.tenant_id, credential.id);
         self.credentials.insert(
             key,
             StoredCredential {
                 credential,
+                raw_credential,
                 payload_encrypted,
             },
         );
-        Ok(())
+        Ok(credential_id)
     }
 
     async fn find_by_id(&self, id: Uuid, tenant_id: Uuid) -> Result<Credential> {
@@ -167,8 +172,7 @@ impl<K: KmsProvider> CredentialRepository for InMemoryRepository<K> {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use serde_json::json;
-    use time::OffsetDateTime;
+    use time::UtcDateTime;
     use url::Url;
     use uuid::Uuid;
 
@@ -219,22 +223,19 @@ mod tests {
             tenant_id,
             issuer: "https://issuer.example".to_string(),
             subject: Some("did:example:alice".to_string()),
-            credential_types: json!(["VerifiableCredential", "EmployeeBadge"]),
+            credential_types: vec![
+                "VerifiableCredential".to_string(),
+                "EmployeeBadge".to_string(),
+            ],
             format: CredentialFormat::JwtVcJson,
             external_id: Some("ext-123".to_string()),
             status: CredentialStatus::Active,
-            issued_at: OffsetDateTime::from_unix_timestamp(1_700_000_000)
-                .unwrap()
-                .into(),
-            valid_until: Some(
-                OffsetDateTime::from_unix_timestamp(2_000_000_000)
-                    .unwrap()
-                    .into(),
-            ),
+            issued_at: UtcDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            valid_until: Some(UtcDateTime::from_unix_timestamp(2_000_000_000).unwrap()),
             is_revoked: false,
             status_location: Some(Url::parse("https://status.example/1").unwrap()),
             status_index: Some(7),
-            raw_credential: b"{\"vc\":\"payload\"}".to_vec().into_boxed_slice(),
+            raw_credential: "{\"vc\":\"payload\"}".to_string(),
         }
     }
 
