@@ -183,6 +183,21 @@ pub enum ErrorKind {
     #[error("Invalid issuer metadata")]
     InvalidIssuerMetadata,
 
+    /// A token request failed validation or parsing (e.g. missing required field for
+    /// the specified grant type, conflicting parameters).
+    ///
+    /// Defined by [RFC 6749 §4.1.3](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.1.3)
+    /// and [OpenID4VCI §6.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-token-request).
+    #[error("Invalid token request")]
+    InvalidTokenRequest,
+
+    /// A token response failed validation or parsing (e.g. missing `access_token`).
+    ///
+    /// Defined by [RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.1)
+    /// and [OpenID4VCI §6.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response).
+    #[error("Invalid token response")]
+    InvalidTokenResponse,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
