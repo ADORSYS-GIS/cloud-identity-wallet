@@ -6,7 +6,6 @@ pub use memory::InMemoryRepository;
 
 use async_trait::async_trait;
 use color_eyre::eyre::Report;
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::credential::{Credential, CredentialFormat, CredentialStatus};
@@ -24,11 +23,11 @@ pub enum Error {
     #[error("Invalid stored credential data: {0}")]
     InvalidData(String),
 
-    #[error("Storage error: {0}")]
-    Other(String),
-
     #[error("Encryption error: {0}")]
     Encryption(String),
+
+    #[error("Storage error: {0}")]
+    Other(String),
 }
 
 impl From<cloud_wallet_kms::Error> for Error {
@@ -39,7 +38,7 @@ impl From<cloud_wallet_kms::Error> for Error {
 
 #[async_trait]
 pub trait CredentialRepository: Send + Sync + 'static {
-    async fn upsert(&self, credential: Credential) -> Result<()>;
+    async fn upsert(&self, credential: Credential) -> Result<uuid::Uuid>;
 
     async fn find_by_id(&self, id: Uuid, tenant_id: Uuid) -> Result<Credential>;
 
@@ -51,7 +50,7 @@ pub trait CredentialRepository: Send + Sync + 'static {
 #[derive(Debug, Clone, Default)]
 pub struct CredentialFilter {
     pub tenant_id: Option<Uuid>,
-    pub credential_types: Option<Value>,
+    pub credential_types: Option<Vec<String>>,
     pub status: Option<CredentialStatus>,
     pub format: Option<CredentialFormat>,
     pub issuer: Option<String>,
