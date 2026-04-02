@@ -151,9 +151,22 @@ pub enum ErrorKind {
     #[error("Invalid credential")]
     InvalidCredential,
 
-    /// A credential offer failed validation or parsing.
+    /// A credential offer failed validation, parsing, or retrieval.
+    ///
+    /// This encompasses:
+    /// - Malformed JSON or URL encoding
+    /// - Invalid URI scheme (non-HTTPS)
+    /// - Invalid media type in response
+    /// - Validation failures (e.g., empty configuration IDs)
     #[error("Invalid credential offer")]
     InvalidCredentialOffer,
+
+    /// A credential offer could not be fetched from a reference URI.
+    ///
+    /// This is distinct from [`InvalidCredentialOffer`](Self::InvalidCredentialOffer)
+    /// as it indicates a network-level failure that may be retried.
+    #[error("Failed to fetch credential offer")]
+    CredentialOfferFetchFailed,
 
     /// A credential request failed validation or parsing.
     #[error("Invalid credential request")]
