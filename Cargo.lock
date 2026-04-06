@@ -949,6 +949,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sqlx",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "time",
  "tokio",
