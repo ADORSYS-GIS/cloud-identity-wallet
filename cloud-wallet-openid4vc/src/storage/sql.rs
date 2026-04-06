@@ -342,15 +342,11 @@ impl CredentialRepository for SqlRepository {
     }
 
     async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<()> {
-        let result = sqlx::query(DELETE_CREDENTIAL.for_driver(&self.driver))
+        sqlx::query(DELETE_CREDENTIAL.for_driver(&self.driver))
             .bind(id.to_string())
             .bind(tenant_id.to_string())
             .execute(&self.pool)
             .await?;
-
-        if result.rows_affected() == 0 {
-            return Err(Error::NotFound { id, tenant_id });
-        }
         Ok(())
     }
 }
