@@ -1,7 +1,7 @@
 //! Common test utilities for integration tests.
 
 use cloud_wallet_openid4vc::credential::{Credential, CredentialFormat, CredentialStatus};
-use sqlx::AnyPool;
+use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -29,10 +29,16 @@ pub fn sample_credential(tenant_id: Uuid) -> Credential {
 }
 
 pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
-    #[cfg(feature = "postgres")]
-    let query = "INSERT INTO tenants (id, name) VALUES ($1, $2)";
-    #[cfg(not(feature = "postgres"))]
-    let query = "INSERT INTO tenants (id, name) VALUES (?, ?)";
+    let url = pool.connect_options().to_url_lossy();
+    let is_postgres =
+        url.as_str().starts_with("postgres://") || url.as_str().starts_with("postgresql://");
+
+    let query = if is_postgres {
+        "INSERT INTO tenants (id, name) VALUES ($1, $2)"
+    } else {
+        "INSERT INTO tenants (id, name) VALUES (?, ?)"
+    };
+
     sqlx::query(query)
         .bind(id.to_string())
         .bind(name)
