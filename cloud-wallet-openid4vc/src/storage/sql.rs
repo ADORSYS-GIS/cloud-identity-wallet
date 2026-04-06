@@ -371,7 +371,7 @@ impl<'d> FilterBuilder<'d> {
         Self {
             driver,
             sql,
-            values: Vec::new(),
+            values: vec![],
             exclude_expired_ts: None,
         }
     }
