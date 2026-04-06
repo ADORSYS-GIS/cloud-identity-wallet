@@ -39,10 +39,10 @@ impl std::fmt::Debug for SqlRepository {
 
 impl SqlRepository {
     /// Creates a new SQL repository using the provided connection pool.
-    /// 
+    ///
     /// After creating the backend, you should call [`init_schema`](Self::init_schema)
     /// to create the necessary tables.
-    /// 
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
@@ -279,8 +279,12 @@ impl CredentialRepository for SqlRepository {
             .ok_or(Error::NotFound { id, tenant_id })?;
 
         let (parsed_id, parsed_tenant_id) = row.parse_ids()?;
-        self.maybe_decrypt(&parsed_id, &mut row.raw_credential, row.payload_encrypted != 0)
-            .await?;
+        self.maybe_decrypt(
+            &parsed_id,
+            &mut row.raw_credential,
+            row.payload_encrypted != 0,
+        )
+        .await?;
         row.into_credential_with_ids(parsed_id, parsed_tenant_id)
     }
 
