@@ -13,12 +13,12 @@ CREATE TABLE IF NOT EXISTS credentials (
     issued_at BIGINT NOT NULL,
     valid_until BIGINT,
 
-    is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    is_revoked INTEGER NOT NULL DEFAULT 0,
     status_location VARCHAR(255),
     status_index BIGINT,
 
     raw_credential BYTEA NOT NULL,
-    payload_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+    payload_encrypted INTEGER NOT NULL DEFAULT 0,
 
     UNIQUE (tenant_id, id)
 );

@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     issuer VARCHAR(255) NOT NULL,
     subject VARCHAR(255),
 
-    credential_types TEXT NOT NULL,
+    credential_types VARCHAR(1024) NOT NULL,
     format VARCHAR(32) NOT NULL,
     external_id VARCHAR(255),
 
