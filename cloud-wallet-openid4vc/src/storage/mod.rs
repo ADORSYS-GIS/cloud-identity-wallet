@@ -7,6 +7,13 @@
 //! - [`InMemoryRepository`]: A volatile, in-memory storage backend intended
 //!   for testing and development purposes.
 
+// Ensure only one database feature is enabled at a time
+#[cfg(any(
+    all(feature = "postgres", any(feature = "mysql", feature = "sqlite")),
+    all(feature = "mysql", feature = "sqlite")
+))]
+compile_error!("Only one database feature can be enabled at a time");
+
 #[cfg(feature = "memory-repo")]
 pub(crate) mod memory;
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
