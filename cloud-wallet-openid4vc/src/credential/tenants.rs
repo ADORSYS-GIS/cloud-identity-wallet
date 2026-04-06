@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct Tenants {
     pub id: uuid::Uuid,
     pub name: String,
