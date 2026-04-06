@@ -26,16 +26,12 @@ validator = { version = "0.20", features = ["derive"] }
 
 [dependencies.sqlx]
 workspace = true
-features = ["runtime-tokio", "time", "tls-rustls-aws-lc-rs", "uuid"]
+features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
 optional = true
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-[dev-dependencies.sqlx]
-workspace = true
-features = ["any", "runtime-tokio", "sqlite", "time", "uuid"]
 
 [features]
 default = ["memory-repo"]
