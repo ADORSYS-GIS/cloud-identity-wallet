@@ -38,7 +38,7 @@ workspace = true
 features = ["any", "runtime-tokio", "sqlite", "time", "uuid"]
 
 [features]
-default = ["memory-repo", "sqlite"]
+default = ["memory-repo"]
 memory-repo = ["dep:cloud-wallet-kms", "dep:dashmap"]
 mysql = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/mysql"]
 postgres = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/postgres"]
