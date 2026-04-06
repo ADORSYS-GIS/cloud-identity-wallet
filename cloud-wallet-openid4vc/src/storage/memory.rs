@@ -6,6 +6,7 @@ use dashmap::DashMap;
 use uuid::Uuid;
 
 use crate::credential::Credential;
+use crate::storage::cipher::{self, Cipher};
 use crate::storage::{CredentialFilter, CredentialRepository, Error, Result};
 
 #[derive(Clone)]
@@ -15,30 +16,17 @@ struct StoredCredential {
     payload_encrypted: bool,
 }
 
-pub struct InMemoryRepository<K> {
+/// A volatile, in-memory credential storage backend.
+///
+/// Useful for tests or local development where data persistence across restarts
+/// is not required.
+#[derive(Clone)]
+pub struct InMemoryRepository {
     credentials: Arc<DashMap<(Uuid, Uuid), StoredCredential>>,
-    cipher: Option<Arc<K>>,
+    cipher: Option<Arc<dyn Cipher>>,
 }
 
-impl<K> Clone for InMemoryRepository<K> {
-    fn clone(&self) -> Self {
-        Self {
-            credentials: self.credentials.clone(),
-            cipher: self.cipher.clone(),
-        }
-    }
-}
-
-impl<K> Default for InMemoryRepository<K> {
-    fn default() -> Self {
-        Self {
-            credentials: Arc::default(),
-            cipher: None,
-        }
-    }
-}
-
-impl<K> std::fmt::Debug for InMemoryRepository<K> {
+impl std::fmt::Debug for InMemoryRepository {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InMemoryRepository")
             .field("credentials_len", &self.credentials.len())
@@ -47,27 +35,46 @@ impl<K> std::fmt::Debug for InMemoryRepository<K> {
     }
 }
 
-impl<K: KmsProvider> InMemoryRepository<K> {
-    pub fn new() -> Self {
-        Self::default()
+impl Default for InMemoryRepository {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub fn with_cipher(cipher: K) -> Self {
+impl InMemoryRepository {
+    /// Creates a new, empty in-memory repository.
+    pub fn new() -> Self {
         Self {
             credentials: Arc::default(),
-            cipher: Some(Arc::new(cipher)),
+            cipher: None,
         }
     }
 
+    /// Configures the repository with a KMS provider for encrypting credential payloads.
+    ///
+    /// By default, the `InMemoryRepository` does not encrypt data. Calling this method
+    /// enables payload encryption and decryption using the provided KMS provider.
+    pub fn with_cipher<K: KmsProvider + Send + Sync + 'static>(provider: K) -> Self {
+        Self {
+            credentials: Arc::default(),
+            cipher: Some(cipher::from_provider(provider)),
+        }
+    }
+
+    /// Encrypts the raw credential payload if a cipher is configured.
     async fn maybe_encrypt(&self, id: &Uuid, raw_credential: &mut Vec<u8>) -> Result<bool> {
         if let Some(cipher) = &self.cipher {
-            cipher.encrypt(id.as_bytes(), raw_credential).await?;
+            cipher
+                .encrypt(id.as_bytes(), raw_credential)
+                .await
+                .map_err(|e| Error::Encryption(e.to_string()))?;
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
+    /// Decrypts the raw credential payload if it was previously encrypted.
     async fn maybe_decrypt(&self, entry: &StoredCredential) -> Result<Credential> {
         let mut credential = entry.credential.clone();
         let mut raw_credential = entry.raw_credential.clone();
@@ -82,7 +89,8 @@ impl<K: KmsProvider> InMemoryRepository<K> {
             let dst = raw_credential.as_ptr() as usize;
             let plaintext = cipher
                 .decrypt(credential.id.as_bytes(), raw_credential.as_mut_slice())
-                .await?;
+                .await
+                .map_err(|e| Error::Encryption(e.to_string()))?;
             let src = plaintext.as_ptr() as usize;
             let plaintext_len = plaintext.len();
             let offset = src.checked_sub(dst).ok_or_else(|| {
@@ -95,6 +103,7 @@ impl<K: KmsProvider> InMemoryRepository<K> {
     }
 }
 
+/// Helper function to compact the plaintext in place after decryption.
 fn compact_plaintext_in_place(
     buffer: &mut Vec<u8>,
     plaintext_offset: usize,
@@ -119,7 +128,7 @@ fn raw_credential_from_bytes(value: Vec<u8>) -> Result<String> {
 }
 
 #[async_trait]
-impl<K: KmsProvider> CredentialRepository for InMemoryRepository<K> {
+impl CredentialRepository for InMemoryRepository {
     async fn upsert(&self, mut credential: Credential) -> Result<Uuid> {
         let credential_id = credential.id;
         let mut raw_credential = std::mem::take(&mut credential.raw_credential).into_bytes();
@@ -241,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_memory_crud_roundtrip() {
-        let repo: InMemoryRepository<PrefixCipher> = InMemoryRepository::new();
+        let repo = InMemoryRepository::with_cipher(PrefixCipher);
         let tenant_id = Uuid::new_v4();
         let credential = sample_credential(tenant_id);
 
