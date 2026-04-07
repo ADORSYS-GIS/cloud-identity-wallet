@@ -129,7 +129,7 @@ Run full feature matrix:
 cargo test -p cloud-wallet-kms --all-features
 ```
 
-**Note**: Some integration tests use Testcontainers and require a working Docker daemon.
+**Note**: Some integration tests use Testcontainers and require a working Docker daemon. When Docker is unreachable, the Docker-backed tests return early instead of panicking so local development on Docker-less machines can still run the rest of the suite.
 
 ## Contributing
 

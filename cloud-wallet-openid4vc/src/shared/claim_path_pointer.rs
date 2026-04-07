@@ -1,4 +1,4 @@
-//! Claims Path Pointer type as defined in [OpenID4VCI Appendix C].
+//! Claims Path Pointer type shared by OpenID4VCI and OpenID4VP.
 //!
 //! [OpenID4VCI Appendix C]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#appendix-C
 
@@ -51,7 +51,7 @@ impl std::fmt::Display for ClaimPathElement {
 /// # Examples
 ///
 /// ```
-/// # use cloud_wallet_openid4vc::issuance::claim_path_pointer::{ClaimPathPointer, ClaimPathElement};
+/// # use cloud_wallet_openid4vc::shared::claim_path_pointer::{ClaimPathElement, ClaimPathPointer};
 /// // Path to claim within a JSON credential
 /// let path = ClaimPathPointer::new(vec![
 ///     ClaimPathElement::from("credentialSubject"),
@@ -149,7 +149,7 @@ impl ClaimPathPointer {
     /// # Examples
     ///
     /// ```
-    /// # use cloud_wallet_openid4vc::issuance::claim_path_pointer::ClaimPathPointer;
+    /// # use cloud_wallet_openid4vc::shared::claim_path_pointer::ClaimPathPointer;
     /// # use serde_json::json;
     /// let credential = json!({
     ///     "name": "Arthur Dent",

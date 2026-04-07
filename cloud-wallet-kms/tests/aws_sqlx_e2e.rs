@@ -16,7 +16,9 @@ where
     S: Storage + Send + Sync,
 {
     // Setup LocalStack and get AWS config
-    let aws_config = common::setup().await;
+    let Some(aws_config) = common::setup().await else {
+        return;
+    };
 
     // Create a new AwsProvider with the given storage backend
     let provider = AwsProvider::new(&aws_config, hostname, storage);
@@ -82,6 +84,10 @@ async fn test_aws_provider_e2e_sqlite() {
 async fn test_aws_provider_e2e_postgres() {
     use testcontainers_modules::postgres::Postgres;
 
+    if !common::docker_available().await {
+        return;
+    }
+
     // Start a PostgreSQL container
     let container = Postgres::default()
         .with_tag("18-alpine")
@@ -118,6 +124,10 @@ async fn test_aws_provider_e2e_postgres() {
 #[tokio::test]
 async fn test_aws_provider_e2e_mysql() {
     use testcontainers_modules::mysql::Mysql;
+
+    if !common::docker_available().await {
+        return;
+    }
 
     // Start a MySQL container
     let container = Mysql::default()

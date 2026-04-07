@@ -69,6 +69,10 @@ async fn test_postgres_storage() {
 
     common::init_tracing();
 
+    if !common::docker_available().await {
+        return;
+    }
+
     let container = Postgres::default()
         .with_tag("18-alpine")
         .start()
@@ -100,6 +104,10 @@ async fn test_mysql_storage() {
     use testcontainers_modules::mysql::Mysql;
 
     common::init_tracing();
+
+    if !common::docker_available().await {
+        return;
+    }
 
     let container = Mysql::default()
         .with_tag("9-oracle")

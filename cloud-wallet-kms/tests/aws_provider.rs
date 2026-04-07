@@ -9,7 +9,9 @@ use cloud_wallet_kms::storage::InMemoryBackend;
 
 #[tokio::test]
 async fn test_encrypt_decrypt_roundtrip() {
-    let aws_config = common::setup().await;
+    let Some(aws_config) = common::setup().await else {
+        return;
+    };
 
     // Create provider
     let storage = InMemoryBackend::new();
@@ -36,7 +38,9 @@ async fn test_encrypt_decrypt_roundtrip() {
 
 #[tokio::test]
 async fn test_with_encryption_context() {
-    let aws_config = common::setup().await;
+    let Some(aws_config) = common::setup().await else {
+        return;
+    };
 
     // Create providers with different encryption contexts
     let storage1 = InMemoryBackend::new();
@@ -73,7 +77,9 @@ async fn test_with_encryption_context() {
 
 #[tokio::test]
 async fn test_concurrent_operations() {
-    let aws_config = common::setup().await;
+    let Some(aws_config) = common::setup().await else {
+        return;
+    };
 
     // Create provider
     let storage = InMemoryBackend::new();
@@ -112,7 +118,9 @@ async fn test_concurrent_operations() {
 
 #[tokio::test]
 async fn test_decryption_failure_corrupted_data() {
-    let aws_config = common::setup().await;
+    let Some(aws_config) = common::setup().await else {
+        return;
+    };
 
     // Create provider
     let storage = InMemoryBackend::new();

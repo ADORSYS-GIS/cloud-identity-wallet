@@ -187,11 +187,15 @@ assert_eq!(digest.as_ref().len(), 32); // SHA-256 = 32 bytes
 > **Note**: JWK support requires the `jwk` feature flag.
 
 ```rust
+# #[cfg(not(feature = "jwk"))]
+# fn main() {}
+# #[cfg(feature = "jwk")]
 use cloud_wallet_crypto::{
     ecdsa::{KeyPair, Curve},
     jwk::{Jwk, Parameters, Algorithm, Signing},
 };
 
+# #[cfg(feature = "jwk")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate key and convert to JWK
     let keypair = KeyPair::generate(Curve::P256)?;

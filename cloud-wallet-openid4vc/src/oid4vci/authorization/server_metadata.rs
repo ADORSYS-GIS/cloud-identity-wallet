@@ -479,7 +479,7 @@ mod tests {
         //   2. Unknown fields (userinfo_endpoint, frontchannel_logout_supported,
         //      dpop_signing_alg_values_supported, etc.) are preserved in
         //      extra_fields and round-trip back to identical JSON.
-        let original = include_str!("../../test_data/keycloak_as_metadata.json");
+        let original = include_str!("../../../test_data/keycloak_as_metadata.json");
 
         let metadata: AuthorizationServerMetadata =
             serde_json::from_str(original).expect("fixture should deserialize without error");

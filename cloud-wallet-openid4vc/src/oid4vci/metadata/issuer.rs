@@ -13,8 +13,7 @@ use url::Url;
 use validator::Validate;
 
 use crate::errors::{Error, ErrorKind};
-
-use super::credential_configuration::{CredentialConfiguration, Logo};
+use crate::oid4vci::credential::configuration::{CredentialConfiguration, Logo};
 
 /// Per-language display properties for the Credential Issuer.
 #[skip_serializing_none]
@@ -139,7 +138,7 @@ impl CredentialIssuerMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::issuance::credential_formats::{
+    use crate::oid4vci::credential::format_profiles::{
         CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
         MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
     };
@@ -161,7 +160,7 @@ mod tests {
 
     /// Full issuer metadata from Keycloak OID4VCI deployment.
     /// Source: ngrok tunnel to Keycloak realm with OID4VCI enabled.
-    const KEYCLOAK_METADATA: &str = include_str!("../../test_data/issuer_metadata.json");
+    const KEYCLOAK_METADATA: &str = include_str!("../../../test_data/issuer_metadata.json");
 
     // ── Format model deserialization ──────────────────────────────────────────
 

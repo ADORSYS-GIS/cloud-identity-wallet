@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use super::query_params::QueryParams;
 use crate::errors::{Error, ErrorKind};
-use crate::issuance::query_params::QueryParams;
 
 /// Recognized query parameters in an authorization response.
 const RECOGNIZED_PARAMS: &[&str] = &["code", "state"];

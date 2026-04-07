@@ -1,5 +1,5 @@
+pub mod credential;
 pub mod errors;
-pub mod format;
-pub mod issuance;
-pub mod models;
-pub mod schema;
+pub mod oid4vci;
+pub mod oid4vp;
+pub mod shared;

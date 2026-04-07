@@ -151,7 +151,7 @@ pub enum CredentialStatus {
 /// into this representation at ingestion time, stored as such, and re-encoded
 /// via a [`CredentialFormat`] adapter when a presentation is needed.
 ///
-/// [`CredentialFormat`]: crate::format::CredentialFormat
+/// [`CredentialFormat`]: crate::credential::codec::CredentialFormat
 #[derive(Debug, Clone)]
 pub struct Credential {
     /// Wallet-assigned unique identifier.

@@ -4,7 +4,7 @@
 
 | Tool     | Minimum Version | Installation                                  |
 |---------|-----------------|-----------------------------------------------|
-| Rust    | 2024 Edition    | [rustup](https://rustup.rs/)                  |
+| Rust    | 1.92.0          | [rustup](https://rustup.rs/)                  |
 | Cargo   | Via Rust        | Included with Rust                            |
 | Git     | 2.40+           | [git-scm.com](https://git-scm.com)            |
 | Clippy  | Via Rust        | `rustup component add clippy`                 |
@@ -23,8 +23,10 @@ cd cloud-identity-wallet
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup default stable
+rustup toolchain install 1.92.0
 ```
+
+This repository includes `rust-toolchain.toml`, so `rustup` will automatically select Rust 1.92.0 when you run `cargo` inside the repo. If that toolchain is not installed yet, `rustup` will install it on first use.
 
 ### 3. Configure Environment Variables
 

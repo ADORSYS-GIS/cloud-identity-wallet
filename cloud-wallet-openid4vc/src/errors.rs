@@ -8,7 +8,7 @@ use thiserror::Error;
 
 /// Error returned when attempting to create an empty [`ClaimPathPointer`].
 ///
-/// [`ClaimPathPointer`]: crate::issuance::claim_path_pointer::ClaimPathPointer
+/// [`ClaimPathPointer`]: crate::shared::claim_path_pointer::ClaimPathPointer
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Error)]
 #[error("claims path pointer must be non-empty")]
 pub struct EmptyClaimPathError;
@@ -18,7 +18,7 @@ pub struct EmptyClaimPathError;
 /// [`Result`]: std::result::Result
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Represents an error that can occur within the OpenID4VCI credential domain.
+/// Represents an error that can occur within the OpenID4VC domain.
 ///
 /// Errors carry a machine-matchable [`ErrorKind`] for control flow and an optional
 /// chained [`source`] for human-readable detail. Use [`Error::kind`] to branch on
@@ -195,6 +195,26 @@ pub enum ErrorKind {
     /// Credential Issuer Metadata failed structural validation.
     #[error("Invalid issuer metadata")]
     InvalidIssuerMetadata,
+
+    /// A DCQL presentation query failed structural validation.
+    #[error("Invalid DCQL query")]
+    InvalidDcqlQuery,
+
+    /// An OpenID4VP authorization request failed validation or parsing.
+    #[error("Invalid presentation request")]
+    InvalidPresentationRequest,
+
+    /// Verifier metadata failed structural validation.
+    #[error("Invalid verifier metadata")]
+    InvalidVerifierMetadata,
+
+    /// Wallet metadata failed structural validation.
+    #[error("Invalid wallet metadata")]
+    InvalidWalletMetadata,
+
+    /// An OpenID4VP presentation response failed structural validation.
+    #[error("Invalid presentation response")]
+    InvalidPresentationResponse,
 
     /// An error that doesn't fit into any other category.
     #[error("Other error")]

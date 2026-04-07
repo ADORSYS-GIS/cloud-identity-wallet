@@ -4,8 +4,8 @@
 //! the wallet's canonical [`Credential`] representation and a specific wire
 //! format. Format-specific adapters implement this trait.
 
+use super::canonical::Credential;
 use crate::errors::Error;
-use crate::models::Credential;
 
 /// Options controlling how a [`Credential`] is encoded into a wire format.
 #[derive(Debug, Clone, Default)]

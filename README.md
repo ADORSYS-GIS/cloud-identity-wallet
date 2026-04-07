@@ -58,7 +58,7 @@ A detailed breakdown of components, trust boundaries, and protocol flows is avai
 
 ### Prerequisites
 
-- [Rust & Cargo](https://www.rust-lang.org/tools/install) (latest stable version)
+- [Rust & Cargo via rustup](https://www.rust-lang.org/tools/install) (Rust 1.92.0 or newer)
 - An optional alternative linker for faster builds (see [linking guide](./docs/linking.md))
 
 ### Setup
@@ -67,6 +67,8 @@ A detailed breakdown of components, trust boundaries, and protocol flows is avai
 git clone https://github.com/ADORSYS-GIS/cloud-identity-wallet.git
 cd cloud-identity-wallet
 ```
+
+The repository pins Rust 1.92.0 in `rust-toolchain.toml`. If you use `rustup`, running `cargo` in this directory will automatically select that toolchain and install it if needed.
 
 ### Running the application
 
