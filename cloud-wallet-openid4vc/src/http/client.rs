@@ -7,7 +7,10 @@ use reqwest::{Client, Method, Url};
 
 use crate::errors::{Error, ErrorKind};
 use crate::http::request::JsonRequestBuilder;
-use crate::http::{map_reqwest_error, DEFAULT_CONNECT_TIMEOUT_SECS, DEFAULT_MAX_RESPONSE_SIZE, DEFAULT_TIMEOUT_SECS};
+use crate::http::{
+    DEFAULT_CONNECT_TIMEOUT_SECS, DEFAULT_MAX_RESPONSE_SIZE, DEFAULT_TIMEOUT_SECS,
+    map_reqwest_error,
+};
 
 use super::request::FormRequestBuilder;
 
@@ -130,9 +133,10 @@ impl HttpClientBuilder {
     #[must_use]
     pub fn default_header(mut self, key: &'static str, value: &str) -> Self {
         if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
-            && let Ok(header_value) = reqwest::header::HeaderValue::try_from(value) {
-                self.default_headers.insert(header_name, header_value);
-            }
+            && let Ok(header_value) = reqwest::header::HeaderValue::try_from(value)
+        {
+            self.default_headers.insert(header_name, header_value);
+        }
         self
     }
 
@@ -161,7 +165,10 @@ impl HttpClientBuilder {
         builder = builder.default_headers(self.default_headers);
 
         let client = builder.build().map_err(|e| {
-            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build HTTP client: {e}"))
+            Error::message(
+                ErrorKind::HttpRequestFailed,
+                format!("failed to build HTTP client: {e}"),
+            )
         })?;
 
         Ok(HttpClient {

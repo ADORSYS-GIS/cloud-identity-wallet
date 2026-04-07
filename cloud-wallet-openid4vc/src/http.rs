@@ -31,8 +31,8 @@
 //! ```
 
 use base64::Engine;
-use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::StatusCode;
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
 
 use crate::errors::{Error, ErrorKind};
@@ -75,8 +75,8 @@ impl AuthHeader {
     /// Creates a Basic authorization header from username and password.
     #[must_use]
     pub fn basic(username: &str, password: &str) -> Self {
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(format!("{username}:{password}"));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
         Self::Basic(encoded)
     }
 
@@ -101,7 +101,10 @@ impl AuthHeader {
             Self::Dpop { token, .. } => format!("DPoP {token}"),
         };
         HeaderValue::try_from(value).map_err(|e| {
-            Error::message(ErrorKind::HttpRequestFailed, format!("invalid authorization header: {e}"))
+            Error::message(
+                ErrorKind::HttpRequestFailed,
+                format!("invalid authorization header: {e}"),
+            )
         })
     }
 
@@ -176,9 +179,10 @@ impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "HTTP {}", self.status)?;
         if let Some(ref body) = self.body
-            && !body.is_empty() {
-                write!(f, ": {body}")?;
-            }
+            && !body.is_empty()
+        {
+            write!(f, ": {body}")?;
+        }
         Ok(())
     }
 }
@@ -188,9 +192,15 @@ impl std::error::Error for HttpError {}
 /// Converts a `reqwest::Error` to our `Error` type.
 pub(crate) fn map_reqwest_error(e: reqwest::Error) -> Error {
     if e.is_timeout() {
-        Error::message(ErrorKind::HttpRequestFailed, format!("request timed out: {e}"))
+        Error::message(
+            ErrorKind::HttpRequestFailed,
+            format!("request timed out: {e}"),
+        )
     } else if e.is_connect() {
-        Error::message(ErrorKind::HttpRequestFailed, format!("connection failed: {e}"))
+        Error::message(
+            ErrorKind::HttpRequestFailed,
+            format!("connection failed: {e}"),
+        )
     } else if e.is_body() || e.is_decode() {
         Error::message(
             ErrorKind::HttpResponseParsingFailed,

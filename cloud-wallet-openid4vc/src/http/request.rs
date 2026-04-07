@@ -2,10 +2,10 @@
 
 use std::marker::PhantomData;
 
-use reqwest::header::HeaderValue;
 use reqwest::Method;
-use serde::de::DeserializeOwned;
+use reqwest::header::HeaderValue;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::errors::{Error, ErrorKind};
 use crate::http::client::HttpClient;
@@ -53,9 +53,10 @@ impl<'a> RequestBuilder<'a> {
     #[must_use]
     pub fn header(mut self, key: &'static str, value: &str) -> Self {
         if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
-            && let Ok(header_value) = HeaderValue::try_from(value) {
-                self.headers.insert(header_name, header_value);
-            }
+            && let Ok(header_value) = HeaderValue::try_from(value)
+        {
+            self.headers.insert(header_name, header_value);
+        }
         self
     }
 
@@ -178,9 +179,10 @@ impl<'a, T: DeserializeOwned, B: Serialize> JsonRequestBuilder<'a, T, B> {
     #[must_use]
     pub fn header(mut self, key: &'static str, value: &str) -> Self {
         if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
-            && let Ok(header_value) = HeaderValue::try_from(value) {
-                self.headers.insert(header_name, header_value);
-            }
+            && let Ok(header_value) = HeaderValue::try_from(value)
+        {
+            self.headers.insert(header_name, header_value);
+        }
         self
     }
 
@@ -309,9 +311,10 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
     #[must_use]
     pub fn header(mut self, key: &'static str, value: &str) -> Self {
         if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
-            && let Ok(header_value) = HeaderValue::try_from(value) {
-                self.headers.insert(header_name, header_value);
-            }
+            && let Ok(header_value) = HeaderValue::try_from(value)
+        {
+            self.headers.insert(header_name, header_value);
+        }
         self
     }
 
@@ -355,8 +358,12 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
             }
         }
 
-        let encoded = serde_urlencoded::to_string(&self.params)
-            .map_err(|e| Error::message(ErrorKind::HttpRequestFailed, format!("failed to encode form body: {e}")))?;
+        let encoded = serde_urlencoded::to_string(&self.params).map_err(|e| {
+            Error::message(
+                ErrorKind::HttpRequestFailed,
+                format!("failed to encode form body: {e}"),
+            )
+        })?;
         request = request.body(encoded);
 
         request = request.headers(self.headers);
@@ -489,8 +496,8 @@ mod tests {
     #[test]
     fn request_builder_sets_bearer_auth() {
         let client = test_client();
-        let builder = RequestBuilder::new(&client, Method::GET, "https://example.com")
-            .bearer("test-token");
+        let builder =
+            RequestBuilder::new(&client, Method::GET, "https://example.com").bearer("test-token");
         assert!(builder.auth.is_some());
     }
 
@@ -522,7 +529,10 @@ mod tests {
             .param("grant_type", "authorization_code")
             .param("code", "abc123");
         assert_eq!(builder.params.len(), 2);
-        assert_eq!(builder.params.get("grant_type"), Some(&"authorization_code".to_string()));
+        assert_eq!(
+            builder.params.get("grant_type"),
+            Some(&"authorization_code".to_string())
+        );
     }
 
     #[test]
