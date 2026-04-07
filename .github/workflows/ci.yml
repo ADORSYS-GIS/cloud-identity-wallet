@@ -44,13 +44,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake golang-go
 
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
-
       - name: Cargo Build
-        run: cargo hack build --workspace --all-targets --each-feature --skip-no-default-features --exclude-features fips
+        run: cargo build --workspace --all-targets --all-features
 
   cargo-clippy:
     name: Cargo Clippy Check
@@ -71,13 +66,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake golang-go
 
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
-
       - name: Clippy Check
-        run: cargo hack clippy --workspace --all-targets --each-feature --skip-no-default-features --exclude-features fips -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   cargo-nextest:
     name: Cargo Nextest
@@ -102,7 +92,7 @@ jobs:
           tool: nextest
 
       - name: Run Cargo Tests
-        run: cargo hack nextest run --workspace --all-targets --each-feature --skip-no-default-features --exclude-features fips
+        run: cargo nextest run --workspace --all-targets --all-features
 
   cargo-doc:
     name: Cargo Documentation
@@ -121,13 +111,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake golang-go
 
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
-
       - name: Generate Documentation
-        run: cargo hack doc --workspace --each-feature --skip-no-default-features --exclude-features fips --no-deps --document-private-items
+        run: cargo doc --workspace --all-features --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -152,13 +137,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake golang-go
 
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
-
       - name: Cargo test doc
-        run: cargo hack test --doc --workspace --each-feature --skip-no-default-features --exclude-features fips
+        run: cargo test --doc --workspace --all-features
 
   cargo-machete:
     name: Cargo Machete Check
