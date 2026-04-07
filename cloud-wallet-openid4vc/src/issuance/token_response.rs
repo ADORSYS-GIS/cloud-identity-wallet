@@ -1,9 +1,12 @@
-//! Token Response models (OID4VCI §6.2, §6.3, and RFC 6749 §5).
+//! Token Response models.
+//!
+//! Spec references:
+//! - OpenID4VCI §6.2: <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response>
+//! - OpenID4VCI §6.3: <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-token-error-response>
+//! - RFC 6749 §5.1: <https://www.rfc-editor.org/rfc/rfc6749#section-5.1>
 
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-
-use crate::errors::{Error, ErrorKind};
 
 /// OAuth 2.0 access token type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,63 +39,25 @@ pub struct TokenResponseAuthorizationDetail {
     pub credential_identifiers: Vec<String>,
 }
 
-impl TokenResponseAuthorizationDetail {
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.detail_type != "openid_credential" {
-            return Err(Error::message(
-                ErrorKind::InvalidTokenResponse,
-                format!(
-                    "authorization_details type must be 'openid_credential', got '{}'",
-                    self.detail_type
-                ),
-            ));
-        }
-        if self.credential_identifiers.is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidTokenResponse,
-                "authorization_details.credential_identifiers must not be empty",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// A successful Token Response (HTTP 200 OK).
+/// A successful Token Response (HTTP 200 OK) per OpenID4VCI §6.2 and RFC 6749 §5.1.
+///
+/// Required: `access_token`, `token_type`
+/// Optional: `expires_in`, `refresh_token`, `scope`, `authorization_details`
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenResponse {
+    /// The access token issued by the authorization server (REQUIRED per RFC 6749 §5.1).
     pub access_token: String,
+    /// The type of token issued (REQUIRED per RFC 6749 §5.1).
     pub token_type: TokenType,
-
+    /// The lifetime in seconds of the access token (RECOMMENDED per RFC 6749 §5.1).
     pub expires_in: Option<u64>,
-
+    /// The refresh token, which can be used to obtain new access tokens (OPTIONAL per RFC 6749 §5.1).
     pub refresh_token: Option<String>,
-
+    /// The scope of the access token (OPTIONAL per RFC 6749 §5.1).
     pub scope: Option<String>,
-
+    /// Authorization details per RFC 9396; REQUIRED when authorization_details was used in the request.
     pub authorization_details: Option<Vec<TokenResponseAuthorizationDetail>>,
-
-    /// OID4VCI extension: nonce for subsequent requests.
-    pub c_nonce: Option<String>,
-
-    pub c_nonce_expires_in: Option<u64>,
-}
-
-impl TokenResponse {
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.access_token.trim().is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidTokenResponse,
-                "access_token must not be empty",
-            ));
-        }
-        if let Some(ref details) = self.authorization_details {
-            for detail in details {
-                detail.validate()?;
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Normative error codes for the Token Error Response.
@@ -253,39 +218,11 @@ mod tests {
     }
 
     #[test]
-    fn auth_detail_rejects_wrong_type() {
-        let detail = TokenResponseAuthorizationDetail {
-            detail_type: "unknown_type".to_string(),
-            credential_configuration_id: None,
-            locations: None,
-            credential_identifiers: vec!["id1".to_string()],
-        };
-
-        let err = detail.validate().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
-    }
-
-    #[test]
-    fn auth_detail_rejects_empty_credential_identifiers() {
-        let detail = TokenResponseAuthorizationDetail {
-            detail_type: "openid_credential".to_string(),
-            credential_configuration_id: Some("UniversityDegreeCredential".to_string()),
-            locations: None,
-            credential_identifiers: vec![],
-        };
-
-        let err = detail.validate().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidTokenResponse);
-    }
-
-    #[test]
-    fn spec_successful_bearer_response_with_c_nonce() {
+    fn spec_successful_bearer_response() {
         let json = r#"{
             "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp..sHQ",
             "token_type": "Bearer",
-            "expires_in": 86400,
-            "c_nonce": "tZignsnFbp",
-            "c_nonce_expires_in": 86400
+            "expires_in": 86400
         }"#;
 
         let resp: TokenResponse = serde_json::from_str(json).expect("deser failed");
@@ -293,9 +230,6 @@ mod tests {
         assert_eq!(resp.access_token, "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp..sHQ");
         assert_eq!(resp.token_type, TokenType::Bearer);
         assert_eq!(resp.expires_in, Some(86400));
-        assert_eq!(resp.c_nonce.as_deref(), Some("tZignsnFbp"));
-        assert_eq!(resp.c_nonce_expires_in, Some(86400));
-        assert!(resp.validate().is_ok());
     }
 
     #[test]
@@ -317,7 +251,6 @@ mod tests {
         }"#;
 
         let resp: TokenResponse = serde_json::from_str(json).expect("deser failed");
-        assert!(resp.validate().is_ok());
 
         let details = resp.authorization_details.as_ref().unwrap();
         assert_eq!(details.len(), 1);
@@ -337,23 +270,6 @@ mod tests {
 
         let resp: TokenResponse = serde_json::from_str(json).expect("deser failed");
         assert_eq!(resp.token_type, TokenType::DPoP);
-        assert!(resp.validate().is_ok());
-    }
-
-    #[test]
-    fn validation_rejects_blank_access_token() {
-        let resp = TokenResponse {
-            access_token: "   ".to_string(),
-            token_type: TokenType::Bearer,
-            expires_in: None,
-            refresh_token: None,
-            scope: None,
-            authorization_details: None,
-            c_nonce: None,
-            c_nonce_expires_in: None,
-        };
-
-        assert!(resp.validate().is_err());
     }
 
     #[test]
@@ -370,8 +286,6 @@ mod tests {
                 locations: None,
                 credential_identifiers: vec!["cred-001".to_string()],
             }]),
-            c_nonce: Some("abc123".to_string()),
-            c_nonce_expires_in: Some(300),
         };
 
         let json = serde_json::to_string(&resp).expect("serialize failed");
@@ -388,13 +302,10 @@ mod tests {
             refresh_token: None,
             scope: None,
             authorization_details: None,
-            c_nonce: None,
-            c_nonce_expires_in: None,
         };
 
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.get("expires_in").is_none());
         assert!(json.get("refresh_token").is_none());
-        assert!(json.get("c_nonce").is_none());
     }
 }
