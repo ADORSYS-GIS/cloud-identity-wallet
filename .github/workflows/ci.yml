@@ -50,7 +50,7 @@ jobs:
           tool: cargo-hack
 
       - name: Cargo Build
-        run: cargo hack build --workspace --all-targets --each-feature --exclude-features fips
+        run: cargo hack build --workspace --all-targets --each-feature --skip-no-default-features --exclude-features fips
 
   cargo-clippy:
     name: Cargo Clippy Check
@@ -77,7 +77,7 @@ jobs:
           tool: cargo-hack
 
       - name: Clippy Check
-        run: cargo hack clippy --workspace --all-targets --each-feature --exclude-features fips -- -D warnings
+        run: cargo hack clippy --workspace --all-targets --each-feature --skip-no-default-features --exclude-features fips -- -D warnings
 
   cargo-nextest:
     name: Cargo Nextest
@@ -102,7 +102,7 @@ jobs:
           tool: nextest
 
       - name: Run Cargo Tests
-        run: cargo hack nextest run --workspace --all-targets --each-feature --exclude-features fips
+        run: cargo hack nextest run --workspace --all-targets --each-feature --skip-no-default-features --exclude-features fips
 
   cargo-doc:
     name: Cargo Documentation
@@ -127,7 +127,7 @@ jobs:
           tool: cargo-hack
 
       - name: Generate Documentation
-        run: cargo hack doc --workspace --each-feature --exclude-features fips --no-deps --document-private-items
+        run: cargo hack doc --workspace --each-feature --skip-no-default-features --exclude-features fips --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -158,7 +158,7 @@ jobs:
           tool: cargo-hack
 
       - name: Cargo test doc
-        run: cargo hack test --doc --workspace --each-feature --exclude-features fips
+        run: cargo hack test --doc --workspace --each-feature --skip-no-default-features --exclude-features fips
 
   cargo-machete:
     name: Cargo Machete Check
