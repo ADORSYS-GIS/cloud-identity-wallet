@@ -12,8 +12,8 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::issuance::authorization_detail::AuthorizationDetail;
-pub use crate::issuance::authorization_detail::{AuthorizationDetailType, AuthzDetailsClaim};
+use crate::issuance::authz_detail::AuthorizationDetails;
+pub use crate::issuance::authz_detail::{AuthorizationDetailType, AuthzDetailsClaim};
 
 /// PKCE code challenge method.
 ///
@@ -60,7 +60,7 @@ pub struct AuthorizationRequest {
     pub issuer_state: Option<String>,
     /// OPTIONAL. RAR authorization details requesting specific Credentials.
     /// See [OID4VCI §5.1.1].
-    pub authorization_details: Option<Vec<AuthorizationDetail>>,
+    pub authorization_details: Option<Vec<AuthorizationDetails>>,
     /// OPTIONAL. PKCE code challenge (base64url-encoded SHA-256 of the verifier).
     pub code_challenge: Option<String>,
     /// OPTIONAL. PKCE challenge method. Will always be `S256` when present.
