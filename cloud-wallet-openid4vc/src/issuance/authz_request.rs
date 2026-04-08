@@ -12,8 +12,8 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::issuance::authz_detail::AuthorizationDetails;
-pub use crate::issuance::authz_detail::{AuthorizationDetailType, AuthzDetailsClaim};
+use crate::issuance::authz_details::AuthorizationDetails;
+pub use crate::issuance::authz_details::{AuthorizationDetailType, AuthzDetailsClaim};
 
 /// PKCE code challenge method.
 ///
