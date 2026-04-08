@@ -14,7 +14,7 @@ use serde_with::skip_serializing_none;
 /// This enum supports the known types (Bearer, DPoP) and captures unknown
 /// types for forward compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
+#[serde(from = "String", into = "String")]
 pub enum TokenType {
     Bearer,
     DPoP,
@@ -23,14 +23,12 @@ pub enum TokenType {
     Other(String),
 }
 
-impl TryFrom<String> for TokenType {
-    type Error = std::convert::Infallible;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+impl From<String> for TokenType {
+    fn from(value: String) -> Self {
         match value.to_lowercase().as_str() {
-            "bearer" => Ok(TokenType::Bearer),
-            "dpop" => Ok(TokenType::DPoP),
-            _ => Ok(TokenType::Other(value)),
+            "bearer" => TokenType::Bearer,
+            "dpop" => TokenType::DPoP,
+            _ => TokenType::Other(value),
         }
     }
 }
