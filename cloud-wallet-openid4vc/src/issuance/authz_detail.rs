@@ -63,7 +63,7 @@ impl From<ClaimPathPointer> for AuthzDetailsClaim {
 /// be set to the Credential Issuer Identifier value.
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthorizationDetail {
+pub struct AuthorizationDetails {
     /// REQUIRED. The type of authorization detail. MUST be `openid_credential`.
     #[serde(rename = "type")]
     pub r#type: AuthorizationDetailType,
@@ -82,7 +82,7 @@ pub struct AuthorizationDetail {
     pub claims: Option<Vec<AuthzDetailsClaim>>,
 }
 
-impl AuthorizationDetail {
+impl AuthorizationDetails {
     /// Creates a new `AuthorizationDetail` specifying the credential by its configuration ID.
     ///
     /// This is the primary way to construct an authorization detail per [OID4VCI §5.1.1]:
@@ -122,7 +122,7 @@ mod tests {
     fn rar_detail_ser_matches_spec_example() {
         // OID4VCI §5.1.1 non-normative example:
         // [{ "type": "openid_credential", "credential_configuration_id": "UniversityDegreeCredential" }]
-        let detail = AuthorizationDetail::for_configuration("UniversityDegreeCredential");
+        let detail = AuthorizationDetails::for_configuration("UniversityDegreeCredential");
         let json = serde_json::to_value(&detail).unwrap();
 
         assert_eq!(json["type"], "openid_credential");
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn rar_detail_with_locations_for_remote_as() {
         // OID4VCI §5.1.1: locations MUST be set when authorization_servers is in metadata
-        let detail = AuthorizationDetail::for_configuration("UniversityDegreeCredential")
+        let detail = AuthorizationDetails::for_configuration("UniversityDegreeCredential")
             .with_locations(vec![
                 Url::parse("https://credential-issuer.example.com").unwrap(),
             ]);
@@ -154,11 +154,11 @@ mod tests {
 
     #[test]
     fn rar_detail_roundtrip_deserialization() {
-        let original = AuthorizationDetail::for_configuration("MyCredential")
+        let original = AuthorizationDetails::for_configuration("MyCredential")
             .with_locations(vec![Url::parse("https://issuer.example.com").unwrap()]);
 
         let json = serde_json::to_string(&original).unwrap();
-        let recovered: AuthorizationDetail = serde_json::from_str(&json).unwrap();
+        let recovered: AuthorizationDetails = serde_json::from_str(&json).unwrap();
 
         assert_eq!(recovered.credential_configuration_id, "MyCredential");
         assert_eq!(
