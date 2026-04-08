@@ -9,10 +9,40 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 /// OAuth 2.0 access token type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Per RFC 6749 §5.1, token_type values are case-insensitive.
+/// This enum supports the known types (Bearer, DPoP) and captures unknown
+/// types for forward compatibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub enum TokenType {
     Bearer,
     DPoP,
+    /// Unknown token type returned by the authorization server.
+    /// Stored in canonical form (lowercase) for consistent comparison.
+    Other(String),
+}
+
+impl TryFrom<String> for TokenType {
+    type Error = std::convert::Infallible;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "bearer" => Ok(TokenType::Bearer),
+            "dpop" => Ok(TokenType::DPoP),
+            _ => Ok(TokenType::Other(value)),
+        }
+    }
+}
+
+impl From<TokenType> for String {
+    fn from(value: TokenType) -> Self {
+        match value {
+            TokenType::Bearer => "Bearer".to_string(),
+            TokenType::DPoP => "DPoP".to_string(),
+            TokenType::Other(s) => s,
+        }
+    }
 }
 
 impl std::fmt::Display for TokenType {
@@ -20,6 +50,7 @@ impl std::fmt::Display for TokenType {
         match self {
             TokenType::Bearer => write!(f, "Bearer"),
             TokenType::DPoP => write!(f, "DPoP"),
+            TokenType::Other(s) => write!(f, "{s}"),
         }
     }
 }
@@ -46,17 +77,11 @@ pub struct TokenResponseAuthorizationDetail {
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenResponse {
-    /// The access token issued by the authorization server (REQUIRED per RFC 6749 §5.1).
     pub access_token: String,
-    /// The type of token issued (REQUIRED per RFC 6749 §5.1).
     pub token_type: TokenType,
-    /// The lifetime in seconds of the access token (RECOMMENDED per RFC 6749 §5.1).
     pub expires_in: Option<u64>,
-    /// The refresh token, which can be used to obtain new access tokens (OPTIONAL per RFC 6749 §5.1).
     pub refresh_token: Option<String>,
-    /// The scope of the access token (OPTIONAL per RFC 6749 §5.1).
     pub scope: Option<String>,
-    /// Authorization details per RFC 9396; REQUIRED when authorization_details was used in the request.
     pub authorization_details: Option<Vec<TokenResponseAuthorizationDetail>>,
 }
 
@@ -137,6 +162,11 @@ mod tests {
             serde_json::to_value(TokenType::DPoP).unwrap(),
             json!("DPoP")
         );
+        // Unknown types preserve original value
+        assert_eq!(
+            serde_json::to_value(TokenType::Other("CustomAuth".to_string())).unwrap(),
+            json!("CustomAuth")
+        );
     }
 
     #[test]
@@ -149,9 +179,43 @@ mod tests {
     }
 
     #[test]
+    fn token_type_case_insensitive_deserialization() {
+        // RFC 6749 §5.1: token_type value is case-insensitive
+        let cases = [
+            ("bearer", TokenType::Bearer),
+            ("BEARER", TokenType::Bearer),
+            ("BeArEr", TokenType::Bearer),
+            ("dpop", TokenType::DPoP),
+            ("DPOP", TokenType::DPoP),
+            ("DpOp", TokenType::DPoP),
+        ];
+
+        for (input, expected) in cases {
+            let t: TokenType = serde_json::from_str(&format!("\"{input}\"")).unwrap();
+            assert_eq!(t, expected, "failed for input: {input}");
+        }
+    }
+
+    #[test]
+    fn token_type_unknown_preserved() {
+        // Unknown token types should be captured, not rejected
+        let t: TokenType = serde_json::from_str(r#""FutureAuth""#).unwrap();
+        assert_eq!(t, TokenType::Other("FutureAuth".to_string()));
+
+        // Round-trip unknown types
+        let json = serde_json::to_string(&t).unwrap();
+        let roundtripped: TokenType = serde_json::from_str(&json).unwrap();
+        assert_eq!(t, roundtripped);
+    }
+
+    #[test]
     fn token_type_display() {
         assert_eq!(TokenType::Bearer.to_string(), "Bearer");
         assert_eq!(TokenType::DPoP.to_string(), "DPoP");
+        assert_eq!(
+            TokenType::Other("CustomAuth".to_string()).to_string(),
+            "CustomAuth"
+        );
     }
 
     #[test]
