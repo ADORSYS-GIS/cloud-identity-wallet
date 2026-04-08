@@ -13,3 +13,6 @@ pub mod css_color;
 pub mod error;
 pub mod issuer_metadata;
 pub mod query_params;
+pub mod token_response;
+
+pub use token_response::{parse_token_response, TokenResponse};
