@@ -147,6 +147,27 @@ mod tests {
     }
 
     #[test]
+    fn pre_authorized_code_request_roundtrip_with_authorization_details() {
+        // RFC 9396 authorization_details round-trip test
+        let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
+            pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
+            tx_code: Some("493536".to_string()),
+            client_id: Some("wallet_client".to_string()),
+            scope: Some("openid_credential".to_string()),
+            authorization_details: Some(
+                r#"[{"type":"openid_credential","credential_configuration_id":"UniversityDegreeCredential"}]"#
+                    .to_string(),
+            ),
+        });
+
+        let json = serde_json::to_string(&request).expect("serialize failed");
+        let roundtripped: TokenRequest =
+            serde_json::from_str(&json).expect("deserialize failed");
+
+        assert_eq!(request, roundtripped);
+    }
+
+    #[test]
     fn refresh_token_request_roundtrip() {
         let request = TokenRequest::RefreshToken(RefreshTokenRequest {
             refresh_token: "tGzv3JOkF0XG5Qx2TlKWIA".to_string(),
