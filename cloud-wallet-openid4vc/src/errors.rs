@@ -210,6 +210,9 @@ pub enum ErrorKind {
     /// and [OpenID4VCI §6.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response).
     #[error("Invalid token response")]
     InvalidTokenResponse,
+    /// Authorization Request failed structural validation.
+    #[error("Invalid authorization request")]
+    InvalidAuthorizationRequest,
 
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
