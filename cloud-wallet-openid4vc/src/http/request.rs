@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use reqwest::Method;
+use reqwest::{Method, Url};
 use reqwest::header::HeaderValue;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -11,6 +11,21 @@ use crate::errors::{Error, ErrorKind};
 use crate::http::client::HttpClient;
 use crate::http::response::{JsonResponse, RawResponse};
 use crate::http::{AuthHeader, HttpError};
+
+fn validate_https_url(url: &str, allow_http: bool) -> Result<Url, Error> {
+    let parsed = Url::parse(url).map_err(|e| {
+        Error::message(ErrorKind::HttpRequestFailed, format!("invalid URL: {e}"))
+    })?;
+    
+    if !allow_http && parsed.scheme() != "https" {
+        return Err(Error::message(
+            ErrorKind::HttpRequestFailed,
+            "endpoint URL must use https scheme per OpenID4VCI spec",
+        ));
+    }
+    
+    Ok(parsed)
+}
 
 /// Generic request builder for raw HTTP requests.
 pub struct RequestBuilder<'a> {
@@ -68,6 +83,10 @@ impl<'a> RequestBuilder<'a> {
     }
 
     /// Sets the request body as JSON.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the body cannot be serialized to JSON.
     #[must_use]
     pub fn json<T: Serialize>(mut self, body: &T) -> Self {
         self.headers.insert(
@@ -83,6 +102,10 @@ impl<'a> RequestBuilder<'a> {
     }
 
     /// Sets the request body as form-encoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the body cannot be form-encoded.
     #[must_use]
     pub fn form(mut self, body: impl Serialize) -> Self {
         self.headers.insert(
@@ -99,10 +122,13 @@ impl<'a> RequestBuilder<'a> {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The URL is not HTTPS
     /// - The request fails (network error, timeout, etc.)
     /// - The response status is not successful (4xx or 5xx)
     /// - The response body exceeds the size limit
     pub async fn send(self) -> Result<RawResponse, Error> {
+        validate_https_url(&self.url, self.client.allow_http_urls)?;
+
         let mut request = self.client.inner.request(self.method, &self.url);
 
         if let Some(ref auth) = self.auth {
@@ -121,7 +147,10 @@ impl<'a> RequestBuilder<'a> {
             request = request.body(body);
         }
 
-        let response = self.client.execute_raw(request.build().unwrap()).await?;
+        let built = request.build().map_err(|e| {
+            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build request: {e}"))
+        })?;
+        let response = self.client.execute_raw(built).await?;
 
         handle_raw_response(response, self.client.max_response_size).await
     }
@@ -198,12 +227,15 @@ impl<'a, T: DeserializeOwned, B: Serialize> JsonRequestBuilder<'a, T, B> {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The URL is not HTTPS
     /// - The request fails (network error, timeout, etc.)
     /// - The response status is not successful (4xx or 5xx)
     /// - The response body exceeds the size limit
     /// - The response body is not valid JSON
     /// - The JSON does not match the expected type
     pub async fn send(self) -> Result<JsonResponse<T>, Error> {
+        validate_https_url(&self.url, self.client.allow_http_urls)?;
+
         let mut request = self.client.inner.request(self.method, &self.url);
 
         request = request.header(
@@ -227,7 +259,10 @@ impl<'a, T: DeserializeOwned, B: Serialize> JsonRequestBuilder<'a, T, B> {
 
         request = request.headers(self.headers);
 
-        let response = self.client.execute_raw(request.build().unwrap()).await?;
+        let built = request.build().map_err(|e| {
+            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build request: {e}"))
+        })?;
+        let response = self.client.execute_raw(built).await?;
 
         handle_json_response(response, self.max_response_size).await
     }
@@ -330,12 +365,15 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The URL is not HTTPS
     /// - The request fails (network error, timeout, etc.)
     /// - The response status is not successful (4xx or 5xx)
     /// - The response body exceeds the size limit
     /// - The response body is not valid JSON
     /// - The JSON does not match the expected type
     pub async fn send(self) -> Result<JsonResponse<T>, Error> {
+        validate_https_url(&self.url, self.client.allow_http_urls)?;
+
         let mut request = self.client.inner.post(&self.url);
 
         request = request.header(
@@ -368,7 +406,10 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
 
         request = request.headers(self.headers);
 
-        let response = self.client.execute_raw(request.build().unwrap()).await?;
+        let built = request.build().map_err(|e| {
+            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build request: {e}"))
+        })?;
+        let response = self.client.execute_raw(built).await?;
 
         handle_json_response(response, self.max_response_size).await
     }
@@ -457,10 +498,11 @@ async fn handle_json_response<T: DeserializeOwned>(
         ));
     }
 
-    if media_type != "application/json" && media_type != "application/jwt" {
+    let allowed = ["application/json", "application/jwt", "application/oauth-authz-req+jwt"];
+    if !allowed.contains(&media_type) {
         return Err(Error::message(
             ErrorKind::HttpResponseParsingFailed,
-            format!("expected media type application/json, got '{}'", media_type),
+            format!("unexpected media type '{}', expected application/json", media_type),
         ));
     }
 
@@ -557,5 +599,136 @@ mod tests {
 
         let headers = auth.additional_headers().unwrap();
         assert!(headers.contains_key("dpop"));
+    }
+
+    #[test]
+    fn validate_https_url_accepts_https() {
+        let result = validate_https_url("https://example.com/path", false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_https_url_rejects_http() {
+        let result = validate_https_url("http://example.com/path", false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::HttpRequestFailed);
+        assert!(err.to_string().contains("https scheme"));
+    }
+
+    #[test]
+    fn validate_https_url_allows_http_when_enabled() {
+        let result = validate_https_url("http://example.com/path", true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_https_url_rejects_invalid_url() {
+        let result = validate_https_url("not a valid url", false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::HttpRequestFailed);
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::http::HttpClientBuilder;
+    use crate::http::response::Response;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{method, path, header};
+
+    fn test_client() -> HttpClient {
+        HttpClientBuilder::new()
+            .accept_invalid_certs(true)
+            .allow_http_urls(true)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_get_json_parses_response() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .and(header("Accept", "application/json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"issuer": "https://example.com"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = test_client();
+        let url = format!("{}/metadata", mock_server.uri());
+        let resp: JsonResponse<serde_json::Value> = client.get_json(&url).send().await.unwrap();
+
+        assert_eq!(resp.body["issuer"], "https://example.com");
+    }
+
+    #[tokio::test]
+    async fn test_post_form_sends_correct_body() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(header("Content-Type", "application/x-www-form-urlencoded"))
+            .and(header("Accept", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "test-token",
+                "token_type": "Bearer"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = test_client();
+        let url = format!("{}/token", mock_server.uri());
+        let resp: JsonResponse<serde_json::Value> = client
+            .post_form(&url)
+            .param("grant_type", "authorization_code")
+            .param("code", "test-code")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.body["access_token"], "test-token");
+    }
+
+    #[tokio::test]
+    async fn test_4xx_returns_http_error_response() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_json(serde_json::json!({"error": "invalid_token"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = test_client();
+        let url = format!("{}/protected", mock_server.uri());
+        let result: Result<JsonResponse<serde_json::Value>, Error> =
+            client.get_json(&url).send().await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::HttpErrorResponse);
+    }
+
+    #[tokio::test]
+    async fn test_bearer_auth_adds_header() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("Authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let client = test_client();
+        let url = format!("{}/protected", mock_server.uri());
+        let resp: JsonResponse<serde_json::Value> =
+            client.get_json(&url).bearer("test-token").send().await.unwrap();
+
+        assert!(resp.is_success());
     }
 }

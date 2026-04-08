@@ -41,6 +41,7 @@ pub struct HttpClientBuilder {
     max_response_size: usize,
     redirect_policy: RedirectPolicy,
     accept_invalid_certs: bool,
+    allow_http_urls: bool,
     user_agent: Option<String>,
     default_headers: reqwest::header::HeaderMap,
 }
@@ -52,7 +53,8 @@ pub enum RedirectPolicy {
     None,
     /// Allow redirects but limit the number.
     Limited(usize),
-    /// Allow all redirects (use with caution).
+    /// Allow redirects up to a safety limit of 10.
+    /// Note: Despite the name, this is limited to 10 redirects for safety.
     All,
 }
 
@@ -64,6 +66,7 @@ impl Default for HttpClientBuilder {
             max_response_size: DEFAULT_MAX_RESPONSE_SIZE,
             redirect_policy: RedirectPolicy::None,
             accept_invalid_certs: false,
+            allow_http_urls: false,
             user_agent: None,
             default_headers: reqwest::header::HeaderMap::new(),
         }
@@ -122,6 +125,17 @@ impl HttpClientBuilder {
         self
     }
 
+    /// Allows HTTP URLs (for testing only).
+    ///
+    /// # Security Warning
+    ///
+    /// This should only be used for testing. Never use in production.
+    #[must_use]
+    pub fn allow_http_urls(mut self, allow: bool) -> Self {
+        self.allow_http_urls = allow;
+        self
+    }
+
     /// Sets a custom user agent.
     #[must_use]
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
@@ -174,6 +188,7 @@ impl HttpClientBuilder {
         Ok(HttpClient {
             inner: client,
             max_response_size: self.max_response_size,
+            allow_http_urls: self.allow_http_urls,
         })
     }
 }
@@ -186,6 +201,7 @@ impl HttpClientBuilder {
 pub struct HttpClient {
     pub(crate) inner: Client,
     pub(crate) max_response_size: usize,
+    pub(crate) allow_http_urls: bool,
 }
 
 impl HttpClient {
