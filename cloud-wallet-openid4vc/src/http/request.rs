@@ -2,8 +2,8 @@
 
 use std::marker::PhantomData;
 
-use reqwest::{Method, Url};
 use reqwest::header::HeaderValue;
+use reqwest::{Method, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -13,17 +13,16 @@ use crate::http::response::{JsonResponse, RawResponse};
 use crate::http::{AuthHeader, HttpError};
 
 fn validate_https_url(url: &str, allow_http: bool) -> Result<Url, Error> {
-    let parsed = Url::parse(url).map_err(|e| {
-        Error::message(ErrorKind::HttpRequestFailed, format!("invalid URL: {e}"))
-    })?;
-    
+    let parsed = Url::parse(url)
+        .map_err(|e| Error::message(ErrorKind::HttpRequestFailed, format!("invalid URL: {e}")))?;
+
     if !allow_http && parsed.scheme() != "https" {
         return Err(Error::message(
             ErrorKind::HttpRequestFailed,
             "endpoint URL must use https scheme per OpenID4VCI spec",
         ));
     }
-    
+
     Ok(parsed)
 }
 
@@ -148,7 +147,10 @@ impl<'a> RequestBuilder<'a> {
         }
 
         let built = request.build().map_err(|e| {
-            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build request: {e}"))
+            Error::message(
+                ErrorKind::HttpRequestFailed,
+                format!("failed to build request: {e}"),
+            )
         })?;
         let response = self.client.execute_raw(built).await?;
 
@@ -260,7 +262,10 @@ impl<'a, T: DeserializeOwned, B: Serialize> JsonRequestBuilder<'a, T, B> {
         request = request.headers(self.headers);
 
         let built = request.build().map_err(|e| {
-            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build request: {e}"))
+            Error::message(
+                ErrorKind::HttpRequestFailed,
+                format!("failed to build request: {e}"),
+            )
         })?;
         let response = self.client.execute_raw(built).await?;
 
@@ -407,7 +412,10 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
         request = request.headers(self.headers);
 
         let built = request.build().map_err(|e| {
-            Error::message(ErrorKind::HttpRequestFailed, format!("failed to build request: {e}"))
+            Error::message(
+                ErrorKind::HttpRequestFailed,
+                format!("failed to build request: {e}"),
+            )
         })?;
         let response = self.client.execute_raw(built).await?;
 
@@ -498,11 +506,18 @@ async fn handle_json_response<T: DeserializeOwned>(
         ));
     }
 
-    let allowed = ["application/json", "application/jwt", "application/oauth-authz-req+jwt"];
+    let allowed = [
+        "application/json",
+        "application/jwt",
+        "application/oauth-authz-req+jwt",
+    ];
     if !allowed.contains(&media_type) {
         return Err(Error::message(
             ErrorKind::HttpResponseParsingFailed,
-            format!("unexpected media type '{}', expected application/json", media_type),
+            format!(
+                "unexpected media type '{}', expected application/json",
+                media_type
+            ),
         ));
     }
 
@@ -636,8 +651,8 @@ mod integration_tests {
     use super::*;
     use crate::http::HttpClientBuilder;
     use crate::http::response::Response;
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    use wiremock::matchers::{method, path, header};
 
     fn test_client() -> HttpClient {
         HttpClientBuilder::new()
@@ -726,8 +741,12 @@ mod integration_tests {
 
         let client = test_client();
         let url = format!("{}/protected", mock_server.uri());
-        let resp: JsonResponse<serde_json::Value> =
-            client.get_json(&url).bearer("test-token").send().await.unwrap();
+        let resp: JsonResponse<serde_json::Value> = client
+            .get_json(&url)
+            .bearer("test-token")
+            .send()
+            .await
+            .unwrap();
 
         assert!(resp.is_success());
     }

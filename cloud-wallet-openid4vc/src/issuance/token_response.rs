@@ -97,8 +97,8 @@ pub fn parse_token_response(
 mod tests {
     use super::*;
     use crate::http::response::JsonResponse;
-    use reqwest::header::HeaderMap;
     use reqwest::StatusCode;
+    use reqwest::header::HeaderMap;
     use url::Url;
 
     fn make_test_url() -> Url {
