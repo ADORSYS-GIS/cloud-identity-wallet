@@ -10,9 +10,6 @@ use serde_with::skip_serializing_none;
 use super::authz_details::AuthorizationDetails;
 
 /// A successful Token Response (HTTP 200 OK) per OpenID4VCI §6.2 and RFC 6749 §5.1.
-///
-/// Required: `access_token`, `token_type`
-/// Optional: `expires_in`, `refresh_token`, `scope`, `authorization_details`
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenResponse {

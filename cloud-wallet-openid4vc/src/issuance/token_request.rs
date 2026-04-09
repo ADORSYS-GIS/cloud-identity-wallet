@@ -51,7 +51,7 @@ pub struct AuthorizationCodeRequest {
 ///
 /// Required: `pre-authorized_code`
 /// Conditional: `tx_code` (MUST be present if tx_code was in credential offer)
-/// Optional: `client_id`, `authorization_details` (RFC 9396)
+/// Optional: `authorization_details` (RFC 9396)
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreAuthorizedCodeRequest {
@@ -60,8 +60,6 @@ pub struct PreAuthorizedCodeRequest {
     pub pre_authorized_code: String,
     /// Transaction code; MUST be present if tx_code object was in the Credential Offer.
     pub tx_code: Option<String>,
-    /// Only needed when a form of Client Authentication that relies on this parameter is used.
-    pub client_id: Option<String>,
     /// Authorization details per RFC 9396 for requesting specific credential configurations.
     pub authorization_details: Option<Vec<AuthorizationDetails>>,
 }
@@ -95,7 +93,6 @@ mod tests {
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
             tx_code: Some("493536".to_string()),
-            client_id: None,
             authorization_details: Some(vec![AuthorizationDetails::for_configuration(
                 "UniversityDegreeCredential",
             )]),
@@ -115,7 +112,6 @@ mod tests {
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: "abc".to_string(),
             tx_code: None,
-            client_id: None,
             authorization_details: None,
         });
 
@@ -129,7 +125,6 @@ mod tests {
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
             tx_code: Some("493536".to_string()),
-            client_id: Some("wallet_client".to_string()),
             authorization_details: Some(vec![AuthorizationDetails::for_configuration(
                 "UniversityDegreeCredential",
             )]),
