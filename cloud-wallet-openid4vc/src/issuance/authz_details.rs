@@ -125,12 +125,6 @@ impl AuthorizationDetails {
         self.claims = Some(claims);
         self
     }
-
-    /// Sets the `credential_identifiers` field for token responses.
-    pub fn with_credential_identifiers(mut self, identifiers: Vec<String>) -> Self {
-        self.credential_identifiers = Some(identifiers);
-        self
-    }
 }
 
 #[cfg(test)]
@@ -186,13 +180,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn token_response_with_credential_identifiers() {
-        let detail = AuthorizationDetails::for_configuration("UniversityDegreeCredential")
-            .with_credential_identifiers(vec!["cred-001".to_string(), "cred-002".to_string()]);
-
-        let json = serde_json::to_value(&detail).unwrap();
-        assert_eq!(json["credential_identifiers"][0], "cred-001");
-        assert_eq!(json["credential_identifiers"][1], "cred-002");
-    }
 }
