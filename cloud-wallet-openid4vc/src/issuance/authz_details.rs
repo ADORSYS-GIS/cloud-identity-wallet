@@ -58,9 +58,12 @@ impl From<ClaimPathPointer> for AuthzDetailsClaim {
 /// As defined in [RFC 9396 §2](https://www.rfc-editor.org/rfc/rfc9396.html) and
 /// [OID4VCI §5.1.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-using-authorization-details).
 ///
-/// Per §5.1.1, `credential_configuration_id` is REQUIRED. If the Credential Issuer
-/// metadata contains an `authorization_servers` parameter, the `locations` field MUST
-/// be set to the Credential Issuer Identifier value.
+/// Per §5.1.1, `credential_configuration_id` is REQUIRED in token requests.
+/// If the Credential Issuer metadata contains an `authorization_servers` parameter,
+/// the `locations` field MUST be set to the Credential Issuer Identifier value.
+///
+/// In token responses, `credential_identifiers` is populated with the identifiers
+/// of the credentials being issued.
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationDetails {
@@ -68,8 +71,11 @@ pub struct AuthorizationDetails {
     #[serde(rename = "type")]
     pub r#type: AuthorizationDetailType,
 
-    /// REQUIRED. Unique identifier of the Credential in the issuer's
+    /// Unique identifier of the Credential in the issuer's
     /// `credential_configurations_supported` map.
+    ///
+    /// REQUIRED in token requests per [OID4VCI §5.1.1].
+    /// OPTIONAL in token responses.
     pub credential_configuration_id: String,
 
     /// OPTIONAL. Array of Credential Issuer Identifier URLs.
@@ -80,6 +86,12 @@ pub struct AuthorizationDetails {
     /// OPTIONAL. Non-empty array of claims description objects restricting which claims
     /// to include in the issued Credential. See [OID4VCI Appendix B.1].
     pub claims: Option<Vec<AuthzDetailsClaim>>,
+
+    /// Identifiers for the credentials being issued.
+    ///
+    /// Populated in token responses per [OID4VCI §6.2].
+    /// Not used in token requests.
+    pub credential_identifiers: Option<Vec<String>>,
 }
 
 impl AuthorizationDetails {
@@ -95,6 +107,7 @@ impl AuthorizationDetails {
             credential_configuration_id: id.into(),
             locations: None,
             claims: None,
+            credential_identifiers: None,
         }
     }
 
