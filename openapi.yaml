@@ -155,7 +155,7 @@ paths:
                       length: 6
                       description: Please provide the one-time code sent to your registered email address.
         "400":
-          description: Offer is missing, malformed, or unparseable.
+          description: Offer is missing, malformed, or unparsable.
           content:
             application/json:
               schema:
