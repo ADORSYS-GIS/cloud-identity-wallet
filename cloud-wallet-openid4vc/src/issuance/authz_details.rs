@@ -179,5 +179,4 @@ mod tests {
             Some(vec![Url::parse("https://issuer.example.com/").unwrap()])
         );
     }
-
 }
