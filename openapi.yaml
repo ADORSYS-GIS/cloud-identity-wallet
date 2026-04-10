@@ -1434,4 +1434,4 @@ tags:
     description: |
       Credential retrieval. Read-only access to verifiable credentials
       stored in the wallet after a successful issuance flow.
-      
+
