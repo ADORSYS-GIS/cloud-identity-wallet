@@ -40,11 +40,13 @@ paths:
       operationId: registerTenant
       summary: Register a new tenant
       description: |
-        One-time, unauthenticated registration of a new tenant. Returns a
-        `tenant_id` and bearer token that the frontend MUST store and use for
-        all subsequent calls. OAuth-based onboarding will replace this in a
-        future iteration.
-      security: [] # No authentication required
+        One-time, unauthenticated registration of a new tenant. Returns only
+        a `tenant_id`. The frontend is responsible for self-issuing the bearer
+        JWT using its own private key — the corresponding public key JWK MUST
+        be included in the token — and populating the required claims defined
+        in this specification (`sub`, `iat`, `exp`). OAuth-based onboarding
+        will replace this in a future iteration.
+      security: []   # No authentication required
       tags:
         - Tenants
       requestBody:
@@ -741,18 +743,22 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        Signed JWT bearer token obtained after tenant registration.
+        Self-issued JWT bearer token constructed by the frontend after tenant
+        registration. The frontend signs the token with its own private key and
+        MUST include the corresponding public key as a JWK in the token header
+        or body so the backend can verify the signature.
 
         Required claims:
 
         | Claim | Type          | Description                                  |
-        |-------|---------------|--------------------------------------------  |
-        | `sub` | string (UUID) | Tenant identifier this token was issued for. |
+        |-------|---------------|----------------------------------------------|
+        | `sub` | string (UUID) | The `tenant_id` returned by `POST /tenants`. |
         | `iat` | integer       | Issued-at timestamp (Unix epoch seconds).    |
         | `exp` | integer       | Expiry timestamp (Unix epoch seconds).       |
 
-        The backend validates the signature, `exp`, and that `sub` matches
-        the resource being accessed.
+        The backend validates the signature using the public key JWK embedded
+        in the token, checks `exp`, and verifies that `sub` matches the
+        resource being accessed.
 
   # -------------------------------------------------------------------------
   # Reusable Parameters
@@ -873,7 +879,10 @@ components:
         tenant_id:
           type: string
           format: uuid
-          description: Unique identifier for this tenant (UUID v4). Store and use in token requests.
+          description: |
+            Unique identifier for this tenant (UUID v4). The frontend MUST use
+            this as the `sub` claim when self-issuing the bearer JWT for all
+            subsequent authenticated requests.
           example: f47ac10b-58cc-4372-a567-0e02b2c3d479
         name:
           type: string
@@ -1434,4 +1443,3 @@ tags:
     description: |
       Credential retrieval. Read-only access to verifiable credentials
       stored in the wallet after a successful issuance flow.
-
