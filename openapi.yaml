@@ -46,7 +46,7 @@ paths:
         be included in the token — and populating the required claims defined
         in this specification (`sub`, `iat`, `exp`). OAuth-based onboarding
         will replace this in a future iteration.
-      security: []   # No authentication required
+      security: [] # No authentication required
       tags:
         - Tenants
       requestBody:
