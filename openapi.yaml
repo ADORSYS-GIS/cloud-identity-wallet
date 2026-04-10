@@ -31,6 +31,7 @@ security:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+
   # -------------------------------------------------------------------------
   # 1. Tenant Registration
   # -------------------------------------------------------------------------
@@ -590,13 +591,147 @@ paths:
               example:
                 error: invalid_session_state
                 error_description: Session is already in a terminal state and cannot be cancelled.
-        "500":
-          $ref: "#/components/responses/InternalServerError"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # -------------------------------------------------------------------------
+  # 8. List Credentials
+  # -------------------------------------------------------------------------
+  /credentials:
+    get:
+      operationId: listCredentials
+      summary: List all credentials for the authenticated tenant
+      description: |
+        Returns all credentials belonging to the authenticated tenant. Supports
+        optional query-parameter filters to narrow results by type, status,
+        format, or issuer.
+      tags:
+        - Credentials
+      parameters:
+        - name: credential_types
+          in: query
+          description: |
+            Filter by one or more credential configuration IDs
+            (e.g. `eu.europa.ec.eudi.pid.1`). Repeat the parameter or pass a
+            comma-separated list to filter by multiple types.
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          example:
+            - eu.europa.ec.eudi.pid.1
+        - name: status
+          in: query
+          description: Filter by credential status.
+          required: false
+          schema:
+            type: string
+            enum:
+              - active
+              - expired
+              - revoked
+              - suspended
+          example: active
+        - name: format
+          in: query
+          description: Filter by credential format.
+          required: false
+          schema:
+            type: string
+            enum:
+              - dc+sd-jwt
+              - mso_mdoc
+              - jwt_vc_json
+              - jwt_vc_json-ld
+              - ldp_vc
+          example: dc+sd-jwt
+        - name: issuer
+          in: query
+          description: Filter by issuer identifier URI.
+          required: false
+          schema:
+            type: string
+            format: uri
+          example: https://issuer.example.eu
+      responses:
+        '200':
+          description: List of decoded credential payloads belonging to the tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialListResponse'
+              example:
+                credentials:
+                  - id: c3d4e5f6-7890-abcd-ef12-3456789abcde
+                    credential_configuration_id: eu.europa.ec.eudi.pid.1
+                    format: dc+sd-jwt
+                    issuer: https://issuer.example.eu
+                    status: active
+                    issued_at: "2026-04-08T14:35:00Z"
+                    expires_at: "2027-04-08T14:35:00Z"
+                    claims:
+                      given_name: Jane
+                      family_name: Doe
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # -------------------------------------------------------------------------
+  # 9. Get Single Credential
+  # -------------------------------------------------------------------------
+  /credentials/{id}:
+    get:
+      operationId: getCredential
+      summary: Retrieve a single credential by its internal wallet ID
+      description: |
+        Returns the decoded payload of a single credential identified by its
+        internal wallet UUID. The `id` is the value returned in the
+        `credential_ids` array of the issuance `completed` SSE event.
+      tags:
+        - Credentials
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: Decoded credential payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialRecord'
+              example:
+                id: c3d4e5f6-7890-abcd-ef12-3456789abcde
+                credential_configuration_id: eu.europa.ec.eudi.pid.1
+                format: dc+sd-jwt
+                issuer: https://issuer.example.eu
+                status: active
+                issued_at: "2026-04-08T14:35:00Z"
+                expires_at: "2027-04-08T14:35:00Z"
+                claims:
+                  given_name: Jane
+                  family_name: Doe
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No credential with that ID exists for the authenticated tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: credential_not_found
+                error_description: No credential with that ID exists for the authenticated tenant.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
 # ---------------------------------------------------------------------------
 # Components
 # ---------------------------------------------------------------------------
 components:
+
   # -------------------------------------------------------------------------
   # Security Schemes
   # -------------------------------------------------------------------------
@@ -632,6 +767,18 @@ components:
         type: string
         minLength: 22
         example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+
+    CredentialId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Internal wallet credential ID (UUID v4) as returned in the
+        `credential_ids` array of the issuance `completed` SSE event.
+      schema:
+        type: string
+        format: uuid
+        example: c3d4e5f6-7890-abcd-ef12-3456789abcde
 
   # -------------------------------------------------------------------------
   # Reusable Responses
@@ -671,6 +818,7 @@ components:
   # Schemas
   # -------------------------------------------------------------------------
   schemas:
+
     # -----------------------------------------------------------------------
     # Error
     # -----------------------------------------------------------------------
@@ -1188,6 +1336,89 @@ components:
             - `internal` — unexpected wallet backend error.
           example: authorization
 
+    CredentialRecord:
+      type: object
+      description: |
+        Decoded payload of a single verifiable credential stored in the wallet.
+        The `claims` object contains the credential-specific attributes whose
+        structure depends on the credential type and format.
+      required:
+        - id
+        - credential_configuration_id
+        - format
+        - issuer
+        - status
+        - issued_at
+        - claims
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Internal wallet credential ID (UUID v4).
+          example: c3d4e5f6-7890-abcd-ef12-3456789abcde
+        credential_configuration_id:
+          type: string
+          description: Credential configuration identifier from the issuer's metadata.
+          example: eu.europa.ec.eudi.pid.1
+        format:
+          type: string
+          description: Credential format.
+          enum:
+            - dc+sd-jwt
+            - mso_mdoc
+            - jwt_vc_json
+            - jwt_vc_json-ld
+            - ldp_vc
+          example: dc+sd-jwt
+        issuer:
+          type: string
+          format: uri
+          description: Issuer identifier URI.
+          example: https://issuer.example.eu
+        status:
+          type: string
+          description: Current validity status of the credential.
+          enum:
+            - active
+            - expired
+            - revoked
+            - suspended
+          example: active
+        issued_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the credential was issued.
+          example: "2026-04-08T14:35:00Z"
+        expires_at:
+          description: |
+            ISO 8601 timestamp when the credential expires. `null` if the
+            credential has no expiry.
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          example: "2027-04-08T14:35:00Z"
+        claims:
+          type: object
+          description: |
+            Decoded credential claims. The structure is credential-type
+            specific. Additional properties are permitted.
+          additionalProperties: true
+          example:
+            given_name: Jane
+            family_name: Doe
+
+    CredentialListResponse:
+      type: object
+      required:
+        - credentials
+      properties:
+        credentials:
+          type: array
+          description: List of decoded credential payloads belonging to the tenant.
+          items:
+            $ref: '#/components/schemas/CredentialRecord'
+
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
@@ -1199,3 +1430,8 @@ tags:
       OID4VCI credential issuance flow. Covers session lifecycle from offer
       submission through credential delivery, supporting both Authorization
       Code and Pre-Authorized Code grant types.
+  - name: Credentials
+    description: |
+      Credential retrieval. Read-only access to verifiable credentials
+      stored in the wallet after a successful issuance flow.
+      
