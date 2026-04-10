@@ -1,4 +1,4 @@
-CREATE TABLE data_encryption_keys (
+CREATE TABLE IF NOT EXISTS data_encryption_keys (
     id VARCHAR(32) PRIMARY KEY,
     master_id VARCHAR(32) NOT NULL,
     encrypted_key VARCHAR(255) NOT NULL, -- Base64 encoded

@@ -28,11 +28,11 @@ aws-sdk-kms = { version = "1", optional = true }
 
 # Cache dependencies
 ahash = "0.8"
-dashmap = "6"
+dashmap.workspace = true
 moka = { version = "0.12", features = ["future"] }
 
 [dependencies.sqlx]
-version = "0.8"
+workspace = true
 features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
 optional = true
 
@@ -56,7 +56,3 @@ sqlx-backend = ["dep:sqlx"]
 
 [lints]
 workspace = true
-
-[profile.dev.package.sqlx-macros]
-# Optimize sqlx-macros to avoid long compile times
-opt-level = 3
