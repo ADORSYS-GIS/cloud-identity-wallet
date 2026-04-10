@@ -936,17 +936,23 @@ dependencies = [
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
+ "cloud-wallet-kms",
  "color-eyre",
  "csscolorparser",
+ "dashmap",
  "jsonwebtoken",
  "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
  "serde_with",
+ "sqlx",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "url",
  "uuid",
  "validator",
