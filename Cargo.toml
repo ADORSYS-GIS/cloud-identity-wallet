@@ -40,6 +40,9 @@ serde_with = "3"
 # Logging and metrics
 tracing = "0.1"
 
+# Other utilities
+dashmap = "6"
+sqlx = "0.8"
 time = "0.3"
 url = "2.5"
 uuid = "1"
@@ -73,6 +76,10 @@ tikv-jemallocator = "0.6"
 [profile.dev]
 # Speed up compilation time
 debug = 1
+
+[profile.dev.package.sqlx-macros]
+# Optimize sqlx-macros to avoid long compile times
+opt-level = 3
 
 [profile.release]
 strip = "symbols"
