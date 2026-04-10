@@ -1,0 +1,1445 @@
+openapi: 3.1.0
+
+info:
+  title: Cloud Wallet OID4VCI Issuance API
+  version: 1.0.0
+  description: |
+    API contract between the frontend (web/mobile) and the cloud wallet backend
+    for the OpenID for Verifiable Credential Issuance (OID4VCI) flow.
+
+    The backend orchestrates all back-channel communication with the external
+    credential issuer. The frontend never calls the issuer directly.
+
+    Two grant types are supported:
+    - Authorization Code Flow (with optional PKCE and PAR)
+    - Pre-Authorized Code Flow (with optional Transaction Code)
+
+    # References
+    - [OID4VCI](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
+    - [RFC 6749 — OAuth 2.0](https://www.rfc-editor.org/rfc/rfc6749)
+    - [RFC 7636 — PKCE](https://www.rfc-editor.org/rfc/rfc7636)
+    - [RFC 9126 — PAR](https://www.rfc-editor.org/rfc/rfc9126)
+
+servers:
+  - url: /api/v1
+    description: Base path for all endpoints
+
+security:
+  - BearerAuth: []
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # -------------------------------------------------------------------------
+  # 1. Tenant Registration
+  # -------------------------------------------------------------------------
+  /tenants:
+    post:
+      operationId: registerTenant
+      summary: Register a new tenant
+      description: |
+        One-time, unauthenticated registration of a new tenant. Returns only
+        a `tenant_id`. The frontend is responsible for self-issuing the bearer
+        JWT using its own private key — the corresponding public key JWK MUST
+        be included in the token — and populating the required claims defined
+        in this specification (`sub`, `iat`, `exp`). OAuth-based onboarding
+        will replace this in a future iteration.
+      security: [] # No authentication required
+      tags:
+        - Tenants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantRegistrationRequest"
+            example:
+              name: adorsys GmbH
+      responses:
+        "201":
+          description: Tenant successfully registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantRegistrationResponse"
+              example:
+                tenant_id: f47ac10b-58cc-4372-a567-0e02b2c3d479
+                name: adorsys GmbH
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # 2. Start Issuance Session
+  # -------------------------------------------------------------------------
+  /issuance/start:
+    post:
+      operationId: startIssuanceSession
+      summary: Submit a credential offer and start an issuance session
+      description: |
+        Submit the raw credential offer scanned from a QR code.
+        The backend resolves the offer (fetching `credential_offer_uri` if
+        needed), fetches and validates issuer and authorization server metadata,
+        creates a session, and returns the parsed credential types for user
+        consent. This is the single entry point into the issuance flow.
+      tags:
+        - Issuance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartIssuanceRequest"
+            examples:
+              offer_uri:
+                summary: Credential offer URI (credential_offer_uri)
+                value:
+                  offer: "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example.eu%2Foffer%2Fabc123"
+              offer_inline:
+                summary: Inline credential offer URI (credential_offer)
+                value:
+                  offer: "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.eu%22%7D"
+      responses:
+        "201":
+          description: Session created. Returns session details and credential types for user consent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartIssuanceResponse"
+              examples:
+                authorization_code_flow:
+                  summary: Authorization Code Flow
+                  value:
+                    session_id: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+                    expires_at: "2026-04-08T14:35:00Z"
+                    issuer:
+                      credential_issuer: https://issuer.example.eu
+                      display_name: Example EU Identity Authority
+                      logo_uri: null
+                    credential_types:
+                      - credential_configuration_id: eu.europa.ec.eudi.pid.1
+                        format: vc+sd-jwt
+                        display:
+                          name: EU Personal ID
+                          description: Official EU personal identity document
+                          background_color: "#12107c"
+                          text_color: "#ffffff"
+                          logo:
+                            uri: https://issuer.example.eu/assets/pid-logo.svg
+                            alt_text: EU PID Logo
+                    flow: authorization_code
+                    tx_code_required: false
+                    tx_code: null
+                pre_authorized_code_flow_with_tx_code:
+                  summary: Pre-Authorized Code Flow with Transaction Code
+                  value:
+                    session_id: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
+                    expires_at: "2026-04-08T14:35:00Z"
+                    issuer:
+                      credential_issuer: https://issuer.example.eu
+                      display_name: Example EU Identity Authority
+                      logo_uri: null
+                    credential_types:
+                      - credential_configuration_id: eu.europa.ec.eudi.lpid.1
+                        format: vc+sd-jwt
+                        display:
+                          name: EU Legal Person ID
+                          description: Official EU legal entity identity credential
+                          background_color: "#1a4f2e"
+                          text_color: "#ffffff"
+                          logo: null
+                    flow: pre_authorized_code
+                    tx_code_required: true
+                    tx_code:
+                      input_mode: numeric
+                      length: 6
+                      description: Please provide the one-time code sent to your registered email address.
+        "400":
+          description: Offer is missing, malformed, or unparsable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: invalid_credential_offer
+                error_description: The credential offer URI could not be parsed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          description: Backend could not reach the issuer or authorization server metadata endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                issuer_metadata_failed:
+                  value:
+                    error: issuer_metadata_fetch_failed
+                    error_description: "Could not reach https://issuer.example.eu/.well-known/openid-credential-issuer"
+                auth_server_metadata_failed:
+                  value:
+                    error: auth_server_metadata_fetch_failed
+                    error_description: Could not reach the authorization server metadata endpoint.
+
+  # -------------------------------------------------------------------------
+  # 3. Submit Consent
+  # -------------------------------------------------------------------------
+  /issuance/{session_id}/consent:
+    post:
+      operationId: submitConsent
+      summary: Submit the user's consent decision
+      description: |
+        Submit whether the user accepts or rejects the credential offer.
+        The backend advances the session based on this decision.
+
+        After a successful response the frontend MUST immediately open the SSE
+        stream (`GET /issuance/{session_id}/events`) and keep it open for the
+        remainder of the flow.
+
+        - Authorization code flow (`next_action: "redirect"`): open
+          `authorization_url` in the system browser.
+        - Pre-authorized code flow + tx_code (`next_action: "provide_tx_code"`):
+          render the transaction code input UI using `tx_code` from `/start`.
+        - Pre-authorized code flow, no tx_code (`next_action: "none"`):
+          listen on SSE for `processing` / `completed` / `failed` events.
+        - User declined (`next_action: "rejected"`): display cancellation
+          message; session is terminated.
+      tags:
+        - Issuance
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConsentRequest"
+            examples:
+              accept_all:
+                summary: User accepts all offered credentials
+                value:
+                  accepted: true
+                  selected_configuration_ids: []
+              accept_subset:
+                summary: User selects a subset of credentials
+                value:
+                  accepted: true
+                  selected_configuration_ids:
+                    - eu.europa.ec.eudi.pid.1
+              reject:
+                summary: User rejects
+                value:
+                  accepted: false
+      responses:
+        "200":
+          description: Consent recorded. Inspect `next_action` to determine the frontend's next step.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentResponse"
+              examples:
+                redirect:
+                  summary: Authorization code flow — redirect user to issuer AS
+                  value:
+                    session_id: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+                    next_action: redirect
+                    authorization_url: "https://as.issuer.example.eu/authorize?response_type=code&client_id=wallet.example.eu&..."
+                provide_tx_code:
+                  summary: Pre-authorized code flow — transaction code required
+                  value:
+                    session_id: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
+                    next_action: provide_tx_code
+                none:
+                  summary: Pre-authorized code flow — no transaction code, processing started
+                  value:
+                    session_id: ses_5bMnT8yPqKrWxVeAcFdG6hLjUiOl3Em
+                    next_action: none
+                rejected:
+                  summary: User declined
+                  value:
+                    session_id: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+                    next_action: rejected
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Session not found or has expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: session_not_found
+                error_description: No active session found for the given session_id.
+        "409":
+          description: Session is not in `awaiting_consent` state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: invalid_session_state
+                error_description: "Session is not awaiting consent (current state: processing)."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # 4. SSE — Real-Time Session Updates
+  # -------------------------------------------------------------------------
+  /issuance/{session_id}/events:
+    get:
+      operationId: streamSessionEvents
+      summary: Open SSE stream for real-time session updates
+      description: |
+        Server-Sent Events (SSE) stream for a single issuance session.
+
+        The frontend MUST open this stream immediately after receiving a
+        successful `/consent` response and maintain the connection until a
+        terminal event (`completed` or `failed`) is received or the session
+        expires.
+
+        **Event types:**
+
+        | `event` field | Terminal? | Description                                     |
+        |---------------|-----------|-------------------------------------------------|
+        | `processing`  | No        | Backend is performing a back-channel operation. |
+        | `completed`   | Yes       | Credentials issued successfully.                |
+        | `failed`      | Yes       | Unrecoverable error occurred.                   |
+
+        Each event is formatted as an SSE frame:
+        ```
+        event: <event_type>
+        data: <json_payload>
+        ```
+
+        The frontend MUST NOT retry after a terminal event. To restart the
+        flow a new session must be created via `POST /issuance/start`.
+      tags:
+        - Issuance
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: SSE stream opened successfully.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-cache]
+            Connection:
+              schema:
+                type: string
+                enum: [keep-alive]
+          content:
+            text/event-stream:
+              schema:
+                description: |
+                  Stream of SSE frames. Each frame has an `event` field and a
+                  `data` field containing a JSON payload. Possible event types
+                  and their payloads are described in the `SseEvent` union
+                  schema below.
+                oneOf:
+                  - $ref: "#/components/schemas/SseProcessingEvent"
+                  - $ref: "#/components/schemas/SseCompletedEvent"
+                  - $ref: "#/components/schemas/SseFailedEvent"
+              examples:
+                processing:
+                  summary: processing event
+                  value: |
+                    event: processing
+                    data: {"session_id":"ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni","state":"processing","step":"requesting_credential"}
+                completed:
+                  summary: completed event
+                  value: |
+                    event: completed
+                    data: {"session_id":"ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni","state":"completed","credential_ids":["c3d4e5f6-7890-abcd-ef12-3456789abcde"],"credential_types":["eu.europa.ec.eudi.pid.1"]}
+                failed:
+                  summary: failed event
+                  value: |
+                    event: failed
+                    data: {"session_id":"ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni","state":"failed","error":"access_denied","error_description":"The user denied authorization at the issuer's authorization server.","step":"authorization"}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Session not found or has expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: session_not_found
+                error_description: No active session found for the given session_id.
+
+  # -------------------------------------------------------------------------
+  # 5. Authorization Callback
+  # -------------------------------------------------------------------------
+  /issuance/callback:
+    get:
+      operationId: authorizationCallback
+      summary: OAuth 2.0 redirect URI — invoked by the issuer's authorization server
+      description: |
+        The OAuth 2.0 redirect URI registered with the issuer. This endpoint is
+        called by the issuer's authorization server (via the system browser)
+        after the user authenticates — **not** by the frontend application
+        directly.
+
+        **Security:** The `state` parameter MUST match a known, unexpired
+        session. This is the sole authentication mechanism for this endpoint.
+
+        **On success:**
+        1. Validate `state` → recover session.
+        2. Exchange `code` for token (back-channel, with PKCE `code_verifier`).
+        3. Request credential(s) from the issuer's credential endpoint.
+        4. Store credential(s) and mark session `completed`.
+        5. Push `completed` SSE event.
+        6. Redirect to `<app_deep_link>?session_id=<session_id>&result=success`.
+
+        **On error (AS returns `error`):**
+        1. Validate `state` → recover session.
+        2. Mark session `failed`; push `failed` SSE event (`step: "authorization"`).
+        3. Redirect to `<app_deep_link>?session_id=<session_id>&result=error&error=<error_code>`.
+
+        The `app_deep_link` scheme is configured per deployment and is out of
+        scope for this specification.
+      security: [] # Authenticated via `state` parameter — no bearer token
+      tags:
+        - Issuance
+      parameters:
+        - name: code
+          in: query
+          description: Authorization code issued by the issuer's AS. Present on success.
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          description: |
+            MUST equal the `session_id` sent in the authorization request.
+            Used to recover the session and validate the callback.
+          required: true
+          schema:
+            type: string
+        - name: error
+          in: query
+          description: |
+            OID4VCI / RFC 6749 error code returned by the AS on failure
+            (e.g. `access_denied`). Present only on error responses.
+          required: false
+          schema:
+            type: string
+        - name: error_description
+          in: query
+          description: Human-readable description of the authorization failure.
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: |
+            Redirect to the frontend's registered deep link URI.
+            - Success: `<app_deep_link>?session_id=<id>&result=success`
+            - Error:   `<app_deep_link>?session_id=<id>&result=error&error=<code>`
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+              examples:
+                success:
+                  value: "wallet://issuance/callback?session_id=ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni&result=success"
+                error:
+                  value: "wallet://issuance/callback?session_id=ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni&result=error&error=access_denied"
+        "400":
+          description: Missing or invalid `state` parameter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: invalid_request
+                error_description: Missing required `state` query parameter.
+        "404":
+          description: No active session found matching the given `state`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: session_not_found
+                error_description: No active session found for the given state value.
+
+  # -------------------------------------------------------------------------
+  # 6. Submit Transaction Code
+  # -------------------------------------------------------------------------
+  /issuance/{session_id}/tx-code:
+    post:
+      operationId: submitTransactionCode
+      summary: Submit the transaction code for pre-authorized code flow
+      description: |
+        Submit the transaction code entered by the user. Only applicable when
+        `tx_code_required` was `true` in the `/start` response.
+
+        The backend immediately starts the token exchange and credential request
+        in the background. The frontend MUST listen on the SSE stream for the
+        outcome (`processing`, `completed`, or `failed` events).
+
+        Validation rules for `tx_code`:
+        - If `tx_code.input_mode` is `"numeric"`, the value MUST contain only
+          ASCII digits (`[0-9]`).
+        - If `tx_code.length` is set, the value length MUST exactly match it.
+      tags:
+        - Issuance
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TxCodeRequest"
+            example:
+              tx_code: "493821"
+      responses:
+        "202":
+          description: |
+            Transaction code accepted. Token exchange and credential request
+            have been started in the background. Listen on the SSE stream for
+            the outcome.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TxCodeResponse"
+              example:
+                session_id: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
+        "400":
+          description: "`tx_code` is missing, wrong length, or contains invalid characters."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: invalid_tx_code
+                error_description: "Transaction code must be exactly 6 numeric digits."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Session not found or has expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: session_not_found
+                error_description: No active session found for the given session_id.
+        "409":
+          description: Session is not in `awaiting_tx_code` state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: invalid_session_state
+                error_description: "Session is not awaiting a transaction code (current state: processing)."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # 7. Cancel Session
+  # -------------------------------------------------------------------------
+  /issuance/{session_id}/cancel:
+    post:
+      operationId: cancelSession
+      summary: Explicitly cancel an active issuance session
+      description: |
+        Mark the session as failed and discard it. A `failed` SSE event is
+        emitted before the stream closes.
+
+        Returns `409` if the session is already in a terminal state
+        (`completed` or `failed`).
+      tags:
+        - Issuance
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Empty body — no fields required.
+      responses:
+        "204":
+          description: Session successfully cancelled. No response body.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Session not found or has already expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: session_not_found
+                error_description: No active session found for the given session_id.
+        "409":
+          description: Session is already in a terminal state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: invalid_session_state
+                error_description: Session is already in a terminal state and cannot be cancelled.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # -------------------------------------------------------------------------
+  # 8. List Credentials
+  # -------------------------------------------------------------------------
+  /credentials:
+    get:
+      operationId: listCredentials
+      summary: List all credentials for the authenticated tenant
+      description: |
+        Returns all credentials belonging to the authenticated tenant. Supports
+        optional query-parameter filters to narrow results by type, status,
+        format, or issuer.
+      tags:
+        - Credentials
+      parameters:
+        - name: credential_types
+          in: query
+          description: |
+            Filter by one or more credential configuration IDs
+            (e.g. `eu.europa.ec.eudi.pid.1`). Repeat the parameter or pass a
+            comma-separated list to filter by multiple types.
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          example:
+            - eu.europa.ec.eudi.pid.1
+        - name: status
+          in: query
+          description: Filter by credential status.
+          required: false
+          schema:
+            type: string
+            enum:
+              - active
+              - expired
+              - revoked
+              - suspended
+          example: active
+        - name: format
+          in: query
+          description: Filter by credential format.
+          required: false
+          schema:
+            type: string
+            enum:
+              - dc+sd-jwt
+              - mso_mdoc
+              - jwt_vc_json
+              - jwt_vc_json-ld
+              - ldp_vc
+          example: dc+sd-jwt
+        - name: issuer
+          in: query
+          description: Filter by issuer identifier URI.
+          required: false
+          schema:
+            type: string
+            format: uri
+          example: https://issuer.example.eu
+      responses:
+        '200':
+          description: List of decoded credential payloads belonging to the tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialListResponse'
+              example:
+                credentials:
+                  - id: c3d4e5f6-7890-abcd-ef12-3456789abcde
+                    credential_configuration_id: eu.europa.ec.eudi.pid.1
+                    format: dc+sd-jwt
+                    issuer: https://issuer.example.eu
+                    status: active
+                    issued_at: "2026-04-08T14:35:00Z"
+                    expires_at: "2027-04-08T14:35:00Z"
+                    claims:
+                      given_name: Jane
+                      family_name: Doe
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # -------------------------------------------------------------------------
+  # 9. Get Single Credential
+  # -------------------------------------------------------------------------
+  /credentials/{id}:
+    get:
+      operationId: getCredential
+      summary: Retrieve a single credential by its internal wallet ID
+      description: |
+        Returns the decoded payload of a single credential identified by its
+        internal wallet UUID. The `id` is the value returned in the
+        `credential_ids` array of the issuance `completed` SSE event.
+      tags:
+        - Credentials
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: Decoded credential payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialRecord'
+              example:
+                id: c3d4e5f6-7890-abcd-ef12-3456789abcde
+                credential_configuration_id: eu.europa.ec.eudi.pid.1
+                format: dc+sd-jwt
+                issuer: https://issuer.example.eu
+                status: active
+                issued_at: "2026-04-08T14:35:00Z"
+                expires_at: "2027-04-08T14:35:00Z"
+                claims:
+                  given_name: Jane
+                  family_name: Doe
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No credential with that ID exists for the authenticated tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: credential_not_found
+                error_description: No credential with that ID exists for the authenticated tenant.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+
+  # -------------------------------------------------------------------------
+  # Security Schemes
+  # -------------------------------------------------------------------------
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Self-issued JWT bearer token constructed by the frontend after tenant
+        registration. The frontend signs the token with its own private key and
+        MUST include the corresponding public key as a JWK in the token header
+        or body so the backend can verify the signature.
+
+        Required claims:
+
+        | Claim | Type          | Description                                  |
+        |-------|---------------|----------------------------------------------|
+        | `sub` | string (UUID) | The `tenant_id` returned by `POST /tenants`. |
+        | `iat` | integer       | Issued-at timestamp (Unix epoch seconds).    |
+        | `exp` | integer       | Expiry timestamp (Unix epoch seconds).       |
+
+        The backend validates the signature using the public key JWK embedded
+        in the token, checks `exp`, and verifies that `sub` matches the
+        resource being accessed.
+
+  # -------------------------------------------------------------------------
+  # Reusable Parameters
+  # -------------------------------------------------------------------------
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      description: Opaque session identifier returned by `POST /issuance/start`.
+      schema:
+        type: string
+        minLength: 22
+        example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+
+    CredentialId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Internal wallet credential ID (UUID v4) as returned in the
+        `credential_ids` array of the issuance `completed` SSE event.
+      schema:
+        type: string
+        format: uuid
+        example: c3d4e5f6-7890-abcd-ef12-3456789abcde
+
+  # -------------------------------------------------------------------------
+  # Reusable Responses
+  # -------------------------------------------------------------------------
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: unauthorized
+            error_description: Missing or invalid bearer token.
+
+    BadRequest:
+      description: Malformed request or validation failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: invalid_request
+            error_description: Request body is missing required fields.
+
+    InternalServerError:
+      description: Unexpected internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: internal_error
+            error_description: An unexpected error occurred. Please try again later.
+
+  # -------------------------------------------------------------------------
+  # Schemas
+  # -------------------------------------------------------------------------
+  schemas:
+
+    # -----------------------------------------------------------------------
+    # Error
+    # -----------------------------------------------------------------------
+    ErrorResponse:
+      type: object
+      description: |
+        RFC 7807 / OID4VCI-aligned error response body. All error responses
+        from the wallet backend use this shape.
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: |
+            Machine-readable error code. OID4VCI or wallet-defined.
+          examples:
+            - invalid_credential_offer
+            - session_not_found
+            - invalid_session_state
+            - invalid_tx_code
+            - issuer_metadata_fetch_failed
+            - auth_server_metadata_fetch_failed
+            - invalid_request
+            - unauthorized
+            - internal_error
+        error_description:
+          type: string
+          description: Human-readable explanation of what went wrong.
+          example: The credential offer URI could not be parsed.
+
+    # -----------------------------------------------------------------------
+    # Tenant Registration
+    # -----------------------------------------------------------------------
+    TenantRegistrationRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Human-readable display name of the tenant / business.
+          example: adorsys GmbH
+
+    TenantRegistrationResponse:
+      type: object
+      required:
+        - tenant_id
+        - name
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: |
+            Unique identifier for this tenant (UUID v4). The frontend MUST use
+            this as the `sub` claim when self-issuing the bearer JWT for all
+            subsequent authenticated requests.
+          example: f47ac10b-58cc-4372-a567-0e02b2c3d479
+        name:
+          type: string
+          description: Echo of the registered name.
+          example: adorsys GmbH
+
+    # -----------------------------------------------------------------------
+    # Start Issuance
+    # -----------------------------------------------------------------------
+    StartIssuanceRequest:
+      type: object
+      required:
+        - offer
+      properties:
+        offer:
+          type: string
+          description: |
+            The raw value scanned or received. One of:
+            - A full `openid-credential-offer://` URI with `credential_offer`
+              or `credential_offer_uri` as a query parameter.
+            - The raw JSON of a credential offer object as a string.
+          example: "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example.eu%2Foffer%2Fabc123"
+
+    StartIssuanceResponse:
+      type: object
+      required:
+        - session_id
+        - expires_at
+        - issuer
+        - credential_types
+        - flow
+        - tx_code_required
+        - tx_code
+      properties:
+        session_id:
+          type: string
+          description: |
+            Opaque session identifier (min 128-bit random entropy). The
+            frontend MUST use this for all subsequent calls and as the SSE
+            stream path parameter.
+          example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            ISO 8601 session expiry timestamp (15 minutes from creation). The
+            frontend MUST discard the session and inform the user if this time
+            is reached.
+          example: "2026-04-08T14:35:00Z"
+        issuer:
+          $ref: "#/components/schemas/IssuerSummary"
+        credential_types:
+          type: array
+          description: |
+            Credential configurations being offered, enriched with display
+            metadata from the issuer's `credential_configurations_supported`.
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CredentialTypeDisplay"
+        flow:
+          type: string
+          enum:
+            - authorization_code
+            - pre_authorized_code
+          description: Indicates which grant type the flow will use.
+          example: authorization_code
+        tx_code_required:
+          type: boolean
+          description: |
+            `true` only when `flow` is `pre_authorized_code` and the issuer
+            requires a transaction code. Otherwise `false`.
+          example: false
+        tx_code:
+          description: |
+            Present (non-null) only when `tx_code_required` is `true`. The
+            frontend MUST use this metadata to render the transaction code
+            input UI.
+          oneOf:
+            - $ref: "#/components/schemas/TxCodeSpec"
+            - type: "null"
+
+    IssuerSummary:
+      type: object
+      required:
+        - credential_issuer
+        - display_name
+        - logo_uri
+      description: Resolved issuer metadata summary returned by `/start`.
+      properties:
+        credential_issuer:
+          type: string
+          format: uri
+          description: Issuer identifier URL.
+          example: https://issuer.example.eu
+        display_name:
+          description: |
+            Human-readable issuer name from issuer metadata `display[0].name`.
+            `null` if not present in the issuer metadata.
+          oneOf:
+            - type: string
+            - type: "null"
+          example: Example EU Identity Authority
+        logo_uri:
+          description: |
+            Issuer logo URI from issuer metadata `display[0].logo.uri`.
+            `null` if not present.
+          oneOf:
+            - type: string
+              format: uri
+            - type: "null"
+          example: null
+
+    CredentialTypeDisplay:
+      type: object
+      required:
+        - credential_configuration_id
+        - format
+        - display
+      description: |
+        A single credential configuration being offered, enriched with display
+        metadata sourced from `credential_configurations_supported[id].display[0]`
+        for the best-matching locale (fallback to first entry if no locale
+        match).
+      properties:
+        credential_configuration_id:
+          type: string
+          description: Identifies the credential configuration within the issuer's metadata.
+          example: eu.europa.ec.eudi.pid.1
+        format:
+          type: string
+          description: Credential format (e.g. `vc+sd-jwt`, `mso_mdoc`).
+          example: vc+sd-jwt
+        display:
+          $ref: "#/components/schemas/CredentialDisplay"
+
+    CredentialDisplay:
+      type: object
+      required:
+        - name
+      description: Display metadata for a credential type, sourced from issuer metadata.
+      properties:
+        name:
+          type: string
+          description: Human-readable credential name.
+          example: EU Personal ID
+        description:
+          type: string
+          description: Human-readable description of the credential.
+          example: Official EU personal identity document
+        background_color:
+          type: string
+          description: Background color for the credential card (CSS hex color).
+          pattern: "^#[0-9a-fA-F]{6}$"
+          example: "#12107c"
+        text_color:
+          type: string
+          description: Text color for the credential card (CSS hex color).
+          pattern: "^#[0-9a-fA-F]{6}$"
+          example: "#ffffff"
+        logo:
+          description: Logo image metadata. `null` if no logo is available.
+          oneOf:
+            - $ref: "#/components/schemas/CredentialLogo"
+            - type: "null"
+
+    CredentialLogo:
+      type: object
+      required:
+        - uri
+      description: Logo image for a credential type.
+      properties:
+        uri:
+          type: string
+          format: uri
+          description: URI of the logo image.
+          example: https://issuer.example.eu/assets/pid-logo.svg
+        alt_text:
+          type: string
+          description: Accessibility alt text for the logo image.
+          example: EU PID Logo
+
+    TxCodeSpec:
+      type: object
+      required:
+        - input_mode
+        - length
+        - description
+      description: |
+        Metadata for rendering the transaction code input UI. Sourced from
+        the issuer's credential offer `tx_code` object per the OID4VCI spec.
+      properties:
+        input_mode:
+          type: string
+          enum:
+            - numeric
+            - text
+          description: |
+            `"numeric"` — digits only (`[0-9]`); render a numeric keyboard.
+            `"text"` — any characters; render a text keyboard.
+            Default per OID4VCI spec: `"numeric"`.
+          default: numeric
+          example: numeric
+        length:
+          description: |
+            Expected exact length of the transaction code. Render a
+            fixed-length input field if present. `null` if the issuer did not
+            specify a length.
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: "null"
+          example: 6
+        description:
+          description: |
+            Guidance text for the user on how to obtain the transaction code
+            (e.g. "Check the SMS sent to your registered phone number"). Max
+            300 characters per the OID4VCI spec. Display next to the input
+            field. `null` if the issuer did not provide a description.
+          oneOf:
+            - type: string
+              maxLength: 300
+            - type: "null"
+          example: Please provide the one-time code sent to your registered email address.
+
+    # -----------------------------------------------------------------------
+    # Consent
+    # -----------------------------------------------------------------------
+    ConsentRequest:
+      type: object
+      required:
+        - accepted
+      properties:
+        accepted:
+          type: boolean
+          description: |
+            `true` — user accepted; proceed with issuance.
+            `false` — user rejected; session is terminated.
+          example: true
+        selected_configuration_ids:
+          type: array
+          description: |
+            Subset of `credential_configuration_id` values from the offer the
+            user wants to receive. If omitted or empty when `accepted` is
+            `true`, all offered credential types are requested.
+          items:
+            type: string
+          example: []
+
+    ConsentResponse:
+      type: object
+      required:
+        - session_id
+        - next_action
+      properties:
+        session_id:
+          type: string
+          description: Session identifier (echo).
+          example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+        next_action:
+          type: string
+          enum:
+            - redirect
+            - provide_tx_code
+            - none
+            - rejected
+          description: |
+            Instructs the frontend on what to do next:
+
+            | Value             | Meaning                                                        | Frontend action                                        |
+            |-------------------|----------------------------------------------------------------|--------------------------------------------------------|
+            | `redirect`        | Authorization code flow — redirect user to `authorization_url`.| Open `authorization_url` in system browser or WebView. |
+            | `provide_tx_code` | Pre-authorized code flow — transaction code required.          | Render tx code input UI using `tx_code` from `/start`. |
+            | `none`            | Pre-authorized code flow without tx_code — processing started. | Listen on SSE stream.                                  |
+            | `rejected`        | User declined — session terminated.                            | Display cancellation message.                          |
+          example: redirect
+        authorization_url:
+          type: string
+          format: uri
+          description: |
+            Present only when `next_action` is `"redirect"`. The full
+            authorization URL (including PKCE `code_challenge`, or PAR
+            `request_uri`) to open in the system browser.
+          example: "https://as.issuer.example.eu/authorize?response_type=code&client_id=wallet.example.eu&..."
+
+    # -----------------------------------------------------------------------
+    # Transaction Code
+    # -----------------------------------------------------------------------
+    TxCodeRequest:
+      type: object
+      required:
+        - tx_code
+      properties:
+        tx_code:
+          type: string
+          description: |
+            The transaction code entered by the user.
+            - If `tx_code.input_mode` is `"numeric"`, MUST contain only ASCII
+              digits (`[0-9]`).
+            - If `tx_code.length` is set, length MUST exactly match that value.
+          example: "493821"
+
+    TxCodeResponse:
+      type: object
+      required:
+        - session_id
+      properties:
+        session_id:
+          type: string
+          description: Session identifier (echo).
+          example: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
+
+    # -----------------------------------------------------------------------
+    # SSE Event Payloads
+    # -----------------------------------------------------------------------
+    SseProcessingEvent:
+      type: object
+      description: |
+        Emitted while the backend is performing back-channel operations.
+        No action is required from the frontend; display a loading/progress
+        state.
+
+        SSE frame:
+        ```
+        event: processing
+        data: { ... }
+        ```
+      required:
+        - session_id
+        - state
+        - step
+      properties:
+        session_id:
+          type: string
+          description: Session identifier.
+          example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+        state:
+          type: string
+          const: processing
+          description: Always `"processing"`.
+        step:
+          type: string
+          enum:
+            - exchanging_token
+            - requesting_credential
+            - awaiting_deferred_credential
+          description: |
+            The specific back-channel operation in progress:
+            - `exchanging_token` — exchanging authorization / pre-authorized code for an access token.
+            - `requesting_credential` — calling the issuer's credential endpoint.
+            - `awaiting_deferred_credential` — credential issuance is deferred; backend is polling.
+          example: requesting_credential
+
+    SseCompletedEvent:
+      type: object
+      description: |
+        Terminal success event. The session is closed after this event. The
+        frontend MUST display a confirmation and optionally navigate to the
+        credential list.
+
+        SSE frame:
+        ```
+        event: completed
+        data: { ... }
+        ```
+      required:
+        - session_id
+        - state
+        - credential_ids
+        - credential_types
+      properties:
+        session_id:
+          type: string
+          description: Session identifier.
+          example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+        state:
+          type: string
+          const: completed
+          description: Always `"completed"`.
+        credential_ids:
+          type: array
+          description: |
+            Internal wallet credential IDs (UUID) for the issued credentials.
+            Parallel array with `credential_types`.
+          items:
+            type: string
+            format: uuid
+          example:
+            - c3d4e5f6-7890-abcd-ef12-3456789abcde
+        credential_types:
+          type: array
+          description: |
+            `credential_configuration_id` values of the issued credentials,
+            in the same order as `credential_ids`.
+          items:
+            type: string
+          example:
+            - eu.europa.ec.eudi.pid.1
+
+    SseFailedEvent:
+      type: object
+      description: |
+        Terminal failure event. Emitted whenever an unrecoverable error occurs
+        at any step. The session is discarded after this event. The frontend
+        MUST display the error to the user and MUST NOT retry — a new session
+        must be started if the user wishes to try again.
+
+        SSE frame:
+        ```
+        event: failed
+        data: { ... }
+        ```
+      required:
+        - session_id
+        - state
+        - error
+        - error_description
+        - step
+      properties:
+        session_id:
+          type: string
+          description: Session identifier.
+          example: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
+        state:
+          type: string
+          const: failed
+          description: Always `"failed"`.
+        error:
+          type: string
+          description: |
+            OID4VCI or wallet-defined error code.
+          examples:
+            - invalid_proof
+            - access_denied
+            - issuer_metadata_fetch_failed
+            - credential_request_denied
+        error_description:
+          description: Human-readable description of the failure. `null` if not available.
+          oneOf:
+            - type: string
+            - type: "null"
+          example: The user denied authorization at the issuer's authorization server.
+        step:
+          type: string
+          enum:
+            - offer_resolution
+            - metadata
+            - authorization
+            - token
+            - credential_request
+            - deferred_credential
+            - internal
+          description: |
+            The phase at which the failure occurred:
+            - `offer_resolution` — resolving the credential offer URI.
+            - `metadata` — fetching issuer or AS metadata.
+            - `authorization` — user authorization at the issuer's AS.
+            - `token` — token exchange at the issuer's token endpoint.
+            - `credential_request` — requesting the credential from the issuer.
+            - `deferred_credential` — polling the deferred credential endpoint.
+            - `internal` — unexpected wallet backend error.
+          example: authorization
+
+    CredentialRecord:
+      type: object
+      description: |
+        Decoded payload of a single verifiable credential stored in the wallet.
+        The `claims` object contains the credential-specific attributes whose
+        structure depends on the credential type and format.
+      required:
+        - id
+        - credential_configuration_id
+        - format
+        - issuer
+        - status
+        - issued_at
+        - claims
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Internal wallet credential ID (UUID v4).
+          example: c3d4e5f6-7890-abcd-ef12-3456789abcde
+        credential_configuration_id:
+          type: string
+          description: Credential configuration identifier from the issuer's metadata.
+          example: eu.europa.ec.eudi.pid.1
+        format:
+          type: string
+          description: Credential format.
+          enum:
+            - dc+sd-jwt
+            - mso_mdoc
+            - jwt_vc_json
+            - jwt_vc_json-ld
+            - ldp_vc
+          example: dc+sd-jwt
+        issuer:
+          type: string
+          format: uri
+          description: Issuer identifier URI.
+          example: https://issuer.example.eu
+        status:
+          type: string
+          description: Current validity status of the credential.
+          enum:
+            - active
+            - expired
+            - revoked
+            - suspended
+          example: active
+        issued_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the credential was issued.
+          example: "2026-04-08T14:35:00Z"
+        expires_at:
+          description: |
+            ISO 8601 timestamp when the credential expires. `null` if the
+            credential has no expiry.
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          example: "2027-04-08T14:35:00Z"
+        claims:
+          type: object
+          description: |
+            Decoded credential claims. The structure is credential-type
+            specific. Additional properties are permitted.
+          additionalProperties: true
+          example:
+            given_name: Jane
+            family_name: Doe
+
+    CredentialListResponse:
+      type: object
+      required:
+        - credentials
+      properties:
+        credentials:
+          type: array
+          description: List of decoded credential payloads belonging to the tenant.
+          items:
+            $ref: '#/components/schemas/CredentialRecord'
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+tags:
+  - name: Tenants
+    description: Tenant registration and management.
+  - name: Issuance
+    description: |
+      OID4VCI credential issuance flow. Covers session lifecycle from offer
+      submission through credential delivery, supporting both Authorization
+      Code and Pre-Authorized Code grant types.
+  - name: Credentials
+    description: |
+      Credential retrieval. Read-only access to verifiable credentials
+      stored in the wallet after a successful issuance flow.
