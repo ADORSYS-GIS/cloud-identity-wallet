@@ -4,8 +4,8 @@ use std::marker::PhantomData;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, Url};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::errors::{Error, ErrorKind};
 use crate::http::client::HttpClient;

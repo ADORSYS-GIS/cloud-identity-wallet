@@ -5,8 +5,8 @@ use std::time::Duration;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Method, Url};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::errors::{Error, ErrorKind};
 use crate::http::request::JsonRequestBuilder;
@@ -253,10 +253,7 @@ impl HttpClient {
 
     /// Creates a POST request with a form-encoded body.
     #[must_use]
-    pub fn post_form<T: DeserializeOwned>(
-        &self,
-        url: &str,
-    ) -> FormRequestBuilder<'_, T> {
+    pub fn post_form<T: DeserializeOwned>(&self, url: &str) -> FormRequestBuilder<'_, T> {
         FormRequestBuilder::new(self, url)
     }
 
