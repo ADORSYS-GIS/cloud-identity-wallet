@@ -2,8 +2,11 @@
 
 use std::time::Duration;
 
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Method, Url};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::errors::{Error, ErrorKind};
 use crate::http::request::JsonRequestBuilder;
@@ -43,7 +46,7 @@ pub struct HttpClientBuilder {
     accept_invalid_certs: bool,
     allow_http_urls: bool,
     user_agent: Option<String>,
-    default_headers: reqwest::header::HeaderMap,
+    default_headers: HeaderMap,
 }
 
 /// Redirect policy configuration.
@@ -54,8 +57,7 @@ pub enum RedirectPolicy {
     /// Allow redirects but limit the number.
     Limited(usize),
     /// Allow redirects up to a safety limit of 10.
-    /// Note: Despite the name, this is limited to 10 redirects for safety.
-    All,
+    Default,
 }
 
 impl Default for HttpClientBuilder {
@@ -68,7 +70,7 @@ impl Default for HttpClientBuilder {
             accept_invalid_certs: false,
             allow_http_urls: false,
             user_agent: None,
-            default_headers: reqwest::header::HeaderMap::new(),
+            default_headers: HeaderMap::new(),
         }
     }
 }
@@ -81,6 +83,8 @@ impl HttpClientBuilder {
     }
 
     /// Sets the connection timeout.
+    ///
+    /// Defaults to 10 seconds.
     #[must_use]
     pub fn connect_timeout(mut self, duration: Duration) -> Self {
         self.connect_timeout = duration;
@@ -88,6 +92,8 @@ impl HttpClientBuilder {
     }
 
     /// Sets the total request timeout.
+    ///
+    /// Defaults to 30 seconds.
     #[must_use]
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = duration;
@@ -95,6 +101,8 @@ impl HttpClientBuilder {
     }
 
     /// Sets the maximum response size in bytes.
+    ///
+    /// Defaults to 1 MB (1,048,576 bytes).
     #[must_use]
     pub fn max_response_size(mut self, size: usize) -> Self {
         self.max_response_size = size;
@@ -102,6 +110,8 @@ impl HttpClientBuilder {
     }
 
     /// Sets the redirect policy.
+    ///
+    /// Defaults to [`RedirectPolicy::None`].
     ///
     /// # Security Warning
     ///
@@ -116,6 +126,8 @@ impl HttpClientBuilder {
 
     /// Accepts invalid TLS certificates.
     ///
+    /// Defaults to `false`.
+    ///
     /// # Security Warning
     ///
     /// This should only be used for testing. Never use in production.
@@ -127,6 +139,8 @@ impl HttpClientBuilder {
 
     /// Allows HTTP URLs (for testing only).
     ///
+    /// Defaults to `false`.
+    ///
     /// # Security Warning
     ///
     /// This should only be used for testing. Never use in production.
@@ -137,6 +151,8 @@ impl HttpClientBuilder {
     }
 
     /// Sets a custom user agent.
+    ///
+    /// Defaults to the `reqwest` default user agent.
     #[must_use]
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = Some(user_agent.into());
@@ -146,8 +162,8 @@ impl HttpClientBuilder {
     /// Adds a default header to all requests.
     #[must_use]
     pub fn default_header(mut self, key: &'static str, value: &str) -> Self {
-        if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
-            && let Ok(header_value) = reqwest::header::HeaderValue::try_from(value)
+        if let Ok(header_name) = HeaderName::try_from(key)
+            && let Ok(header_value) = HeaderValue::try_from(value)
         {
             self.default_headers.insert(header_name, header_value);
         }
@@ -163,7 +179,7 @@ impl HttpClientBuilder {
         let redirect_policy = match self.redirect_policy {
             RedirectPolicy::None => Policy::none(),
             RedirectPolicy::Limited(n) => Policy::limited(n),
-            RedirectPolicy::All => Policy::limited(10),
+            RedirectPolicy::Default => Policy::limited(10),
         };
 
         let mut builder = Client::builder()
@@ -222,13 +238,13 @@ impl HttpClient {
 
     /// Creates a GET request for JSON content.
     #[must_use]
-    pub fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> JsonRequestBuilder<'_, T> {
+    pub fn get_json<T: DeserializeOwned>(&self, url: &str) -> JsonRequestBuilder<'_, T> {
         JsonRequestBuilder::new(self, Method::GET, url)
     }
 
     /// Creates a POST request with a JSON body.
     #[must_use]
-    pub fn post_json<T: serde::de::DeserializeOwned, B: serde::Serialize>(
+    pub fn post_json<T: DeserializeOwned, B: Serialize>(
         &self,
         url: &str,
     ) -> JsonRequestBuilder<'_, T, B> {
@@ -237,7 +253,7 @@ impl HttpClient {
 
     /// Creates a POST request with a form-encoded body.
     #[must_use]
-    pub fn post_form<T: serde::de::DeserializeOwned>(
+    pub fn post_form<T: DeserializeOwned>(
         &self,
         url: &str,
     ) -> FormRequestBuilder<'_, T> {
@@ -304,12 +320,6 @@ impl HttpClient {
             ));
         }
         Ok(())
-    }
-}
-
-impl Default for HttpClient {
-    fn default() -> Self {
-        Self::new().expect("failed to create default HTTP client")
     }
 }
 

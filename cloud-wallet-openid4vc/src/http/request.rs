@@ -2,10 +2,10 @@
 
 use std::marker::PhantomData;
 
-use reqwest::header::HeaderValue;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, Url};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::errors::{Error, ErrorKind};
 use crate::http::client::HttpClient;
@@ -31,9 +31,10 @@ pub struct RequestBuilder<'a> {
     client: &'a HttpClient,
     method: Method,
     url: String,
-    headers: reqwest::header::HeaderMap,
+    headers: HeaderMap,
     body: Option<reqwest::Body>,
     auth: Option<AuthHeader>,
+    serialization_error: Option<Error>,
 }
 
 impl<'a> RequestBuilder<'a> {
@@ -44,9 +45,10 @@ impl<'a> RequestBuilder<'a> {
             client,
             method,
             url: url.to_string(),
-            headers: reqwest::header::HeaderMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             auth: None,
+            serialization_error: None,
         }
     }
 
@@ -66,7 +68,7 @@ impl<'a> RequestBuilder<'a> {
     /// Adds a header to the request.
     #[must_use]
     pub fn header(mut self, key: &'static str, value: &str) -> Self {
-        if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
+        if let Ok(header_name) = HeaderName::try_from(key)
             && let Ok(header_value) = HeaderValue::try_from(value)
         {
             self.headers.insert(header_name, header_value);
@@ -83,36 +85,36 @@ impl<'a> RequestBuilder<'a> {
 
     /// Sets the request body as JSON.
     ///
-    /// # Panics
-    ///
-    /// Panics if the body cannot be serialized to JSON.
+    /// If serialization fails, the error is deferred to [`send()`](Self::send).
     #[must_use]
     pub fn json<T: Serialize>(mut self, body: &T) -> Self {
         self.headers.insert(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
-        self.body = Some(
-            serde_json::to_vec(body)
-                .expect("failed to serialize JSON body")
-                .into(),
-        );
+        match serde_json::to_vec(body) {
+            Ok(bytes) => self.body = Some(bytes.into()),
+            Err(e) => {
+                self.serialization_error = Some(Error::message(
+                    ErrorKind::HttpResponseParsingFailed,
+                    format!("failed to serialize JSON body: {e}"),
+                ));
+            }
+        }
         self
     }
 
-    /// Sets the request body as form-encoded.
+    /// Sets the request body as a pre-encoded form-urlencoded string.
     ///
-    /// # Panics
-    ///
-    /// Panics if the body cannot be form-encoded.
+    /// For form requests with automatic encoding, use [`HttpClient::post_form`]
+    /// and [`FormRequestBuilder`] instead.
     #[must_use]
-    pub fn form(mut self, body: impl Serialize) -> Self {
+    pub fn form_encoded(mut self, body: &str) -> Self {
         self.headers.insert(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
-        let encoded = serde_urlencoded::to_string(&body).expect("failed to encode form body");
-        self.body = Some(encoded.into());
+        self.body = Some(body.to_string().into());
         self
     }
 
@@ -121,11 +123,16 @@ impl<'a> RequestBuilder<'a> {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - A previous builder call (e.g. `json()`) failed to serialize
     /// - The URL is not HTTPS
     /// - The request fails (network error, timeout, etc.)
     /// - The response status is not successful (4xx or 5xx)
     /// - The response body exceeds the size limit
     pub async fn send(self) -> Result<RawResponse, Error> {
+        if let Some(err) = self.serialization_error {
+            return Err(err);
+        }
+
         validate_https_url(&self.url, self.client.allow_http_urls)?;
 
         let mut request = self.client.inner.request(self.method, &self.url);
@@ -163,7 +170,7 @@ pub struct JsonRequestBuilder<'a, T, B = serde_json::Value> {
     client: &'a HttpClient,
     method: Method,
     url: String,
-    headers: reqwest::header::HeaderMap,
+    headers: HeaderMap,
     body: Option<&'a B>,
     auth: Option<AuthHeader>,
     max_response_size: usize,
@@ -178,7 +185,7 @@ impl<'a, T: DeserializeOwned, B: Serialize> JsonRequestBuilder<'a, T, B> {
             client,
             method,
             url: url.to_string(),
-            headers: reqwest::header::HeaderMap::new(),
+            headers: HeaderMap::new(),
             body: None,
             auth: None,
             max_response_size: client.max_response_size(),
@@ -209,7 +216,7 @@ impl<'a, T: DeserializeOwned, B: Serialize> JsonRequestBuilder<'a, T, B> {
     /// Adds a header to the request.
     #[must_use]
     pub fn header(mut self, key: &'static str, value: &str) -> Self {
-        if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
+        if let Ok(header_name) = HeaderName::try_from(key)
             && let Ok(header_value) = HeaderValue::try_from(value)
         {
             self.headers.insert(header_name, header_value);
@@ -285,8 +292,8 @@ impl<'a, T: DeserializeOwned> JsonRequestBuilder<'a, T, serde_json::Value> {
 pub struct FormRequestBuilder<'a, T> {
     client: &'a HttpClient,
     url: String,
-    headers: reqwest::header::HeaderMap,
-    params: std::collections::HashMap<String, String>,
+    headers: HeaderMap,
+    params: Vec<(String, String)>,
     auth: Option<AuthHeader>,
     max_response_size: usize,
     _response: PhantomData<T>,
@@ -299,8 +306,8 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
         Self {
             client,
             url: url.to_string(),
-            headers: reqwest::header::HeaderMap::new(),
-            params: std::collections::HashMap::new(),
+            headers: HeaderMap::new(),
+            params: Vec::new(),
             auth: None,
             max_response_size: client.max_response_size(),
             _response: PhantomData,
@@ -308,9 +315,12 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
     }
 
     /// Adds a parameter to the form body.
+    ///
+    /// Parameters are stored in insertion order. Duplicate keys are allowed
+    /// (per form-encoding rules) and will be emitted in the order added.
     #[must_use]
     pub fn param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.params.insert(key.into(), value.into());
+        self.params.push((key.into(), value.into()));
         self
     }
 
@@ -323,7 +333,7 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
         V: Into<String>,
     {
         for (key, value) in params {
-            self.params.insert(key.into(), value.into());
+            self.params.push((key.into(), value.into()));
         }
         self
     }
@@ -350,7 +360,7 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
     /// Adds a header to the request.
     #[must_use]
     pub fn header(mut self, key: &'static str, value: &str) -> Self {
-        if let Ok(header_name) = reqwest::header::HeaderName::try_from(key)
+        if let Ok(header_name) = HeaderName::try_from(key)
             && let Ok(header_value) = HeaderValue::try_from(value)
         {
             self.headers.insert(header_name, header_value);
@@ -386,10 +396,7 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
             HeaderValue::from_static("application/json"),
         );
 
-        request = request.header(
-            reqwest::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
+        request = request.form(&self.params);
 
         if let Some(ref auth) = self.auth {
             let auth_header = auth.to_header_value()?;
@@ -400,14 +407,6 @@ impl<'a, T: DeserializeOwned> FormRequestBuilder<'a, T> {
                 }
             }
         }
-
-        let encoded = serde_urlencoded::to_string(&self.params).map_err(|e| {
-            Error::message(
-                ErrorKind::HttpRequestFailed,
-                format!("failed to encode form body: {e}"),
-            )
-        })?;
-        request = request.body(encoded);
 
         request = request.headers(self.headers);
 
@@ -586,10 +585,8 @@ mod tests {
             .param("grant_type", "authorization_code")
             .param("code", "abc123");
         assert_eq!(builder.params.len(), 2);
-        assert_eq!(
-            builder.params.get("grant_type"),
-            Some(&"authorization_code".to_string())
-        );
+        assert_eq!(builder.params[0].0, "grant_type");
+        assert_eq!(builder.params[0].1, "authorization_code");
     }
 
     #[test]
