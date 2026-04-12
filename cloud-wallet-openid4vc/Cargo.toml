@@ -5,21 +5,38 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cloud-wallet-kms = { path = "../cloud-wallet-kms", optional = true }
+
+async-trait.workspace = true
+base64 = "0.22"
 color-eyre.workspace = true
 csscolorparser = { version = "0.8", features = ["serde"] }
+dashmap = { workspace = true, optional = true }
 jsonwebtoken = "9"
 percent-encoding = "2"
+reqwest = { version = "0.13", features = ["form", "json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
 thiserror.workspace = true
 time.workspace = true
-base64 = "0.22"
-reqwest = { version = "0.13", features = ["json"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }
 
+[dependencies.sqlx]
+workspace = true
+features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
+optional = true
+
 [dev-dependencies]
 wiremock = "0.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = ["memory-repo"]
+memory-repo = ["dep:cloud-wallet-kms", "dep:dashmap"]
+mysql = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/mysql"]
+postgres = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/postgres"]
+sqlite = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/sqlite"]
