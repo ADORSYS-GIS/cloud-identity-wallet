@@ -16,7 +16,6 @@ thiserror.workspace = true
 time.workspace = true
 base64 = "0.22"
 reqwest = { version = "0.13", features = ["json"] }
-serde_urlencoded = "0.7"
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }
