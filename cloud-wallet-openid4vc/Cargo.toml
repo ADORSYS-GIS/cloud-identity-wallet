@@ -12,7 +12,6 @@ base64 = "0.22"
 color-eyre.workspace = true
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
-http = "1.4"
 jsonwebtoken = "9"
 percent-encoding = "2"
 reqwest = { version = "0.13", features = ["json"] }
