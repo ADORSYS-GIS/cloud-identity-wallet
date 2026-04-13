@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use thiserror::Error;
 
@@ -40,9 +40,9 @@ impl<T: std::fmt::Debug> Display for Oid4vciError<T> {
     }
 }
 
-/// Authorization Error Response as described in [RFC 6749 §4.1.2.1]
+/// Authorization Error Response as described in [RFC 6749 ┬º4.1.2.1]
 ///
-/// [RFC 6749 §4.1.2.1]: https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1
+/// [RFC 6749 ┬º4.1.2.1]: https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthzErrorResponse {
@@ -64,10 +64,10 @@ pub enum AuthzErrorResponse {
     TemporarilyUnavailable,
 }
 
-/// Token Error Response as described in [RFC 6749 §5.2] and extended in [OpenID4VCI §6.3]
+/// Token Error Response as described in [RFC 6749 ┬º5.2] and extended in [OpenID4VCI ┬º6.3]
 ///
-/// [RFC 6749 §5.2]: https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
-/// [OpenID4VCI §6.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-token-error-response
+/// [RFC 6749 ┬º5.2]: https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
+/// [OpenID4VCI ┬º6.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-token-error-response
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenErrorResponse {
