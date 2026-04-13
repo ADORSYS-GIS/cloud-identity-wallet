@@ -8,6 +8,7 @@ extend-ignore-identifiers-re = []
 COSE = "COSE"
 Cose = "Cose"
 cose = "cose"
+fwe = "fwe"
 
 [files]
 extend-exclude = [
