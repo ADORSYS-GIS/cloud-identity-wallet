@@ -1,17 +1,23 @@
 use std::collections::HashMap;
 
-use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
+use config::{builder::DefaultState, Config as ConfigLib, ConfigBuilder, ConfigError, Environment};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
+    pub jwt: JwtConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtConfig {
+    pub secret: String,
 }
 
 impl Config {
@@ -45,7 +51,8 @@ impl Config {
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)
+            .set_default("server.port", 3000)?
+            .set_default("jwt.secret", "development-secret-change-in-production")
     }
 }
 
@@ -60,6 +67,7 @@ mod tests {
 
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 3000);
+        assert!(!config.jwt.secret.is_empty());
     }
 
     #[test]
