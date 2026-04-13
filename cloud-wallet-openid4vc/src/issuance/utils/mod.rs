@@ -42,10 +42,16 @@ mod tests {
     #[test]
     fn alphanumeric_characters_are_allowed() {
         for b in b'A'..=b'Z' {
-            assert!(is_allowed_ascii_byte(b), "uppercase {b:#04x} should be allowed");
+            assert!(
+                is_allowed_ascii_byte(b),
+                "uppercase {b:#04x} should be allowed"
+            );
         }
         for b in b'a'..=b'z' {
-            assert!(is_allowed_ascii_byte(b), "lowercase {b:#04x} should be allowed");
+            assert!(
+                is_allowed_ascii_byte(b),
+                "lowercase {b:#04x} should be allowed"
+            );
         }
         for b in b'0'..=b'9' {
             assert!(is_allowed_ascii_byte(b), "digit {b:#04x} should be allowed");
@@ -80,14 +86,20 @@ mod tests {
     #[test]
     fn control_characters_are_rejected() {
         for b in 0x00..0x20u8 {
-            assert!(!is_allowed_ascii_byte(b), "control char {b:#04x} should be rejected");
+            assert!(
+                !is_allowed_ascii_byte(b),
+                "control char {b:#04x} should be rejected"
+            );
         }
     }
 
     #[test]
     fn high_bytes_above_tilde_are_rejected() {
         for b in 0x7F..=0xFFu8 {
-            assert!(!is_allowed_ascii_byte(b), "byte {b:#04x} should be rejected");
+            assert!(
+                !is_allowed_ascii_byte(b),
+                "byte {b:#04x} should be rejected"
+            );
         }
     }
 
@@ -96,6 +108,10 @@ mod tests {
         for b in 0x00..=0xFFu16 {
             let b = b as u8;
             let expected = matches!(b, 0x20..=0x21 | 0x23..=0x5B | 0x5D..=0x7E);
+<<<<<<< HEAD:cloud-wallet-openid4vc/src/issuance/utils/mod.rs
+=======
+
+>>>>>>> ce01eb7 (fix fmt and typo issue):cloud-wallet-openid4vc/src/issuance/utils.rs
             assert_eq!(is_allowed_ascii_byte(b), expected, "byte {b:#04x} mismatch");
         }
     }
