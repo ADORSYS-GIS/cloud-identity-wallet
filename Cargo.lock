@@ -942,6 +942,7 @@ dependencies = [
  "color-eyre",
  "csscolorparser",
  "dashmap",
+ "http 1.4.0",
  "jsonwebtoken",
  "percent-encoding",
  "reqwest",
