@@ -1,21 +1,35 @@
+mod auth;
+mod error;
 mod handlers;
 mod responses;
 
 use crate::config::Config;
+use crate::server::auth::AuthenticatedUser;
 use crate::server::handlers::{health_check, home};
-
+use axum::extract::FromRef;
 use axum::http::Method;
-use axum::{Router, routing::get};
+use axum::{Json, Router, routing::get};
 use color_eyre::eyre::{Context, Result};
+use serde_json::json;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
 
+pub use auth::generate_token;
+pub use error::ApiError;
+
 #[derive(Debug, Clone)]
-/// The global application state shared between all request handlers.
-struct AppState {}
+pub struct AppState {
+    jwt: crate::config::JwtConfig,
+}
+
+impl FromRef<AppState> for crate::config::JwtConfig {
+    fn from_ref(state: &AppState) -> Self {
+        state.jwt.clone()
+    }
+}
 
 pub struct Server {
     router: Router,
@@ -23,7 +37,6 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
     pub async fn new(config: &Config) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -42,11 +55,22 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {};
+        let state = AppState {
+            jwt: config.jwt.clone(),
+        };
+
+        let api_routes = Router::new()
+            .route("/protected", get(|user: AuthenticatedUser| async move {
+                Json(json!({
+                    "message": "Protected endpoint",
+                    "tenant_id": user.tenant_id()
+                }))
+            }));
 
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
+            .nest("/api/v1", api_routes)
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -62,7 +86,6 @@ impl Server {
         self.listener.local_addr().unwrap().port()
     }
 
-    /// Runs the HTTP server.
     pub async fn run(self) -> Result<()> {
         tracing::info!("Server listening on {}", self.listener.local_addr()?);
         axum::serve(self.listener, self.router).await?;

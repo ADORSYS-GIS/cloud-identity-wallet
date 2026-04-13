@@ -58,14 +58,19 @@ broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
 [dependencies]
+async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
 color-eyre.workspace = true
 config = "0.15"
+jsonwebtoken = "9"
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }
