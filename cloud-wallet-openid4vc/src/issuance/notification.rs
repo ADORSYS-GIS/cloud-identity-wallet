@@ -102,9 +102,7 @@ impl NotificationRequest {
             if let Some(pos) = desc.bytes().position(|b| !is_allowed_ascii_byte(b)) {
                 return Err(Error::message(
                     ErrorKind::InvalidNotificationRequest,
-                    format!(
-                        "event_description contains disallowed character at byte offset {pos}"
-                    ),
+                    format!("event_description contains disallowed character at byte offset {pos}"),
                 ));
             }
         }
@@ -147,9 +145,18 @@ mod tests {
     #[test]
     fn deserialize_all_event_types() {
         let cases = [
-            ("\"credential_accepted\"", NotificationEvent::CredentialAccepted),
-            ("\"credential_failure\"", NotificationEvent::CredentialFailure),
-            ("\"credential_deleted\"", NotificationEvent::CredentialDeleted),
+            (
+                "\"credential_accepted\"",
+                NotificationEvent::CredentialAccepted,
+            ),
+            (
+                "\"credential_failure\"",
+                NotificationEvent::CredentialFailure,
+            ),
+            (
+                "\"credential_deleted\"",
+                NotificationEvent::CredentialDeleted,
+            ),
         ];
 
         for (input, expected) in cases {
@@ -185,8 +192,7 @@ mod tests {
 
     #[test]
     fn serialize_minimal_request() {
-        let request =
-            NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted);
+        let request = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted);
 
         let json = serde_json::to_value(&request).expect("Failed to serialize");
 
@@ -201,9 +207,8 @@ mod tests {
 
     #[test]
     fn serialize_request_with_description() {
-        let request =
-            NotificationRequest::new("3fwe98js", NotificationEvent::CredentialFailure)
-                .with_event_description("Could not store the Credential. Out of storage.");
+        let request = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialFailure)
+            .with_event_description("Could not store the Credential. Out of storage.");
 
         let json = serde_json::to_value(&request).expect("Failed to serialize");
 
@@ -285,9 +290,8 @@ mod tests {
 
     #[test]
     fn round_trip_preserves_all_fields() {
-        let original =
-            NotificationRequest::new("abc-123", NotificationEvent::CredentialDeleted)
-                .with_event_description("User removed credential");
+        let original = NotificationRequest::new("abc-123", NotificationEvent::CredentialDeleted)
+            .with_event_description("User removed credential");
 
         let serialized = serde_json::to_string(&original).expect("Failed to serialize");
         let deserialized: NotificationRequest =
@@ -300,8 +304,7 @@ mod tests {
 
     #[test]
     fn validate_valid_request_succeeds() {
-        let request =
-            NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted);
+        let request = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted);
 
         assert!(request.validate().is_ok());
     }
@@ -326,9 +329,8 @@ mod tests {
 
     #[test]
     fn validate_valid_event_description_succeeds() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description("Could not store the Credential. Out of storage.");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+            .with_event_description("Could not store the Credential. Out of storage.");
 
         assert!(request.validate().is_ok());
     }
@@ -336,9 +338,8 @@ mod tests {
     /// `\` (0x5C) is excluded from the allowed character set.
     #[test]
     fn validate_event_description_with_backslash_fails() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description("path\\to\\file");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+            .with_event_description("path\\to\\file");
 
         let err = request.validate().unwrap_err();
 
@@ -348,9 +349,8 @@ mod tests {
     /// DEL (0x7F) is excluded from the allowed character set.
     #[test]
     fn validate_event_description_with_del_fails() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description("bad\x7F");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+            .with_event_description("bad\x7F");
 
         let err = request.validate().unwrap_err();
 
@@ -360,9 +360,8 @@ mod tests {
     /// Control characters (0x00–0x1F) are excluded.
     #[test]
     fn validate_event_description_with_control_chars_fails() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description("line\nnewline");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+            .with_event_description("line\nnewline");
 
         let err = request.validate().unwrap_err();
 
@@ -372,9 +371,8 @@ mod tests {
     /// `"` (0x22) is excluded from the allowed character set.
     #[test]
     fn validate_event_description_with_double_quote_fails() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description("said \"hello\"");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+            .with_event_description("said \"hello\"");
 
         let err = request.validate().unwrap_err();
 
@@ -385,17 +383,15 @@ mod tests {
     #[test]
     fn validate_event_description_with_allowed_boundary_chars() {
         // Space (0x20), ! (0x21), # (0x23), [ (0x5B), ] (0x5D), ~ (0x7E)
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted)
-                .with_event_description(" !#[]~");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted)
+            .with_event_description(" !#[]~");
 
         assert!(request.validate().is_ok());
     }
 
     #[test]
     fn validate_none_description_succeeds() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted);
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted);
 
         assert_eq!(request.event_description, None);
         assert!(request.validate().is_ok());
@@ -405,8 +401,7 @@ mod tests {
 
     #[test]
     fn request_new_creates_without_description() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted);
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted);
 
         assert_eq!(request.notification_id, "id-1");
         assert_eq!(request.event, NotificationEvent::CredentialAccepted);
@@ -415,13 +410,9 @@ mod tests {
 
     #[test]
     fn request_with_event_description_sets_value() {
-        let request =
-            NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description("storage full");
+        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+            .with_event_description("storage full");
 
-        assert_eq!(
-            request.event_description.as_deref(),
-            Some("storage full")
-        );
+        assert_eq!(request.event_description.as_deref(), Some("storage full"));
     }
 }

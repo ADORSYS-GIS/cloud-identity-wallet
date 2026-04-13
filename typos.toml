@@ -8,8 +8,6 @@ extend-ignore-identifiers-re = []
 COSE = "COSE"
 Cose = "Cose"
 cose = "cose"
-# MIGH is part of PEM private key format (ASN.1 header), not a typo
-MIGH = "MIGH"
 
 [files]
 extend-exclude = [
