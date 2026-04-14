@@ -2,8 +2,12 @@
 use std::fmt::Display;
 use thiserror::Error;
 
-<<<<<<< HEAD
-/// All errors that can occur during an OpenID4VCI issuance flow.
+use super::utils::is_allowed_ascii_byte;
+
+/// Generic wrapper for all OpenID4VCI / OAuth 2.0 error responses.
+///
+/// Each auth-flow endpoint (authorization, token, credential, deferred-credential,
+/// notification) serialises to `{"error": "<code>", "error_description": "..."}`.
 #[derive(Debug, Error, Serialize, Deserialize)]
 pub struct Oid4vciError<T> {
     /// The spec-defined error code.
@@ -11,36 +15,6 @@ pub struct Oid4vciError<T> {
     /// Optional human-readable description of the error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_description: Option<String>,
-=======
-use super::utils::is_allowed_ascii_byte;
-use serde::{Deserialize, Serialize};
-
-/// Normative credential-endpoint error codes from OpenID4VCI Â§8.3.1.2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialErrorCode {
-    /// The Credential Request is missing a required parameter, includes an unsupported
-    /// parameter or parameter value, repeats the same parameter, or is otherwise malformed.
-    InvalidCredentialRequest,
-
-    /// Requested Credential Configuration is unknown.
-    UnknownCredentialConfiguration,
-
-    /// Requested Credential identifier is unknown.
-    UnknownCredentialIdentifier,
-
-    /// The proofs parameter in the Credential Request is invalid.
-    InvalidProof,
-
-    /// The proofs parameter in the Credential Request uses an invalid nonce.
-    InvalidNonce,
-
-    /// The encryption parameters in the Credential Request are either invalid or missing.
-    InvalidEncryptionParameters,
-
-    /// The Credential Request has not been accepted by the Credential Issuer.
-    CredentialRequestDenied,
->>>>>>> ce01eb7 (fix fmt and typo issue)
 }
 
 impl<T> Oid4vciError<T> {
@@ -71,9 +45,9 @@ impl<T: std::fmt::Debug> Display for Oid4vciError<T> {
     }
 }
 
-/// Authorization Error Response as described in [RFC 6749 ┬º4.1.2.1]
+/// Authorization Error Response as described in [RFC 6749 §4.1.2.1]
 ///
-/// [RFC 6749 ┬º4.1.2.1]: https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1
+/// [RFC 6749 §4.1.2.1]: https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthzErrorResponse {
@@ -95,10 +69,10 @@ pub enum AuthzErrorResponse {
     TemporarilyUnavailable,
 }
 
-/// Token Error Response as described in [RFC 6749 ┬º5.2] and extended in [OpenID4VCI ┬º6.3]
+/// Token Error Response as described in [RFC 6749 §5.2] and extended in [OpenID4VCI §6.3]
 ///
-/// [RFC 6749 ┬º5.2]: https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
-/// [OpenID4VCI ┬º6.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-token-error-response
+/// [RFC 6749 §5.2]: https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
+/// [OpenID4VCI §6.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-token-error-response
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenErrorResponse {
@@ -116,64 +90,156 @@ pub enum TokenErrorResponse {
     InvalidScope,
 }
 
-/// Credential Error Response as defined in [OpenID4VCI $8.3.1.2]
-///
-/// [OpenID4VCI $8.3.1.2]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-request-errors
-#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Serialize, Deserialize)]
+/// Normative credential-endpoint error codes from OpenID4VCI §8.3.1.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CredentialErrorResponse {
-    #[error("The Credential Request is missing a required parameter or is otherwise malformed.")]
+pub enum CredentialErrorCode {
+    /// The Credential Request is missing a required parameter, includes an unsupported
+    /// parameter or parameter value, repeats the same parameter, or is otherwise malformed.
     InvalidCredentialRequest,
-    #[error("The requested Credential Configuration is unknown")]
+
+    /// Requested Credential Configuration is unknown.
     UnknownCredentialConfiguration,
-    #[error("The requested Credential Identifier is unknown")]
+
+    /// Requested Credential identifier is unknown.
     UnknownCredentialIdentifier,
-    #[error("The proofs parameter in the Credential Request is invalid")]
+
+    /// The proofs parameter in the Credential Request is invalid.
     InvalidProof,
-    #[error("The proofs parameter in the Credential Request uses an invalid nonce")]
+
+    /// The proofs parameter in the Credential Request uses an invalid nonce.
     InvalidNonce,
-    #[error("Invalid or missing encryption parameters in the Credential Request")]
+
+    /// The encryption parameters in the Credential Request are either invalid or missing.
     InvalidEncryptionParameters,
-    #[error("The Credential Request has not been accepted by the Credential Issuer")]
+
+    /// The Credential Request has not been accepted by the Credential Issuer.
     CredentialRequestDenied,
 }
 
-/// Deferred Credential Error Response as described in [OpenID4VCI $9.3]
-///
-/// [OpenID4VCI $9.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-deferred-credential-error-r
-#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Serialize, Deserialize)]
+impl std::fmt::Display for CredentialErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        write!(f, "{}", s.trim_matches('"'))
+    }
+}
+
+/// Deferred-endpoint error codes from OpenID4VCI §9.3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DeferredCredentialErrorResponse {
-    #[error("The Credential Request is missing a required parameter or is otherwise malformed.")]
+pub enum DeferredCredentialErrorCode {
+    /// The Credential Request is missing a required parameter, includes an unsupported
+    /// parameter or parameter value, repeats the same parameter, or is otherwise malformed.
     InvalidCredentialRequest,
-    #[error("The requested Credential Configuration is unknown")]
+
+    /// Requested Credential Configuration is unknown.
     UnknownCredentialConfiguration,
-    #[error("The requested Credential Identifier is unknown")]
+
+    /// Requested Credential identifier is unknown.
     UnknownCredentialIdentifier,
-    #[error("The proofs parameter in the Credential Request is invalid")]
+
+    /// The proofs parameter in the Credential Request is invalid.
     InvalidProof,
-    #[error("The proofs parameter in the Credential Request uses an invalid nonce")]
+
+    /// The proofs parameter in the Credential Request uses an invalid nonce.
     InvalidNonce,
-    #[error("Invalid or missing encryption parameters in the Credential Request")]
+
+    /// The encryption parameters in the Credential Request are either invalid or missing.
     InvalidEncryptionParameters,
-    #[error("The Credential Request has not been accepted by the Credential Issuer")]
+
+    /// The Credential Request has not been accepted by the Credential Issuer.
     CredentialRequestDenied,
-    #[error("The Deferred Credential Request contains an invalid transaction_id")]
+
+    /// The Deferred Credential Request contains an invalid `transaction_id`.
     InvalidTransactionId,
 }
 
-/// Notification Error Response as defined in [OpenID4VCI $11.3]
-///
-/// [OpenID4VCI $11.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-error-response
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NotificationErrorResponse {
-    InvalidNotificationRequest,
-    InvalidNotificationId,
+impl std::fmt::Display for DeferredCredentialErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        write!(f, "{}", s.trim_matches('"'))
+    }
 }
 
-<<<<<<< HEAD
-=======
+/// Credential error response.
+///
+/// Error response from the credential endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialErrorResponse {
+    /// The error code.
+    pub error: CredentialErrorCode,
+
+    /// Human-readable error description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
+
+    /// Error URI with more details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_uri: Option<String>,
+}
+
+impl CredentialErrorResponse {
+    /// Creates a new credential error response.
+    pub fn new(error: CredentialErrorCode) -> Self {
+        Self {
+            error,
+            error_description: None,
+            error_uri: None,
+        }
+    }
+
+    /// Adds an error description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.error_description = Some(description.into());
+        self
+    }
+}
+
+impl std::fmt::Display for CredentialErrorResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)?;
+        if let Some(ref desc) = self.error_description {
+            write!(f, ": {desc}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CredentialErrorResponse {}
+
+/// Deferred credential error response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredCredentialErrorResponse {
+    /// The error code.
+    pub error: DeferredCredentialErrorCode,
+
+    /// Human-readable error description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
+}
+
+impl std::fmt::Display for DeferredCredentialErrorResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)?;
+        if let Some(ref desc) = self.error_description {
+            write!(f, ": {desc}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for DeferredCredentialErrorResponse {}
+
+/// Notification error codes from OpenID4VCI §11.3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationErrorCode {
+    /// The `notification_id` in the Notification Request was not recognized.
+    InvalidNotificationId,
+    /// The Notification Request is missing a required parameter or is otherwise malformed.
+    InvalidNotificationRequest,
+}
+
 impl std::fmt::Display for NotificationErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
@@ -181,7 +247,7 @@ impl std::fmt::Display for NotificationErrorCode {
     }
 }
 
-/// Notification error response body from OpenID4VCI Â§11.3.
+/// Notification error response body from OpenID4VCI §11.3.
 ///
 /// Returned with HTTP 400 when the Notification Request is invalid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,7 +319,6 @@ impl std::fmt::Display for NotificationErrorResponse {
 
 impl std::error::Error for NotificationErrorResponse {}
 
->>>>>>> ce01eb7 (fix fmt and typo issue)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,9 +335,16 @@ mod tests {
             "error_description": "The request is missing a required parameter or is malformed"
         });
 
-<<<<<<< HEAD
         assert_eq!(json_body, expected);
-=======
+    }
+
+    #[test]
+    fn serialize_credential_error_response() {
+        let error = CredentialErrorResponse::new(CredentialErrorCode::InvalidProof)
+            .with_description("The proof is invalid or missing");
+
+        let json = serde_json::to_value(&error).expect("Failed to serialize");
+
         assert_eq!(
             json,
             json!({
@@ -415,7 +487,9 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(code).expect("Failed to serialize"),
                 serde_json::Value::String(expected.to_string()),
+                "serialize {expected}"
             );
+            assert_eq!(format!("{code}"), expected, "display {expected}");
         }
     }
 
@@ -483,7 +557,7 @@ mod tests {
         );
     }
 
-    /// Spec Â§11.3 â€” example error response.
+    /// Spec §11.3 — example error response.
     #[test]
     fn deserialize_notification_spec_error_example() {
         let json = r#"{"error": "invalid_notification_id"}"#;
@@ -569,7 +643,7 @@ mod tests {
         assert!(response.validate().is_err());
     }
 
-    /// Control characters (0x00–0x1F) are excluded.
+    /// Control characters (0x00-0x1F) are excluded.
     #[test]
     fn notification_error_response_validate_control_char_fails() {
         let response = NotificationErrorResponse::new(NotificationErrorCode::InvalidNotificationId)
@@ -586,6 +660,5 @@ mod tests {
             .with_description(" !#[]~");
 
         assert!(response.validate().is_ok());
->>>>>>> ce01eb7 (fix fmt and typo issue)
     }
 }
