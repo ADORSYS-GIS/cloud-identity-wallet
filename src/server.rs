@@ -59,13 +59,15 @@ impl Server {
             jwt: config.jwt.clone(),
         };
 
-        let api_routes = Router::new()
-            .route("/protected", get(|user: AuthenticatedUser| async move {
+        let api_routes = Router::new().route(
+            "/protected",
+            get(|user: AuthenticatedUser| async move {
                 Json(json!({
                     "message": "Protected endpoint",
                     "tenant_id": user.tenant_id()
                 }))
-            }));
+            }),
+        );
 
         let router = Router::new()
             .route("/", get(home))

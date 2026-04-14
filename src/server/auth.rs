@@ -2,11 +2,11 @@ use axum::{
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
 };
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::error::{unauthorized, ApiError};
+use super::error::{ApiError, unauthorized};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -58,11 +58,10 @@ fn validate_token(token: &str, secret: &str) -> Result<Claims, ApiError> {
     let decoding_key = DecodingKey::from_secret(secret.as_bytes());
     let validation = Validation::new(Algorithm::HS256);
 
-    let token_data = decode::<Claims>(token, &decoding_key, &validation)
-        .map_err(|e| {
-            tracing::debug!("Token validation failed: {}", e);
-            unauthorized()
-        })?;
+    let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
+        tracing::debug!("Token validation failed: {}", e);
+        unauthorized()
+    })?;
 
     let claims = token_data.claims;
     let now = std::time::SystemTime::now()
@@ -83,7 +82,11 @@ fn validate_token(token: &str, secret: &str) -> Result<Claims, ApiError> {
     Ok(claims)
 }
 
-pub fn generate_token(tenant_id: Uuid, secret: &str, expires_in_secs: i64) -> Result<String, ApiError> {
+pub fn generate_token(
+    tenant_id: Uuid,
+    secret: &str,
+    expires_in_secs: i64,
+) -> Result<String, ApiError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -96,11 +99,10 @@ pub fn generate_token(tenant_id: Uuid, secret: &str, expires_in_secs: i64) -> Re
     };
 
     let encoding_key = EncodingKey::from_secret(secret.as_bytes());
-    encode(&Header::new(Algorithm::HS256), &claims, &encoding_key)
-        .map_err(|e| {
-            tracing::error!("Failed to generate token: {}", e);
-            ApiError::Internal
-        })
+    encode(&Header::new(Algorithm::HS256), &claims, &encoding_key).map_err(|e| {
+        tracing::error!("Failed to generate token: {}", e);
+        ApiError::Internal
+    })
 }
 
 #[cfg(test)]
