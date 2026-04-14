@@ -58,7 +58,6 @@ broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
 [dependencies]
-async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
 color-eyre.workspace = true
 config = "0.15"
