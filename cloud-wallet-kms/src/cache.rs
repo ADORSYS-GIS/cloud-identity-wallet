@@ -150,8 +150,7 @@ where
                 self.stats.record_hit();
             }
         } else if is_stats_enabled {
-                self.stats.record_miss();
-            
+            self.stats.record_miss();
         }
         result
     }
