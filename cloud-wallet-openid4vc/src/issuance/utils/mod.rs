@@ -108,10 +108,6 @@ mod tests {
         for b in 0x00..=0xFFu16 {
             let b = b as u8;
             let expected = matches!(b, 0x20..=0x21 | 0x23..=0x5B | 0x5D..=0x7E);
-<<<<<<< HEAD:cloud-wallet-openid4vc/src/issuance/utils/mod.rs
-=======
-
->>>>>>> ce01eb7 (fix fmt and typo issue):cloud-wallet-openid4vc/src/issuance/utils.rs
             assert_eq!(is_allowed_ascii_byte(b), expected, "byte {b:#04x} mismatch");
         }
     }
