@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -113,7 +113,10 @@ mod tests {
         let error_body: ErrorBodyTest = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(error_body.error, "unauthorized");
-        assert_eq!(error_body.error_description, "Missing or invalid bearer token.");
+        assert_eq!(
+            error_body.error_description,
+            "Missing or invalid bearer token."
+        );
     }
 
     #[tokio::test]
@@ -127,16 +130,37 @@ mod tests {
         let error_body: ErrorBodyTest = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(error_body.error, "internal_error");
-        assert_eq!(error_body.error_description, "An internal server error occurred.");
+        assert_eq!(
+            error_body.error_description,
+            "An internal server error occurred."
+        );
     }
 
     #[test]
     fn test_status_codes() {
-        assert_eq!(ApiError::BadRequest("test".into()).status_code(), StatusCode::BAD_REQUEST);
-        assert_eq!(ApiError::Unauthorized("test".into()).status_code(), StatusCode::UNAUTHORIZED);
-        assert_eq!(ApiError::NotFound("test".into()).status_code(), StatusCode::NOT_FOUND);
-        assert_eq!(ApiError::Conflict("test".into()).status_code(), StatusCode::CONFLICT);
-        assert_eq!(ApiError::Internal.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(ApiError::UpstreamError("test".into()).status_code(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            ApiError::BadRequest("test".into()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ApiError::Unauthorized("test".into()).status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            ApiError::NotFound("test".into()).status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            ApiError::Conflict("test".into()).status_code(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            ApiError::Internal.status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            ApiError::UpstreamError("test".into()).status_code(),
+            StatusCode::BAD_GATEWAY
+        );
     }
 }

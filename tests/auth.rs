@@ -19,7 +19,10 @@ async fn test_protected_endpoint_requires_auth() {
 
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
     assert_eq!(body["error"], "unauthorized");
-    assert_eq!(body["error_description"], "Missing or invalid bearer token.");
+    assert_eq!(
+        body["error_description"],
+        "Missing or invalid bearer token."
+    );
 }
 
 #[tokio::test]
@@ -57,7 +60,10 @@ async fn test_protected_endpoint_with_invalid_token() {
 
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
     assert_eq!(body["error"], "unauthorized");
-    assert_eq!(body["error_description"], "Missing or invalid bearer token.");
+    assert_eq!(
+        body["error_description"],
+        "Missing or invalid bearer token."
+    );
 }
 
 #[tokio::test]
