@@ -14,7 +14,7 @@ csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
 jsonwebtoken = "10"
 percent-encoding = "2"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["form", "json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
@@ -30,6 +30,7 @@ features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
 optional = true
 
 [dev-dependencies]
+wiremock = "0.6"
 testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
