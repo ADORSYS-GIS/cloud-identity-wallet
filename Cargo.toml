@@ -43,7 +43,7 @@ tracing = "0.1"
 # Other utilities
 dashmap = "6"
 sqlx = "0.8"
-time = "0.3"
+time = { version = "0.3", features = ["serde", "serde-well-known"] }
 url = "2.5"
 uuid = "1"
 zeroize = "1.8"
