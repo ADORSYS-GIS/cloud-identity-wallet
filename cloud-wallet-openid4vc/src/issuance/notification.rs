@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, ErrorKind};
 
-use super::utils::is_allowed_ascii_byte;
+use super::utils::helper::is_allowed_ascii_byte;
 
 /// Notification event types defined in OpenID4VCI §11.1.
 ///

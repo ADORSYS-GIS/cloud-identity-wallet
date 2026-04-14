@@ -1,6 +1,3 @@
-pub mod helper;
-pub mod pkce;
-
 /// Returns `true` when `b` falls within the allowed character set for
 /// `error_description` values across OpenID4VCI error responses:
 ///
@@ -19,6 +16,8 @@ pub(crate) fn is_allowed_ascii_byte(b: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Accepted printable ASCII characters
 
     #[test]
     fn space_is_allowed() {
@@ -64,6 +63,8 @@ mod tests {
         assert!(is_allowed_ascii_byte(b']'));
     }
 
+    // Explicitly excluded characters
+
     #[test]
     fn double_quote_is_rejected() {
         assert!(!is_allowed_ascii_byte(b'"'));
@@ -78,6 +79,8 @@ mod tests {
     fn del_is_rejected() {
         assert!(!is_allowed_ascii_byte(0x7F));
     }
+
+    // Control characters and high bytes
 
     #[test]
     fn null_byte_is_rejected() {
@@ -104,11 +107,14 @@ mod tests {
         }
     }
 
+    // Full-range exhaustive verification
+
     #[test]
     fn exhaustive_range_matches_spec() {
         for b in 0x00..=0xFFu16 {
             let b = b as u8;
             let expected = matches!(b, 0x20..=0x21 | 0x23..=0x5B | 0x5D..=0x7E);
+
             assert_eq!(is_allowed_ascii_byte(b), expected, "byte {b:#04x} mismatch");
         }
     }
