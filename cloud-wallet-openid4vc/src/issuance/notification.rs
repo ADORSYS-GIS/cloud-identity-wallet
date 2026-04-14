@@ -98,13 +98,13 @@ impl NotificationRequest {
             ));
         }
 
-        if let Some(ref desc) = self.event_description {
-            if let Some(pos) = desc.bytes().position(|b| !is_allowed_ascii_byte(b)) {
-                return Err(Error::message(
-                    ErrorKind::InvalidNotificationRequest,
-                    format!("event_description contains disallowed character at byte offset {pos}"),
-                ));
-            }
+        if let Some(ref desc) = self.event_description
+            && let Some(pos) = desc.bytes().position(|b| !is_allowed_ascii_byte(b))
+        {
+            return Err(Error::message(
+                ErrorKind::InvalidNotificationRequest,
+                format!("event_description contains disallowed character at byte offset {pos}"),
+            ));
         }
 
         Ok(())
