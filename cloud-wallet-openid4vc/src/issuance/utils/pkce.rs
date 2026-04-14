@@ -4,24 +4,24 @@
 //! and S256 code challenge generation.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
-use sha2::{Digest, Sha256};
+use cloud_wallet_crypto::digest::HashAlg;
+use cloud_wallet_crypto::rand;
 
 /// Generates a PKCE `code_verifier`.
 ///
 /// Produces 32 cryptographically random bytes encoded as base64url without padding.
 /// The result is 43 characters long, satisfying [RFC 7636 §4.1] (43–128 chars).
-pub fn generate_verifier() -> String {
+pub fn generate_pkce_verifier() -> String {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::fill_bytes(&mut bytes).expect("cryptographically secure randomness should be available");
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Derives the PKCE S256 `code_challenge` from a `code_verifier`.
 ///
 /// Computes `BASE64URL(SHA-256(ASCII(code_verifier)))` per [RFC 7636 §4.2].
-pub fn derive_challenge(verifier: &str) -> String {
-    let digest = Sha256::digest(verifier.as_bytes());
+pub fn derive_pkce_challenge(verifier: &str) -> String {
+    let digest = HashAlg::Sha256.hash(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(digest)
 }
 
@@ -35,19 +35,19 @@ mod tests {
 
     #[test]
     fn rfc7636_s256_example() {
-        assert_eq!(derive_challenge(RFC_VERIFIER), RFC_CHALLENGE);
+        assert_eq!(derive_pkce_challenge(RFC_VERIFIER), RFC_CHALLENGE);
     }
 
     #[test]
     fn verifier_length_is_43() {
         // 32 bytes → 43 base64url chars (no padding).
-        let v = generate_verifier();
+        let v = generate_pkce_verifier();
         assert_eq!(v.len(), 43);
     }
 
     #[test]
     fn verifier_charset_is_base64url() {
-        let v = generate_verifier();
+        let v = generate_pkce_verifier();
         assert!(
             v.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn challenge_has_no_padding() {
-        let challenge = derive_challenge(&generate_verifier());
+        let challenge = derive_pkce_challenge(&generate_pkce_verifier());
         assert!(
             !challenge.contains('='),
             "challenge must not contain padding: {challenge}"
@@ -66,13 +66,16 @@ mod tests {
 
     #[test]
     fn challenge_is_deterministic() {
-        let verifier = generate_verifier();
-        assert_eq!(derive_challenge(&verifier), derive_challenge(&verifier));
+        let verifier = generate_pkce_verifier();
+        assert_eq!(
+            derive_pkce_challenge(&verifier),
+            derive_pkce_challenge(&verifier)
+        );
     }
 
     #[test]
     fn challenge_charset_is_base64url() {
-        let challenge = derive_challenge(&generate_verifier());
+        let challenge = derive_pkce_challenge(&generate_pkce_verifier());
         assert!(
             challenge
                 .chars()
