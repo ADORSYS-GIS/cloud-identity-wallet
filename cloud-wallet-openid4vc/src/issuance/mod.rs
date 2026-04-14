@@ -15,6 +15,3 @@ pub mod error;
 pub mod issuer_metadata;
 pub mod query_params;
 pub mod token_request;
-pub mod token_response;
-
-pub use token_response::{TokenResponse, parse_token_response};
