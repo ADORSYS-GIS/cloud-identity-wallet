@@ -229,13 +229,14 @@ impl NotificationErrorResponse {
     /// Returns an error message when `error_description` contains
     /// characters outside the allowed set.
     pub fn validate(&self) -> Result<(), String> {
-      if let Some(ref desc) = self.error_description
-           && let Some(pos) = desc.bytes().position(|b| !is_allowed_ascii_byte(b)) {
-                return Err(format!(
-                     "error_description contains disallowed character at byte offset {pos}"
-                ));
-             }
-        
+        if let Some(ref desc) = self.error_description
+            && let Some(pos) = desc.bytes().position(|b| !is_allowed_ascii_byte(b))
+        {
+            return Err(format!(
+                "error_description contains disallowed character at byte offset {pos}"
+            ));
+        }
+
         Ok(())
     }
 }
