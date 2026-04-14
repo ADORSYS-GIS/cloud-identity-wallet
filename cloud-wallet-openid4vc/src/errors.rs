@@ -3,7 +3,7 @@
 use std::error::Error as StdError;
 use std::fmt;
 
-use color_eyre::eyre::{Report, eyre};
+use color_eyre::eyre::{eyre, Report};
 use thiserror::Error;
 
 /// Error returned when attempting to create an empty [`ClaimPathPointer`].
@@ -204,12 +204,6 @@ pub enum ErrorKind {
     #[error("Invalid token request")]
     InvalidTokenRequest,
 
-    /// A token response failed validation or parsing (e.g. missing `access_token`).
-    ///
-    /// Defined by [RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.1)
-    /// and [OpenID4VCI §6.2](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-successful-token-response).
-    #[error("Invalid token response")]
-    InvalidTokenResponse,
     /// Authorization Request failed structural validation.
     #[error("Invalid authorization request")]
     InvalidAuthorizationRequest,
