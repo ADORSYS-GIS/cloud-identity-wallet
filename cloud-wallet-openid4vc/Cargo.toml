@@ -34,7 +34,6 @@ features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
 optional = true
 
 [dev-dependencies]
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"] }
 testcontainers-modules = { version = "0.15", features = ["mysql", "postgres", "redis"] }
 wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

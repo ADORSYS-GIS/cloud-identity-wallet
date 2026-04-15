@@ -88,3 +88,7 @@ lto = "fat"
 panic = "abort"
 # Maximize runtime speed
 codegen-units = 1
+
+# Security patches for transitive vulnerabilities
+[patch.crates-io]
+rustls-webpki = { git = "https://github.com/rustls/webpki.git", branch = "rel-0.101" }
