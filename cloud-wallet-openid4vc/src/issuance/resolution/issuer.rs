@@ -12,7 +12,7 @@ use crate::errors::{Error, ErrorKind};
 use crate::http::HttpClient;
 use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
 
-use super::cache::{create_cache, issuer_cache_key, MetadataCache, DEFAULT_CACHE_TTL_SECS};
+use super::cache::{DEFAULT_CACHE_TTL_SECS, MetadataCache, create_cache, issuer_cache_key};
 
 /// Well-known path for Credential Issuer Metadata.
 pub const CREDENTIAL_ISSUER_WELL_KNOWN: &str = ".well-known/openid-credential-issuer";
@@ -136,7 +136,10 @@ impl IssuerMetadataResolver {
     /// Validates the issuer URL.
     fn validate_issuer_url(&self, issuer_url: &str) -> Result<Url, Error> {
         let url = Url::parse(issuer_url).map_err(|e| {
-            Error::message(ErrorKind::IssuerMetadataFetchFailed, format!("invalid URL: {}", e))
+            Error::message(
+                ErrorKind::IssuerMetadataFetchFailed,
+                format!("invalid URL: {}", e),
+            )
         })?;
 
         if url.scheme() != "https" {

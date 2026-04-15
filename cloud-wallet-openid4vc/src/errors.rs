@@ -3,7 +3,7 @@
 use std::error::Error as StdError;
 use std::fmt;
 
-use color_eyre::eyre::{eyre, Report};
+use color_eyre::eyre::{Report, eyre};
 use thiserror::Error;
 
 /// Error returned when attempting to create an empty [`ClaimPathPointer`].

@@ -15,7 +15,16 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-ignore = []
+ignore = [
+  # RUSTSEC-2026-0098: rustls-webpki 0.101.x vulnerability
+  # This is a transitive dependency from AWS SDK (aws-config -> aws-smithy-runtime -> hyper-rustls -> rustls 0.21.x)
+  # AWS SDK has not yet updated to rustls 0.23.x. The vulnerability requires misissuance to exploit.
+  # TODO: Remove when AWS SDK updates rustls dependency.
+  "RUSTSEC-2026-0098",
+  # RUSTSEC-2026-0099: rustls-webpki 0.101.x vulnerability (wildcard name constraints)
+  # Same situation as RUSTSEC-2026-0098 above.
+  "RUSTSEC-2026-0099",
+]
 
 [bans]
 # Lint level for when multiple versions of the same crate are detected

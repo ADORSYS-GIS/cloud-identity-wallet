@@ -126,12 +126,10 @@ pub mod cache;
 pub mod issuer;
 pub mod offer;
 
-pub use auth_server::{
-    AuthServerMetadataResolver, OAUTH_AS_WELL_KNOWN, OIDC_WELL_KNOWN,
-};
+pub use auth_server::{AuthServerMetadataResolver, OAUTH_AS_WELL_KNOWN, OIDC_WELL_KNOWN};
 pub use cache::{
-    as_cache_key, create_cache, issuer_cache_key, url_hash, MetadataCache,
-    DEFAULT_CACHE_TTL_SECS, DEFAULT_MAX_CAPACITY,
+    DEFAULT_CACHE_TTL_SECS, DEFAULT_MAX_CAPACITY, MetadataCache, as_cache_key, create_cache,
+    issuer_cache_key, url_hash,
 };
-pub use issuer::{IssuerMetadataResolver, CREDENTIAL_ISSUER_WELL_KNOWN};
+pub use issuer::{CREDENTIAL_ISSUER_WELL_KNOWN, IssuerMetadataResolver};
 pub use offer::{CredentialOfferResolver, ResolvedOffer};

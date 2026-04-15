@@ -2,7 +2,14 @@
 ignore = [
     # Present in sqlx-mysql. As there is currently no available fix for this vulnerability,
     # this change temporarily ignores the advisory to allow CI/CD pipelines to pass
-    "RUSTSEC-2023-0071" 
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0098: rustls-webpki 0.101.x vulnerability in AWS SDK transitive deps
+    # AWS SDK uses rustls 0.21.x which depends on rustls-webpki 0.101.x.
+    # The fix (0.103.12+) is for rustls 0.23.x which is incompatible.
+    # TODO: Remove when AWS SDK updates to rustls 0.23.x
+    "RUSTSEC-2026-0098",
+    # RUSTSEC-2026-0099: Same situation as RUSTSEC-2026-0098 (wildcard name constraints)
+    "RUSTSEC-2026-0099",
 ]  # advisory IDs to ignore
 
 informational_warnings = ["unmaintained"]

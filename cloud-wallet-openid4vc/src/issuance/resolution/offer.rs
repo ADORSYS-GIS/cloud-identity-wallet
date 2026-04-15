@@ -12,9 +12,9 @@ use crate::issuance::credential_offer::{
 };
 use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
 
+use super::DEFAULT_CACHE_TTL_SECS;
 use super::auth_server::AuthServerMetadataResolver;
 use super::issuer::IssuerMetadataResolver;
-use super::DEFAULT_CACHE_TTL_SECS;
 
 /// Default maximum cache capacity.
 pub const DEFAULT_MAX_CAPACITY: u64 = 1000;
@@ -63,7 +63,10 @@ impl CredentialOfferResolver {
     ///
     /// Returns an error if the HTTP client cannot be created.
     pub fn new() -> Result<Self, Error> {
-        Self::with_config(Duration::from_secs(DEFAULT_CACHE_TTL_SECS), DEFAULT_MAX_CAPACITY)
+        Self::with_config(
+            Duration::from_secs(DEFAULT_CACHE_TTL_SECS),
+            DEFAULT_MAX_CAPACITY,
+        )
     }
 
     /// Creates a new resolver with custom cache settings.
@@ -150,9 +153,7 @@ impl CredentialOfferResolver {
 
         match parsed.source {
             CredentialOfferSource::ByValue(offer) => Ok(offer),
-            CredentialOfferSource::ByReference(uri) => {
-                self.fetch_offer_by_reference(&uri).await
-            }
+            CredentialOfferSource::ByReference(uri) => self.fetch_offer_by_reference(&uri).await,
         }
     }
 

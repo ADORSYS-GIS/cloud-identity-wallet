@@ -12,7 +12,7 @@ use crate::errors::{Error, ErrorKind};
 use crate::http::HttpClient;
 use crate::issuance::authz_server_metadata::AuthorizationServerMetadata;
 
-use super::cache::{as_cache_key, create_cache, MetadataCache, DEFAULT_CACHE_TTL_SECS};
+use super::cache::{DEFAULT_CACHE_TTL_SECS, MetadataCache, as_cache_key, create_cache};
 
 /// Well-known path for OAuth 2.0 Authorization Server Metadata (RFC 8414).
 pub const OAUTH_AS_WELL_KNOWN: &str = ".well-known/oauth-authorization-server";
@@ -110,11 +110,7 @@ impl AuthServerMetadataResolver {
         match self.try_fetch(&oauth_url, &base_url).await {
             Ok(metadata) => return Ok(metadata),
             Err(e) => {
-                tracing::debug!(
-                    "OAuth AS metadata fetch failed from {}: {}",
-                    oauth_url,
-                    e
-                );
+                tracing::debug!("OAuth AS metadata fetch failed from {}: {}", oauth_url, e);
             }
         }
 
@@ -227,9 +223,14 @@ mod tests {
             let resolver = AuthServerMetadataResolver::new(http).unwrap();
             let base = Url::parse("https://auth.example.com").unwrap();
 
-            let url = resolver.build_well_known_url(&base, OAUTH_AS_WELL_KNOWN).unwrap();
+            let url = resolver
+                .build_well_known_url(&base, OAUTH_AS_WELL_KNOWN)
+                .unwrap();
 
-            assert_eq!(url, "https://auth.example.com/.well-known/oauth-authorization-server");
+            assert_eq!(
+                url,
+                "https://auth.example.com/.well-known/oauth-authorization-server"
+            );
         }
 
         #[test]
@@ -238,9 +239,14 @@ mod tests {
             let resolver = AuthServerMetadataResolver::new(http).unwrap();
             let base = Url::parse("https://auth.example.com").unwrap();
 
-            let url = resolver.build_well_known_url(&base, OIDC_WELL_KNOWN).unwrap();
+            let url = resolver
+                .build_well_known_url(&base, OIDC_WELL_KNOWN)
+                .unwrap();
 
-            assert_eq!(url, "https://auth.example.com/.well-known/openid-configuration");
+            assert_eq!(
+                url,
+                "https://auth.example.com/.well-known/openid-configuration"
+            );
         }
 
         #[test]
@@ -249,7 +255,9 @@ mod tests {
             let resolver = AuthServerMetadataResolver::new(http).unwrap();
             let base = Url::parse("https://auth.example.com/tenant1").unwrap();
 
-            let url = resolver.build_well_known_url(&base, OAUTH_AS_WELL_KNOWN).unwrap();
+            let url = resolver
+                .build_well_known_url(&base, OAUTH_AS_WELL_KNOWN)
+                .unwrap();
 
             assert!(url.contains("/tenant1/"));
             assert!(url.ends_with(OAUTH_AS_WELL_KNOWN));
