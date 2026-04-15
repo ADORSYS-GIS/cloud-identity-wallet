@@ -6,16 +6,19 @@ license.workspace = true
 
 [dependencies]
 cloud-wallet-kms = { path = "../cloud-wallet-kms", optional = true }
+cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
+
 
 async-trait.workspace = true
 base64 = "0.22"
 color-eyre.workspace = true
+
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
 jsonwebtoken = "10"
 percent-encoding = "2"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"], optional = true }
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["form", "json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
@@ -33,6 +36,7 @@ optional = true
 [dev-dependencies]
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"] }
 testcontainers-modules = { version = "0.15", features = ["mysql", "postgres", "redis"] }
+wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
