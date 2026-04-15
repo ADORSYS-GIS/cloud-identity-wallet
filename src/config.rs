@@ -1,17 +1,49 @@
 use std::collections::HashMap;
 
-use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
+use config::{builder::DefaultState, Config as ConfigLib, ConfigBuilder, ConfigError, Environment};
 use serde::{Deserialize, Serialize};
 
+/// Application configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
+    pub metadata: MetadataConfig,
 }
 
+/// Server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+}
+
+/// Metadata resolution configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataConfig {
+    /// Cache TTL in seconds for issuer and AS metadata.
+    ///
+    /// Defaults to 300 (5 minutes).
+    pub cache_ttl_secs: u64,
+
+    /// Maximum number of entries in each metadata cache.
+    ///
+    /// Defaults to 1000.
+    pub cache_max_entries: u64,
+
+    /// HTTP timeout in seconds for metadata requests.
+    ///
+    /// Defaults to 10 seconds.
+    pub http_timeout_secs: u64,
+}
+
+impl Default for MetadataConfig {
+    fn default() -> Self {
+        Self {
+            cache_ttl_secs: 300,
+            cache_max_entries: 1000,
+            http_timeout_secs: 10,
+        }
+    }
 }
 
 impl Config {
@@ -45,7 +77,10 @@ impl Config {
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)
+            .set_default("server.port", 3000)?
+            .set_default("metadata.cache_ttl_secs", 300)?
+            .set_default("metadata.cache_max_entries", 1000)?
+            .set_default("metadata.http_timeout_secs", 10)
     }
 }
 
@@ -85,5 +120,25 @@ mod tests {
         assert_eq!(config.server.host, "192.168.1.1");
         // The other values should use default
         assert_eq!(config.server.port, 3000);
+    }
+
+    #[test]
+    fn test_metadata_config_defaults() {
+        let config = Config::load().expect("Failed to load config");
+
+        assert_eq!(config.metadata.cache_ttl_secs, 300);
+        assert_eq!(config.metadata.cache_max_entries, 1000);
+        assert_eq!(config.metadata.http_timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_metadata_config_override() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("metadata.cache_ttl_secs".to_string(), "600".to_string());
+
+        let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
+
+        assert_eq!(config.metadata.cache_ttl_secs, 600);
+        assert_eq!(config.metadata.cache_max_entries, 1000);
     }
 }

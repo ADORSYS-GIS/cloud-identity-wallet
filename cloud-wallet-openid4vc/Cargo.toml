@@ -21,8 +21,10 @@ reqwest = { version = "0.13", features = ["form", "json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
 time.workspace = true
+tracing.workspace = true
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }

@@ -3,7 +3,7 @@
 use std::error::Error as StdError;
 use std::fmt;
 
-use color_eyre::eyre::{Report, eyre};
+use color_eyre::eyre::{eyre, Report};
 use thiserror::Error;
 
 /// Error returned when attempting to create an empty [`ClaimPathPointer`].
@@ -195,6 +195,21 @@ pub enum ErrorKind {
     /// Credential Issuer Metadata failed structural validation.
     #[error("Invalid issuer metadata")]
     InvalidIssuerMetadata,
+
+    /// Credential Issuer Metadata could not be fetched from the well-known endpoint.
+    ///
+    /// This indicates a network-level failure (connection timeout, DNS resolution,
+    /// TLS handshake, non-200 response) when fetching from
+    /// `/.well-known/openid-credential-issuer`.
+    #[error("Failed to fetch issuer metadata")]
+    IssuerMetadataFetchFailed,
+
+    /// Authorization Server Metadata could not be fetched from either well-known endpoint.
+    ///
+    /// Tried both `/.well-known/oauth-authorization-server` and
+    /// `/.well-known/openid-configuration` without success.
+    #[error("Failed to fetch authorization server metadata")]
+    AuthServerMetadataFetchFailed,
 
     /// A token request failed validation or parsing (e.g. missing required field for
     /// the specified grant type, conflicting parameters).
