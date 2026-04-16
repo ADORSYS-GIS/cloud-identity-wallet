@@ -23,8 +23,8 @@ cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
 rand = "0.10"
 
 # KMS AWS dependencies
-aws-config = { version = "1", optional = true }
-aws-sdk-kms = { version = "1", optional = true }
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls", "rt-tokio", "sso"], optional = true }
+aws-sdk-kms = { version = "1", default-features = false, optional = true }
 
 # Cache dependencies
 ahash = "0.8"

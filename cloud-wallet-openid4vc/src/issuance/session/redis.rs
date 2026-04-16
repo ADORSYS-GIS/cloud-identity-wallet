@@ -63,8 +63,6 @@ impl SessionStore for RedisSessionStore {
             .map_err(|e| Error::message(ErrorKind::Other, format!("deserialize session: {e}")))?;
 
         if UtcDateTime::now() >= session.expires_at {
-            let mut conn2 = self.connection().await?;
-            let _ = conn2.del::<_, ()>(&key).await;
             return Ok(None);
         }
 

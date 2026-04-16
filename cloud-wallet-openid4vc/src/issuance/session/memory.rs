@@ -76,7 +76,7 @@ mod tests {
     }
 
     fn make_session() -> IssuanceSession {
-        IssuanceSession::new(Uuid::new_v4(), make_offer(), FlowType::AuthorizationCode)
+        IssuanceSession::new(Uuid::new_v4(), make_offer(), FlowType::AuthorizationCode).unwrap()
     }
 
     #[tokio::test]
@@ -130,7 +130,8 @@ mod tests {
 
         store.create(session.clone()).await.unwrap();
 
-        let updated = transition(session, IssuanceState::Processing).unwrap();
+        let mut updated = session;
+        transition(&mut updated, IssuanceState::Processing).unwrap();
         store.update(updated).await.unwrap();
 
         let fetched = store.get(&id, tenant_id).await.unwrap().unwrap();
