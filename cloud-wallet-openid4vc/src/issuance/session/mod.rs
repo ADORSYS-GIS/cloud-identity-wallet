@@ -13,14 +13,14 @@ pub mod memory;
 #[cfg(feature = "redis-session")]
 pub mod redis;
 
-pub fn generate_session_id() -> String {
+pub fn generate_session_id() -> Result<String> {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use cloud_wallet_crypto::rand;
 
     let mut bytes = [0u8; 16];
-    rand::fill_bytes(&mut bytes).expect("OS random source must be available");
-    format!("ses_{}", URL_SAFE_NO_PAD.encode(bytes))
+    rand::fill_bytes(&mut bytes).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    Ok(format!("ses_{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,11 +63,11 @@ pub struct IssuanceSession {
 }
 
 impl IssuanceSession {
-    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
+    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Result<Self> {
         let now = UtcDateTime::now();
         let expires_at = now + time::Duration::minutes(15);
-        Self {
-            id: generate_session_id(),
+        Ok(Self {
+            id: generate_session_id()?,
             tenant_id,
             state: IssuanceState::AwaitingConsent,
             offer,
@@ -76,7 +76,7 @@ impl IssuanceSession {
             issuer_state: None,
             created_at: now,
             expires_at,
-        }
+        })
     }
 
     pub fn is_expired(&self) -> bool {
@@ -84,10 +84,7 @@ impl IssuanceSession {
     }
 }
 
-pub fn transition(
-    mut session: IssuanceSession,
-    new_state: IssuanceState,
-) -> Result<IssuanceSession> {
+pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> Result<()> {
     let allowed = is_transition_allowed(session.state, new_state);
     if !allowed {
         return Err(Error::message(
@@ -99,7 +96,7 @@ pub fn transition(
         ));
     }
     session.state = new_state;
-    Ok(session)
+    Ok(())
 }
 
 fn is_transition_allowed(from: IssuanceState, to: IssuanceState) -> bool {
@@ -136,7 +133,7 @@ mod tests {
     }
 
     fn make_session() -> IssuanceSession {
-        IssuanceSession::new(Uuid::new_v4(), make_offer(), FlowType::AuthorizationCode)
+        IssuanceSession::new(Uuid::new_v4(), make_offer(), FlowType::AuthorizationCode).unwrap()
     }
 
     #[test]
@@ -179,77 +176,77 @@ mod tests {
 
     #[test]
     fn consent_to_awaiting_authorization() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingAuthorization).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingAuthorization).unwrap();
         assert_eq!(s.state, IssuanceState::AwaitingAuthorization);
     }
 
     #[test]
     fn consent_to_awaiting_tx_code() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingTxCode).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingTxCode).unwrap();
         assert_eq!(s.state, IssuanceState::AwaitingTxCode);
     }
 
     #[test]
     fn consent_to_processing() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::Processing).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::Processing).unwrap();
         assert_eq!(s.state, IssuanceState::Processing);
     }
 
     #[test]
     fn consent_to_failed() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::Failed).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::Failed).unwrap();
         assert_eq!(s.state, IssuanceState::Failed);
     }
 
     #[test]
     fn awaiting_authorization_to_processing() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingAuthorization).unwrap();
-        let s = transition(s, IssuanceState::Processing).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingAuthorization).unwrap();
+        transition(&mut s, IssuanceState::Processing).unwrap();
         assert_eq!(s.state, IssuanceState::Processing);
     }
 
     #[test]
     fn awaiting_authorization_to_failed() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingAuthorization).unwrap();
-        let s = transition(s, IssuanceState::Failed).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingAuthorization).unwrap();
+        transition(&mut s, IssuanceState::Failed).unwrap();
         assert_eq!(s.state, IssuanceState::Failed);
     }
 
     #[test]
     fn awaiting_tx_code_to_processing() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingTxCode).unwrap();
-        let s = transition(s, IssuanceState::Processing).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingTxCode).unwrap();
+        transition(&mut s, IssuanceState::Processing).unwrap();
         assert_eq!(s.state, IssuanceState::Processing);
     }
 
     #[test]
     fn awaiting_tx_code_to_failed() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingTxCode).unwrap();
-        let s = transition(s, IssuanceState::Failed).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingTxCode).unwrap();
+        transition(&mut s, IssuanceState::Failed).unwrap();
         assert_eq!(s.state, IssuanceState::Failed);
     }
 
     #[test]
     fn processing_to_completed() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::Processing).unwrap();
-        let s = transition(s, IssuanceState::Completed).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::Processing).unwrap();
+        transition(&mut s, IssuanceState::Completed).unwrap();
         assert_eq!(s.state, IssuanceState::Completed);
     }
 
     #[test]
     fn processing_to_failed() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::Processing).unwrap();
-        let s = transition(s, IssuanceState::Failed).unwrap();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::Processing).unwrap();
+        transition(&mut s, IssuanceState::Failed).unwrap();
         assert_eq!(s.state, IssuanceState::Failed);
     }
 
@@ -268,7 +265,7 @@ mod tests {
             ] {
                 let mut s = make_session();
                 s.state = terminal;
-                let err = transition(s, target).unwrap_err();
+                let err = transition(&mut s, target).unwrap_err();
                 assert_eq!(
                     err.kind(),
                     ErrorKind::InvalidSessionState,
@@ -280,24 +277,24 @@ mod tests {
 
     #[test]
     fn awaiting_authorization_to_consent_is_invalid() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingAuthorization).unwrap();
-        let err = transition(s, IssuanceState::AwaitingConsent).unwrap_err();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingAuthorization).unwrap();
+        let err = transition(&mut s, IssuanceState::AwaitingConsent).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidSessionState);
     }
 
     #[test]
     fn awaiting_tx_code_to_awaiting_authorization_is_invalid() {
-        let s = make_session();
-        let s = transition(s, IssuanceState::AwaitingTxCode).unwrap();
-        let err = transition(s, IssuanceState::AwaitingAuthorization).unwrap_err();
+        let mut s = make_session();
+        transition(&mut s, IssuanceState::AwaitingTxCode).unwrap();
+        let err = transition(&mut s, IssuanceState::AwaitingAuthorization).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidSessionState);
     }
 
     #[test]
     fn consent_to_completed_is_invalid() {
-        let s = make_session();
-        let err = transition(s, IssuanceState::Completed).unwrap_err();
+        let mut s = make_session();
+        let err = transition(&mut s, IssuanceState::Completed).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidSessionState);
     }
 }
