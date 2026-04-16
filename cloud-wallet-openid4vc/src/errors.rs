@@ -214,6 +214,26 @@ pub enum ErrorKind {
     #[error("Invalid authorization request")]
     InvalidAuthorizationRequest,
 
+    /// An HTTP request failed due to network or connectivity issues.
+    ///
+    /// This indicates a transport-level failure (connection timeout, DNS resolution,
+    /// TLS handshake, etc.) that may be retried.
+    #[error("HTTP request failed")]
+    HttpRequestFailed,
+
+    /// An HTTP response had an unsuccessful status code (4xx or 5xx).
+    ///
+    /// The error contains the status code and may include the response body
+    /// for error details from the server.
+    #[error("HTTP error response")]
+    HttpErrorResponse,
+
+    /// An HTTP response could not be parsed as the expected format.
+    ///
+    /// This includes invalid JSON, unexpected content type, or missing required fields.
+    #[error("HTTP response parsing failed")]
+    HttpResponseParsingFailed,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
