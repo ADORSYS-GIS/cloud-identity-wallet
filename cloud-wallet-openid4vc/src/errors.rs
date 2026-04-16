@@ -237,4 +237,16 @@ pub enum ErrorKind {
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
+
+    /// An issuance session could not be found (expired or never existed).
+    ///
+    /// Expired sessions return this error – identical to a missing session –
+    /// to avoid leaking information about the session lifecycle.
+    #[error("Session not found")]
+    SessionNotFound,
+
+    /// A state transition was attempted that is not allowed by the session
+    /// state machine, per the OpenID4VCI issuance flow.
+    #[error("Invalid session state transition")]
+    InvalidSessionState,
 }
