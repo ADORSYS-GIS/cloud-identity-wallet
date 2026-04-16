@@ -186,7 +186,7 @@ pub struct CredentialOffer {
     /// The URL of the Credential Issuer from which the Wallet is requested to obtain credentials.
     ///
     /// The Wallet uses it to obtain the Credential Issuer's Metadata.
-    pub credential_issuer: String,
+    pub credential_issuer: Url,
 
     /// A non-empty array of unique strings identifying credential configurations.
     ///
@@ -217,17 +217,7 @@ impl CredentialOffer {
     /// - If `grants` is absent or empty, the wallet must determine grant types from issuer metadata
     /// - When multiple grants are present, it's at the wallet's discretion which one to use
     pub fn validate(&self) -> Result<(), Error> {
-        let parsed = Url::parse(&self.credential_issuer).map_err(|_| {
-            Error::message(
-                ErrorKind::InvalidCredentialOffer,
-                format!(
-                    "credential_issuer '{}' is not a valid URL",
-                    self.credential_issuer
-                ),
-            )
-        })?;
-
-        if parsed.scheme() != "https" {
+        if self.credential_issuer.scheme() != "https" {
             return Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
                 "credential_issuer must use the https scheme",
@@ -705,7 +695,7 @@ mod tests {
 
         assert_eq!(
             offer.credential_issuer,
-            "https://credential-issuer.example.com"
+            Url::parse("https://credential-issuer.example.com.").unwrap()
         );
         assert_eq!(offer.credential_configuration_ids.len(), 2);
         assert!(offer.grants.is_some());
@@ -762,7 +752,10 @@ mod tests {
 
         let offer: CredentialOffer = serde_json::from_str(json).expect("Failed to deserialize");
 
-        assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+        assert_eq!(
+            offer.credential_issuer,
+            Url::parse("https://issuer.example.com").unwrap()
+        );
         assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
         assert!(offer.grants.is_none());
     }
@@ -770,7 +763,7 @@ mod tests {
     #[test]
     fn serialize_credential_offer() {
         let offer = CredentialOffer {
-            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_issuer: Url::parse("https://issuer.example.com").unwrap(),
             credential_configuration_ids: vec!["MyCredential".to_string()],
             grants: None,
         };
@@ -793,7 +786,7 @@ mod tests {
     #[test]
     fn validate_empty_configuration_ids() {
         let offer = CredentialOffer {
-            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_issuer: Url::parse("https://issuer.example.com").unwrap(),
             credential_configuration_ids: vec![],
             grants: None,
         };
@@ -809,28 +802,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_empty_credential_issuer() {
-        let offer = CredentialOffer {
-            credential_issuer: String::new(),
-            credential_configuration_ids: vec!["MyCredential".to_string()],
-            grants: None,
-        };
-
-        let result = offer.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
-        assert!(
-            err.to_string().contains("not a valid URL"),
-            "Error message should mention invalid URL"
-        );
-    }
-
-    #[test]
     fn validate_tx_code_description_too_long() {
         let long_desc = "x".repeat(301);
         let offer = CredentialOffer {
-            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_issuer: Url::parse("https://issuer.example.com").unwrap(),
             credential_configuration_ids: vec!["MyCredential".to_string()],
             grants: Some(Grants {
                 authorization_code: None,
@@ -859,7 +834,7 @@ mod tests {
     #[test]
     fn validate_valid_offer() {
         let offer = CredentialOffer {
-            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_issuer: Url::parse("https://issuer.example.com").unwrap(),
             credential_configuration_ids: vec!["MyCredential".to_string()],
             grants: Some(Grants {
                 authorization_code: Some(AuthorizationCodeGrant {
@@ -879,7 +854,10 @@ mod tests {
 
         let offer = CredentialOffer::from_query_param(encoded).expect("Failed to parse");
 
-        assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+        assert_eq!(
+            offer.credential_issuer,
+            Url::parse("https://issuer.example.com").unwrap()
+        );
         assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
     }
 
@@ -904,7 +882,10 @@ mod tests {
 
         match uri.source {
             CredentialOfferSource::ByValue(offer) => {
-                assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
             }
             CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
         }
@@ -919,7 +900,10 @@ mod tests {
 
         match uri.source {
             CredentialOfferSource::ByValue(offer) => {
-                assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
                 assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
             }
             CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
@@ -1012,7 +996,7 @@ mod tests {
     #[test]
     fn validate_http_url_rejected() {
         let offer = CredentialOffer {
-            credential_issuer: "http://issuer.example.com".to_string(), // http, not https
+            credential_issuer: Url::parse("http://issuer.example.com").unwrap(), // http, not https
             credential_configuration_ids: vec!["MyCredential".to_string()],
             grants: None,
         };
@@ -1022,21 +1006,6 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
         assert!(err.to_string().contains("https scheme"));
-    }
-
-    #[test]
-    fn validate_invalid_url_rejected() {
-        let offer = CredentialOffer {
-            credential_issuer: "not-a-valid-url".to_string(),
-            credential_configuration_ids: vec!["MyCredential".to_string()],
-            grants: None,
-        };
-
-        let result = offer.validate();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
-        assert!(err.to_string().contains("not a valid URL"));
     }
 
     #[test]
@@ -1072,7 +1041,7 @@ mod tests {
     #[test]
     fn validate_duplicate_configuration_ids_rejected() {
         let offer = CredentialOffer {
-            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_issuer: Url::parse("https://issuer.example.com").unwrap(),
             credential_configuration_ids: vec![
                 "MyCredential".to_string(),
                 "MyCredential".to_string(),
@@ -1092,7 +1061,7 @@ mod tests {
         // Per OpenID4VCI Section 4.1.1, empty grants object is valid -
         // wallet must determine grant types from issuer metadata
         let offer = CredentialOffer {
-            credential_issuer: "https://issuer.example.com".to_string(),
+            credential_issuer: Url::parse("https://issuer.example.com").unwrap(),
             credential_configuration_ids: vec!["MyCredential".to_string()],
             grants: Some(Grants {
                 authorization_code: None,
@@ -1152,7 +1121,10 @@ mod tests {
         }"#;
 
         let offer = CredentialOffer::from_json_str(json).expect("should parse valid offer");
-        assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+        assert_eq!(
+            offer.credential_issuer,
+            Url::parse("https://issuer.example.com").unwrap()
+        );
         assert_eq!(
             offer.credential_configuration_ids,
             vec!["UniversityDegreeCredential"]
@@ -1169,7 +1141,10 @@ mod tests {
         }"#;
 
         let offer = CredentialOffer::from_json_str(json).expect("should parse minimal offer");
-        assert_eq!(offer.credential_issuer, "https://issuer.example.com");
+        assert_eq!(
+            offer.credential_issuer,
+            Url::parse("https://issuer.example.com").unwrap()
+        );
         assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
         assert!(offer.grants.is_none());
     }
