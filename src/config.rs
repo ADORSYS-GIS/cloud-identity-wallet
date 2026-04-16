@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use config::{builder::DefaultState, Config as ConfigLib, ConfigBuilder, ConfigError, Environment};
+use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
