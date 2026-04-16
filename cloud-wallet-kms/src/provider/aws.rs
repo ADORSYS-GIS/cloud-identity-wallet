@@ -142,10 +142,37 @@ impl<S: Storage> AwsProvider<S> {
                         })?;
                         let key_id = key_metadata.key_id().to_string();
 
-                        // Create alias
-                        let alias_op = inner.client.create_alias().alias_name(&inner.master_alias);
-                        alias_op.target_key_id(&key_id).send().await?;
-                        key_id
+                        // Create alias — handle concurrent creation race
+                        let alias_result = inner
+                            .client
+                            .create_alias()
+                            .alias_name(&inner.master_alias)
+                            .target_key_id(&key_id)
+                            .send()
+                            .await;
+
+                        match alias_result {
+                            Ok(_) => key_id,
+                            Err(SdkError::ServiceError(err))
+                                if err.err().is_already_exists_exception() =>
+                            {
+                                // Another caller created the alias concurrently.
+                                // Re-fetch the actual key ID behind the alias.
+                                let output = inner
+                                    .client
+                                    .describe_key()
+                                    .key_id(&inner.master_alias)
+                                    .send()
+                                    .await?;
+                                let key_metadata = output.key_metadata().ok_or_else(|| {
+                                    Error::Provider(eyre!(
+                                        "No master key metadata in describe response after alias race"
+                                    ))
+                                })?;
+                                key_metadata.key_id().to_string()
+                            }
+                            Err(err) => return Err(Error::Provider(err.into())),
+                        }
                     }
                     Err(err) => return Err(Error::Provider(err.into())),
                 };
