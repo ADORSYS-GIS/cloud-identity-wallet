@@ -1,13 +1,8 @@
 pub mod error;
 
-use axum::{
-    body::Body,
-    extract::Request,
-    middleware::Next,
-    response::IntoResponse,
-};
-use error::AuthError;
 use axum::http::header;
+use axum::{body::Body, extract::Request, middleware::Next, response::IntoResponse};
+use error::AuthError;
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,10 +14,7 @@ pub struct Claims {
     pub exp: i64,
 }
 
-pub async fn auth(
-    mut request: Request<Body>,
-    next: Next,
-) -> Result<impl IntoResponse, AuthError> {
+pub async fn auth(mut request: Request<Body>, next: Next) -> Result<impl IntoResponse, AuthError> {
     let token = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -48,14 +40,10 @@ pub async fn auth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::to_bytes,
-        routing::get,
-        Extension, Router,
-    };
     use axum::http::StatusCode;
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use axum::{Extension, Router, body::to_bytes, routing::get};
     use jsonwebtoken::jwk::Jwk;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use time::OffsetDateTime;
     use tower::ServiceExt;
 
