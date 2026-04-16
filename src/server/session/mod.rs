@@ -1,6 +1,5 @@
-//! Session management for OID4VC issuance and authorization flows.
+//! Session management for the server layer.
 
-pub mod model;
 pub mod service;
 pub mod store;
 
@@ -10,5 +9,5 @@ pub mod memory;
 #[cfg(feature = "session-redis")]
 pub mod redis;
 
-pub use service::SessionService;
+pub use service::SessionManager;
 pub use store::{SessionStore, SessionStoreError};

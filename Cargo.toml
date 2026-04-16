@@ -60,12 +60,25 @@ invalid_html_tags = "deny"
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
 color-eyre.workspace = true
+thiserror.workspace = true
+time.workspace = true
 config = "0.15"
 serde = { workspace = true, features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Session Management
+async-trait.workspace = true
+bincode = "1.3"
+dashmap = { workspace = true, optional = true }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"], optional = true }
+
+[features]
+default = ["session-memory"]
+session-memory = ["dep:dashmap"]
+session-redis = ["dep:redis"]
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }

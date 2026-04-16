@@ -1,63 +1,57 @@
 //! Redis-backed [`SessionStore`] implementation.
-//!
-//! Sessions are stored under `session:{session_id}` as JSON.
-
-use std::time::Duration;
 
 use async_trait::async_trait;
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
+use serde::{Serialize, de::DeserializeOwned};
+use std::{marker::PhantomData, time::Duration};
+use time::OffsetDateTime;
 
-use super::{
-    model::IssuanceSession,
-    store::{Result, SessionStore, SessionStoreError},
-};
+use super::store::{Result, SessionStore, SessionStoreError};
 
 const KEY_PREFIX: &str = "session:";
 
-/// Redis session store.
 #[derive(Clone)]
-pub struct RedisSessionStore {
+pub struct RedisSessionStore<T> {
     conn: ConnectionManager,
+    _marker: PhantomData<T>,
 }
 
-impl std::fmt::Debug for RedisSessionStore {
+impl<T> std::fmt::Debug for RedisSessionStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedisSessionStore").finish_non_exhaustive()
     }
 }
 
-impl RedisSessionStore {
+impl<T> RedisSessionStore<T> {
     pub async fn new(client: redis::Client) -> std::result::Result<Self, redis::RedisError> {
         let conn = ConnectionManager::new(client).await?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            _marker: PhantomData,
+        })
     }
 
     fn key(session_id: &str) -> String {
         format!("{KEY_PREFIX}{session_id}")
     }
 
-    fn serialize(session: &IssuanceSession) -> Result<String> {
-        serde_json::to_string(session).map_err(|e| SessionStoreError::Serialization(e.to_string()))
+    fn encode(data: &T) -> Result<Vec<u8>>
+    where
+        T: Serialize,
+    {
+        bincode::serialize(data).map_err(|e| SessionStoreError::Serialization(e.to_string()))
     }
 
-    fn deserialize(data: &str, session_id: &str) -> Result<IssuanceSession> {
-        serde_json::from_str(data).map_err(|e| {
+    fn decode(data: &[u8], session_id: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        bincode::deserialize(data).map_err(|e| {
             SessionStoreError::Backend(format!("failed to deserialize session {session_id}: {e}"))
         })
     }
-
-    fn remaining_ttl(session: &IssuanceSession) -> Duration {
-        let now = time::UtcDateTime::now();
-        if session.expires_at <= now {
-            Duration::ZERO
-        } else {
-            let secs = (session.expires_at - now).whole_seconds().max(0) as u64;
-            Duration::from_secs(secs)
-        }
-    }
 }
 
-/// Lua fallback for `GETDEL` on Redis < 6.2.
 const GETDEL_SCRIPT: &str = r#"
 local v = redis.call('GET', KEYS[1])
 if v then redis.call('DEL', KEYS[1]) end
@@ -65,29 +59,39 @@ return v
 "#;
 
 #[async_trait]
-impl SessionStore for RedisSessionStore {
-    async fn create(&self, session: IssuanceSession) -> Result<()> {
-        let key = Self::key(&session.session_id);
-        let value = Self::serialize(&session)?;
-        let ttl = Self::remaining_ttl(&session);
+impl<T> SessionStore<T> for RedisSessionStore<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    async fn create(
+        &self,
+        session_id: String,
+        session: T,
+        expires_at: OffsetDateTime,
+    ) -> Result<()> {
+        let key = Self::key(&session_id);
+        let value = Self::encode(&session)?;
 
-        if ttl == Duration::ZERO {
+        let now = OffsetDateTime::now_utc();
+        let ttl_secs = (expires_at - now).whole_seconds().max(0) as u64;
+
+        if ttl_secs == 0 {
             return Ok(());
         }
 
         let mut conn = self.conn.clone();
-        conn.set_ex::<_, _, ()>(&key, value, ttl.as_secs())
+        conn.set_ex::<_, _, ()>(&key, value, ttl_secs)
             .await
             .map_err(|e| SessionStoreError::Backend(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn get(&self, session_id: &str) -> Result<IssuanceSession> {
+    async fn get(&self, session_id: &str) -> Result<T> {
         let key = Self::key(session_id);
         let mut conn = self.conn.clone();
 
-        let data: Option<String> = conn
+        let data: Option<Vec<u8>> = conn
             .get(&key)
             .await
             .map_err(|e| SessionStoreError::Backend(e.to_string()))?;
@@ -96,28 +100,16 @@ impl SessionStore for RedisSessionStore {
             session_id: session_id.to_string(),
         })?;
 
-        let session = Self::deserialize(&data, session_id)?;
-
-        if session.is_expired() {
-            let _: () = conn
-                .del(&key)
-                .await
-                .map_err(|e| SessionStoreError::Backend(e.to_string()))?;
-            return Err(SessionStoreError::Expired {
-                session_id: session_id.to_string(),
-            });
-        }
-
-        Ok(session)
+        Self::decode(&data, session_id)
     }
 
-    async fn consume(&self, session_id: &str) -> Result<IssuanceSession> {
+    async fn consume(&self, session_id: &str) -> Result<T> {
         let key = Self::key(session_id);
         let mut conn = self.conn.clone();
 
-        let data: Option<String> = match redis::cmd("GETDEL")
+        let data: Option<Vec<u8>> = match redis::cmd("GETDEL")
             .arg(&key)
-            .query_async::<Option<String>>(&mut conn)
+            .query_async::<Option<Vec<u8>>>(&mut conn)
             .await
         {
             Ok(v) => v,
@@ -132,29 +124,19 @@ impl SessionStore for RedisSessionStore {
             session_id: session_id.to_string(),
         })?;
 
-        let session = Self::deserialize(&data, session_id)?;
-
-        if session.is_expired() {
-            return Err(SessionStoreError::Expired {
-                session_id: session_id.to_string(),
-            });
-        }
-
-        Ok(session)
+        Self::decode(&data, session_id)
     }
 
-    async fn update(&self, session: &IssuanceSession) -> Result<()> {
-        let key = Self::key(&session.session_id);
-        let value = Self::serialize(session)?;
-        let ttl = Self::remaining_ttl(session);
+    async fn update(&self, session_id: &str, session: T) -> Result<()> {
+        let key = Self::key(session_id);
+        let value = Self::encode(&session)?;
 
         let mut conn = self.conn.clone();
 
         let result: Option<String> = redis::cmd("SET")
             .arg(&key)
             .arg(value)
-            .arg("EX")
-            .arg(ttl.as_secs().max(1))
+            .arg("KEEPTTL")
             .arg("XX")
             .query_async(&mut conn)
             .await
@@ -162,7 +144,7 @@ impl SessionStore for RedisSessionStore {
 
         if result.is_none() {
             return Err(SessionStoreError::NotFound {
-                session_id: session.session_id.clone(),
+                session_id: session_id.to_string(),
             });
         }
 
