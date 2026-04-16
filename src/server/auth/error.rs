@@ -1,9 +1,10 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use jsonwebtoken::errors::Error as JwtError;
 use serde_json::json;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum AuthError {
     #[error("Missing or invalid Authorization header")]
     InvalidAuthorizationHeader,

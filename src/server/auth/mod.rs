@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Claims {
     pub sub: Uuid,
     pub iat: i64,
     pub exp: i64,
 }
 
+#[allow(dead_code)]
 pub async fn auth(mut request: Request<Body>, next: Next) -> Result<impl IntoResponse, AuthError> {
     let token = request
         .headers()
