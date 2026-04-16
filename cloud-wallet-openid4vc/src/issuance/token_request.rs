@@ -58,6 +58,10 @@ pub struct PreAuthorizedCodeRequest {
     /// The code representing the authorization to obtain Credentials (REQUIRED).
     #[serde(rename = "pre-authorized_code")]
     pub pre_authorized_code: String,
+    /// OAuth2 client_id.
+    ///
+    /// REQUIRED unless the AS explicitly allows anonymous pre-authorized code access.
+    pub client_id: Option<String>,
     /// Transaction code; MUST be present if tx_code object was in the Credential Offer.
     pub tx_code: Option<String>,
     /// Authorization details per RFC 9396 for requesting specific credential configurations.
@@ -92,6 +96,7 @@ mod tests {
     fn spec_pre_authorized_code_request_example() {
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
+            client_id: None,
             tx_code: Some("493536".to_string()),
             authorization_details: Some(vec![AuthorizationDetails::for_configuration(
                 "UniversityDegreeCredential",
@@ -111,6 +116,7 @@ mod tests {
     fn pre_authorized_code_key_uses_hyphen() {
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: "abc".to_string(),
+            client_id: None,
             tx_code: None,
             authorization_details: None,
         });
@@ -124,6 +130,7 @@ mod tests {
         // RFC 9396 authorization_details round-trip test
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
+            client_id: None,
             tx_code: Some("493536".to_string()),
             authorization_details: Some(vec![AuthorizationDetails::for_configuration(
                 "UniversityDegreeCredential",
