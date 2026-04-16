@@ -15,6 +15,8 @@ color-eyre.workspace = true
 
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+redis = { version = "0.28", features = ["tokio-comp"], optional = true }
 jsonwebtoken = "10"
 percent-encoding = "2"
 reqwest = { version = "0.13", features = ["form", "json"] }
@@ -38,8 +40,10 @@ testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
-default = ["memory-repo"]
+default = ["memory-repo", "memory-session"]
 memory-repo = ["dep:cloud-wallet-kms", "dep:dashmap"]
+memory-session = ["dep:dashmap"]
+redis-session = ["dep:redis"]
 mysql = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/mysql"]
 postgres = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/postgres"]
 sqlite = ["dep:cloud-wallet-kms", "dep:sqlx", "sqlx/sqlite"]
