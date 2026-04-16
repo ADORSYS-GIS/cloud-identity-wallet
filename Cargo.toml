@@ -71,7 +71,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Session Management
 async-trait.workspace = true
-bincode = "1.3"
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 dashmap = { workspace = true, optional = true }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"], optional = true }
 

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use redis::{AsyncCommands, Script, aio::ConnectionManager};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{marker::PhantomData, time::Duration};
+use std::marker::PhantomData;
 use time::OffsetDateTime;
 
 use super::store::{Result, SessionStore, SessionStoreError};
@@ -39,14 +39,14 @@ impl<T> RedisSessionStore<T> {
     where
         T: Serialize,
     {
-        bincode::serialize(data).map_err(|e| SessionStoreError::Serialization(e.to_string()))
+        postcard::to_stdvec(data).map_err(|e| SessionStoreError::Serialization(e.to_string()))
     }
 
     fn decode(data: &[u8], session_id: &str) -> Result<T>
     where
         T: DeserializeOwned,
     {
-        bincode::deserialize(data).map_err(|e| {
+        postcard::from_bytes(data).map_err(|e| {
             SessionStoreError::Backend(format!("failed to deserialize session {session_id}: {e}"))
         })
     }
