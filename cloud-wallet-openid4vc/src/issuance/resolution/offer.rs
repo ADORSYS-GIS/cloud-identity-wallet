@@ -201,23 +201,23 @@ impl CredentialOfferResolver {
         issuer_metadata: &CredentialIssuerMetadata,
     ) -> Result<Option<String>, Error> {
         if let Some(grants) = &offer.grants {
-            if let Some(auth_code) = &grants.authorization_code {
-                if let Some(as_url) = &auth_code.authorization_server {
-                    return Ok(Some(as_url.clone()));
-                }
+            if let Some(auth_code) = &grants.authorization_code
+                && let Some(as_url) = &auth_code.authorization_server
+            {
+                return Ok(Some(as_url.clone()));
             }
-            if let Some(pre_auth) = &grants.pre_authorized_code {
-                if let Some(as_url) = &pre_auth.authorization_server {
-                    return Ok(Some(as_url.clone()));
-                }
+            if let Some(pre_auth) = &grants.pre_authorized_code
+                && let Some(as_url) = &pre_auth.authorization_server
+            {
+                return Ok(Some(as_url.clone()));
             }
         }
 
-        if let Some(auth_servers) = &issuer_metadata.authorization_servers {
-            if !auth_servers.is_empty() {
-                let first = &auth_servers[0];
-                return Ok(Some(first.to_string()));
-            }
+        if let Some(auth_servers) = &issuer_metadata.authorization_servers
+            && !auth_servers.is_empty()
+        {
+            let first = &auth_servers[0];
+            return Ok(Some(first.to_string()));
         }
 
         Ok(None)
