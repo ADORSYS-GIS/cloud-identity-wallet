@@ -5,6 +5,7 @@ pub mod authz_request;
 pub mod authz_response;
 pub mod authz_server_metadata;
 pub mod claim_path_pointer;
+pub mod client;
 pub mod credential_configuration;
 pub mod credential_formats;
 pub mod credential_offer;
