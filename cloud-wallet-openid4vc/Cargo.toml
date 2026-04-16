@@ -15,7 +15,7 @@ color-eyre.workspace = true
 
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
-jsonwebtoken = "10"
+jsonwebtoken.workspace = true
 percent-encoding = "2"
 reqwest = { version = "0.13", features = ["form", "json"] }
 serde = { workspace = true, features = ["derive"] }
