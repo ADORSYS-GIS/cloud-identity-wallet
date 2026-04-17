@@ -14,9 +14,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Clone)]
+#[derive(Debug,Clone)]
 /// The global application state shared between all request handlers.
-pub struct AppState {}
+struct AppState {}
 
 pub struct Server {
     router: Router,
