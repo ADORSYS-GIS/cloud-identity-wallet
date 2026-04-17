@@ -16,9 +16,7 @@ use tower_http::{
 
 #[derive(Clone)]
 /// The global application state shared between all request handlers.
-pub struct AppState {
-    pub session_store: std::sync::Arc<session::memory::MemorySessionStore>,
-}
+pub struct AppState {}
 
 pub struct Server {
     router: Router,
@@ -45,9 +43,7 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {
-            session_store: std::sync::Arc::new(session::memory::MemorySessionStore::new()),
-        };
+        let state = AppState {};
 
         let router = Router::new()
             .route("/", get(home))
