@@ -71,8 +71,6 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 time = { workspace = true, features = ["serde"] }
 base64ct = { workspace = true, features = ["alloc"] }
 dashmap = { workspace = true }
-postcard = { version = "1", default-features = false, features = ["alloc"] }
-async-trait = { workspace = true }
 thiserror = { workspace = true }
 cloud-wallet-crypto = { path = "cloud-wallet-crypto" }
 
