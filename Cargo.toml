@@ -58,17 +58,28 @@ broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 
 [dependencies]
+async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
+cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
+dashmap.workspace = true
+futures-util = "0.3"
 serde = { workspace = true, features = ["derive"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+serde_json.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["serde"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync"] }
+tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid.workspace = true
 
 [dev-dependencies]
+http-body-util = "0.1"
 reqwest = { version = "0.13", features = ["json"] }
+tower = "0.5"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

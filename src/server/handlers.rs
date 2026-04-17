@@ -1,6 +1,7 @@
 mod health;
+mod issuance;
 mod root;
 
-// Export handlers for use in the server
 pub use health::health_check;
+pub use issuance::{cancel_session, submit_tx_code, IssuanceState};
 pub use root::home;

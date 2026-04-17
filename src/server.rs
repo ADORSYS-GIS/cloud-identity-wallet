@@ -1,21 +1,21 @@
 mod handlers;
 mod responses;
+pub mod sse;
 
 use crate::config::Config;
-use crate::server::handlers::{health_check, home};
+use crate::domain::InMemorySessionStore;
+use crate::server::handlers::{cancel_session, health_check, home, submit_tx_code, IssuanceState};
+use crate::server::sse::SseBroadcaster;
 
 use axum::http::Method;
-use axum::{Router, routing::get};
+use axum::{Router, routing::get, routing::post};
 use color_eyre::eyre::{Context, Result};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-
-#[derive(Debug, Clone)]
-/// The global application state shared between all request handlers.
-struct AppState {}
 
 pub struct Server {
     router: Router,
@@ -23,7 +23,6 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
     pub async fn new(config: &Config) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -42,11 +41,19 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {};
+        let session_store = Arc::new(InMemorySessionStore::new());
+        let broadcaster = SseBroadcaster::new();
+
+        let state = Arc::new(IssuanceState {
+            session_store,
+            broadcaster,
+        });
 
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
+            .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+            .route("/api/v1/issuance/{session_id}/cancel", post(cancel_session))
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -62,7 +69,6 @@ impl Server {
         self.listener.local_addr().unwrap().port()
     }
 
-    /// Runs the HTTP server.
     pub async fn run(self) -> Result<()> {
         tracing::info!("Server listening on {}", self.listener.local_addr()?);
         axum::serve(self.listener, self.router).await?;

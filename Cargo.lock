@@ -886,16 +886,27 @@ dependencies = [
 name = "cloud-identity-wallet"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "cloud-wallet-openid4vc",
  "color-eyre",
  "config",
+ "dashmap",
+ "futures-util",
+ "http-body-util",
  "reqwest",
  "serde",
+ "serde_json",
+ "thiserror 2.0.18",
  "tikv-jemallocator",
+ "time",
  "tokio",
+ "tokio-stream",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
