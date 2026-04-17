@@ -25,6 +25,14 @@ use crate::error::{Error, ErrorKind, Result};
 /// Fills the provided buffer with cryptographically secure random bytes
 /// using the operating system's secure random number generator.
 ///
+/// This is an alias for [`fill_bytes`] to maintain compatibility with `rand::fill` style calls.
+pub fn fill(buffer: &mut [u8]) -> Result<()> {
+    fill_bytes(buffer)
+}
+
+/// Fills the provided buffer with cryptographically secure random bytes
+/// using the operating system's secure random number generator.
+///
 /// # Examples
 ///
 /// ```rust
