@@ -15,7 +15,6 @@ color-eyre.workspace = true
 
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
-postcard = { version = "1", default-features = false, features = ["alloc"] }
 jsonwebtoken = "10"
 percent-encoding = "2"
 reqwest = { version = "0.13", features = ["form", "json"] }
