@@ -29,7 +29,7 @@ tokio = "1"
 
 # Error handling
 color-eyre = "0.6"
-jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+jsonwebtoken = "10"
 thiserror = "2"
 
 # Serialization / Deserialization
