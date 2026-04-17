@@ -15,6 +15,7 @@ use tower_http::{
 };
 
 #[derive(Debug, Clone)]
+/// The global application state shared between all request handlers.
 struct AppState {}
 
 pub struct Server {
@@ -23,6 +24,7 @@ pub struct Server {
 }
 
 impl Server {
+    /// Creates a new HTTPS server.
     pub async fn new(config: &Config) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -61,6 +63,7 @@ impl Server {
         self.listener.local_addr().unwrap().port()
     }
 
+    /// Runs the HTTP server.
     pub async fn run(self) -> Result<()> {
         tracing::info!("Server listening on {}", self.listener.local_addr()?);
         axum::serve(self.listener, self.router).await?;
