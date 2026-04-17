@@ -69,10 +69,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 uuid = { workspace = true, features = ["serde", "v4"] }
 time = { workspace = true, features = ["serde"] }
-base64ct = { workspace = true, features = ["alloc"] }
-dashmap = { workspace = true }
+base64 = "0.22"
+rand = "0.10"
 thiserror = { workspace = true }
-cloud-wallet-crypto = { path = "cloud-wallet-crypto" }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }

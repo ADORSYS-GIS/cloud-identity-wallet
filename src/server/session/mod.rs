@@ -1,13 +1,27 @@
 use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
 use color_eyre::eyre::Result;
-pub use error::SessionError;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub mod error;
-pub mod memory;
 pub mod util;
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error("Invalid session state transition from {from:?} to {to:?}")]
+    InvalidTransition {
+        from: IssuanceState,
+        to: IssuanceState,
+    },
+    #[error("Session not found")]
+    NotFound,
+    #[error("Session expired")]
+    Expired,
+    #[error("Other error: {0}")]
+    Other(String),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuanceSession {
@@ -89,12 +103,19 @@ fn is_transition_allowed(from: IssuanceState, to: IssuanceState, flow: FlowType)
     use FlowType::*;
     use IssuanceState::*;
     match (from, to) {
+        // Any non-terminal -> Failed (POST /cancel or expiry)
         (from, Failed) if !from.is_terminal() => true,
+        // awaiting_consent -> awaiting_authorization (Consent accepted, authorization code flow)
         (AwaitingConsent, AwaitingAuthorization) if flow == AuthorizationCode => true,
+        // awaiting_consent -> awaiting_tx_code (Consent accepted, pre-auth flow, tx_code required)
         (AwaitingConsent, AwaitingTxCode) if flow == PreAuthorizedCode => true,
+        // awaiting_consent -> processing (Consent accepted, pre-auth flow, no tx_code)
         (AwaitingConsent, Processing) if flow == PreAuthorizedCode => true,
-        (AwaitingAuthorization, Processing) => true,
-        (AwaitingTxCode, Processing) => true,
+        // awaiting_authorization -> processing (Authorization callback received with valid code)
+        (AwaitingAuthorization, Processing) if flow == AuthorizationCode => true,
+        // awaiting_tx_code -> processing (tx_code submitted)
+        (AwaitingTxCode, Processing) if flow == PreAuthorizedCode => true,
+        // processing -> completed (Credential stored successfully)
         (Processing, Completed) => true,
 
         _ => false,
@@ -154,18 +175,33 @@ mod tests {
 
     #[test]
     fn test_failed_transitions() {
-        let session = mock_session(FlowType::AuthorizationCode);
-
         // Any non-terminal can fail
-        let s1 = session.clone();
-        assert!(is_transition_allowed(
-            s1.state,
-            IssuanceState::Failed,
-            s1.flow
-        ));
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        transition(&mut session, IssuanceState::Failed).unwrap();
 
-        let mut s2 = session.clone();
-        transition(&mut s2, IssuanceState::AwaitingAuthorization).unwrap();
-        transition(&mut s2, IssuanceState::Failed).unwrap();
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
+        transition(&mut session, IssuanceState::Failed).unwrap();
+
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        transition(&mut session, IssuanceState::AwaitingTxCode).unwrap();
+        transition(&mut session, IssuanceState::Failed).unwrap();
+
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        transition(&mut session, IssuanceState::Processing).unwrap();
+        transition(&mut session, IssuanceState::Failed).unwrap();
+    }
+
+    #[test]
+    fn test_invalid_flow_transitions() {
+        // AwaitingAuthorization -> Processing is NOT allowed in PreAuthorizedCode flow
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        session.state = IssuanceState::AwaitingAuthorization;
+        assert!(transition(&mut session, IssuanceState::Processing).is_err());
+
+        // AwaitingTxCode -> Processing is NOT allowed in AuthorizationCode flow
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        session.state = IssuanceState::AwaitingTxCode;
+        assert!(transition(&mut session, IssuanceState::Processing).is_err());
     }
 }

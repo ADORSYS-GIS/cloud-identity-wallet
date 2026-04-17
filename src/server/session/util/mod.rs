@@ -1,11 +1,11 @@
-use base64ct::{Base64UrlUnpadded, Encoding};
-use cloud_wallet_crypto::rand;
-use color_eyre::eyre::{Result, eyre};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use color_eyre::eyre::Result;
 
 pub fn generate_session_id() -> Result<String> {
     let mut bytes = [0u8; 16];
-    rand::fill(&mut bytes).map_err(|e| eyre!("Failed to generate random bytes: {e}"))?;
-    Ok(format!("ses_{}", Base64UrlUnpadded::encode_string(&bytes)))
+    rand::fill(&mut bytes);
+    Ok(format!("ses_{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
 #[cfg(test)]
