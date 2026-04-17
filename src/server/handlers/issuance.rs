@@ -114,7 +114,10 @@ pub async fn submit_tx_code(
                 )
             }
             TxCodeValidationError::InvalidCharacters { expected } => {
-                format!("Transaction code must contain only {} characters.", expected)
+                format!(
+                    "Transaction code must contain only {} characters.",
+                    expected
+                )
             }
         };
         return Err(IssuanceError::InvalidTxCode(desc).into());
