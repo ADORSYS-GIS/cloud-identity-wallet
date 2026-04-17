@@ -4,7 +4,7 @@ pub mod sse;
 
 use crate::config::Config;
 use crate::domain::InMemorySessionStore;
-use crate::server::handlers::{cancel_session, health_check, home, submit_tx_code, IssuanceState};
+use crate::server::handlers::{IssuanceState, cancel_session, health_check, home, submit_tx_code};
 use crate::server::sse::SseBroadcaster;
 
 use axum::http::Method;
@@ -52,7 +52,10 @@ impl Server {
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
-            .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+            .route(
+                "/api/v1/issuance/{session_id}/tx-code",
+                post(submit_tx_code),
+            )
             .route("/api/v1/issuance/{session_id}/cancel", post(cancel_session))
             .layer(cors_layer)
             .layer(trace_layer)

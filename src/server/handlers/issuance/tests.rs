@@ -1,8 +1,8 @@
 use axum::{
+    Router,
     body::Body,
     http::{Request, StatusCode},
     routing::post,
-    Router,
 };
 use http_body_util::BodyExt;
 use serde_json::json;
@@ -12,7 +12,7 @@ use tower::ServiceExt;
 use crate::domain::models::{Session, SessionState, TxCodeSpec};
 use crate::domain::{InMemorySessionStore, SessionStore};
 use crate::server::handlers::issuance::{
-    cancel_session, submit_tx_code, ErrorResponse, IssuanceState, TxCodeResponse,
+    ErrorResponse, IssuanceState, TxCodeResponse, cancel_session, submit_tx_code,
 };
 use crate::server::sse::SseBroadcaster;
 use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
@@ -45,7 +45,10 @@ async fn test_submit_tx_code_valid_numeric_code() {
     let (state, session_id) = create_test_state().await;
 
     let app = Router::new()
-        .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+        .route(
+            "/api/v1/issuance/{session_id}/tx-code",
+            post(submit_tx_code),
+        )
         .with_state(state);
 
     let response = app
@@ -72,7 +75,10 @@ async fn test_submit_tx_code_invalid_non_numeric() {
     let (state, session_id) = create_test_state().await;
 
     let app = Router::new()
-        .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+        .route(
+            "/api/v1/issuance/{session_id}/tx-code",
+            post(submit_tx_code),
+        )
         .with_state(state);
 
     let response = app
@@ -99,7 +105,10 @@ async fn test_submit_tx_code_invalid_length() {
     let (state, session_id) = create_test_state().await;
 
     let app = Router::new()
-        .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+        .route(
+            "/api/v1/issuance/{session_id}/tx-code",
+            post(submit_tx_code),
+        )
         .with_state(state);
 
     let response = app
@@ -126,7 +135,10 @@ async fn test_submit_tx_code_session_not_found() {
     let (state, _) = create_test_state().await;
 
     let app = Router::new()
-        .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+        .route(
+            "/api/v1/issuance/{session_id}/tx-code",
+            post(submit_tx_code),
+        )
         .with_state(state);
 
     let response = app
@@ -155,7 +167,10 @@ async fn test_submit_tx_code_invalid_session_state() {
         .unwrap();
 
     let app = Router::new()
-        .route("/api/v1/issuance/{session_id}/tx-code", post(submit_tx_code))
+        .route(
+            "/api/v1/issuance/{session_id}/tx-code",
+            post(submit_tx_code),
+        )
         .with_state(state);
 
     let response = app

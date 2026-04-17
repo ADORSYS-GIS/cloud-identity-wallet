@@ -1,13 +1,13 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::domain::models::{FailureStep, ProcessingStep, SessionState, TxCodeValidationError};
 use crate::domain::SessionStore;
+use crate::domain::models::{FailureStep, ProcessingStep, SessionState, TxCodeValidationError};
 use crate::server::sse::{SseBroadcaster, SseEvent};
 
 #[cfg(test)]
@@ -48,7 +48,8 @@ impl From<&IssuanceError> for ErrorResponse {
             },
             IssuanceError::TerminalState => Self {
                 error: "invalid_session_state".to_string(),
-                error_description: "Session is already in a terminal state and cannot be cancelled.".to_string(),
+                error_description:
+                    "Session is already in a terminal state and cannot be cancelled.".to_string(),
             },
         }
     }
@@ -112,7 +113,10 @@ pub async fn submit_tx_code(
                     )
                 }
                 TxCodeValidationError::InvalidCharacters { expected } => {
-                    format!("Transaction code must contain only {} characters.", expected)
+                    format!(
+                        "Transaction code must contain only {} characters.",
+                        expected
+                    )
                 }
             };
             return Err(IssuanceError::InvalidTxCode(desc).into());
