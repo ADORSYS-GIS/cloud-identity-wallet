@@ -166,7 +166,7 @@ impl CredentialRepository for InMemoryRepository {
             }
         }
 
-        out.sort_by_key(|a| std::cmp::Reverse(a.issued_at));
+        out.sort_by(|a, b| b.issued_at.cmp(&a.issued_at));
         Ok(out)
     }
 
