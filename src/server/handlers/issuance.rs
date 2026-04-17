@@ -103,24 +103,21 @@ pub async fn submit_tx_code(
         .into());
     }
 
-    if let Some(ref spec) = session.tx_code_spec {
-        if let Err(e) = spec.validate_tx_code(&payload.tx_code) {
-            let desc = match e {
-                TxCodeValidationError::InvalidLength { expected, actual } => {
-                    format!(
-                        "Transaction code must be exactly {} characters (got {}).",
-                        expected, actual
-                    )
-                }
-                TxCodeValidationError::InvalidCharacters { expected } => {
-                    format!(
-                        "Transaction code must contain only {} characters.",
-                        expected
-                    )
-                }
-            };
-            return Err(IssuanceError::InvalidTxCode(desc).into());
-        }
+    if let Some(ref spec) = session.tx_code_spec
+        && let Err(e) = spec.validate_tx_code(&payload.tx_code)
+    {
+        let desc = match e {
+            TxCodeValidationError::InvalidLength { expected, actual } => {
+                format!(
+                    "Transaction code must be exactly {} characters (got {}).",
+                    expected, actual
+                )
+            }
+            TxCodeValidationError::InvalidCharacters { expected } => {
+                format!("Transaction code must contain only {} characters.", expected)
+            }
+        };
+        return Err(IssuanceError::InvalidTxCode(desc).into());
     }
 
     state

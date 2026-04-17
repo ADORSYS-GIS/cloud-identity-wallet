@@ -60,13 +60,13 @@ impl From<TxCode> for TxCodeSpec {
 
 impl TxCodeSpec {
     pub fn validate_tx_code(&self, code: &str) -> Result<(), TxCodeValidationError> {
-        if let Some(length) = self.length {
-            if code.len() != length as usize {
-                return Err(TxCodeValidationError::InvalidLength {
-                    expected: length,
-                    actual: code.len() as u32,
-                });
-            }
+        if let Some(length) = self.length
+            && code.len() != length as usize
+        {
+            return Err(TxCodeValidationError::InvalidLength {
+                expected: length,
+                actual: code.len() as u32,
+            });
         }
 
         match self.input_mode {
