@@ -956,7 +956,6 @@ dependencies = [
  "dashmap",
  "jsonwebtoken",
  "percent-encoding",
- "postcard",
  "reqwest",
  "serde",
  "serde_json",
