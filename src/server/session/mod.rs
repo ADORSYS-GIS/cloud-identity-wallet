@@ -4,24 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub mod util;
-
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum SessionError {
-    #[error("Invalid session state transition from {from:?} to {to:?}")]
-    InvalidTransition {
-        from: IssuanceState,
-        to: IssuanceState,
-    },
-    #[error("Session not found")]
-    NotFound,
-    #[error("Session expired")]
-    Expired,
-    #[error("Other error: {0}")]
-    Other(String),
-}
+pub mod utils;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuanceSession {
@@ -67,7 +50,7 @@ impl IssuanceSession {
         let now = OffsetDateTime::now_utc();
         let expires_at = now + time::Duration::minutes(15);
         Ok(Self {
-            id: util::generate_session_id()?,
+            id: utils::generate_session_id()?,
             tenant_id,
             state: IssuanceState::AwaitingConsent,
             offer,
@@ -84,16 +67,14 @@ impl IssuanceSession {
     }
 }
 
-pub fn transition(
-    session: &mut IssuanceSession,
-    new_state: IssuanceState,
-) -> std::result::Result<(), SessionError> {
+pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> Result<()> {
     let allowed = is_transition_allowed(session.state, new_state, session.flow);
     if !allowed {
-        return Err(SessionError::InvalidTransition {
-            from: session.state,
-            to: new_state,
-        });
+        color_eyre::eyre::bail!(
+            "Invalid session state transition from {:?} to {:?}",
+            session.state,
+            new_state
+        );
     }
     session.state = new_state;
     Ok(())
@@ -103,20 +84,28 @@ fn is_transition_allowed(from: IssuanceState, to: IssuanceState, flow: FlowType)
     use FlowType::*;
     use IssuanceState::*;
     match (from, to) {
-        // Any non-terminal -> Failed (POST /cancel or expiry)
-        (from, Failed) if !from.is_terminal() => true,
         // awaiting_consent -> awaiting_authorization (Consent accepted, authorization code flow)
         (AwaitingConsent, AwaitingAuthorization) if flow == AuthorizationCode => true,
         // awaiting_consent -> awaiting_tx_code (Consent accepted, pre-auth flow, tx_code required)
         (AwaitingConsent, AwaitingTxCode) if flow == PreAuthorizedCode => true,
         // awaiting_consent -> processing (Consent accepted, pre-auth flow, no tx_code)
         (AwaitingConsent, Processing) if flow == PreAuthorizedCode => true,
+        // awaiting_consent -> failed (Consent rejected or any error)
+        (AwaitingConsent, Failed) => true,
         // awaiting_authorization -> processing (Authorization callback received with valid code)
         (AwaitingAuthorization, Processing) if flow == AuthorizationCode => true,
+        // awaiting_authorization -> failed (AS returns error or session expires)
+        (AwaitingAuthorization, Failed) => true,
         // awaiting_tx_code -> processing (tx_code submitted)
         (AwaitingTxCode, Processing) if flow == PreAuthorizedCode => true,
+        // awaiting_tx_code -> failed (Any error)
+        (AwaitingTxCode, Failed) => true,
         // processing -> completed (Credential stored successfully)
         (Processing, Completed) => true,
+        // processing -> failed (Token, credential, or deferred error)
+        (Processing, Failed) => true,
+        // Any non-terminal -> failed (POST /cancel or session expiry)
+        (from, Failed) if !from.is_terminal() => true,
 
         _ => false,
     }
