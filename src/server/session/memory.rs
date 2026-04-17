@@ -1,7 +1,7 @@
+use crate::server::session::{IssuanceSession, SessionError};
 use dashmap::DashMap;
 use time::OffsetDateTime;
 use uuid::Uuid;
-use crate::server::session::{IssuanceSession, SessionError};
 
 pub struct MemorySessionStore {
     sessions: DashMap<String, IssuanceSession>,
@@ -19,7 +19,11 @@ impl MemorySessionStore {
         Ok(())
     }
 
-    pub async fn get(&self, id: &str, tenant_id: Uuid) -> Result<Option<IssuanceSession>, SessionError> {
+    pub async fn get(
+        &self,
+        id: &str,
+        tenant_id: Uuid,
+    ) -> Result<Option<IssuanceSession>, SessionError> {
         let Some(session) = self.sessions.get(id).map(|r| r.clone()) else {
             return Ok(None);
         };
