@@ -15,7 +15,13 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0098: rustls-webpki 0.101.7 - transitive dependency from AWS SDK via rustls 0.21.12
+    # No patched version available for 0.101.x line. Requires misissuance to exploit.
+    "RUSTSEC-2026-0098",
+    # RUSTSEC-2026-0099: rustls-webpki 0.101.7 - same as above
+    "RUSTSEC-2026-0099",
+]
 
 [bans]
 # Lint level for when multiple versions of the same crate are detected
