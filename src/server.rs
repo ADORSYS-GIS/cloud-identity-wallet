@@ -1,5 +1,6 @@
 mod handlers;
 mod responses;
+pub mod session;
 
 use crate::config::Config;
 use crate::server::handlers::{health_check, home};
@@ -13,9 +14,11 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// The global application state shared between all request handlers.
-struct AppState {}
+pub struct AppState {
+    pub session_store: std::sync::Arc<session::memory::MemorySessionStore>,
+}
 
 pub struct Server {
     router: Router,
@@ -42,7 +45,9 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {};
+        let state = AppState {
+            session_store: std::sync::Arc::new(session::memory::MemorySessionStore::new()),
+        };
 
         let router = Router::new()
             .route("/", get(home))
