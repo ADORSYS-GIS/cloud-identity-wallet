@@ -4,10 +4,8 @@ use async_trait::async_trait;
 use sqlx::AnyPool;
 use uuid::Uuid;
 
-use crate::domain::ports::{
-    RegisterTenantRequest, TenantError, TenantRepository, TenantResponse,
-};
 use crate::domain::models::TenantName;
+use crate::domain::ports::{RegisterTenantRequest, TenantError, TenantRepository, TenantResponse};
 
 /// SQL-based tenant repository implementation.
 #[derive(Debug, Clone)]
@@ -46,8 +44,8 @@ impl SqlTenantRepository {
 #[async_trait]
 impl TenantRepository for SqlTenantRepository {
     async fn create(&self, request: RegisterTenantRequest) -> Result<TenantResponse, TenantError> {
-        let validated_name = TenantName::validate(request.name.as_ref())
-            .map_err(|e| TenantError::InvalidName(e))?;
+        let validated_name =
+            TenantName::validate(request.name.as_ref()).map_err(TenantError::InvalidName)?;
 
         let id = Uuid::new_v4();
         let created_at = time::UtcDateTime::now();

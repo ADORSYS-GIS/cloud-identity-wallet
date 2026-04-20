@@ -9,7 +9,10 @@ use crate::domain::service::Service;
 use crate::server::handlers::{health_check, home, register_tenant};
 
 use axum::http::Method;
-use axum::{Router, routing::{get, post}};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
@@ -70,8 +73,7 @@ impl Server {
         let state = AppState { service };
 
         // API v1 routes
-        let api_v1 = Router::new()
-            .route("/tenants", post(register_tenant));
+        let api_v1 = Router::new().route("/tenants", post(register_tenant));
 
         let router = Router::new()
             .route("/", get(home))

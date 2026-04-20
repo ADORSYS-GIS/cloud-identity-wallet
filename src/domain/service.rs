@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use super::ports::TenantRepository;
+use std::sync::Arc;
 
 pub struct Service {
     pub tenant_repo: Arc<dyn TenantRepository>,
