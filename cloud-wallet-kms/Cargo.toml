@@ -30,9 +30,10 @@ ahash = "0.8"
 dashmap.workspace = true
 moka = { version = "0.12", features = ["future"] }
 
-[dependencies.aws-sdk-config]
+[dependencies.aws-config]
+version = "1"
 default-features = false
-features = ["ehavior-version-latest", "rt-tokio", "rustls"]
+features = ["behavior-version-latest", "rt-tokio", "rustls"]
 optional = true
 
 [dependencies.sqlx]
