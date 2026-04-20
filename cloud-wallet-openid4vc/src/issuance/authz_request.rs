@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::issuance::authz_details::AuthorizationDetails;
 pub use crate::issuance::authz_details::{AuthorizationDetailType, AuthzDetailsClaim};
+use crate::issuance::utils::serialize_json_string;
 
 /// PKCE code challenge method.
 ///
@@ -41,7 +42,7 @@ impl std::fmt::Display for CodeChallengeMethod {
 /// An OAuth 2.0 Authorization Request for OID4VCI.
 ///
 /// Compliant with [OID4VCI §5.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-authorization-request).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthorizationRequest {
     /// Fixed to `"code"` for the Authorization Code flow.
     pub response_type: String,
@@ -65,6 +66,7 @@ pub struct AuthorizationRequest {
     pub issuer_state: Option<String>,
     /// OPTIONAL. RAR authorization details requesting specific Credentials.
     /// See [OID4VCI §5.1.1].
+    #[serde(serialize_with = "serialize_json_string")]
     pub authorization_details: Option<Vec<AuthorizationDetails>>,
     /// OPTIONAL. PKCE code challenge (base64url-encoded SHA-256 of the verifier).
     pub code_challenge: Option<String>,
