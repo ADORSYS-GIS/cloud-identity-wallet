@@ -335,14 +335,14 @@ impl Oid4vciClient {
     pub async fn resolve_offer_with_grant(
         &self,
         raw_offer: &str,
-        prefered: GrantType,
+        preferred: GrantType,
     ) -> Result<ResolvedOfferContext> {
         let offer = self.resolve_offer(raw_offer).await?;
         let issuer_metadata = self.fetch_issuer_metadata(&offer.credential_issuer).await?;
         let as_metadata = self
             .fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer)
             .await?;
-        let flow_type = self.determine_flow(&offer, &as_metadata, Some(prefered))?;
+        let flow_type = self.determine_flow(&offer, &as_metadata, Some(preferred))?;
 
         Ok(ResolvedOfferContext {
             offer,
