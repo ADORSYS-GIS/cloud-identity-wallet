@@ -8,5 +8,7 @@ pub struct Tenants {
     pub id: uuid::Uuid,
     /// Human-readable name of the tenant.
     pub name: String,
+    /// Timestamp when the tenant was created.
+    pub created_at: time::UtcDateTime,
     // TODO: More fields will be added later
 }

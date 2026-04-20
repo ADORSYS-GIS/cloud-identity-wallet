@@ -1,11 +1,14 @@
 mod handlers;
 mod responses;
 
+use std::sync::Arc;
+
 use crate::config::Config;
-use crate::server::handlers::{health_check, home};
+use crate::domain::service::Service;
+use crate::server::handlers::{health_check, home, register_tenant};
 
 use axum::http::Method;
-use axum::{Router, routing::get};
+use axum::{Router, routing::{get, post}};
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
@@ -13,9 +16,12 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug, Clone)]
 /// The global application state shared between all request handlers.
-struct AppState {}
+#[derive(Clone)]
+pub struct AppState {
+    /// Service for tenant operations.
+    pub service: Arc<Service>,
+}
 
 pub struct Server {
     router: Router,
@@ -23,7 +29,7 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
+    /// Creates a new HTTP server.
     pub async fn new(config: &Config) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -42,11 +48,34 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {};
+        // Install SQLx drivers
+        sqlx::any::install_default_drivers();
+
+        // Create database connection pool (SQLite in-memory for now)
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(5)
+            .connect("sqlite::memory:")
+            .await
+            .wrap_err("Failed to connect to database")?;
+
+        // Create tenant repository and initialize schema
+        let tenant_repo = Arc::new(crate::outbound::SqlTenantRepository::new(pool));
+        tenant_repo
+            .init_schema()
+            .await
+            .wrap_err("Failed to initialize database schema")?;
+
+        let service = Arc::new(Service::new(tenant_repo));
+        let state = AppState { service };
+
+        // API v1 routes
+        let api_v1 = Router::new()
+            .route("/tenants", post(register_tenant));
 
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
+            .nest("/api/v1", api_v1)
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
