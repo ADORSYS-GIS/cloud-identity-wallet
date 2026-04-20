@@ -49,6 +49,9 @@ url = "2.5"
 uuid = "1"
 zeroize = "1.8"
 
+# Security fix for RUSTSEC-2026-0098 and RUSTSEC-2026-0099
+rustls-webpki = "0.103.12"
+
 [workspace.lints.clippy]
 
 [workspace.lints.rust]
@@ -63,6 +66,7 @@ axum = { version = "0.8", features = ["macros"] }
 color-eyre.workspace = true
 config = "0.15"
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+rustls-webpki.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
