@@ -1,13 +1,12 @@
-pub struct Service;
+use std::sync::Arc;
+use super::ports::TenantRepository;
 
-impl Default for Service {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct Service {
+    pub tenant_repo: Arc<dyn TenantRepository>,
 }
 
 impl Service {
-    pub fn new() -> Self {
-        Self
+    pub fn new(tenant_repo: Arc<dyn TenantRepository>) -> Self {
+        Self { tenant_repo }
     }
 }
