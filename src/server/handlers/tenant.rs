@@ -1,16 +1,11 @@
 //! HTTP handler for tenant registration.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode};
 
-use crate::domain::ports::{
-    TenantError,
-    RegisterTenantRequest, TenantResponse, TenantErrorResponse,
-};
 use crate::domain::models::TenantName;
+use crate::domain::ports::{
+    RegisterTenantRequest, TenantError, TenantErrorResponse, TenantResponse,
+};
 use crate::server::AppState;
 
 /// POST /api/v1/tenants - Register a new tenant.
@@ -37,8 +32,8 @@ pub async fn register_tenant(
         )
     })?;
 
-    let request = RegisterTenantRequest { 
-        name: validated_name
+    let request = RegisterTenantRequest {
+        name: validated_name,
     };
 
     // Persist the tenant
@@ -55,7 +50,8 @@ pub async fn register_tenant(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(TenantErrorResponse {
                 error: "server_error",
-                error_description: "An internal error occurred while processing your request".to_string(),
+                error_description: "An internal error occurred while processing your request"
+                    .to_string(),
             }),
         )),
     }

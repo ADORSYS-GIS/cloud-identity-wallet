@@ -28,11 +28,11 @@ impl TenantName {
     }
 
     /// Validates and creates a TenantName from a string.
-    /// 
+    ///
     /// The name is trimmed, and must be non-empty and at most 255 characters.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if:
     /// - The trimmed name is empty
     /// - The trimmed name exceeds 255 characters

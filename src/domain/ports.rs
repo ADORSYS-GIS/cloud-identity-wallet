@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 
 // Re-export from models
-pub use super::models::{Tenant, RegisterTenantRequest, TenantResponse, TenantErrorResponse, TenantError};
+pub use super::models::{
+    RegisterTenantRequest, Tenant, TenantError, TenantErrorResponse, TenantResponse,
+};
 
 /// Repository trait for tenant persistence.
 #[async_trait]
