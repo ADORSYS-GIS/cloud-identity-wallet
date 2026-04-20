@@ -3,7 +3,7 @@
 //! This module implements the data models as defined in
 //! [OpenID4VCI Section 4.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-credential-offer).
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use percent_encoding::percent_decode_str;
 use reqwest_middleware::ClientWithMiddleware;
@@ -233,13 +233,12 @@ impl CredentialOffer {
         }
 
         // Check for unique values
-        let unique_count = self
+        let mut seen = HashSet::with_capacity(self.credential_configuration_ids.len());
+        if !self
             .credential_configuration_ids
             .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len();
-
-        if unique_count != self.credential_configuration_ids.len() {
+            .all(|id| seen.insert(id))
+        {
             return Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
                 "credential_configuration_ids must contain unique values",
@@ -249,7 +248,6 @@ impl CredentialOffer {
         if let Some(ref grants) = self.grants {
             grants.validate()?;
         }
-
         Ok(())
     }
 
@@ -286,16 +284,9 @@ impl CredentialOffer {
     /// - URL decoding or JSON parsing fails
     /// - The parsed offer fails validation (e.g., non-HTTPS issuer, empty configuration IDs)
     pub fn from_query_param(encoded: &str) -> Result<Self, Error> {
-        let decoded = urlencoding_decode(encoded);
+        let decoded = percent_decode_str(encoded).decode_utf8_lossy();
         Self::from_json_str(&decoded)
     }
-}
-
-/// URL percent-decoding using `percent_encoding` crate.
-///
-/// Properly handles UTF-8 encoded bytes (e.g., `%C3%A9` for `é`).
-fn urlencoding_decode(s: &str) -> String {
-    percent_decode_str(s).decode_utf8_lossy().into_owned()
 }
 
 /// Source of a credential offer.
@@ -340,53 +331,30 @@ impl CredentialOfferUri {
     /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
         // Prepend scheme if not already present
-        let uri = if link.contains("://") {
-            link.to_string()
+        let parsed_url = if link.contains("://") {
+            Url::parse(link)
         } else {
-            format!("openid-credential-offer://?{link}")
-        };
-
-        let parsed_url = Url::parse(&uri).map_err(|e| {
+            Url::parse(&format!("openid-credential-offer://?{link}"))
+        }
+        .map_err(|e| {
             Error::message(
                 ErrorKind::InvalidCredentialOffer,
                 format!("invalid offer link: {e}"),
             )
         })?;
 
-        let params: HashMap<String, String> = parsed_url
-            .query_pairs()
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
+        let mut credential_offer = None;
+        let mut credential_offer_uri = None;
 
-        let has_by_value = params.contains_key("credential_offer");
-        let has_by_reference = params.contains_key("credential_offer_uri");
-
-        // Mutual exclusivity check
-        if has_by_value && has_by_reference {
-            return Err(Error::message(
-                ErrorKind::InvalidCredentialOffer,
-                "credential_offer and credential_offer_uri are mutually exclusive",
-            ));
+        for (k, v) in parsed_url.query_pairs() {
+            if k == "credential_offer" {
+                credential_offer = Some(v.into_owned());
+            } else if k == "credential_offer_uri" {
+                credential_offer_uri = Some(v.into_owned());
+            }
         }
 
-        // query_pairs() already percent-decodes parameter values, so parse JSON directly
-        if let Some(json) = params.get("credential_offer") {
-            let offer = CredentialOffer::from_json_str(json)?;
-            return Ok(Self {
-                source: CredentialOfferSource::ByValue(offer),
-            });
-        }
-
-        if let Some(uri) = params.get("credential_offer_uri") {
-            return Ok(Self {
-                source: CredentialOfferSource::ByReference(uri.clone()),
-            });
-        }
-
-        Err(Error::message(
-            ErrorKind::InvalidCredentialOffer,
-            "missing credential_offer or credential_offer_uri parameter",
-        ))
+        Self::parse_params(credential_offer.as_deref(), credential_offer_uri.as_deref())
     }
 
     /// Parses credential offer URI parameters from a query string.
@@ -408,39 +376,41 @@ impl CredentialOfferUri {
         // Strip leading '?' if present (common when parsing raw query strings)
         let query = query.strip_prefix('?').unwrap_or(query);
 
-        let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
+        let mut credential_offer = None;
+        let mut credential_offer_uri = None;
 
-        let has_by_value = params.contains_key("credential_offer");
-        let has_by_reference = params.contains_key("credential_offer_uri");
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            if k == "credential_offer" {
+                credential_offer = Some(v.into_owned());
+            } else if k == "credential_offer_uri" {
+                credential_offer_uri = Some(v.into_owned());
+            }
+        }
 
-        // Mutual exclusivity check
-        if has_by_value && has_by_reference {
-            return Err(Error::message(
+        Self::parse_params(credential_offer.as_deref(), credential_offer_uri.as_deref())
+    }
+
+    /// Helper to parse parameters enforcing mutual exclusivity
+    fn parse_params(offer: Option<&str>, offer_uri: Option<&str>) -> Result<Self, Error> {
+        match (offer, offer_uri) {
+            (Some(_), Some(_)) => Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
                 "credential_offer and credential_offer_uri are mutually exclusive",
-            ));
+            )),
+            (Some(json), None) => {
+                let offer = CredentialOffer::from_json_str(json)?;
+                Ok(Self {
+                    source: CredentialOfferSource::ByValue(offer),
+                })
+            }
+            (None, Some(uri)) => Ok(Self {
+                source: CredentialOfferSource::ByReference(uri.to_string()),
+            }),
+            (None, None) => Err(Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                "missing credential_offer or credential_offer_uri parameter",
+            )),
         }
-
-        // form_urlencoded::parse() already percent-decodes parameter values, so parse JSON directly
-        if let Some(json) = params.get("credential_offer") {
-            let offer = CredentialOffer::from_json_str(json)?;
-            return Ok(Self {
-                source: CredentialOfferSource::ByValue(offer),
-            });
-        }
-
-        if let Some(uri) = params.get("credential_offer_uri") {
-            return Ok(Self {
-                source: CredentialOfferSource::ByReference(uri.clone()),
-            });
-        }
-
-        Err(Error::message(
-            ErrorKind::InvalidCredentialOffer,
-            "missing credential_offer or credential_offer_uri parameter",
-        ))
     }
 }
 
@@ -556,13 +526,10 @@ pub async fn resolve_by_reference(
 
     // Extract media-type essence (before any ";" for parameters)
     let media_type_essence = content_type.split(';').next().unwrap_or("").trim();
-    if media_type_essence != "application/json" {
+    if !media_type_essence.eq_ignore_ascii_case("application/json") {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOffer,
-            format!(
-                "expected media type application/json, got '{}'",
-                media_type_essence
-            ),
+            format!("expected media type application/json, got '{media_type_essence}'"),
         ));
     }
 
@@ -638,21 +605,20 @@ fn looks_like_jwt_with_none(content: &str) -> bool {
 
     // If decoding failed, check if it's a JWT with "alg": "none"
     // by manually inspecting the header
-    let trimmed = content.trim();
-    let parts: Vec<&str> = trimmed.split('.').collect();
-    if parts.len() != 3 {
-        return false;
-    }
+    let mut parts = content.trim().split('.');
+    let header_part = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(header), Some(_), Some(_), None) => header,
+        _ => return false,
+    };
 
     // Try to decode the header manually
-    if let Ok(header_bytes) = base64url_decode(parts[0])
+    if let Ok(header_bytes) = base64url_decode(header_part)
         && let Ok(header_str) = String::from_utf8(header_bytes)
         && let Ok(header_json) = serde_json::from_str::<serde_json::Value>(&header_str)
         && let Some(alg) = header_json.get("alg").and_then(|v| v.as_str())
     {
         return alg.eq_ignore_ascii_case("none");
     }
-
     false
 }
 
@@ -1013,12 +979,12 @@ mod tests {
     fn url_decode_utf8() {
         // Test UTF-8 decoding: %C3%A9 = é (UTF-8 encoded as 0xC3 0xA9)
         let encoded = "%C3%A9";
-        let decoded = urlencoding_decode(encoded);
+        let decoded = percent_decode_str(encoded).decode_utf8_lossy();
         assert_eq!(decoded, "é");
 
         // Test in context of credential offer URL
         let description = "Code%20for%20%C3%A9%C3%A8%C3%AA"; // "Code for éèê"
-        let decoded = urlencoding_decode(description);
+        let decoded = percent_decode_str(description).decode_utf8_lossy();
         assert_eq!(decoded, "Code for éèê");
     }
 
