@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use percent_encoding::percent_decode_str;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -93,7 +94,7 @@ pub struct AuthorizationCodeGrant {
     /// has multiple entries. The value MUST match one of the values in the
     /// `authorization_servers` array.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorization_server: Option<String>,
+    pub authorization_server: Option<Url>,
 }
 
 /// Pre-Authorized Code Grant parameters.
@@ -121,7 +122,7 @@ pub struct PreAuthorizedCodeGrant {
     /// has multiple entries. The value MUST match one of the values in the
     /// `authorization_servers` array.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorization_server: Option<String>,
+    pub authorization_server: Option<Url>,
 }
 
 impl PreAuthorizedCodeGrant {
@@ -489,7 +490,7 @@ impl CredentialOfferUri {
 /// - Response body exceeds size limit
 pub async fn resolve_by_reference(
     uri: &str,
-    http_client: &reqwest::Client,
+    http_client: &ClientWithMiddleware,
 ) -> Result<CredentialOffer, Error> {
     // Validate URI scheme
     let parsed = Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
