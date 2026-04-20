@@ -10,6 +10,7 @@ use serde_with::skip_serializing_none;
 use url::Url;
 
 use super::authz_details::AuthorizationDetails;
+use crate::issuance::utils::serialize_json_string;
 
 /// Token Request as defined in OpenID4VCI §6.1.
 ///
@@ -44,6 +45,7 @@ pub struct AuthorizationCodeRequest {
     /// PKCE code verifier per RFC 7636.
     pub code_verifier: Option<String>,
     /// Authorization details per RFC 9396 for fine-grained credential requests.
+    #[serde(serialize_with = "serialize_json_string")]
     pub authorization_details: Option<Vec<AuthorizationDetails>>,
 }
 
@@ -65,6 +67,7 @@ pub struct PreAuthorizedCodeRequest {
     /// Transaction code; MUST be present if tx_code object was in the Credential Offer.
     pub tx_code: Option<String>,
     /// Authorization details per RFC 9396 for requesting specific credential configurations.
+    #[serde(serialize_with = "serialize_json_string")]
     pub authorization_details: Option<Vec<AuthorizationDetails>>,
 }
 
