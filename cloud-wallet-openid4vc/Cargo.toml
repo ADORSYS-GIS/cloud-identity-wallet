@@ -15,7 +15,7 @@ csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
 jsonwebtoken.workspace = true
 percent-encoding = "2"
-reqwest = { version = "0.13", features = ["form", "json"] }
+reqwest = { version = "0.13", features = ["form", "json", "rustls"] }
 reqwest-middleware = { version = "0.5", features = ["json", "form"] }
 reqwest-retry = "0.9"
 serde = { workspace = true, features = ["derive"] }

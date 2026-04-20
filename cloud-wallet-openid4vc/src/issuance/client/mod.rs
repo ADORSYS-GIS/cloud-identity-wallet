@@ -3,7 +3,12 @@ mod signer;
 #[cfg(test)]
 mod tests;
 
+// Public Re-exports
+pub use error::ClientError;
+pub use signer::{ProofClaims, ProofSigner};
+
 use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::header::CONTENT_TYPE;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -18,8 +23,6 @@ use crate::issuance::authz_request::{
 };
 use crate::issuance::authz_response::{AuthorizationResponse, PushedAuthorizationResponse};
 use crate::issuance::authz_server_metadata::AuthorizationServerMetadata;
-use crate::issuance::client::error::ClientError;
-use crate::issuance::client::signer::{ProofClaims, ProofSigner};
 use crate::issuance::credential_offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
 };
@@ -41,6 +44,7 @@ use crate::issuance::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier
 type Result<T> = std::result::Result<T, ClientError>;
 
 const HTTP_MAX_RETRIES: u32 = 3;
+const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 10;
 const OAUTH_RESPONSE_TYPE: &str = "code";
 const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 const JSON_HEADER: &str = "application/json";
@@ -134,13 +138,53 @@ pub struct Config {
     pub client_id: String,
     /// The redirect URI registered with the issuer AS.
     pub redirect_uri: Url,
+    /// Total timeout for each request.
+    pub timeout: Duration,
+    /// Optional user-agent value to send with every request.
+    pub user_agent: Option<String>,
+    /// Accept untrusted hosts (testing only).
+    pub accept_untrusted_hosts: bool,
 }
 
 impl Config {
+    /// Creates a new configuration with the given client ID and redirect URI.
+    ///
+    /// Defaults:
+    /// - timeout: 10 seconds
+    /// - user_agent: None
+    /// - accept_untrusted_hosts: false
     pub fn new(client_id: impl Into<String>, redirect_uri: Url) -> Self {
         Self {
             client_id: client_id.into(),
             redirect_uri,
+            timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
+            user_agent: None,
+            accept_untrusted_hosts: false,
+        }
+    }
+
+    /// Sets the total request timeout.
+    ///
+    /// Defaults to 10 seconds.
+    pub fn timeout(self, timeout: Duration) -> Self {
+        Self { timeout, ..self }
+    }
+
+    /// Sets a custom user-agent header value.
+    pub fn user_agent(self, user_agent: impl Into<String>) -> Self {
+        Self {
+            user_agent: Some(user_agent.into()),
+            ..self
+        }
+    }
+
+    /// Enables or disables accepting untrusted hosts.
+    ///
+    /// This should only be enabled in test environments.
+    pub fn accept_untrusted_hosts(self, accept_untrusted_hosts: bool) -> Self {
+        Self {
+            accept_untrusted_hosts,
+            ..self
         }
     }
 }
@@ -163,17 +207,34 @@ pub struct Oid4vciClient {
 }
 
 impl Oid4vciClient {
-    pub fn new(config: Config) -> Self {
+    /// Creates a new client with custom HTTP options for the internal request client.
+    pub fn new_with_http_options(config: Config) -> Result<Self> {
         let retry_policy = ExponentialBackoff::builder()
             .jitter(Jitter::Bounded)
             .build_with_max_retries(HTTP_MAX_RETRIES);
-        let http_client = ClientBuilder::new(reqwest::Client::new())
+
+        let mut inner_client_builder = reqwest::Client::builder()
+            .timeout(config.timeout)
+            .tls_backend_rustls()
+            .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts)
+            .https_only(true);
+
+        if let Some(ref user_agent) = config.user_agent {
+            inner_client_builder = inner_client_builder.user_agent(user_agent);
+        }
+
+        let inner_client = inner_client_builder
+            .build()
+            .map_err(|e| ClientError::configuration(format!("failed to build HTTP client: {e}")))?;
+
+        let http_client = ClientBuilder::new(inner_client)
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
             .build();
-        Self {
+
+        Ok(Self {
             config: Arc::new(config),
             http_client,
-        }
+        })
     }
 
     /// Returns the underlying HTTP client.
