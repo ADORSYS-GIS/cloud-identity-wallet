@@ -23,13 +23,17 @@ cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
 rand = "0.10"
 
 # KMS AWS dependencies
-aws-config = { version = "1", optional = true }
-aws-sdk-kms = { version = "1", optional = true }
+aws-sdk-kms = { version = "1", default-features = false, optional = true }
 
 # Cache dependencies
 ahash = "0.8"
 dashmap.workspace = true
 moka = { version = "0.12", features = ["future"] }
+
+[dependencies.aws-sdk-config]
+default-features = false
+features = ["ehavior-version-latest", "rt-tokio", "rustls"]
+optional = true
 
 [dependencies.sqlx]
 workspace = true
