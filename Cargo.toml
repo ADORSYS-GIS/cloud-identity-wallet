@@ -29,6 +29,7 @@ tokio = "1"
 
 # Error handling
 color-eyre = "0.6"
+jsonwebtoken = "10"
 thiserror = "2"
 
 # Serialization / Deserialization
@@ -61,14 +62,20 @@ invalid_html_tags = "deny"
 axum = { version = "0.8", features = ["macros"] }
 color-eyre.workspace = true
 config = "0.15"
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
