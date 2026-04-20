@@ -29,6 +29,7 @@ tokio = "1"
 
 # Error handling
 color-eyre = "0.6"
+jsonwebtoken = "10"
 thiserror = "2"
 
 # Serialization / Deserialization
@@ -63,8 +64,10 @@ axum = { version = "0.8", features = ["macros"] }
 cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 serde = { workspace = true, features = ["derive"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "any", "sqlite"] }
+serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
@@ -77,6 +80,7 @@ uuid = { workspace = true, features = ["v4"] }
 reqwest = { version = "0.13", features = ["json"] }
 serde_json.workspace = true
 uuid.workspace = true
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
