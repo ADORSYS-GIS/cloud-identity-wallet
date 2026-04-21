@@ -1,5 +1,6 @@
 pub mod pkce;
 
+use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 
@@ -11,4 +12,14 @@ where
 {
     let j = serde_json::to_string(value).map_err(serde::ser::Error::custom)?;
     serializer.serialize_str(&j)
+}
+
+/// Deserialize a JSON string into a value
+pub fn deserialize_json_string<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: for<'a> Deserialize<'a>,
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    serde_json::from_str(&s).map_err(serde::de::Error::custom)
 }
