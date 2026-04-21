@@ -6,11 +6,11 @@ use axum::{
 use std::sync::Arc;
 
 use crate::domain::session_store::Error as StoreError;
+use crate::server::AppState;
 use crate::server::handlers::issuance::{
     ErrorResponse, IssuanceError, TxCodeRequest, TxCodeResponse,
 };
 use crate::server::sse::SseEvent;
-use crate::server::AppState;
 use crate::session::{IssuanceState, ProcessingStep, TxCodeValidationError, validate_tx_code};
 
 pub async fn submit_tx_code(

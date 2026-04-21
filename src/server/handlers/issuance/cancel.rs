@@ -5,9 +5,9 @@ use axum::{
 use std::sync::Arc;
 
 use crate::domain::session_store::Error as StoreError;
+use crate::server::AppState;
 use crate::server::handlers::issuance::{ErrorResponse, IssuanceError};
 use crate::server::sse::SseEvent;
-use crate::server::AppState;
 use crate::session::FailureStep;
 
 pub async fn cancel_session(

@@ -10,11 +10,11 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use crate::domain::{InMemorySessionStore, SessionStore};
+use crate::server::AppState;
 use crate::server::handlers::issuance::{
     ErrorResponse, TxCodeResponse, cancel_session, submit_tx_code,
 };
 use crate::server::sse::SseBroadcaster;
-use crate::server::AppState;
 use crate::session::{FlowType, IssuanceSession, IssuanceState};
 
 async fn create_test_state() -> (Arc<AppState>, String) {
@@ -37,7 +37,8 @@ async fn create_test_state() -> (Arc<AppState>, String) {
     }))
     .unwrap();
 
-    let mut session = IssuanceSession::new(uuid::Uuid::nil(), offer, FlowType::PreAuthorizedCode).unwrap();
+    let mut session =
+        IssuanceSession::new(uuid::Uuid::nil(), offer, FlowType::PreAuthorizedCode).unwrap();
     session.state = IssuanceState::AwaitingTxCode;
     let session_id = session.id.clone();
     session_store.insert(session).await.unwrap();
