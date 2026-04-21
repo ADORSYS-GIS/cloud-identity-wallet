@@ -9,30 +9,31 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use crate::domain::models::{Session, SessionState, TxCodeSpec};
+use crate::domain::models::{Session, SessionState};
 use crate::domain::{InMemorySessionStore, SessionStore};
 use crate::server::handlers::issuance::{
-    ErrorResponse, IssuanceState, TxCodeResponse, cancel_session, submit_tx_code,
+    ErrorResponse, TxCodeResponse, cancel_session, submit_tx_code,
 };
 use crate::server::sse::SseBroadcaster;
-use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
+use crate::server::AppState;
+use cloud_wallet_openid4vc::issuance::credential_offer::{InputMode, TxCode};
 
-async fn create_test_state() -> (Arc<IssuanceState>, String) {
+async fn create_test_state() -> (Arc<AppState>, String) {
     let session_store = Arc::new(InMemorySessionStore::new());
     let broadcaster = SseBroadcaster::new();
 
-    let tx_code_spec = Some(TxCodeSpec {
-        input_mode: InputMode::Numeric,
+    let tx_code = Some(TxCode {
+        input_mode: Some(InputMode::Numeric),
         length: Some(6),
         description: Some("Enter the 6-digit code sent to your phone".to_string()),
     });
 
     let session_id = "test-session-123".to_string();
-    let mut session = Session::new(session_id.clone(), uuid::Uuid::nil(), tx_code_spec);
+    let mut session = Session::new(session_id.clone(), uuid::Uuid::nil(), tx_code);
     session.state = SessionState::AwaitingTxCode;
     session_store.insert(session).await.unwrap();
 
-    let state = Arc::new(IssuanceState {
+    let state = Arc::new(AppState {
         session_store,
         broadcaster,
     });

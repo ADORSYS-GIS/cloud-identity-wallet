@@ -5,11 +5,11 @@ pub mod sse;
 
 use crate::config::Config;
 use crate::domain::InMemorySessionStore;
-use crate::server::handlers::{IssuanceState, cancel_session, health_check, home, submit_tx_code};
+use crate::server::handlers::{cancel_session, health_check, home, submit_tx_code};
 use crate::server::sse::SseBroadcaster;
 
 use axum::http::Method;
-use axum::{Router, routing::get, routing::post};
+use axum::{Router, routing::get};
 use color_eyre::eyre::{Context, Result};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -18,12 +18,20 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+#[derive(Debug, Clone)]
+/// The global application state shared between all request handlers.
+pub struct AppState {
+    pub session_store: Arc<dyn crate::domain::SessionStore>,
+    pub broadcaster: SseBroadcaster,
+}
+
 pub struct Server {
     router: Router,
     listener: TcpListener,
 }
 
 impl Server {
+    /// Creates a new HTTPS server.
     pub async fn new(config: &Config) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -45,19 +53,19 @@ impl Server {
         let session_store = Arc::new(InMemorySessionStore::new());
         let broadcaster = SseBroadcaster::new();
 
-        let state = Arc::new(IssuanceState {
+        let state = Arc::new(AppState {
             session_store,
             broadcaster,
         });
 
+        let issuance_router = Router::new()
+            .route("/{session_id}/tx-code", axum::routing::post(submit_tx_code))
+            .route("/{session_id}/cancel", axum::routing::post(cancel_session));
+
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
-            .route(
-                "/api/v1/issuance/{session_id}/tx-code",
-                post(submit_tx_code),
-            )
-            .route("/api/v1/issuance/{session_id}/cancel", post(cancel_session))
+            .nest("/api/v1/issuance", issuance_router)
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -73,6 +81,7 @@ impl Server {
         self.listener.local_addr().unwrap().port()
     }
 
+    /// Runs the HTTP server.
     pub async fn run(self) -> Result<()> {
         tracing::info!("Server listening on {}", self.listener.local_addr()?);
         axum::serve(self.listener, self.router).await?;

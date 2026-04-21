@@ -1,6 +1,5 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
-use uuid::Uuid;
 
 use crate::domain::models::{FailureStep, ProcessingStep};
 
@@ -10,11 +9,6 @@ pub enum SseEvent {
     Processing {
         session_id: String,
         step: ProcessingStep,
-    },
-    Completed {
-        session_id: String,
-        credential_ids: Vec<Uuid>,
-        credential_types: Vec<String>,
     },
     Failed {
         session_id: String,
@@ -29,18 +23,6 @@ impl SseEvent {
         Self::Processing { session_id, step }
     }
 
-    pub fn completed(
-        session_id: String,
-        credential_ids: Vec<Uuid>,
-        credential_types: Vec<String>,
-    ) -> Self {
-        Self::Completed {
-            session_id,
-            credential_ids,
-            credential_types,
-        }
-    }
-
     pub fn failed(
         session_id: String,
         error: String,
@@ -53,26 +35,6 @@ impl SseEvent {
             error_description,
             step,
         }
-    }
-
-    pub fn event_type(&self) -> &'static str {
-        match self {
-            Self::Processing { .. } => "processing",
-            Self::Completed { .. } => "completed",
-            Self::Failed { .. } => "failed",
-        }
-    }
-
-    pub fn session_id(&self) -> &str {
-        match self {
-            Self::Processing { session_id, .. } => session_id,
-            Self::Completed { session_id, .. } => session_id,
-            Self::Failed { session_id, .. } => session_id,
-        }
-    }
-
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed { .. } | Self::Failed { .. })
     }
 }
 
@@ -104,24 +66,10 @@ impl SseBroadcaster {
             false
         }
     }
-
-    pub fn remove(&self, session_id: &str) {
-        self.senders.remove(session_id);
-    }
-
-    pub fn get_sender(&self, session_id: &str) -> Option<EventSender> {
-        self.senders
-            .get(session_id)
-            .map(|entry| entry.value().clone())
-    }
 }
 
 impl Default for SseBroadcaster {
     fn default() -> Self {
         Self::new()
     }
-}
-
-pub fn format_sse_frame(event_type: &str, data: &str) -> String {
-    format!("event: {event_type}\ndata: {data}\n\n")
 }

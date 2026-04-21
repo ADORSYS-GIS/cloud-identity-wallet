@@ -42,7 +42,9 @@ serde_with = "3"
 tracing = "0.1"
 
 # Other utilities
+base64 = "0.22"
 dashmap = "6"
+rand = "0.10"
 sqlx = "0.8"
 time = "0.3"
 url = "2.5"
@@ -75,10 +77,13 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
+base64.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 http-body-util = "0.1"
 reqwest = { version = "0.13", features = ["json"] }
+serde_json = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

@@ -10,7 +10,7 @@ cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
 
 
 async-trait.workspace = true
-base64 = "0.22"
+base64.workspace = true
 color-eyre.workspace = true
 
 csscolorparser = { version = "0.8", features = ["serde"] }
