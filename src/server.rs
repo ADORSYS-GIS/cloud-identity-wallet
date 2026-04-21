@@ -34,7 +34,7 @@ pub struct Server {
 
 impl Server {
     /// Creates a new HTTP server.
-    pub async fn new(config: &Config) -> Result<Self> {
+    pub async fn new(config: &Config, service: Service) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -52,33 +52,14 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        // Install SQLx drivers
-        sqlx::any::install_default_drivers();
-
-        // Create database connection pool (SQLite in-memory for now)
-        let pool = sqlx::any::AnyPoolOptions::new()
-            .max_connections(5)
-            .connect("sqlite::memory:")
-            .await
-            .wrap_err("Failed to connect to database")?;
-
-        // Create tenant repository and initialize schema
-        let tenant_repo = Arc::new(crate::outbound::SqlTenantRepository::new(pool));
-        tenant_repo
-            .init_schema()
-            .await
-            .wrap_err("Failed to initialize database schema")?;
-
-        let service = Arc::new(Service::new(tenant_repo));
-        let state = AppState { service };
-
-        // API v1 routes
-        let api_v1 = Router::new().route("/tenants", post(register_tenant));
+        let state = AppState {
+            service: Arc::new(service),
+        };
 
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
-            .nest("/api/v1", api_v1)
+            .nest("/api/v1", api_routes())
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -100,4 +81,8 @@ impl Server {
         axum::serve(self.listener, self.router).await?;
         Ok(())
     }
+}
+
+fn api_routes() -> Router<AppState> {
+    Router::new().route("/tenants", post(register_tenant))
 }

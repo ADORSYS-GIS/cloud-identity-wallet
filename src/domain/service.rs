@@ -6,7 +6,9 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn new(tenant_repo: Arc<dyn TenantRepository>) -> Self {
-        Self { tenant_repo }
+    pub fn new<T: TenantRepository>(tenant_repo: T) -> Self {
+        Self {
+            tenant_repo: Arc::new(tenant_repo),
+        }
     }
 }

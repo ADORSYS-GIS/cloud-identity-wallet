@@ -1,6 +1,7 @@
 //! Integration tests for SQL tenant repository.
 
-use cloud_identity_wallet::domain::ports::{RegisterTenantRequest, TenantRepository};
+use cloud_identity_wallet::domain::models::tenants::RegisterTenantRequest;
+use cloud_identity_wallet::domain::ports::TenantRepository;
 use cloud_identity_wallet::outbound::SqlTenantRepository;
 use sqlx::any::AnyPoolOptions;
 
@@ -24,7 +25,7 @@ async fn test_sql_tenant_repository_create() {
 
     // Test creating a tenant
     let request = RegisterTenantRequest {
-        name: "Test Tenant".to_string().into(),
+        name: "Test Tenant".to_string(),
     };
 
     let response = repo.create(request).await.expect("Failed to create tenant");
@@ -50,7 +51,7 @@ async fn test_sql_tenant_repository_validates_name() {
 
     // Test with empty name
     let request = RegisterTenantRequest {
-        name: "".to_string().into(),
+        name: "".to_string(),
     };
 
     let result = repo.create(request).await;
@@ -74,7 +75,7 @@ async fn test_sql_tenant_repository_trims_name() {
 
     // Test with whitespace
     let request = RegisterTenantRequest {
-        name: "  Test Tenant  ".to_string().into(),
+        name: "  Test Tenant  ".to_string(),
     };
 
     let response = repo.create(request).await.expect("Failed to create tenant");

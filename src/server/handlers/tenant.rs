@@ -2,11 +2,12 @@
 
 use axum::{Json, extract::State, http::StatusCode};
 
-use crate::domain::models::TenantName;
-use crate::domain::ports::{
-    RegisterTenantRequest, TenantError, TenantErrorResponse, TenantResponse,
+use crate::{
+    domain::models::tenants::{
+        RegisterTenantRequest, TenantError, TenantErrorResponse, TenantName, TenantResponse,
+    },
+    server::AppState,
 };
-use crate::server::AppState;
 
 /// POST /api/v1/tenants - Register a new tenant.
 ///
@@ -21,8 +22,8 @@ pub async fn register_tenant(
     State(state): State<AppState>,
     Json(payload): Json<RegisterTenantRequest>,
 ) -> Result<(StatusCode, Json<TenantResponse>), (StatusCode, Json<TenantErrorResponse>)> {
-    // Validate and trim the name before passing to the repository
-    let validated_name = TenantName::validate(payload.name.as_ref()).map_err(|e| {
+    // Validate the name before passing to the repository
+    let _tenant_name = TenantName::new(&payload.name).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(TenantErrorResponse {
@@ -32,12 +33,8 @@ pub async fn register_tenant(
         )
     })?;
 
-    let request = RegisterTenantRequest {
-        name: validated_name,
-    };
-
     // Persist the tenant
-    match state.service.tenant_repo.create(request).await {
+    match state.service.tenant_repo.create(payload).await {
         Ok(response) => Ok((StatusCode::CREATED, Json(response))),
         Err(TenantError::InvalidName(msg)) => Err((
             StatusCode::BAD_REQUEST,

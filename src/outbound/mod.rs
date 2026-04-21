@@ -3,6 +3,6 @@
    by which external modules interact with the domain.
 */
 
-mod tenant_repository;
+mod tenant;
 
-pub use tenant_repository::SqlTenantRepository;
+pub use tenant::SqlTenantRepository;
