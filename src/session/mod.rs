@@ -50,7 +50,7 @@ impl IssuanceSession {
         let now = OffsetDateTime::now_utc();
         let expires_at = now + time::Duration::minutes(15);
         Ok(Self {
-            id: utils::generate_session_id()?,
+            id: utils::generate_session_id(),
             tenant_id,
             state: IssuanceState::AwaitingConsent,
             offer,
