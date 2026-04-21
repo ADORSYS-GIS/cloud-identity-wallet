@@ -1,7 +1,6 @@
 mod auth;
 mod handlers;
 mod responses;
-pub mod session;
 
 use crate::config::Config;
 use crate::server::handlers::{health_check, home};

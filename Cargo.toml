@@ -42,7 +42,9 @@ serde_with = "3"
 tracing = "0.1"
 
 # Other utilities
+base64 = "0.22"
 dashmap = "6"
+rand = "0.10"
 sqlx = "0.8"
 time = "0.3"
 url = "2.5"
@@ -73,8 +75,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 uuid = { workspace = true, features = ["serde", "v4"] }
 time = { workspace = true, features = ["serde"] }
-base64 = "0.22"
-rand = "0.10"
+base64.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }
