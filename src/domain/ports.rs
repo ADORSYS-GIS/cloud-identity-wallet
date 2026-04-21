@@ -2,10 +2,9 @@
 
 use async_trait::async_trait;
 
+use crate::domain::models::tenants::{RegisterTenantRequest, TenantError, TenantResponse};
+
 // Re-export from models
-pub use super::models::{
-    RegisterTenantRequest, Tenant, TenantError, TenantErrorResponse, TenantResponse,
-};
 
 /// Repository trait for tenant persistence.
 #[async_trait]
