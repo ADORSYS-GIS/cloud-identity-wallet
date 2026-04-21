@@ -1,4 +1,4 @@
-use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
+use cloud_wallet_openid4vc::issuance::credential_offer::{CredentialOffer, InputMode, TxCode};
 use color_eyre::eyre::Result;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -15,6 +15,7 @@ pub struct IssuanceSession {
     pub flow: FlowType,
     pub code_verifier: Option<String>,
     pub issuer_state: Option<String>,
+    pub submitted_tx_code: Option<String>,
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
 }
@@ -57,6 +58,7 @@ impl IssuanceSession {
             flow,
             code_verifier: None,
             issuer_state: None,
+            submitted_tx_code: None,
             created_at: now,
             expires_at,
         })
@@ -65,6 +67,57 @@ impl IssuanceSession {
     pub fn is_expired(&self) -> bool {
         OffsetDateTime::now_utc() >= self.expires_at
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingStep {
+    ExchangingToken,
+    RequestingCredential,
+    AwaitingDeferredCredential,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureStep {
+    OfferResolution,
+    Metadata,
+    Authorization,
+    Token,
+    CredentialRequest,
+    DeferredCredential,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxCodeValidationError {
+    InvalidLength { expected: u32, actual: u32 },
+    InvalidCharacters { expected: String },
+}
+
+pub fn validate_tx_code(spec: &TxCode, code: &str) -> Result<(), TxCodeValidationError> {
+    if let Some(length) = spec.length
+        && code.len() != length as usize
+    {
+        return Err(TxCodeValidationError::InvalidLength {
+            expected: length,
+            actual: code.len() as u32,
+        });
+    }
+
+    let input_mode = spec.input_mode.unwrap_or_default();
+    match input_mode {
+        InputMode::Numeric => {
+            if !code.chars().all(|c| c.is_ascii_digit()) {
+                return Err(TxCodeValidationError::InvalidCharacters {
+                    expected: "numeric".to_string(),
+                });
+            }
+        }
+        InputMode::Text => {}
+    }
+
+    Ok(())
 }
 
 pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> Result<()> {

@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::models::{Session, SessionState};
+use crate::session::{IssuanceSession, IssuanceState};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -21,16 +21,16 @@ pub enum Error {
 
 #[async_trait]
 pub trait SessionStore: Send + Sync + 'static + Debug {
-    async fn insert(&self, session: Session) -> Result<()>;
-    async fn get(&self, id: &str) -> Result<Session>;
-    async fn update_state(&self, id: &str, new_state: SessionState) -> Result<()>;
+    async fn insert(&self, session: IssuanceSession) -> Result<()>;
+    async fn get(&self, id: &str) -> Result<IssuanceSession>;
+    async fn update_state(&self, id: &str, new_state: IssuanceState) -> Result<()>;
     async fn set_tx_code(&self, id: &str, tx_code: String) -> Result<()>;
     async fn delete(&self, id: &str) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
 pub struct InMemorySessionStore {
-    sessions: Arc<DashMap<String, Session>>,
+    sessions: Arc<DashMap<String, IssuanceSession>>,
 }
 
 impl InMemorySessionStore {
@@ -49,19 +49,19 @@ impl Default for InMemorySessionStore {
 
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
-    async fn insert(&self, session: Session) -> Result<()> {
+    async fn insert(&self, session: IssuanceSession) -> Result<()> {
         self.sessions.insert(session.id.clone(), session);
         Ok(())
     }
 
-    async fn get(&self, id: &str) -> Result<Session> {
+    async fn get(&self, id: &str) -> Result<IssuanceSession> {
         self.sessions
             .get(id)
             .map(|entry| entry.value().clone())
             .ok_or_else(|| Error::NotFound(id.to_string()))
     }
 
-    async fn update_state(&self, id: &str, new_state: SessionState) -> Result<()> {
+    async fn update_state(&self, id: &str, new_state: IssuanceState) -> Result<()> {
         let mut session = self.get(id).await?;
 
         if session.is_expired() {

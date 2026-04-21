@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::domain::models::{FailureStep, ProcessingStep};
+use crate::session::{FailureStep, ProcessingStep};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]

@@ -5,13 +5,13 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::domain::models::{ProcessingStep, SessionState, TxCodeValidationError, validate_tx_code};
 use crate::domain::session_store::Error as StoreError;
 use crate::server::handlers::issuance::{
     ErrorResponse, IssuanceError, TxCodeRequest, TxCodeResponse,
 };
 use crate::server::sse::SseEvent;
 use crate::server::AppState;
+use crate::session::{IssuanceState, ProcessingStep, TxCodeValidationError, validate_tx_code};
 
 pub async fn submit_tx_code(
     State(state): State<Arc<AppState>>,
@@ -27,7 +27,7 @@ pub async fn submit_tx_code(
             _ => IssuanceError::SessionNotFound,
         })?;
 
-    if session.state != SessionState::AwaitingTxCode {
+    if session.state != IssuanceState::AwaitingTxCode {
         return Err(IssuanceError::InvalidSessionState(format!(
             "Session is not awaiting a transaction code (current state: {:?})",
             session.state
@@ -35,7 +35,14 @@ pub async fn submit_tx_code(
         .into());
     }
 
-    if let Some(ref spec) = session.tx_code
+    let tx_code_spec = session
+        .offer
+        .grants
+        .as_ref()
+        .and_then(|g| g.pre_authorized_code.as_ref())
+        .and_then(|g| g.tx_code.as_ref());
+
+    if let Some(spec) = tx_code_spec
         && let Err(e) = validate_tx_code(spec, &payload.tx_code)
     {
         let desc = match e {
@@ -63,7 +70,7 @@ pub async fn submit_tx_code(
 
     state
         .session_store
-        .update_state(&session_id, SessionState::Processing)
+        .update_state(&session_id, IssuanceState::Processing)
         .await
         .map_err(|_| IssuanceError::SessionNotFound)?;
 

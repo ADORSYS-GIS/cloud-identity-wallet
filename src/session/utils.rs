@@ -1,5 +1,5 @@
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 
 pub fn generate_session_id() -> String {
     let mut bytes = [0u8; 16];

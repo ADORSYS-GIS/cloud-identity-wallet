@@ -9,28 +9,37 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use crate::domain::models::{Session, SessionState};
 use crate::domain::{InMemorySessionStore, SessionStore};
 use crate::server::handlers::issuance::{
     ErrorResponse, TxCodeResponse, cancel_session, submit_tx_code,
 };
 use crate::server::sse::SseBroadcaster;
 use crate::server::AppState;
-use cloud_wallet_openid4vc::issuance::credential_offer::{InputMode, TxCode};
+use crate::session::{FlowType, IssuanceSession, IssuanceState};
 
 async fn create_test_state() -> (Arc<AppState>, String) {
     let session_store = Arc::new(InMemorySessionStore::new());
     let broadcaster = SseBroadcaster::new();
 
-    let tx_code = Some(TxCode {
-        input_mode: Some(InputMode::Numeric),
-        length: Some(6),
-        description: Some("Enter the 6-digit code sent to your phone".to_string()),
-    });
+    let offer = serde_json::from_value(serde_json::json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["test_id"],
+        "grants": {
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                "pre-authorized_code": "abc123",
+                "tx_code": {
+                    "input_mode": "numeric",
+                    "length": 6,
+                    "description": "Enter the 6-digit code sent to your phone"
+                }
+            }
+        }
+    }))
+    .unwrap();
 
-    let session_id = "test-session-123".to_string();
-    let mut session = Session::new(session_id.clone(), uuid::Uuid::nil(), tx_code);
-    session.state = SessionState::AwaitingTxCode;
+    let mut session = IssuanceSession::new(uuid::Uuid::nil(), offer, FlowType::PreAuthorizedCode).unwrap();
+    session.state = IssuanceState::AwaitingTxCode;
+    let session_id = session.id.clone();
     session_store.insert(session).await.unwrap();
 
     let state = Arc::new(AppState {
@@ -163,7 +172,7 @@ async fn test_submit_tx_code_invalid_session_state() {
 
     state
         .session_store
-        .update_state(&session_id, SessionState::Processing)
+        .update_state(&session_id, IssuanceState::Processing)
         .await
         .unwrap();
 
@@ -239,7 +248,7 @@ async fn test_cancel_session_already_completed() {
 
     state
         .session_store
-        .update_state(&session_id, SessionState::Completed)
+        .update_state(&session_id, IssuanceState::Completed)
         .await
         .unwrap();
 
@@ -271,7 +280,7 @@ async fn test_cancel_session_already_failed() {
 
     state
         .session_store
-        .update_state(&session_id, SessionState::Failed)
+        .update_state(&session_id, IssuanceState::Failed)
         .await
         .unwrap();
 
