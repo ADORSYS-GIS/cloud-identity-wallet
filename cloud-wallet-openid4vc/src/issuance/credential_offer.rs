@@ -662,7 +662,7 @@ mod tests {
 
         assert_eq!(
             offer.credential_issuer,
-            Url::parse("https://credential-issuer.example.com.").unwrap()
+            Url::parse("https://credential-issuer.example.com").unwrap()
         );
         assert_eq!(offer.credential_configuration_ids.len(), 2);
         assert!(offer.grants.is_some());
@@ -735,17 +735,13 @@ mod tests {
             grants: None,
         };
 
-        let json = serde_json::to_string(&offer).expect("Failed to serialize");
-
-        // Parse and compare as JSON for canonical comparison
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json).expect("Failed to parse serialized JSON");
+        let json = serde_json::to_value(&offer).expect("Failed to serialize");
         let expected = serde_json::json!({
-            "credential_issuer": "https://issuer.example.com",
+            "credential_issuer": "https://issuer.example.com/",
             "credential_configuration_ids": ["MyCredential"]
         });
         assert_eq!(
-            parsed, expected,
+            json, expected,
             "Serialized JSON should match expected structure"
         );
     }

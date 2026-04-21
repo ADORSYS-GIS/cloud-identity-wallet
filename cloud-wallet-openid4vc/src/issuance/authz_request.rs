@@ -76,7 +76,7 @@ pub struct AuthorizationRequest {
 
 /// An OAuth 2.0 Pushed Authorization Request (PAR) as outlined in [OID4VCI §5.1.4].
 ///
-/// OID4VCI §5.1.4]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-5.1.4
+/// [OID4VCI §5.1.4]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-5.1.4
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushedAuthorizationRequest {
     /// The client identifier for the wallet.
