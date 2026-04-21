@@ -1,8 +1,8 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use thiserror::Error;
 
-use super::utils::is_allowed_ascii_byte;
+use super::utils::allowed_chars::is_allowed_ascii_byte;
 
 /// Generic wrapper for all OpenID4VCI / OAuth 2.0 error responses.
 ///
