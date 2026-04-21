@@ -269,7 +269,7 @@ impl Oid4vciClient {
         credential_issuer: &Url,
     ) -> Result<CredentialIssuerMetadata> {
         // Construct the well-known URL per OID4VCI §12.2.2
-        let url = well_known_issuer_metadata_url(&credential_issuer);
+        let url = well_known_issuer_metadata_url(credential_issuer);
 
         let response = self
             .http_client
@@ -469,9 +469,9 @@ impl Oid4vciClient {
         {
             // PAR is advertised, use it.
             let par_response = self.send_par(context, &authz_request).await?;
-            build_par_redirect_url(&authz_endpoint, &self.config.client_id, par_response)?
+            build_par_redirect_url(authz_endpoint, &self.config.client_id, par_response)?
         } else {
-            build_plain_authz_url(&authz_endpoint, authz_request)?
+            build_plain_authz_url(authz_endpoint, authz_request)?
         };
 
         Ok(AuthorizationUrlResult {
@@ -522,7 +522,7 @@ impl Oid4vciClient {
 
         // Include authorization_details so the AS can return credential_identifiers
         // in the token response per §6.2
-        let authz_details = build_authorization_details(&context, &credential_config_ids)?;
+        let authz_details = build_authorization_details(context, credential_config_ids)?;
 
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
             code: code.into(),
