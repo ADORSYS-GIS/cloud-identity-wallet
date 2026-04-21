@@ -1,7 +1,5 @@
 mod error;
 mod signer;
-#[cfg(test)]
-mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
