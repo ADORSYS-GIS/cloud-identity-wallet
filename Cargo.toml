@@ -29,6 +29,7 @@ tokio = "1"
 
 # Error handling
 color-eyre = "0.6"
+jsonwebtoken = "10"
 thiserror = "2"
 
 # Serialization / Deserialization
@@ -64,6 +65,7 @@ cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
 dashmap.workspace = true
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
@@ -72,12 +74,12 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync"]
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-uuid.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
 reqwest = { version = "0.13", features = ["json"] }
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

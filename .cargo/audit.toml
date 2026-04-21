@@ -2,7 +2,7 @@
 ignore = [
     # Present in sqlx-mysql. As there is currently no available fix for this vulnerability,
     # this change temporarily ignores the advisory to allow CI/CD pipelines to pass
-    "RUSTSEC-2023-0071" 
+    "RUSTSEC-2023-0071"
 ]  # advisory IDs to ignore
 
 informational_warnings = ["unmaintained"]

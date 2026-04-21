@@ -16,10 +16,12 @@ feature-depth = 1
 
 [advisories]
 ignore = [
-    # RUSTSEC-2026-0098: rustls-webpki 0.101.7 - transitive dependency from AWS SDK via rustls 0.21.12
-    # No patched version available for 0.101.x line. Requires misissuance to exploit.
+    # rustls-webpki 0.101.7 — transitive dep via AWS SDK (aws-config → rustls 0.21.x).
+    # Cannot upgrade without AWS SDK releasing a version using rustls >=0.23.
+    # See https://rustsec.org/advisories/RUSTSEC-2026-0098
     "RUSTSEC-2026-0098",
-    # RUSTSEC-2026-0099: rustls-webpki 0.101.7 - same as above
+    # rustls-webpki 0.101.7 — same root cause as RUSTSEC-2026-0098, same dependency chain.
+    # See https://rustsec.org/advisories/RUSTSEC-2026-0099
     "RUSTSEC-2026-0099",
 ]
 
