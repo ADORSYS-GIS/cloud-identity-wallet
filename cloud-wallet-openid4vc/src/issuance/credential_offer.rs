@@ -292,6 +292,7 @@ impl CredentialOffer {
 /// Source of a credential offer.
 ///
 /// Credential offers can be passed by value or by reference.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialOfferSource {
     /// Credential offer passed by value (embedded JSON).
