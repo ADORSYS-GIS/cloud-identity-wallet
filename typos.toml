@@ -9,6 +9,8 @@ COSE = "COSE"
 Cose = "Cose"
 cose = "cose"
 
+fwe = "fwe"
+
 [files]
 extend-exclude = [
   "cloud-wallet-crypto/src/jwk.rs",
