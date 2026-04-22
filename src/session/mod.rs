@@ -41,8 +41,6 @@ pub trait SessionStore: Send + Sync + 'static {
 }
 
 /// ID type for sessions
-///
-/// Wraps a vector of bytes
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Id(Box<[u8]>);
 
