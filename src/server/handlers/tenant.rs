@@ -1,27 +1,19 @@
 //! HTTP handler for tenant registration.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
 use crate::{
     domain::models::tenants::{
-        RegisterTenantRequest, TenantError, TenantErrorResponse, TenantName, TenantResponse,
+        RegisterTenantRequest, TenantError, TenantErrorResponse, TenantName,
     },
     server::AppState,
 };
 
-/// POST /api/v1/tenants - Register a new tenant.
-///
-/// This is an unauthenticated endpoint that creates a new tenant record.
-/// It serves as the entry point for any new frontend instance.
-///
-/// # Returns
-/// - `201 Created` with `TenantResponse` on success
-/// - `400 Bad Request` with `TenantErrorResponse` for validation errors
-/// - `500 Internal Server Error` for storage failures
+/// Registers a new tenant.
 pub async fn register_tenant(
     State(state): State<AppState>,
     Json(payload): Json<RegisterTenantRequest>,
-) -> Result<(StatusCode, Json<TenantResponse>), (StatusCode, Json<TenantErrorResponse>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<TenantErrorResponse>)> {
     // Validate the name before passing to the repository
     let _tenant_name = TenantName::new(&payload.name).map_err(|e| {
         (

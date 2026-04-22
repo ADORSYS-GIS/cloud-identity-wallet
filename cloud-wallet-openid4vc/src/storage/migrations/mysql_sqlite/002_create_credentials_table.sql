@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS credentials (
     id VARCHAR(36) PRIMARY KEY,
-    tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id VARCHAR(36) NOT NULL,
 
     issuer VARCHAR(255) NOT NULL,
     subject VARCHAR(255),

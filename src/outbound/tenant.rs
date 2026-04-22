@@ -18,18 +18,10 @@ static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migratio
 /// SQL-based tenant repository implementation.
 ///
 /// Supports PostgreSQL, MySQL, and SQLite databases.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SqlTenantRepository {
     pool: AnyPool,
     driver: Driver,
-}
-
-impl std::fmt::Debug for SqlTenantRepository {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SqlTenantRepository")
-            .field("driver", &self.driver)
-            .finish()
-    }
 }
 
 impl SqlTenantRepository {
