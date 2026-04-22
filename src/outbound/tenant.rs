@@ -34,33 +34,12 @@ impl std::fmt::Debug for SqlTenantRepository {
 
 impl SqlTenantRepository {
     /// Creates a new SQL tenant repository with the given connection pool.
-    ///
-    /// After creating the repository, you should call [`init_schema`](Self::init_schema)
-    /// to create the necessary tables.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Important: Install default drivers for the database
-    /// sqlx::any::install_default_drivers();
-    ///
-    /// // Example for PostgreSQL
-    /// let pool = sqlx::any::AnyPoolOptions::new()
-    ///     .connect("postgresql://user:pass@localhost/db").await?;
-    /// let repo = SqlTenantRepository::new(pool);
-    ///
-    /// // Example for SQLite in-memory
-    /// let pool = sqlx::any::AnyPoolOptions::new()
-    ///     .connect("sqlite::memory:").await?;
-    /// let repo = SqlTenantRepository::new(pool);
-    /// ```
     pub fn new(pool: AnyPool) -> Self {
         let driver = Driver::from_pool(&pool);
         Self { pool, driver }
     }
 
     /// Runs embedded database migrations to ensure required tables exist.
-    #[inline]
     pub async fn init_schema(&self) -> Result<(), TenantError> {
         match self.driver {
             Driver::Postgres => POSTGRES_MIGRATOR.run(&self.pool).await?,
@@ -172,8 +151,6 @@ fn rewrite_to_positional(sql: &str) -> std::borrow::Cow<'_, str> {
 
 static INSERT_TENANT: Query =
     Query::new("INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, $3)");
-
-// Error type conversions
 
 impl From<sqlx::Error> for TenantError {
     fn from(error: sqlx::Error) -> Self {
