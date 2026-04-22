@@ -1,196 +1,103 @@
-use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
-use color_eyre::eyre::Result;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use uuid::Uuid;
+mod data;
+mod error;
+mod store;
+mod utils;
 
-pub mod utils;
+pub use data::*;
+pub use error::Error as SessionError;
+pub use store::{MemorySession, RedisSession};
+pub use utils::generate_session_id;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IssuanceSession {
-    pub id: String,
-    pub tenant_id: Uuid,
-    pub state: IssuanceState,
-    pub offer: ParsedOffer,
-    pub flow: FlowType,
-    pub code_verifier: Option<String>,
-    pub issuer_state: Option<String>,
-    pub created_at: OffsetDateTime,
-    pub expires_at: OffsetDateTime,
+pub type Result<T> = std::result::Result<T, SessionError>;
+
+/// A session store interface used to manage the lifecycle of sessions.
+#[async_trait::async_trait]
+pub trait SessionStore: Send + Sync + 'static {
+    /// Inserts or updates a session in the store.
+    async fn upsert<K, V>(&self, key: K, value: &V) -> Result<()>
+    where
+        K: Into<Id> + Send + Sync,
+        V: serde::Serialize + Send + Sync;
+
+    /// Retrieves a session from the store.
+    async fn get<K, V>(&self, key: K) -> Result<Option<V>>
+    where
+        K: Into<Id> + Send + Sync,
+        V: serde::de::DeserializeOwned + Send + Sync;
+
+    /// Checks if a session exists in the store.
+    async fn exists<K: Into<Id> + Send + Sync>(&self, key: K) -> Result<bool>;
+
+    /// Atomically retrieves and removes a session from the store.
+    ///
+    /// This method provides one-time consume semantics.
+    async fn consume<K, V>(&self, key: K) -> Result<Option<V>>
+    where
+        K: Into<Id> + Send + Sync,
+        V: serde::de::DeserializeOwned + Send + Sync;
+
+    /// Removes a session from the store.
+    async fn remove<K: Into<Id> + Send + Sync>(&self, key: K) -> Result<()>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowType {
-    AuthorizationCode,
-    PreAuthorizedCode,
-}
+/// ID type for sessions
+///
+/// Wraps a vector of bytes
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Id(Box<[u8]>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum IssuanceState {
-    AwaitingConsent,
-    AwaitingAuthorization,
-    AwaitingTxCode,
-    Processing,
-    Completed,
-    Failed,
-}
-
-impl IssuanceState {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed)
-    }
-}
-
-pub type ParsedOffer = CredentialOffer;
-
-impl IssuanceSession {
-    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Result<Self> {
-        let now = OffsetDateTime::now_utc();
-        let expires_at = now + time::Duration::minutes(15);
-        Ok(Self {
-            id: utils::generate_session_id(),
-            tenant_id,
-            state: IssuanceState::AwaitingConsent,
-            offer,
-            flow,
-            code_verifier: None,
-            issuer_state: None,
-            created_at: now,
-            expires_at,
-        })
+impl Id {
+    /// Creates a new session ID.
+    pub fn new<T: Into<Box<[u8]>>>(value: T) -> Self {
+        Self(value.into())
     }
 
-    pub fn is_expired(&self) -> bool {
-        OffsetDateTime::now_utc() >= self.expires_at
+    /// Get the inner bytes of the ID
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 }
 
-pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> Result<()> {
-    let allowed = is_transition_allowed(session.state, new_state, session.flow);
-    if !allowed {
-        color_eyre::eyre::bail!(
-            "Invalid session state transition from {:?} to {:?}",
-            session.state,
-            new_state
-        );
-    }
-    session.state = new_state;
-    Ok(())
-}
-
-fn is_transition_allowed(from: IssuanceState, to: IssuanceState, flow: FlowType) -> bool {
-    use FlowType::*;
-    use IssuanceState::*;
-    match (from, to) {
-        // awaiting_consent -> awaiting_authorization (Consent accepted, authorization code flow)
-        (AwaitingConsent, AwaitingAuthorization) if flow == AuthorizationCode => true,
-        // awaiting_consent -> awaiting_tx_code (Consent accepted, pre-auth flow, tx_code required)
-        (AwaitingConsent, AwaitingTxCode) if flow == PreAuthorizedCode => true,
-        // awaiting_consent -> processing (Consent accepted, pre-auth flow, no tx_code)
-        (AwaitingConsent, Processing) if flow == PreAuthorizedCode => true,
-        // awaiting_consent -> failed (Consent rejected or any error)
-        (AwaitingConsent, Failed) => true,
-        // awaiting_authorization -> processing (Authorization callback received with valid code)
-        (AwaitingAuthorization, Processing) if flow == AuthorizationCode => true,
-        // awaiting_authorization -> failed (AS returns error or session expires)
-        (AwaitingAuthorization, Failed) => true,
-        // awaiting_tx_code -> processing (tx_code submitted)
-        (AwaitingTxCode, Processing) if flow == PreAuthorizedCode => true,
-        // awaiting_tx_code -> failed (Any error)
-        (AwaitingTxCode, Failed) => true,
-        // processing -> completed (Credential stored successfully)
-        (Processing, Completed) => true,
-        // processing -> failed (Token, credential, or deferred error)
-        (Processing, Failed) => true,
-        // Any non-terminal -> failed (POST /cancel or session expiry)
-        (from, Failed) if !from.is_terminal() => true,
-
-        _ => false,
+impl AsRef<[u8]> for Id {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl std::ops::Deref for Id {
+    type Target = [u8];
 
-    fn mock_session(flow: FlowType) -> IssuanceSession {
-        let offer = serde_json::from_value(serde_json::json!({
-            "credential_issuer": "https://issuer.example.com",
-            "credential_configuration_ids": ["test_id"],
-            "grants": {
-                "authorization_code": {
-                    "issuer_state": "test_state"
-                }
-            }
-        }))
-        .unwrap();
-
-        IssuanceSession::new(Uuid::new_v4(), offer, flow).unwrap()
+    fn deref(&self) -> &[u8] {
+        &self.0
     }
+}
 
-    #[test]
-    fn test_auth_code_flow_transitions() {
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        assert_eq!(session.state, IssuanceState::AwaitingConsent);
-
-        // Valid transitions
-        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
-        transition(&mut session, IssuanceState::Processing).unwrap();
-        transition(&mut session, IssuanceState::Completed).unwrap();
-
-        // Already terminal
-        assert!(transition(&mut session, IssuanceState::Failed).is_err());
+impl<'a> From<&'a [u8]> for Id {
+    fn from(value: &'a [u8]) -> Self {
+        Self(value.into())
     }
+}
 
-    #[test]
-    fn test_pre_auth_flow_transitions() {
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        assert_eq!(session.state, IssuanceState::AwaitingConsent);
-
-        // Valid transition to TxCode
-        let mut s1 = session.clone();
-        transition(&mut s1, IssuanceState::AwaitingTxCode).unwrap();
-        transition(&mut s1, IssuanceState::Processing).unwrap();
-
-        // Valid transition directly to Processing
-        let mut s2 = session.clone();
-        transition(&mut s2, IssuanceState::Processing).unwrap();
-
-        // Invalid transition for this flow
-        assert!(transition(&mut session, IssuanceState::AwaitingAuthorization).is_err());
+impl<const N: usize> From<&[u8; N]> for Id {
+    fn from(value: &[u8; N]) -> Self {
+        Self(value.as_slice().into())
     }
+}
 
-    #[test]
-    fn test_failed_transitions() {
-        // Any non-terminal can fail
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        transition(&mut session, IssuanceState::Failed).unwrap();
-
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
-        transition(&mut session, IssuanceState::Failed).unwrap();
-
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        transition(&mut session, IssuanceState::AwaitingTxCode).unwrap();
-        transition(&mut session, IssuanceState::Failed).unwrap();
-
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        transition(&mut session, IssuanceState::Processing).unwrap();
-        transition(&mut session, IssuanceState::Failed).unwrap();
+impl From<Vec<u8>> for Id {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value.into_boxed_slice())
     }
+}
 
-    #[test]
-    fn test_invalid_flow_transitions() {
-        // AwaitingAuthorization -> Processing is NOT allowed in PreAuthorizedCode flow
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        session.state = IssuanceState::AwaitingAuthorization;
-        assert!(transition(&mut session, IssuanceState::Processing).is_err());
+impl From<&str> for Id {
+    fn from(value: &str) -> Self {
+        Self(value.as_bytes().into())
+    }
+}
 
-        // AwaitingTxCode -> Processing is NOT allowed in AuthorizationCode flow
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        session.state = IssuanceState::AwaitingTxCode;
-        assert!(transition(&mut session, IssuanceState::Processing).is_err());
+impl From<String> for Id {
+    fn from(value: String) -> Self {
+        Self(value.into_bytes().into())
     }
 }
