@@ -17,6 +17,7 @@ async fn main() -> color_eyre::Result<()> {
     let config = Config::load()?;
     tracing::info!("Loaded configuration: {:?}", config);
 
+    sqlx::any::install_default_drivers();
     // Create database pool and tenant repository
     let pool = sqlx::any::AnyPoolOptions::new()
         .max_connections(5)
