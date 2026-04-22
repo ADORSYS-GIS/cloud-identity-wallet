@@ -42,9 +42,10 @@ async fn redis_roundtrip_and_remove() {
     let (store, _container) = init_session_store(Duration::from_secs(2)).await;
     let key = b"session";
 
-    store.upsert(key, b"value").await.unwrap();
+    store.upsert(key, &b"value".to_vec()).await.unwrap();
     assert!(store.exists(key).await.unwrap());
-    assert_eq!(store.get(key).await.unwrap(), Some(b"value".to_vec()));
+    let val: Option<Vec<u8>> = store.get(key).await.unwrap();
+    assert_eq!(val, Some(b"value".to_vec()));
 
     store.remove(key).await.unwrap();
     assert!(!store.exists(key).await.unwrap());
@@ -57,7 +58,7 @@ async fn redis_consumes_only_once() {
     let (store, _container) = init_session_store(Duration::from_secs(2)).await;
     let key = b"one-time";
 
-    store.upsert(key, b"value").await.unwrap();
+    store.upsert(key, &b"value".to_vec()).await.unwrap();
     let val: Option<Vec<u8>> = store.consume(key).await.unwrap();
     assert_eq!(val, Some(b"value".to_vec()));
     let val2: Option<Vec<u8>> = store.get(key).await.unwrap();
@@ -69,10 +70,10 @@ async fn redis_upsert_does_not_extend_ttl() {
     let (store, _container) = init_session_store(Duration::from_millis(220)).await;
     let key = b"ttl-no-refresh";
 
-    store.upsert(key, b"v1").await.unwrap();
+    store.upsert(key, &b"v1".to_vec()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(130)).await;
 
-    store.upsert(key, b"v2").await.unwrap();
+    store.upsert(key, &b"v2".to_vec()).await.unwrap();
     let val: Option<Vec<u8>> = store.get(key).await.unwrap();
     assert_eq!(val, Some(b"v2".to_vec()));
 
@@ -86,7 +87,7 @@ async fn redis_consume_is_atomic_for_concurrent_callers() {
     let (store, _container) = init_session_store(Duration::from_secs(2)).await;
     let store = Arc::new(store);
     let key = b"race-consume";
-    store.upsert(key, b"value").await.unwrap();
+    store.upsert(key, &b"value".to_vec()).await.unwrap();
 
     let callers = 24usize;
     let barrier = Arc::new(Barrier::new(callers));
