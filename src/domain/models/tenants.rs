@@ -33,21 +33,6 @@ impl TenantName {
         Ok(Self(trimmed))
     }
 
-    /// Validates a tenant name and returns the trimmed string.
-    /// This is useful for validation without creating the struct.
-    pub fn validate(name: &str) -> Result<String, String> {
-        let trimmed = name.trim().to_string();
-
-        if trimmed.is_empty() {
-            return Err("name cannot be empty".into());
-        }
-        if trimmed.len() > 255 {
-            return Err("name must not exceed 255 characters".into());
-        }
-
-        Ok(trimmed)
-    }
-
     /// Returns the inner string value.
     pub fn as_str(&self) -> &str {
         &self.0
