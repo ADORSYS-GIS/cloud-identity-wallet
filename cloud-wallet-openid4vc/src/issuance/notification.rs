@@ -32,8 +32,11 @@ pub enum NotificationEvent {
 
 impl std::fmt::Display for NotificationEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", s.trim_matches('"'))
+        match self {
+            Self::CredentialAccepted => write!(f, "credential_accepted"),
+            Self::CredentialFailure => write!(f, "credential_failure"),
+            Self::CredentialDeleted => write!(f, "credential_deleted"),
+        }
     }
 }
 
@@ -59,9 +62,6 @@ pub struct NotificationRequest {
     pub event: NotificationEvent,
 
     /// Human-readable ASCII text providing additional information.
-    ///
-    /// Characters are restricted to `%x20-21 / %x23-5B / %x5D-7E`
-    /// (printable ASCII excluding `\` and DEL).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_description: Option<String>,
 }
