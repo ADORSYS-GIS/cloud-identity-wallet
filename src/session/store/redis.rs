@@ -67,7 +67,7 @@ impl SessionStore for RedisSession {
     {
         let encoded_value = postcard::to_allocvec(value)?;
         let key = self.key(key.into().as_bytes());
-        let ttl = self.ttl.as_secs();
+        let ttl_ms = self.ttl.as_millis().try_into().unwrap_or(u64::MAX);
 
         loop {
             let mut conn = self.conn.clone();
@@ -82,7 +82,7 @@ impl SessionStore for RedisSession {
 
             let options = SetOptions::default()
                 .conditional_set(ExistenceCheck::NX)
-                .with_expiration(SetExpiry::EX(ttl));
+                .with_expiration(SetExpiry::PX(ttl_ms));
             let inserted: Option<String> = conn.set_options(&key, &encoded_value, options).await?;
 
             if inserted.is_some() {
