@@ -119,8 +119,15 @@ pub enum CredentialErrorCode {
 
 impl std::fmt::Display for CredentialErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", s.trim_matches('"'))
+        match self {
+            Self::InvalidCredentialRequest => write!(f, "invalid_credential_request"),
+            Self::UnknownCredentialConfiguration => write!(f, "unknown_credential_configuration"),
+            Self::UnknownCredentialIdentifier => write!(f, "unknown_credential_identifier"),
+            Self::InvalidProof => write!(f, "invalid_proof"),
+            Self::InvalidNonce => write!(f, "invalid_nonce"),
+            Self::InvalidEncryptionParameters => write!(f, "invalid_encryption_parameters"),
+            Self::CredentialRequestDenied => write!(f, "credential_request_denied"),
+        }
     }
 }
 
@@ -156,8 +163,16 @@ pub enum DeferredCredentialErrorCode {
 
 impl std::fmt::Display for DeferredCredentialErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", s.trim_matches('"'))
+        match self {
+            Self::InvalidCredentialRequest => write!(f, "invalid_credential_request"),
+            Self::UnknownCredentialConfiguration => write!(f, "unknown_credential_configuration"),
+            Self::UnknownCredentialIdentifier => write!(f, "unknown_credential_identifier"),
+            Self::InvalidProof => write!(f, "invalid_proof"),
+            Self::InvalidNonce => write!(f, "invalid_nonce"),
+            Self::InvalidEncryptionParameters => write!(f, "invalid_encryption_parameters"),
+            Self::CredentialRequestDenied => write!(f, "credential_request_denied"),
+            Self::InvalidTransactionId => write!(f, "invalid_transaction_id"),
+        }
     }
 }
 
@@ -242,8 +257,10 @@ pub enum NotificationErrorCode {
 
 impl std::fmt::Display for NotificationErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", s.trim_matches('"'))
+        match self {
+            Self::InvalidNotificationId => write!(f, "invalid_notification_id"),
+            Self::InvalidNotificationRequest => write!(f, "invalid_notification_request"),
+        }
     }
 }
 
