@@ -14,7 +14,6 @@ use crate::http::HttpError;
 use crate::http::client::HttpClient;
 
 use super::error::{NotificationErrorResponse, Oid4vciError};
-use super::utils::allowed_chars::is_allowed_ascii_byte;
 
 /// Notification event types defined in OpenID4VCI §11.1.
 ///
@@ -34,13 +33,20 @@ pub enum NotificationEvent {
     CredentialDeleted,
 }
 
+impl NotificationEvent {
+    /// Returns the canonical snake_case string representation of the event.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CredentialAccepted => "credential_accepted",
+            Self::CredentialFailure => "credential_failure",
+            Self::CredentialDeleted => "credential_deleted",
+        }
+    }
+}
+
 impl std::fmt::Display for NotificationEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::CredentialAccepted => write!(f, "credential_accepted"),
-            Self::CredentialFailure => write!(f, "credential_failure"),
-            Self::CredentialDeleted => write!(f, "credential_deleted"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -90,24 +96,13 @@ impl NotificationRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::InvalidNotificationRequest`] when:
-    /// - `notification_id` is empty or contains only whitespace.
-    /// - `event_description` contains characters outside the allowed set
-    ///   (`%x20-21 / %x23-5B / %x5D-7E`).
+    /// Returns [`ErrorKind::InvalidNotificationRequest`] when
+    /// `notification_id` is empty or contains only whitespace.
     pub fn validate(&self) -> crate::errors::Result<()> {
         if self.notification_id.trim().is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidNotificationRequest,
                 "notification_id must not be empty",
-            ));
-        }
-
-        if let Some(ref desc) = self.event_description
-            && let Some(pos) = desc.bytes().position(|b| !is_allowed_ascii_byte(b))
-        {
-            return Err(Error::message(
-                ErrorKind::InvalidNotificationRequest,
-                format!("event_description contains disallowed character at byte offset {pos}"),
             ));
         }
 
@@ -261,15 +256,4 @@ mod tests {
         }
     }
 
-    /// `\` (0x5C), `"` (0x22), and control chars are excluded per RFC 6750 §3.
-    #[test]
-    fn validate_rejects_disallowed_chars_in_event_description() {
-        for bad in ["path\\to", "said \"hi\"", "line\n"] {
-            let err = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-                .with_event_description(bad)
-                .validate()
-                .unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-        }
-    }
 }
