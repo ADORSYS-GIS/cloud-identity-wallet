@@ -241,6 +241,13 @@ pub enum ErrorKind {
     #[error("Invalid notification request")]
     InvalidNotificationRequest,
 
+    /// The `notification_id` in a Notification Request was not recognized by
+    /// the Credential Issuer.
+    ///
+    /// Defined by [OpenID4VCI §11.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-error-response).
+    #[error("Invalid notification id")]
+    InvalidNotificationId,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
