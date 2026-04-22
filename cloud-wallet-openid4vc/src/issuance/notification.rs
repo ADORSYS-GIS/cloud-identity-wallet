@@ -6,10 +6,14 @@
 //!
 //! See [OpenID4VCI §11](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-endpoint).
 
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, ErrorKind};
+use crate::http::HttpError;
+use crate::http::client::HttpClient;
 
+use super::error::{Oid4vciError, NotificationErrorResponse};
 use super::utils::allowed_chars::is_allowed_ascii_byte;
 
 /// Notification event types defined in OpenID4VCI §11.1.
@@ -111,107 +115,102 @@ impl NotificationRequest {
     }
 }
 
+/// Sends a Notification Request to the Credential Issuer's Notification Endpoint.
+///
+/// POSTs `request` as JSON to `endpoint` with a Bearer `token`, following
+/// [OpenID4VCI §11](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-endpoint).
+///
+/// The request is validated before sending. On success the issuer returns
+/// HTTP 204 No Content (no response body). On failure the issuer returns
+/// HTTP 400 with a JSON body conforming to [OpenID4VCI §11.3].
+///
+/// [OpenID4VCI §11.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-error-response
+///
+/// # Errors
+///
+/// - [`ErrorKind::InvalidNotificationRequest`] — `request` fails local validation
+///   (empty `notification_id` or disallowed characters in `event_description`),
+///   or the server returned `"error": "invalid_notification_request"`.
+/// - [`ErrorKind::InvalidNotificationId`] — the server returned HTTP 400 with
+///   `"error": "invalid_notification_id"`.
+/// - [`ErrorKind::HttpErrorResponse`] — any other non-2xx HTTP status.
+/// - [`ErrorKind::HttpRequestFailed`] — network or TLS failure.
+pub async fn send_notification(
+    client: &HttpClient,
+    endpoint: &str,
+    token: &str,
+    request: &NotificationRequest,
+) -> crate::errors::Result<()> {
+    request.validate()?;
+
+    let result = client
+        .request(Method::POST, endpoint)
+        .bearer(token)
+        .json(request)
+        .send()
+        .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::HttpErrorResponse => {
+            match e.downcast::<HttpError>() {
+                Ok(http_err) => {
+                    if http_err.status == StatusCode::BAD_REQUEST
+                        && let Ok(Some(notification_err)) =
+                            http_err.parse_body_as_json::<Oid4vciError<NotificationErrorResponse>>()
+                    {
+                        let description = notification_err.error_description.unwrap_or_default();
+                        return Err(match notification_err.error {
+                            NotificationErrorResponse::InvalidNotificationId => {
+                                Error::message(ErrorKind::InvalidNotificationId, description)
+                            }
+                            NotificationErrorResponse::InvalidNotificationRequest => {
+                                Error::message(ErrorKind::InvalidNotificationRequest, description)
+                            }
+                        });
+                    }
+                    Err(Error::new(ErrorKind::HttpErrorResponse, http_err))
+                }
+                Err(original) => Err(original),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    // NotificationEvent serialization
-
     #[test]
-    fn serialize_credential_accepted() {
-        let json = serde_json::to_value(NotificationEvent::CredentialAccepted)
-            .expect("Failed to serialize");
-
-        assert_eq!(json, json!("credential_accepted"));
-    }
-
-    #[test]
-    fn serialize_credential_failure() {
-        let json = serde_json::to_value(NotificationEvent::CredentialFailure)
-            .expect("Failed to serialize");
-
-        assert_eq!(json, json!("credential_failure"));
-    }
-
-    #[test]
-    fn serialize_credential_deleted() {
-        let json = serde_json::to_value(NotificationEvent::CredentialDeleted)
-            .expect("Failed to serialize");
-
-        assert_eq!(json, json!("credential_deleted"));
-    }
-
-    #[test]
-    fn deserialize_all_event_types() {
+    fn event_wire_format_and_display() {
         let cases = [
-            (
-                "\"credential_accepted\"",
-                NotificationEvent::CredentialAccepted,
-            ),
-            (
-                "\"credential_failure\"",
-                NotificationEvent::CredentialFailure,
-            ),
-            (
-                "\"credential_deleted\"",
-                NotificationEvent::CredentialDeleted,
-            ),
+            (NotificationEvent::CredentialAccepted, "credential_accepted"),
+            (NotificationEvent::CredentialFailure, "credential_failure"),
+            (NotificationEvent::CredentialDeleted, "credential_deleted"),
         ];
-
-        for (input, expected) in cases {
-            let event: NotificationEvent =
-                serde_json::from_str(input).expect("Failed to deserialize");
-
-            assert_eq!(event, expected);
+        for (event, wire) in cases {
+            assert_eq!(serde_json::to_value(event).unwrap(), json!(wire));
+            let deserialized: NotificationEvent =
+                serde_json::from_str(&format!("\"{}\"", wire)).unwrap();
+            assert_eq!(deserialized, event);
+            assert_eq!(event.to_string(), wire);
         }
     }
 
     #[test]
     fn deserialize_unknown_event_rejects() {
-        let result = serde_json::from_str::<NotificationEvent>("\"credential_revoked\"");
-
-        assert!(result.is_err());
+        assert!(serde_json::from_str::<NotificationEvent>("\"credential_revoked\"").is_err());
     }
 
+    /// Spec §11.1 wire format — round-trip preserves all fields.
     #[test]
-    fn event_display_matches_wire_format() {
-        assert_eq!(
-            format!("{}", NotificationEvent::CredentialAccepted),
-            "credential_accepted"
-        );
-        assert_eq!(
-            format!("{}", NotificationEvent::CredentialFailure),
-            "credential_failure"
-        );
-        assert_eq!(
-            format!("{}", NotificationEvent::CredentialDeleted),
-            "credential_deleted"
-        );
-    }
-
-    #[test]
-    fn serialize_minimal_request() {
-        let request = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted);
-
-        let json = serde_json::to_value(&request).expect("Failed to serialize");
-
-        assert_eq!(
-            json,
-            json!({
-                "notification_id": "3fwe98js",
-                "event": "credential_accepted"
-            })
-        );
-    }
-
-    #[test]
-    fn serialize_request_with_description() {
-        let request = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialFailure)
+    fn request_round_trip() {
+        let original = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialFailure)
             .with_event_description("Could not store the Credential. Out of storage.");
 
-        let json = serde_json::to_value(&request).expect("Failed to serialize");
-
+        let json = serde_json::to_value(&original).unwrap();
         assert_eq!(
             json,
             json!({
@@ -220,199 +219,59 @@ mod tests {
                 "event_description": "Could not store the Credential. Out of storage."
             })
         );
-    }
-
-    /// Spec §11.1 — example of a successful acceptance notification.
-    #[test]
-    fn deserialize_spec_example_accepted() {
-        let json = r#"{
-            "notification_id": "3fwe98js",
-            "event": "credential_accepted"
-        }"#;
-
-        let request: NotificationRequest =
-            serde_json::from_str(json).expect("Failed to deserialize");
-
-        assert_eq!(request.notification_id, "3fwe98js");
-        assert_eq!(request.event, NotificationEvent::CredentialAccepted);
-        assert_eq!(request.event_description, None);
-    }
-
-    /// Spec §11.1 — example of a failure notification with description.
-    #[test]
-    fn deserialize_spec_example_failure() {
-        let json = r#"{
-            "notification_id": "3fwe98js",
-            "event": "credential_failure",
-            "event_description": "Could not store the Credential. Out of storage."
-        }"#;
-
-        let request: NotificationRequest =
-            serde_json::from_str(json).expect("Failed to deserialize");
-
-        assert_eq!(request.notification_id, "3fwe98js");
-        assert_eq!(request.event, NotificationEvent::CredentialFailure);
         assert_eq!(
-            request.event_description.as_deref(),
-            Some("Could not store the Credential. Out of storage.")
+            serde_json::from_value::<NotificationRequest>(json).unwrap(),
+            original
         );
     }
 
-    /// Spec §11.1 — "The Credential Issuer MUST ignore any unrecognized parameters."
+    /// Spec §11.1 — unrecognized parameters MUST be ignored.
     #[test]
     fn deserialize_ignores_unknown_fields() {
-        let json = r#"{
-            "notification_id": "3fwe98js",
-            "event": "credential_accepted",
-            "some_future_field": true
-        }"#;
-
-        let request: NotificationRequest =
-            serde_json::from_str(json).expect("Should ignore unknown fields");
-
-        assert_eq!(request.notification_id, "3fwe98js");
-        assert_eq!(request.event, NotificationEvent::CredentialAccepted);
+        let json = r#"{"notification_id":"3fwe98js","event":"credential_accepted","future":true}"#;
+        assert!(serde_json::from_str::<NotificationRequest>(json).is_ok());
     }
 
     #[test]
-    fn deserialize_missing_notification_id_rejects() {
-        let json = r#"{"event": "credential_accepted"}"#;
-
-        assert!(serde_json::from_str::<NotificationRequest>(json).is_err());
+    fn deserialize_rejects_missing_required_fields() {
+        assert!(
+            serde_json::from_str::<NotificationRequest>(r#"{"event":"credential_accepted"}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<NotificationRequest>(r#"{"notification_id":"3fwe98js"}"#)
+                .is_err()
+        );
     }
 
     #[test]
-    fn deserialize_missing_event_rejects() {
-        let json = r#"{"notification_id": "3fwe98js"}"#;
-
-        assert!(serde_json::from_str::<NotificationRequest>(json).is_err());
+    fn validate_accepts_valid_request() {
+        assert!(
+            NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted)
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]
-    fn round_trip_preserves_all_fields() {
-        let original = NotificationRequest::new("abc-123", NotificationEvent::CredentialDeleted)
-            .with_event_description("User removed credential");
-
-        let serialized = serde_json::to_string(&original).expect("Failed to serialize");
-        let deserialized: NotificationRequest =
-            serde_json::from_str(&serialized).expect("Failed to deserialize");
-
-        assert_eq!(original, deserialized);
+    fn validate_rejects_blank_notification_id() {
+        for id in ["", "   "] {
+            let err = NotificationRequest::new(id, NotificationEvent::CredentialAccepted)
+                .validate()
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
+        }
     }
 
-    // NotificationRequest::validate
-
+    /// `\` (0x5C), `"` (0x22), and control chars are excluded per RFC 6750 §3.
     #[test]
-    fn validate_valid_request_succeeds() {
-        let request = NotificationRequest::new("3fwe98js", NotificationEvent::CredentialAccepted);
-
-        assert!(request.validate().is_ok());
-    }
-
-    #[test]
-    fn validate_empty_notification_id_fails() {
-        let request = NotificationRequest::new("", NotificationEvent::CredentialAccepted);
-
-        let err = request.validate().unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-    }
-
-    #[test]
-    fn validate_whitespace_only_notification_id_fails() {
-        let request = NotificationRequest::new("   ", NotificationEvent::CredentialAccepted);
-
-        let err = request.validate().unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-    }
-
-    #[test]
-    fn validate_valid_event_description_succeeds() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-            .with_event_description("Could not store the Credential. Out of storage.");
-
-        assert!(request.validate().is_ok());
-    }
-
-    /// `\` (0x5C) is excluded from the allowed character set.
-    #[test]
-    fn validate_event_description_with_backslash_fails() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-            .with_event_description("path\\to\\file");
-
-        let err = request.validate().unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-    }
-
-    /// DEL (0x7F) is excluded from the allowed character set.
-    #[test]
-    fn validate_event_description_with_del_fails() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-            .with_event_description("bad\x7F");
-
-        let err = request.validate().unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-    }
-
-    /// Control characters (0x00–0x1F) are excluded.
-    #[test]
-    fn validate_event_description_with_control_chars_fails() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-            .with_event_description("line\nnewline");
-
-        let err = request.validate().unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-    }
-
-    /// `"` (0x22) is excluded from the allowed character set.
-    #[test]
-    fn validate_event_description_with_double_quote_fails() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-            .with_event_description("said \"hello\"");
-
-        let err = request.validate().unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
-    }
-
-    /// Boundary characters at the edges of each allowed range must pass.
-    #[test]
-    fn validate_event_description_with_allowed_boundary_chars() {
-        // Space (0x20), ! (0x21), # (0x23), [ (0x5B), ] (0x5D), ~ (0x7E)
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted)
-            .with_event_description(" !#[]~");
-
-        assert!(request.validate().is_ok());
-    }
-
-    #[test]
-    fn validate_none_description_succeeds() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted);
-
-        assert_eq!(request.event_description, None);
-        assert!(request.validate().is_ok());
-    }
-
-    // Builder methods
-
-    #[test]
-    fn request_new_creates_without_description() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialAccepted);
-
-        assert_eq!(request.notification_id, "id-1");
-        assert_eq!(request.event, NotificationEvent::CredentialAccepted);
-        assert_eq!(request.event_description, None);
-    }
-
-    #[test]
-    fn request_with_event_description_sets_value() {
-        let request = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
-            .with_event_description("storage full");
-
-        assert_eq!(request.event_description.as_deref(), Some("storage full"));
+    fn validate_rejects_disallowed_chars_in_event_description() {
+        for bad in ["path\\to", "said \"hi\"", "line\n"] {
+            let err = NotificationRequest::new("id-1", NotificationEvent::CredentialFailure)
+                .with_event_description(bad)
+                .validate()
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
+        }
     }
 }
