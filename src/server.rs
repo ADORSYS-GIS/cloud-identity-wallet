@@ -24,7 +24,7 @@ struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
 
-// W manually implement Clone here to avoid the need for S: Clone bound
+// We manually implement Clone here to avoid bounds on generic types
 impl<S: SessionStore> Clone for AppState<S> {
     fn clone(&self) -> Self {
         Self {
