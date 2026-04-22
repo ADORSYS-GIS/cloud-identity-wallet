@@ -1,4 +1,6 @@
-use cloud_identity_wallet::{config::Config, server::Server};
+use cloud_identity_wallet::{
+    config::Config, domain::service::Service, server::Server, session::MemorySession,
+};
 
 pub async fn spawn_server() -> String {
     let config = {
@@ -8,7 +10,9 @@ pub async fn spawn_server() -> String {
         config
     };
 
-    let server = Server::new(&config).await.unwrap();
+    let session_store = MemorySession::default();
+    let service = Service::new(session_store);
+    let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();
     tokio::spawn(server.run());
