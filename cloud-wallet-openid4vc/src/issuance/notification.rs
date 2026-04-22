@@ -13,7 +13,7 @@ use crate::errors::{Error, ErrorKind};
 use crate::http::HttpError;
 use crate::http::client::HttpClient;
 
-use super::error::{Oid4vciError, NotificationErrorResponse};
+use super::error::{NotificationErrorResponse, Oid4vciError};
 use super::utils::allowed_chars::is_allowed_ascii_byte;
 
 /// Notification event types defined in OpenID4VCI §11.1.
@@ -152,28 +152,26 @@ pub async fn send_notification(
 
     match result {
         Ok(_) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::HttpErrorResponse => {
-            match e.downcast::<HttpError>() {
-                Ok(http_err) => {
-                    if http_err.status == StatusCode::BAD_REQUEST
-                        && let Ok(Some(notification_err)) =
-                            http_err.parse_body_as_json::<Oid4vciError<NotificationErrorResponse>>()
-                    {
-                        let description = notification_err.error_description.unwrap_or_default();
-                        return Err(match notification_err.error {
-                            NotificationErrorResponse::InvalidNotificationId => {
-                                Error::message(ErrorKind::InvalidNotificationId, description)
-                            }
-                            NotificationErrorResponse::InvalidNotificationRequest => {
-                                Error::message(ErrorKind::InvalidNotificationRequest, description)
-                            }
-                        });
-                    }
-                    Err(Error::new(ErrorKind::HttpErrorResponse, http_err))
+        Err(e) if e.kind() == ErrorKind::HttpErrorResponse => match e.downcast::<HttpError>() {
+            Ok(http_err) => {
+                if http_err.status == StatusCode::BAD_REQUEST
+                    && let Ok(Some(notification_err)) =
+                        http_err.parse_body_as_json::<Oid4vciError<NotificationErrorResponse>>()
+                {
+                    let description = notification_err.error_description.unwrap_or_default();
+                    return Err(match notification_err.error {
+                        NotificationErrorResponse::InvalidNotificationId => {
+                            Error::message(ErrorKind::InvalidNotificationId, description)
+                        }
+                        NotificationErrorResponse::InvalidNotificationRequest => {
+                            Error::message(ErrorKind::InvalidNotificationRequest, description)
+                        }
+                    });
                 }
-                Err(original) => Err(original),
+                Err(Error::new(ErrorKind::HttpErrorResponse, http_err))
             }
-        }
+            Err(original) => Err(original),
+        },
         Err(e) => Err(e),
     }
 }
