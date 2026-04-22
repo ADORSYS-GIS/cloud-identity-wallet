@@ -1,5 +1,6 @@
-//! Tenant repository port and validation logic.
-
+/*
+   This module specifies the API by which external modules interact with the wallet domain.
+*/
 use async_trait::async_trait;
 
 use crate::domain::models::tenants::{RegisterTenantRequest, TenantError, TenantResponse};
