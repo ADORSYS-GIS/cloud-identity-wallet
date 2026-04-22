@@ -71,14 +71,14 @@ mod tests {
 
     #[test]
     fn rejects_empty_name() {
-        let result = TenantName::validate("");
+        let result = TenantName::new("");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "name cannot be empty");
     }
 
     #[test]
     fn rejects_whitespace_only_name() {
-        let result = TenantName::validate("   ");
+        let result = TenantName::new("   ");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "name cannot be empty");
     }
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn rejects_256_char_name() {
         let name = "a".repeat(256);
-        let result = TenantName::validate(&name);
+        let result = TenantName::new(&name);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "name must not exceed 255 characters");
     }
@@ -94,21 +94,21 @@ mod tests {
     #[test]
     fn accepts_255_char_name() {
         let name = "a".repeat(255);
-        let result = TenantName::validate(&name);
+        let result = TenantName::new(&name);
         assert!(result.is_ok());
     }
 
     #[test]
     fn trims_whitespace() {
-        let result = TenantName::validate("  test name  ");
+        let result = TenantName::new("  test name  ");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "test name");
+        assert_eq!(result.unwrap().as_str(), "test name");
     }
 
     #[test]
     fn accepts_valid_name() {
-        let result = TenantName::validate("Acme Corporation");
+        let result = TenantName::new("Acme Corporation");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "Acme Corporation");
+        assert_eq!(result.unwrap().as_str(), "Acme Corporation");
     }
 }
