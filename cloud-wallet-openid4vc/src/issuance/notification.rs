@@ -6,14 +6,9 @@
 //!
 //! See [OpenID4VCI §11](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-endpoint).
 
-use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, ErrorKind};
-use crate::http::HttpError;
-use crate::http::client::HttpClient;
-
-use super::error::{NotificationErrorResponse, Oid4vciError};
 
 /// Notification event types defined in OpenID4VCI §11.1.
 ///
@@ -107,67 +102,6 @@ impl NotificationRequest {
         }
 
         Ok(())
-    }
-}
-
-/// Sends a Notification Request to the Credential Issuer's Notification Endpoint.
-///
-/// POSTs `request` as JSON to `endpoint` with a Bearer `token`, following
-/// [OpenID4VCI §11](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-endpoint).
-///
-/// The request is validated before sending. On success the issuer returns
-/// HTTP 204 No Content (no response body). On failure the issuer returns
-/// HTTP 400 with a JSON body conforming to [OpenID4VCI §11.3].
-///
-/// [OpenID4VCI §11.3]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-error-response
-///
-/// # Errors
-///
-/// - [`ErrorKind::InvalidNotificationRequest`] — `request` fails local validation
-///   (empty `notification_id` or disallowed characters in `event_description`),
-///   or the server returned `"error": "invalid_notification_request"`.
-/// - [`ErrorKind::InvalidNotificationId`] — the server returned HTTP 400 with
-///   `"error": "invalid_notification_id"`.
-/// - [`ErrorKind::HttpErrorResponse`] — any other non-2xx HTTP status.
-/// - [`ErrorKind::HttpRequestFailed`] — network or TLS failure.
-pub async fn send_notification(
-    client: &HttpClient,
-    endpoint: &str,
-    token: &str,
-    request: &NotificationRequest,
-) -> crate::errors::Result<()> {
-    request.validate()?;
-
-    let result = client
-        .request(Method::POST, endpoint)
-        .bearer(token)
-        .json(request)
-        .send()
-        .await;
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::HttpErrorResponse => match e.downcast::<HttpError>() {
-            Ok(http_err) => {
-                if http_err.status == StatusCode::BAD_REQUEST
-                    && let Ok(Some(notification_err)) =
-                        http_err.parse_body_as_json::<Oid4vciError<NotificationErrorResponse>>()
-                {
-                    let description = notification_err.error_description.unwrap_or_default();
-                    return Err(match notification_err.error {
-                        NotificationErrorResponse::InvalidNotificationId => {
-                            Error::message(ErrorKind::InvalidNotificationId, description)
-                        }
-                        NotificationErrorResponse::InvalidNotificationRequest => {
-                            Error::message(ErrorKind::InvalidNotificationRequest, description)
-                        }
-                    });
-                }
-                Err(Error::new(ErrorKind::HttpErrorResponse, http_err))
-            }
-            Err(original) => Err(original),
-        },
-        Err(e) => Err(e),
     }
 }
 
