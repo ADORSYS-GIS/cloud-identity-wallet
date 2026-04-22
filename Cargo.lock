@@ -911,6 +911,7 @@ dependencies = [
  "dashmap",
  "jsonwebtoken",
  "percent-encoding",
+ "pkcs8",
  "reqwest",
  "reqwest-middleware",
  "reqwest-retry",
@@ -927,6 +928,7 @@ dependencies = [
  "uuid",
  "validator",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]

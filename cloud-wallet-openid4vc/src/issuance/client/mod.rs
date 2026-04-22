@@ -3,7 +3,7 @@ mod signer;
 
 // Public Re-exports
 pub use error::ClientError;
-pub use signer::{ProofClaims, ProofSigner};
+pub use signer::{CryptoProofSigner, ProofClaims, ProofJwtAlgorithm, ProofSigner};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,14 +96,6 @@ impl IssuanceFlow {
     pub fn tx_code_required(&self) -> bool {
         self.tx_code_spec().is_some()
     }
-}
-
-/// How authorization request parameters are conveyed to the AS.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AuthorizationRequestMode {
-    QueryParameters,
-    #[default]
-    PushedAuthorizationRequest,
 }
 
 /// Result of building the authorization URL.
@@ -299,8 +291,6 @@ impl Oid4vciClient {
     ///
     /// Tries `/.well-known/oauth-authorization-server{path}` first (RFC 8414 §3),
     /// then falls back to `{issuer}/.well-known/openid-configuration` (RFC 8414 §5).
-    /// Uses the AS URL from `issuer_metadata.authorization_servers[0]` if present,
-    /// otherwise falls back to the issuer URL itself (combined issuer+AS deployment).
     pub async fn fetch_as_metadata(
         &self,
         credential_issuer: &Url,
@@ -361,47 +351,23 @@ impl Oid4vciClient {
 
     /// Resolves the provided raw credential offer into the fully resolved offer context.
     ///
+    /// You can specify a preferred grant type to use when multiple grant types are present
+    /// in the offer.
+    ///
     /// Supported `raw_offer` forms:
     /// - Full `openid-credential-offer://` URI
     /// - Query string containing `credential_offer` or `credential_offer_uri`
     pub async fn resolve_offer_with_metadata(
         &self,
         raw_offer: &str,
+        preferred: Option<GrantType>,
     ) -> Result<ResolvedOfferContext> {
         let offer = self.resolve_offer(raw_offer).await?;
         let issuer_metadata = self.fetch_issuer_metadata(&offer.credential_issuer).await?;
         let as_metadata = self
             .fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer)
             .await?;
-        let flow_type = self.determine_flow(&offer, &as_metadata, None)?;
-
-        Ok(ResolvedOfferContext {
-            offer,
-            issuer_metadata,
-            as_metadata,
-            flow: flow_type,
-        })
-    }
-
-    /// Resolves the provided raw credential offer into the fully resolved offer context.
-    ///
-    /// This method allows specifying a preferred grant type to use when multiple grant types
-    /// are present in the offer.
-    ///
-    /// Supported `raw_offer` forms:
-    /// - Full `openid-credential-offer://` URI
-    /// - Query string containing `credential_offer` or `credential_offer_uri`
-    pub async fn resolve_offer_with_grant(
-        &self,
-        raw_offer: &str,
-        preferred: GrantType,
-    ) -> Result<ResolvedOfferContext> {
-        let offer = self.resolve_offer(raw_offer).await?;
-        let issuer_metadata = self.fetch_issuer_metadata(&offer.credential_issuer).await?;
-        let as_metadata = self
-            .fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer)
-            .await?;
-        let flow_type = self.determine_flow(&offer, &as_metadata, Some(preferred))?;
+        let flow_type = self.determine_flow(&offer, &as_metadata, preferred)?;
 
         Ok(ResolvedOfferContext {
             offer,
@@ -613,22 +579,36 @@ impl Oid4vciClient {
         identifier: impl Into<String>,
         signer: &S,
     ) -> Result<CredentialResponse> {
-        let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
-            && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
-
-        let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
-        let proofs = self
-            .build_proofs(context, c_nonce.as_deref(), is_anonymous, signer)
-            .await?;
-
-        let id = CredIdOrCredConfigId::credential_identifier(identifier);
-        let mut request = CredentialRequest::new(id);
-        if let Some(p) = proofs {
-            request = request.with_proofs(p);
-        }
-
-        self.post_credential_request(context, &access_token.into(), &request)
+        let identifier = identifier.into();
+        let access_token = access_token.into();
+        self.request_credential_internal(context, &access_token, &identifier, None, signer)
             .await
+    }
+
+    /// Request a credential while explicitly selecting the credential configuration.
+    ///
+    /// Use this when multiple credential configurations are available and the caller
+    /// wants deterministic proof-algorithm selection for a specific configuration.
+    pub async fn request_credential_for_configuration<S: ProofSigner>(
+        &self,
+        context: &ResolvedOfferContext,
+        access_token: impl Into<String>,
+        credential_configuration_id: impl Into<String>,
+        credential_identifier: impl Into<String>,
+        signer: &S,
+    ) -> Result<CredentialResponse> {
+        let access_token = access_token.into();
+        let credential_configuration_id = credential_configuration_id.into();
+        let credential_identifier = credential_identifier.into();
+
+        self.request_credential_internal(
+            context,
+            &access_token,
+            &credential_identifier,
+            Some(&credential_configuration_id),
+            signer,
+        )
+        .await
     }
 
     /// Request all credentials authorized by the token response.
@@ -882,8 +862,23 @@ impl Oid4vciClient {
         context: &ResolvedOfferContext,
         c_nonce: Option<&str>,
         is_anonymous: bool,
+        credential_identifier: &str,
+        credential_configuration_id: Option<&str>,
         signer: &S,
     ) -> Result<Option<Proofs>> {
+        let resolved_config_id = resolve_credential_configuration_id_for_request(
+            context,
+            credential_identifier,
+            credential_configuration_id,
+        )?;
+
+        let proof_algorithm =
+            select_jwt_proof_algorithm_for_configuration(context, &resolved_config_id, signer)?;
+
+        let Some(proof_algorithm) = proof_algorithm else {
+            return Ok(None);
+        };
+
         let client_id = if is_anonymous {
             None
         } else {
@@ -897,8 +892,41 @@ impl Oid4vciClient {
             nonce: c_nonce.map(|n| n.to_owned()),
         };
 
-        let jwt = signer.sign_proof(claims).await?;
+        let jwt = signer.sign_proof(claims, proof_algorithm).await?;
         Ok(Some(Proofs::jwt([jwt])))
+    }
+
+    async fn request_credential_internal<S: ProofSigner>(
+        &self,
+        context: &ResolvedOfferContext,
+        access_token: &str,
+        credential_identifier: &str,
+        credential_configuration_id: Option<&str>,
+        signer: &S,
+    ) -> Result<CredentialResponse> {
+        let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
+            && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
+
+        let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
+        let proofs = self
+            .build_proofs(
+                context,
+                c_nonce.as_deref(),
+                is_anonymous,
+                credential_identifier,
+                credential_configuration_id,
+                signer,
+            )
+            .await?;
+
+        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
+        let mut request = CredentialRequest::new(id);
+        if let Some(p) = proofs {
+            request = request.with_proofs(p);
+        }
+
+        self.post_credential_request(context, access_token, &request)
+            .await
     }
 
     async fn post_credential_request(
@@ -1065,9 +1093,101 @@ fn build_authorization_details(
         .collect()
 }
 
+fn resolve_credential_configuration_id_for_request(
+    context: &ResolvedOfferContext,
+    credential_identifier: &str,
+    explicit_credential_configuration_id: Option<&str>,
+) -> Result<String> {
+    if let Some(id) = explicit_credential_configuration_id {
+        if context
+            .issuer_metadata
+            .credential_configurations_supported
+            .contains_key(id)
+        {
+            return Ok(id.to_string());
+        }
+        return Err(ClientError::UnknownCredentialConfiguration { id: id.to_string() });
+    }
+
+    // Direct callers may pass credential_configuration_id instead of credential_identifier.
+    if context
+        .issuer_metadata
+        .credential_configurations_supported
+        .contains_key(credential_identifier)
+    {
+        return Ok(credential_identifier.to_string());
+    }
+
+    if context.offer.credential_configuration_ids.len() == 1 {
+        let id = &context.offer.credential_configuration_ids[0];
+        if context
+            .issuer_metadata
+            .credential_configurations_supported
+            .contains_key(id)
+        {
+            return Ok(id.to_string());
+        }
+        return Err(ClientError::UnknownCredentialConfiguration { id: id.clone() });
+    }
+
+    Err(ClientError::configuration(
+        "unable to determine credential configuration for request; \
+         use request_credential_for_configuration when multiple configurations are available",
+    ))
+}
+
+fn select_jwt_proof_algorithm_for_configuration<S: ProofSigner>(
+    context: &ResolvedOfferContext,
+    credential_configuration_id: &str,
+    signer: &S,
+) -> Result<Option<ProofJwtAlgorithm>> {
+    let config = context
+        .issuer_metadata
+        .credential_configurations_supported
+        .get(credential_configuration_id)
+        .ok_or_else(|| ClientError::UnknownCredentialConfiguration {
+            id: credential_configuration_id.to_string(),
+        })?;
+
+    // OID4VCI: proof_types_supported present means key proof is explicitly required.
+    let Some(proof_types) = config.proof_types_supported.as_ref() else {
+        return Ok(None);
+    };
+
+    let jwt_proof_type = proof_types.get("jwt").ok_or_else(|| {
+        ClientError::configuration(format!(
+            "credential configuration '{}' does not support 'jwt' proofs",
+            credential_configuration_id
+        ))
+    })?;
+
+    let mut issuer_algorithms =
+        Vec::with_capacity(jwt_proof_type.proof_signing_alg_values_supported.len());
+    for alg in &jwt_proof_type.proof_signing_alg_values_supported {
+        let Some(algorithm_name) = alg.as_str() else {
+            continue;
+        };
+
+        issuer_algorithms.push(algorithm_name.to_string());
+        let Ok(algorithm) = algorithm_name.parse::<ProofJwtAlgorithm>() else {
+            continue;
+        };
+
+        if signer.supports_algorithm(algorithm) {
+            return Ok(Some(algorithm));
+        }
+    }
+
+    Err(ClientError::configuration(format!(
+        "no compatible jwt proof signing algorithm for configuration '{}'; issuer advertised [{}]",
+        credential_configuration_id,
+        issuer_algorithms.join(", ")
+    )))
+}
+
 /// Extract the resolved identifiers from the token response.
 pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<String>> {
-    // Check if the token response carries authorization_details with identifiers
+    // Check if the token response carries authorization_details with identifiers.
     if let Some(details) = token.authorization_details.as_deref() {
         let mut result = Vec::with_capacity(details.len());
         for detail in details {
@@ -1077,12 +1197,11 @@ pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<String>> {
                 }
             }
         }
-        // Only use this path if we actually got identifiers
         if !result.is_empty() {
             return Ok(result);
         }
     }
-    // The token response should have included authorization_details with identifiers
+
     Err(ClientError::InvalidResponse {
         message: "Missing credential identifiers in token response".into(),
     })
