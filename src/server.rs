@@ -2,8 +2,12 @@ mod auth;
 mod handlers;
 mod responses;
 
+use std::sync::Arc;
+
 use crate::config::Config;
+use crate::domain::service::Service;
 use crate::server::handlers::{health_check, home};
+use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{Router, routing::get};
@@ -14,9 +18,20 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// The global application state shared between all request handlers.
-struct AppState {}
+struct AppState<S: SessionStore> {
+    service: Arc<Service<S>>,
+}
+
+// W manually implement Clone here to avoid the need for S: Clone bound
+impl<S: SessionStore> Clone for AppState<S> {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+        }
+    }
+}
 
 pub struct Server {
     router: Router,
@@ -25,7 +40,7 @@ pub struct Server {
 
 impl Server {
     /// Creates a new HTTPS server.
-    pub async fn new(config: &Config) -> Result<Self> {
+    pub async fn new<S: SessionStore>(config: &Config, service: Service<S>) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -43,7 +58,9 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {};
+        let state = AppState {
+            service: Arc::new(service),
+        };
 
         let router = Router::new()
             .route("/", get(home))

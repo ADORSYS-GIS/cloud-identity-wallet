@@ -1,13 +1,12 @@
-pub struct Service;
+use crate::session::SessionStore;
 
-impl Default for Service {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Debug, Clone)]
+pub struct Service<S> {
+    pub session: S,
 }
 
-impl Service {
-    pub fn new() -> Self {
-        Self
+impl<S: SessionStore> Service<S> {
+    pub fn new(session: S) -> Self {
+        Self { session }
     }
 }
