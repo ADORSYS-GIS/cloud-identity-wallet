@@ -255,5 +255,4 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::InvalidNotificationRequest);
         }
     }
-
 }
