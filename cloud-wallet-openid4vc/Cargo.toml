@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
+cloud-wallet-crypto = { path = "../cloud-wallet-crypto", features = ["jwk"] }
 cloud-wallet-kms = { path = "../cloud-wallet-kms", optional = true }
 
 async-trait.workspace = true
@@ -13,10 +13,11 @@ base64 = "0.22"
 color-eyre.workspace = true
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
-jsonwebtoken.workspace = true
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 percent-encoding = "2"
+pkcs8 = { version = "0.10", features = ["std"] }
 reqwest = { version = "0.13", features = ["form", "json", "rustls"] }
-reqwest-middleware = { version = "0.5", features = ["json", "form"] }
+reqwest-middleware = { version = "0.5", features = ["form", "json"] }
 reqwest-retry = "0.9"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -27,6 +28,7 @@ time.workspace = true
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }
+zeroize.workspace = true
 
 [dependencies.sqlx]
 workspace = true
