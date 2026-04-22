@@ -71,6 +71,7 @@ dashmap.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand.workspace = true
+secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
