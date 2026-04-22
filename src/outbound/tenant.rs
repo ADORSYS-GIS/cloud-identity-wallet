@@ -12,9 +12,8 @@ use crate::domain::{
     ports::TenantRepository,
 };
 
-static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("src/migrations/postgres");
-static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator =
-    sqlx::migrate!("src/migrations/mysql_sqlite");
+static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql_sqlite");
 
 /// SQL-based tenant repository implementation.
 ///
