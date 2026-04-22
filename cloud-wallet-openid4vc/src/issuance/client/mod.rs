@@ -3,7 +3,7 @@ mod signer;
 
 // Public Re-exports
 pub use error::ClientError;
-pub use signer::{CryptoProofSigner, ProofClaims, ProofJwtAlgorithm, ProofSigner};
+pub use signer::{Algorithm, CryptoProofSigner, ProofClaims, ProofJwtAlgorithm, ProofSigner, Signer};
 
 use std::sync::Arc;
 use std::time::Duration;
