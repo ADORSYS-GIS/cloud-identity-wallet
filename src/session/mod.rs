@@ -76,6 +76,12 @@ impl<'a> From<&'a [u8]> for Id {
     }
 }
 
+impl<const N: usize> From<[u8; N]> for Id {
+    fn from(value: [u8; N]) -> Self {
+        Self(value.into())
+    }
+}
+
 impl<const N: usize> From<&[u8; N]> for Id {
     fn from(value: &[u8; N]) -> Self {
         Self(value.as_slice().into())

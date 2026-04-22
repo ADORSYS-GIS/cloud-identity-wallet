@@ -144,7 +144,7 @@ mod tests {
     #[tokio::test]
     async fn memory_roundtrip_and_remove() {
         let manager = MemorySession::new(Duration::from_secs(5));
-        let key = b"session-key";
+        let key = "session-key";
 
         manager.upsert(key, &b"value".to_vec()).await.unwrap();
         assert!(manager.exists(key).await.unwrap());
@@ -160,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn memory_entry_expires() {
         let manager = MemorySession::new(Duration::from_millis(80));
-        let key = b"expiring";
+        let key = "expiring";
         manager.upsert(key, &b"value".to_vec()).await.unwrap();
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -173,7 +173,7 @@ mod tests {
     #[tokio::test]
     async fn memory_upsert_does_not_extend_ttl() {
         let manager = MemorySession::new(Duration::from_millis(120));
-        let key = b"ttl-no-refresh";
+        let key = "ttl-no-refresh";
 
         manager.upsert(key, &b"v1".to_vec()).await.unwrap();
         tokio::time::sleep(Duration::from_millis(90)).await;
@@ -187,7 +187,7 @@ mod tests {
     #[tokio::test]
     async fn memory_consume_is_one_time() {
         let manager = MemorySession::new(Duration::from_secs(1));
-        let key = b"consume-once";
+        let key = "consume-once";
         manager.upsert(key, &b"value".to_vec()).await.unwrap();
 
         let val_bytes: Option<Vec<u8>> = manager.consume(key).await.unwrap();
@@ -202,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn memory_consume_is_atomic_for_concurrent_callers() {
         let manager = Arc::new(MemorySession::new(Duration::from_secs(2)));
-        let key = b"race-consume";
+        let key = "race-consume";
         manager.upsert(key, &b"value".to_vec()).await.unwrap();
 
         let callers = 24usize;
