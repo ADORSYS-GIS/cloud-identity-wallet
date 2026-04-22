@@ -1,17 +1,46 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
+use redis::{
+    Client as RedisClient, RedisResult,
+    aio::{ConnectionManager, ConnectionManagerConfig},
+};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
+    pub redis: RedisConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RedisConfig {
+    pub uri: SecretString,
+}
+
+impl RedisConfig {
+    /// Establishes a new Redis connection based on the provided URI.
+    ///
+    /// - To enable TLS, the URI must use the `rediss://` scheme.
+    /// - To enable insecure TLS, the URI must use the `rediss://` scheme and end with `/#insecure`.
+    ///
+    /// # Errors
+    /// Returns an error if the connection cannot be established.
+    pub async fn start(&self) -> RedisResult<ConnectionManager> {
+        let client = RedisClient::open(self.uri.expose_secret())?;
+        let config = ConnectionManagerConfig::new()
+            .set_number_of_retries(3)
+            .set_response_timeout(Some(Duration::from_secs(30)))
+            .set_connection_timeout(Some(Duration::from_secs(30)));
+        client.get_connection_manager_with_config(config).await
+    }
 }
 
 impl Config {
@@ -45,7 +74,8 @@ impl Config {
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)
+            .set_default("server.port", 3000)?
+            .set_default("redis.uri", "redis://127.0.0.1:6379")
     }
 }
 
@@ -60,6 +90,7 @@ mod tests {
 
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 3000);
+        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379");
     }
 
     #[test]
@@ -72,6 +103,7 @@ mod tests {
 
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 443);
+        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379");
     }
 
     #[test]
@@ -85,5 +117,6 @@ mod tests {
         assert_eq!(config.server.host, "192.168.1.1");
         // The other values should use default
         assert_eq!(config.server.port, 3000);
+        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379");
     }
 }
