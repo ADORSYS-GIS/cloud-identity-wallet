@@ -69,7 +69,7 @@ color-eyre.workspace = true
 config = "0.15"
 dashmap.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
-postcard = { version = "1", features = ["alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
