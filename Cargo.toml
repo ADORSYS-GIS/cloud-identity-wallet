@@ -66,6 +66,7 @@ axum = { version = "0.8", features = ["macros"] }
 cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
+dashmap.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 serde = { workspace = true, features = ["derive"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "any", "sqlite"] }

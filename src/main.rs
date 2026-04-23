@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
-use cloud_identity_wallet::outbound::SqlTenantRepository;
+use cloud_identity_wallet::outbound::{MemoryTenantRepository};
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::telemetry;
 
@@ -17,14 +19,8 @@ async fn main() -> color_eyre::Result<()> {
     let config = Config::load()?;
     tracing::info!("Loaded configuration: {:?}", config);
 
-    sqlx::any::install_default_drivers();
-    // Create database pool and tenant repository
-    let pool = sqlx::any::AnyPoolOptions::new()
-        .max_connections(5)
-        .connect(&config.database.url)
-        .await?;
-    let tenant_repo = SqlTenantRepository::new(pool);
-    tenant_repo.init_schema().await?;
+    // Create tenant repository based on database URL
+    let tenant_repo = MemoryTenantRepository::new(); 
 
     // Create service and server
     let service = Service::new(tenant_repo);

@@ -5,4 +5,4 @@
 
 mod tenant;
 
-pub use tenant::SqlTenantRepository;
+pub use tenant::{MemoryTenantRepository, SqlTenantRepository};

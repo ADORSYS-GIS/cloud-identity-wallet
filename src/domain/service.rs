@@ -6,6 +6,7 @@ pub struct Service {
 }
 
 impl Service {
+    /// Creates a new Service with the given tenant repository.
     pub fn new<T: TenantRepository>(tenant_repo: T) -> Self {
         Self {
             tenant_repo: Arc::new(tenant_repo),
