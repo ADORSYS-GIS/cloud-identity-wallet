@@ -34,7 +34,6 @@ optional = true
 
 [dev-dependencies]
 wiremock = "0.6"
-testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
