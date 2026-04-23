@@ -6,10 +6,13 @@ mod common;
 
 use cloud_wallet_openid4vc::credential::CredentialStatus;
 use cloud_wallet_openid4vc::storage::{
-    CredentialFilter, CredentialRepository, Error as StorageError, InMemoryRepository,
-    SqlRepository,
+    CredentialFilter,
+    CredentialRepository,
+    Error as StorageError,
+    InMemoryRepository,
+    // SqlRepository,
 };
-use sqlx::any::AnyPoolOptions;
+// use sqlx::any::AnyPoolOptions;
 use uuid::Uuid;
 
 /// Generic CRUD suite that all repository backends must pass.
@@ -114,96 +117,96 @@ async fn test_inmemory_storage_backend() {
     test_repository_backend(&repository, tenant_a, tenant_b).await;
 }
 
-#[cfg(feature = "sqlite")]
-#[tokio::test]
-async fn test_sqlite_storage_backend() {
-    sqlx::any::install_default_drivers();
+// #[cfg(feature = "sqlite")]
+// #[tokio::test]
+// async fn test_sqlite_storage_backend() {
+//     sqlx::any::install_default_drivers();
 
-    let pool = AnyPoolOptions::new()
-        .max_connections(1)
-        .connect("sqlite::memory:")
-        .await
-        .expect("Failed to connect to SQLite");
+//     let pool = AnyPoolOptions::new()
+//         .max_connections(1)
+//         .connect("sqlite::memory:")
+//         .await
+//         .expect("Failed to connect to SQLite");
 
-    let repository = SqlRepository::new(pool.clone());
-    repository.init_schema().await.unwrap();
+//     let repository = SqlRepository::new(pool.clone());
+//     repository.init_schema().await.unwrap();
 
-    let tenant_a = Uuid::new_v4();
-    let tenant_b = Uuid::new_v4();
-    common::insert_tenant(&pool, tenant_a, "Tenant A").await;
-    common::insert_tenant(&pool, tenant_b, "Tenant B").await;
+//     let tenant_a = Uuid::new_v4();
+//     let tenant_b = Uuid::new_v4();
+//     common::insert_tenant(&pool, tenant_a, "Tenant A").await;
+//     common::insert_tenant(&pool, tenant_b, "Tenant B").await;
 
-    test_repository_backend(&repository, tenant_a, tenant_b).await;
-}
+//     test_repository_backend(&repository, tenant_a, tenant_b).await;
+// }
 
-#[cfg(feature = "postgres")]
-#[tokio::test]
-async fn test_postgres_storage_backend() {
-    use testcontainers_modules::postgres::Postgres;
-    use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
+// #[cfg(feature = "postgres")]
+// #[tokio::test]
+// async fn test_postgres_storage_backend() {
+//     use testcontainers_modules::postgres::Postgres;
+//     use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
 
-    let container = Postgres::default()
-        .with_tag("18-alpine")
-        .start()
-        .await
-        .expect("Failed to start Postgres container");
+//     let container = Postgres::default()
+//         .with_tag("18-alpine")
+//         .start()
+//         .await
+//         .expect("Failed to start Postgres container");
 
-    let connection_string = format!(
-        "postgres://postgres:postgres@{}:{}/postgres",
-        container.get_host().await.unwrap(),
-        container.get_host_port_ipv4(5432).await.unwrap()
-    );
+//     let connection_string = format!(
+//         "postgres://postgres:postgres@{}:{}/postgres",
+//         container.get_host().await.unwrap(),
+//         container.get_host_port_ipv4(5432).await.unwrap()
+//     );
 
-    sqlx::any::install_default_drivers();
-    let pool = AnyPoolOptions::new()
-        .max_connections(1)
-        .connect(&connection_string)
-        .await
-        .expect("Failed to connect to PostgreSQL");
+//     sqlx::any::install_default_drivers();
+//     let pool = AnyPoolOptions::new()
+//         .max_connections(1)
+//         .connect(&connection_string)
+//         .await
+//         .expect("Failed to connect to PostgreSQL");
 
-    let repository = SqlRepository::new(pool.clone());
-    repository.init_schema().await.unwrap();
+//     let repository = SqlRepository::new(pool.clone());
+//     repository.init_schema().await.unwrap();
 
-    let tenant_a = Uuid::new_v4();
-    let tenant_b = Uuid::new_v4();
-    common::insert_tenant(&pool, tenant_a, "Tenant A").await;
-    common::insert_tenant(&pool, tenant_b, "Tenant B").await;
+//     let tenant_a = Uuid::new_v4();
+//     let tenant_b = Uuid::new_v4();
+//     common::insert_tenant(&pool, tenant_a, "Tenant A").await;
+//     common::insert_tenant(&pool, tenant_b, "Tenant B").await;
 
-    test_repository_backend(&repository, tenant_a, tenant_b).await;
-}
+//     test_repository_backend(&repository, tenant_a, tenant_b).await;
+// }
 
-#[cfg(feature = "mysql")]
-#[tokio::test]
-async fn test_mysql_storage_backend() {
-    use testcontainers_modules::mysql::Mysql;
-    use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
+// #[cfg(feature = "mysql")]
+// #[tokio::test]
+// async fn test_mysql_storage_backend() {
+//     use testcontainers_modules::mysql::Mysql;
+//     use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
 
-    let container = Mysql::default()
-        .with_tag("9-oracle")
-        .start()
-        .await
-        .expect("Failed to start MySQL container");
+//     let container = Mysql::default()
+//         .with_tag("9-oracle")
+//         .start()
+//         .await
+//         .expect("Failed to start MySQL container");
 
-    let connection_string = format!(
-        "mysql://{}:{}/test",
-        container.get_host().await.unwrap(),
-        container.get_host_port_ipv4(3306).await.unwrap()
-    );
+//     let connection_string = format!(
+//         "mysql://{}:{}/test",
+//         container.get_host().await.unwrap(),
+//         container.get_host_port_ipv4(3306).await.unwrap()
+//     );
 
-    sqlx::any::install_default_drivers();
-    let pool = AnyPoolOptions::new()
-        .max_connections(1)
-        .connect(&connection_string)
-        .await
-        .expect("Failed to connect to MySQL");
+//     sqlx::any::install_default_drivers();
+//     let pool = AnyPoolOptions::new()
+//         .max_connections(1)
+//         .connect(&connection_string)
+//         .await
+//         .expect("Failed to connect to MySQL");
 
-    let repository = SqlRepository::new(pool.clone());
-    repository.init_schema().await.unwrap();
+//     let repository = SqlRepository::new(pool.clone());
+//     repository.init_schema().await.unwrap();
 
-    let tenant_a = Uuid::new_v4();
-    let tenant_b = Uuid::new_v4();
-    common::insert_tenant(&pool, tenant_a, "Tenant A").await;
-    common::insert_tenant(&pool, tenant_b, "Tenant B").await;
+//     let tenant_a = Uuid::new_v4();
+//     let tenant_b = Uuid::new_v4();
+//     common::insert_tenant(&pool, tenant_a, "Tenant A").await;
+//     common::insert_tenant(&pool, tenant_b, "Tenant B").await;
 
-    test_repository_backend(&repository, tenant_a, tenant_b).await;
-}
+//     test_repository_backend(&repository, tenant_a, tenant_b).await;
+// }

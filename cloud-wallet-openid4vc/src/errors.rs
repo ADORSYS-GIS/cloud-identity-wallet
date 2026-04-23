@@ -234,6 +234,20 @@ pub enum ErrorKind {
     #[error("HTTP response parsing failed")]
     HttpResponseParsingFailed,
 
+    /// A Notification Request failed validation (e.g. empty `notification_id`,
+    /// disallowed characters in `event_description`).
+    ///
+    /// Defined by [OpenID4VCI §11](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-endpoint).
+    #[error("Invalid notification request")]
+    InvalidNotificationRequest,
+
+    /// The `notification_id` in a Notification Request was not recognized by
+    /// the Credential Issuer.
+    ///
+    /// Defined by [OpenID4VCI §11.3](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-notification-error-response).
+    #[error("Invalid notification id")]
+    InvalidNotificationId,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
