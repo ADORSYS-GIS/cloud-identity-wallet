@@ -137,7 +137,6 @@ enum KeyMaterial {
 
 impl CryptoSigner {
     /// Creates a signer from an ECDSA private key in PKCS#8 format.
-    #[must_use]
     pub fn from_ecdsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Ecdsa(ecdsa::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
@@ -150,7 +149,6 @@ impl CryptoSigner {
     }
 
     /// Creates a signer from an Ed25519 private key in PKCS#8 format.
-    #[must_use]
     pub fn from_ed25519_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Ed25519(ed25519::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
@@ -163,7 +161,6 @@ impl CryptoSigner {
     }
 
     /// Creates a signer from an RSA private key in PKCS#8 format.
-    #[must_use]
     pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Rsa(rsa::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
@@ -272,7 +269,7 @@ fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<String> {
         attestation: None,
         trust_chain: None,
     };
-    Ok(base64_encode_type(&header)?)
+    base64_encode_type(&header)
 }
 
 fn base64_encode_type<T: Serialize>(value: &T) -> Result<String> {
