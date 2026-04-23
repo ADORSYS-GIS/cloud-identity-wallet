@@ -626,7 +626,7 @@ impl Oid4vciClient {
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential(context, token, id, &config_id, signer));
+                futures.push(self.request_credential(context, token, id, config_id, signer));
             }
         }
 
@@ -1183,21 +1183,21 @@ impl AlgorithmIdentifier {
             AlgorithmIdentifier::String(s) => s == alg.as_str(),
             AlgorithmIdentifier::Integer(n) => {
                 // COSE mapping
-                match (*n, alg) {
-                    (-7, Algorithm::ES256) => true,
-                    (-7, Algorithm::ES256K) => true,
-                    (-9, Algorithm::ES256) => true,
-                    (-35, Algorithm::ES384) => true,
-                    (-36, Algorithm::ES512) => true,
-                    (-8, Algorithm::EdDSA) => true,
-                    (-37, Algorithm::PS256) => true,
-                    (-38, Algorithm::PS384) => true,
-                    (-39, Algorithm::PS512) => true,
-                    (-257, Algorithm::RS256) => true,
-                    (-258, Algorithm::RS384) => true,
-                    (-259, Algorithm::RS512) => true,
-                    _ => false,
-                }
+                matches!(
+                    (*n, alg),
+                    (-7, Algorithm::ES256)
+                        | (-7, Algorithm::ES256K)
+                        | (-9, Algorithm::ES256)
+                        | (-35, Algorithm::ES384)
+                        | (-36, Algorithm::ES512)
+                        | (-8, Algorithm::EdDSA)
+                        | (-37, Algorithm::PS256)
+                        | (-38, Algorithm::PS384)
+                        | (-39, Algorithm::PS512)
+                        | (-257, Algorithm::RS256)
+                        | (-258, Algorithm::RS384)
+                        | (-259, Algorithm::RS512)
+                )
             }
         }
     }
