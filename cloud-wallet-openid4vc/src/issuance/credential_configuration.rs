@@ -81,6 +81,16 @@ pub struct ProofTypeMetadata {
     pub key_attestations_required: Option<KeyAttestationsRequired>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofType {
+    Jwt,
+    DiVp,
+    Attestation,
+    // forward compatibility
+    Other(String),
+}
+
 /// One entry in the `credential_configurations_supported` map.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,7 +110,7 @@ pub struct CredentialConfiguration {
     ///
     /// [IANA JOSE Registry]: https://www.iana.org/assignments/jose/jose.xhtml#web-signature-encryption-algorithms
     pub credential_signing_alg_values_supported: Option<Vec<AlgorithmIdentifier>>,
-    pub proof_types_supported: Option<HashMap<String, ProofTypeMetadata>>,
+    pub proof_types_supported: Option<HashMap<ProofType, ProofTypeMetadata>>,
 
     /// Credential metadata for display and claims.
     pub credential_metadata: Option<CredentialMetadata>,
