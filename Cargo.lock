@@ -851,6 +851,7 @@ dependencies = [
  "cloud-wallet-openid4vc",
  "color-eyre",
  "config",
+ "dashmap",
  "jsonwebtoken",
  "rand 0.10.1",
  "reqwest",

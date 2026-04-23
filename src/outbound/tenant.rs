@@ -1,8 +1,11 @@
-//! SQL-based implementation of the TenantRepository trait.
+//! Tenant repository implementations.
+//!
+//! Provides both SQL-based and in-memory storage backends for tenant data.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use uuid::Uuid;
@@ -55,6 +58,36 @@ impl TenantRepository for SqlTenantRepository {
             .bind(created_at.unix_timestamp())
             .execute(&self.pool)
             .await?;
+
+        Ok(TenantResponse {
+            tenant_id: id.to_string(),
+            name: tenant_name.into_inner(),
+        })
+    }
+}
+
+/// In-memory tenant repository implementation.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryTenantRepository {
+    tenants: Arc<DashMap<Uuid, String>>,
+}
+
+impl MemoryTenantRepository {
+    /// Creates a new, empty in-memory tenant repository.
+    pub fn new() -> Self {
+        Self {
+            tenants: Arc::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl TenantRepository for MemoryTenantRepository {
+    async fn create(&self, request: RegisterTenantRequest) -> Result<TenantResponse, TenantError> {
+        let tenant_name = TenantName::new(request.name).map_err(TenantError::InvalidName)?;
+
+        let id = Uuid::new_v4();
+        self.tenants.insert(id, tenant_name.as_str().to_string());
 
         Ok(TenantResponse {
             tenant_id: id.to_string(),
