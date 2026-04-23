@@ -6,7 +6,10 @@ mod common;
 
 use cloud_wallet_openid4vc::credential::CredentialStatus;
 use cloud_wallet_openid4vc::storage::{
-    CredentialFilter, CredentialRepository, Error as StorageError, InMemoryRepository,
+    CredentialFilter,
+    CredentialRepository,
+    Error as StorageError,
+    InMemoryRepository,
     // SqlRepository,
 };
 // use sqlx::any::AnyPoolOptions;
