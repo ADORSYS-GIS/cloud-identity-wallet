@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
 use cloud_identity_wallet::outbound::{MemoryTenantRepository};
