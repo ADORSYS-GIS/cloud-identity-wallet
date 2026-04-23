@@ -3,11 +3,14 @@ mod signer;
 
 // Public Re-exports
 pub use error::ClientError;
-pub use signer::{Algorithm, CryptoProofSigner, ProofClaims, ProofJwtAlgorithm, ProofSigner, Signer};
+pub use signer::{
+    Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
+};
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use reqwest::header::CONTENT_TYPE;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::policies::ExponentialBackoff;
@@ -21,6 +24,7 @@ use crate::issuance::authz_request::{
 };
 use crate::issuance::authz_response::{AuthorizationResponse, PushedAuthorizationResponse};
 use crate::issuance::authz_server_metadata::AuthorizationServerMetadata;
+use crate::issuance::credential_configuration::{AlgorithmIdentifier, ProofType};
 use crate::issuance::credential_offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
 };
@@ -575,40 +579,33 @@ impl Oid4vciClient {
     pub async fn request_credential<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
-        access_token: impl Into<String>,
-        identifier: impl Into<String>,
-        signer: &S,
-    ) -> Result<CredentialResponse> {
-        let identifier = identifier.into();
-        let access_token = access_token.into();
-        self.request_credential_internal(context, &access_token, &identifier, None, signer)
-            .await
-    }
-
-    /// Request a credential while explicitly selecting the credential configuration.
-    ///
-    /// Use this when multiple credential configurations are available and the caller
-    /// wants deterministic proof-algorithm selection for a specific configuration.
-    pub async fn request_credential_for_configuration<S: ProofSigner>(
-        &self,
-        context: &ResolvedOfferContext,
-        access_token: impl Into<String>,
-        credential_configuration_id: impl Into<String>,
+        access_token: &str,
         credential_identifier: impl Into<String>,
+        credential_config_id: &str,
         signer: &S,
     ) -> Result<CredentialResponse> {
-        let access_token = access_token.into();
-        let credential_configuration_id = credential_configuration_id.into();
-        let credential_identifier = credential_identifier.into();
+        let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
+            && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
 
-        self.request_credential_internal(
-            context,
-            &access_token,
-            &credential_identifier,
-            Some(&credential_configuration_id),
-            signer,
-        )
-        .await
+        let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
+        let proofs = self
+            .build_proofs(
+                context,
+                c_nonce.as_deref(),
+                is_anonymous,
+                credential_config_id,
+                signer,
+            )
+            .await?;
+
+        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
+        let mut request = CredentialRequest::new(id);
+        if let Some(p) = proofs {
+            request = request.with_proofs(p);
+        }
+
+        self.post_credential_request(context, access_token, &request)
+            .await
     }
 
     /// Request all credentials authorized by the token response.
@@ -621,17 +618,22 @@ impl Oid4vciClient {
         token: &TokenResponse,
         signer: &S,
     ) -> Result<Vec<CredentialResponse>> {
-        let identifiers = resolve_credential_ids(token)?;
-        let mut result = Vec::with_capacity(identifiers.len());
+        let resolved = resolve_credential_ids(token)?;
+        let mut futures = FuturesUnordered::new();
+        let token = &token.access_token;
+        let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
+        let mut results = Vec::with_capacity(total);
 
-        for identifier in &identifiers {
-            // Each credential of a different type/dataset needs its own request.
-            result.push(
-                self.request_credential(context, &token.access_token, identifier, signer)
-                    .await?,
-            );
+        for (config_id, identifiers) in resolved {
+            for id in identifiers {
+                futures.push(self.request_credential(context, token, id, &config_id, signer));
+            }
         }
-        Ok(result)
+
+        while let Some(res) = futures.next().await {
+            results.push(res?);
+        }
+        Ok(results)
     }
 
     /// Polls the deferred credential endpoint for a single transaction id.
@@ -767,7 +769,7 @@ impl Oid4vciClient {
             }),
 
             // Unreachable: has_any_grants would be false for (None, None)
-            (None, None) => unreachable!("has_any_grants check above prevents this branch"),
+            (None, None) => Err(ClientError::NoSupportedGrantType),
         }
     }
 
@@ -781,13 +783,10 @@ impl Oid4vciClient {
             .as_metadata
             .pushed_authorization_request_endpoint
             .as_ref()
-            .ok_or_else(|| ClientError::Configuration {
-                message: "PAR endpoint not available".into(),
-            })?;
+            .ok_or_else(|| ClientError::configuration("PAR endpoint not available"))?;
 
-        let body = serde_urlencoded::to_string(request).map_err(|e| ClientError::Internal {
-            message: format!("Failed to serialize PAR request: {e}").into(),
-        })?;
+        let body = serde_urlencoded::to_string(request)
+            .map_err(|e| ClientError::internal(format!("Failed to serialize PAR request: {e}")))?;
 
         let response = self
             .http_client
@@ -824,8 +823,8 @@ impl Oid4vciClient {
         token_endpoint: &Url,
         request: &T,
     ) -> Result<TokenResponse> {
-        let body = serde_urlencoded::to_string(request).map_err(|e| ClientError::Internal {
-            message: format!("Failed to serialize PAR request: {e}").into(),
+        let body = serde_urlencoded::to_string(request).map_err(|e| {
+            ClientError::internal(format!("Failed to serialize token request: {e}"))
         })?;
 
         let response = self
@@ -862,22 +861,12 @@ impl Oid4vciClient {
         context: &ResolvedOfferContext,
         c_nonce: Option<&str>,
         is_anonymous: bool,
-        credential_identifier: &str,
-        credential_configuration_id: Option<&str>,
+        credential_config_id: &str,
         signer: &S,
     ) -> Result<Option<Proofs>> {
-        let resolved_config_id = resolve_credential_configuration_id_for_request(
-            context,
-            credential_identifier,
-            credential_configuration_id,
-        )?;
-
-        let proof_algorithm =
-            select_jwt_proof_algorithm_for_configuration(context, &resolved_config_id, signer)?;
-
-        let Some(proof_algorithm) = proof_algorithm else {
+        if !should_sign_proof(context, credential_config_id, signer)? {
             return Ok(None);
-        };
+        }
 
         let client_id = if is_anonymous {
             None
@@ -892,41 +881,8 @@ impl Oid4vciClient {
             nonce: c_nonce.map(|n| n.to_owned()),
         };
 
-        let jwt = signer.sign_proof(claims, proof_algorithm).await?;
+        let jwt = signer.sign(&claims)?;
         Ok(Some(Proofs::jwt([jwt])))
-    }
-
-    async fn request_credential_internal<S: ProofSigner>(
-        &self,
-        context: &ResolvedOfferContext,
-        access_token: &str,
-        credential_identifier: &str,
-        credential_configuration_id: Option<&str>,
-        signer: &S,
-    ) -> Result<CredentialResponse> {
-        let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
-            && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
-
-        let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
-        let proofs = self
-            .build_proofs(
-                context,
-                c_nonce.as_deref(),
-                is_anonymous,
-                credential_identifier,
-                credential_configuration_id,
-                signer,
-            )
-            .await?;
-
-        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
-        let mut request = CredentialRequest::new(id);
-        if let Some(p) = proofs {
-            request = request.with_proofs(p);
-        }
-
-        self.post_credential_request(context, access_token, &request)
-            .await
     }
 
     async fn post_credential_request(
@@ -1093,118 +1049,79 @@ fn build_authorization_details(
         .collect()
 }
 
-fn resolve_credential_configuration_id_for_request(
+/// Negotiate the proof algorithm for a credential request.
+fn should_sign_proof<S: ProofSigner>(
     context: &ResolvedOfferContext,
-    credential_identifier: &str,
-    explicit_credential_configuration_id: Option<&str>,
-) -> Result<String> {
-    if let Some(id) = explicit_credential_configuration_id {
-        if context
-            .issuer_metadata
-            .credential_configurations_supported
-            .contains_key(id)
-        {
-            return Ok(id.to_string());
-        }
-        return Err(ClientError::UnknownCredentialConfiguration { id: id.to_string() });
-    }
-
-    // Direct callers may pass credential_configuration_id instead of credential_identifier.
-    if context
-        .issuer_metadata
-        .credential_configurations_supported
-        .contains_key(credential_identifier)
-    {
-        return Ok(credential_identifier.to_string());
-    }
-
-    if context.offer.credential_configuration_ids.len() == 1 {
-        let id = &context.offer.credential_configuration_ids[0];
-        if context
-            .issuer_metadata
-            .credential_configurations_supported
-            .contains_key(id)
-        {
-            return Ok(id.to_string());
-        }
-        return Err(ClientError::UnknownCredentialConfiguration { id: id.clone() });
-    }
-
-    Err(ClientError::configuration(
-        "unable to determine credential configuration for request; \
-         use request_credential_for_configuration when multiple configurations are available",
-    ))
-}
-
-fn select_jwt_proof_algorithm_for_configuration<S: ProofSigner>(
-    context: &ResolvedOfferContext,
-    credential_configuration_id: &str,
+    credential_config_id: &str,
     signer: &S,
-) -> Result<Option<ProofJwtAlgorithm>> {
+) -> Result<bool> {
     let config = context
         .issuer_metadata
         .credential_configurations_supported
-        .get(credential_configuration_id)
+        .get(credential_config_id)
         .ok_or_else(|| ClientError::UnknownCredentialConfiguration {
-            id: credential_configuration_id.to_string(),
+            id: credential_config_id.into(),
         })?;
 
-    // OID4VCI: proof_types_supported present means key proof is explicitly required.
+    // No proof required
     let Some(proof_types) = config.proof_types_supported.as_ref() else {
-        return Ok(None);
+        return Ok(false);
     };
 
-    let jwt_proof_type = proof_types.get("jwt").ok_or_else(|| {
+    let proof_type = proof_types.get(&ProofType::Jwt).ok_or_else(|| {
         ClientError::configuration(format!(
-            "credential configuration '{}' does not support 'jwt' proofs",
-            credential_configuration_id
+            "credential configuration '{credential_config_id}' does not support 'jwt' proofs"
         ))
     })?;
 
-    let mut issuer_algorithms =
-        Vec::with_capacity(jwt_proof_type.proof_signing_alg_values_supported.len());
-    for alg in &jwt_proof_type.proof_signing_alg_values_supported {
-        let Some(algorithm_name) = alg.as_str() else {
-            continue;
-        };
-
-        issuer_algorithms.push(algorithm_name.to_string());
-        let Ok(algorithm) = algorithm_name.parse::<ProofJwtAlgorithm>() else {
-            continue;
-        };
-
-        if signer.supports_algorithm(algorithm) {
-            return Ok(Some(algorithm));
-        }
+    let signer_alg = signer.algorithm();
+    if proof_type
+        .proof_signing_alg_values_supported
+        .iter()
+        .any(|id| id.matches(signer_alg))
+    {
+        return Ok(true);
     }
 
     Err(ClientError::configuration(format!(
-        "no compatible jwt proof signing algorithm for configuration '{}'; issuer advertised [{}]",
-        credential_configuration_id,
-        issuer_algorithms.join(", ")
+        "no compatible jwt proof signing algorithm for configuration '{credential_config_id}'"
     )))
 }
 
-/// Extract the resolved identifiers from the token response.
-pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<String>> {
-    // Check if the token response carries authorization_details with identifiers.
-    if let Some(details) = token.authorization_details.as_deref() {
-        let mut result = Vec::with_capacity(details.len());
-        for detail in details {
-            if let Some(identifiers) = detail.credential_identifiers.as_deref() {
-                for id in identifiers {
-                    result.push(id.clone());
-                }
-            }
+pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[String])>> {
+    let details =
+        token
+            .authorization_details
+            .as_ref()
+            .ok_or_else(|| ClientError::InvalidResponse {
+                message: "missing authorization_details in token response".into(),
+            })?;
+
+    let mut result = Vec::with_capacity(details.len());
+
+    for detail in details {
+        let Some(ids) = detail.credential_identifiers.as_deref() else {
+            continue;
+        };
+
+        if ids.is_empty() {
+            return Err(ClientError::InvalidResponse {
+                message: format!(
+                    "authorization_details entry for '{}' contains empty credential_identifiers",
+                    detail.credential_configuration_id
+                )
+                .into(),
+            });
         }
-        if !result.is_empty() {
-            return Ok(result);
-        }
+        result.push((detail.credential_configuration_id.as_str(), ids));
     }
 
-    Err(ClientError::InvalidResponse {
-        message: "Missing credential identifiers in token response".into(),
-    })
+    if result.is_empty() {
+        return Err(ClientError::InvalidResponse {
+            message: "no credential_identifiers found in authorization_details".into(),
+        });
+    }
+    Ok(result)
 }
 
 /// Build the minimal PAR redirect URL.
@@ -1250,7 +1167,7 @@ fn well_known_oauth_as_url(as_url: &Url) -> Url {
 fn well_known_oidc_configuration_url(as_url: &Url) -> Url {
     let mut url = as_url.clone();
     let path = as_url.path().trim_end_matches('/');
-    url.set_path(&format!("{path}/.well-known/openid-configuration"));
+    url.set_path(&format!("/.well-known/openid-configuration{path}"));
     url
 }
 
@@ -1258,4 +1175,30 @@ async fn http_error_response(response: reqwest::Response) -> ClientError {
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
     ClientError::http_response(status, body)
+}
+
+impl AlgorithmIdentifier {
+    pub fn matches(&self, alg: Algorithm) -> bool {
+        match self {
+            AlgorithmIdentifier::String(s) => s == alg.as_str(),
+            AlgorithmIdentifier::Integer(n) => {
+                // COSE mapping
+                match (*n, alg) {
+                    (-7, Algorithm::ES256) => true,
+                    (-7, Algorithm::ES256K) => true,
+                    (-9, Algorithm::ES256) => true,
+                    (-35, Algorithm::ES384) => true,
+                    (-36, Algorithm::ES512) => true,
+                    (-8, Algorithm::EdDSA) => true,
+                    (-37, Algorithm::PS256) => true,
+                    (-38, Algorithm::PS384) => true,
+                    (-39, Algorithm::PS512) => true,
+                    (-257, Algorithm::RS256) => true,
+                    (-258, Algorithm::RS384) => true,
+                    (-259, Algorithm::RS512) => true,
+                    _ => false,
+                }
+            }
+        }
+    }
 }
