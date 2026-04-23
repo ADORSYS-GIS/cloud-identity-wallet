@@ -20,7 +20,7 @@ zeroize.workspace = true
 # Cryptography dependencies
 base64ct = { workspace = true, features = ["std"] }
 cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
-rand = "0.10"
+rand.workspace = true
 
 # KMS AWS dependencies
 aws-sdk-kms = { version = "1", default-features = false, optional = true }

@@ -2,11 +2,17 @@ mod auth;
 mod handlers;
 mod responses;
 
+use std::sync::Arc;
+
 use crate::config::Config;
-use crate::server::handlers::{health_check, home};
+use crate::domain::service::Service;
+use crate::server::handlers::{health_check, home, register_tenant};
 
 use axum::http::Method;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
@@ -14,9 +20,12 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug, Clone)]
 /// The global application state shared between all request handlers.
-struct AppState {}
+#[derive(Clone)]
+pub struct AppState {
+    /// Service for tenant operations.
+    pub service: Arc<Service>,
+}
 
 pub struct Server {
     router: Router,
@@ -24,8 +33,8 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
-    pub async fn new(config: &Config) -> Result<Self> {
+    /// Creates a new HTTP server.
+    pub async fn new(config: &Config, service: Service) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -43,11 +52,14 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = AppState {};
+        let state = AppState {
+            service: Arc::new(service),
+        };
 
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
+            .nest("/api/v1", api_routes())
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -69,4 +81,8 @@ impl Server {
         axum::serve(self.listener, self.router).await?;
         Ok(())
     }
+}
+
+fn api_routes() -> Router<AppState> {
+    Router::new().route("/tenants", post(register_tenant))
 }
