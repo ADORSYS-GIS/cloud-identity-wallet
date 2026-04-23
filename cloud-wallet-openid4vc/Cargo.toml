@@ -13,6 +13,7 @@ base64 = "0.22"
 color-eyre.workspace = true
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
+futures = "0.3"
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 percent-encoding = "2"
 pkcs8 = { version = "0.10", features = ["std"] }
