@@ -1,21 +1,4 @@
-use color_eyre::eyre::Report;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum SessionError {
-    #[error("Storage backend error: {0}")]
-    Backend(#[from] Report),
-
-    #[error("Session not found: {0}")]
-    NotFound(String),
-
-    #[error("Session expired: {0}")]
-    Expired(String),
-
-    #[error("Invalid session state: {0}")]
-    InvalidState(String),
-}
 
 #[derive(Debug, Deserialize)]
 pub struct ConsentRequest {

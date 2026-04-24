@@ -2,8 +2,9 @@ use cloud_identity_wallet::{
     config::Config,
     domain::service::Service,
     issuance::AuthorizationUrlBuilder,
-    outbound::{MemorySessionRepository, SqlTenantRepository},
+    outbound::SqlTenantRepository,
     server::{Server, sse::SseEvent},
+    session::MemorySession,
 };
 
 pub async fn spawn_server() -> String {
@@ -26,8 +27,8 @@ pub async fn spawn_server() -> String {
     let tenant_repo = SqlTenantRepository::new(pool);
     tenant_repo.init_schema().await.unwrap();
 
-    // Create session repository and SSE broadcast
-    let session_repo = MemorySessionRepository::new();
+    // Create session store and SSE broadcast
+    let session_store = MemorySession::default();
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);
 
     // Create HTTP client and authorization URL builder
@@ -41,7 +42,7 @@ pub async fn spawn_server() -> String {
         http_client,
     );
 
-    let service = Service::new(tenant_repo, session_repo, authz_url_builder, sse_broadcast);
+    let service = Service::new(session_store, tenant_repo, authz_url_builder, sse_broadcast);
     let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();

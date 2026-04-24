@@ -1,27 +1,29 @@
-use super::ports::{SessionRepository, TenantRepository};
 use std::sync::Arc;
 
+use crate::domain::ports::TenantRepository;
 use crate::issuance::AuthorizationUrlBuilder;
 use crate::server::sse::SseEvent;
+use crate::session::SessionStore;
 
-pub struct Service {
+#[derive(Clone)]
+pub struct Service<S: SessionStore> {
+    pub session: S,
     pub tenant_repo: Arc<dyn TenantRepository>,
-    pub session_repo: Arc<dyn SessionRepository>,
     pub authz_url_builder: Arc<AuthorizationUrlBuilder>,
     pub sse_broadcast: tokio::sync::broadcast::Sender<SseEvent>,
 }
 
-impl Service {
-    /// Creates a new Service with the given repositories and components.
-    pub fn new<T: TenantRepository, S: SessionRepository>(
-        tenant_repo: T,
-        session_repo: S,
+impl<S: SessionStore> Service<S> {
+    /// Creates a new Service with the given session store, tenant repository, and components.
+    pub fn new<R: TenantRepository>(
+        session: S,
+        tenant_repo: R,
         authz_url_builder: AuthorizationUrlBuilder,
         sse_broadcast: tokio::sync::broadcast::Sender<SseEvent>,
     ) -> Self {
         Self {
+            session,
             tenant_repo: Arc::new(tenant_repo),
-            session_repo: Arc::new(session_repo),
             authz_url_builder: Arc::new(authz_url_builder),
             sse_broadcast,
         }
