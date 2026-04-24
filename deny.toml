@@ -15,15 +15,7 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-ignore = [
-    # rustls-webpki 0.101.7 — transitive dep via AWS SDK (aws-config → rustls 0.21.x).
-    # Cannot upgrade without AWS SDK releasing a version using rustls >=0.23.
-    # See https://rustsec.org/advisories/RUSTSEC-2026-0098
-    "RUSTSEC-2026-0098",
-    # rustls-webpki 0.101.7 — same root cause as RUSTSEC-2026-0098, same dependency chain.
-    # See https://rustsec.org/advisories/RUSTSEC-2026-0099
-    "RUSTSEC-2026-0099",
-]
+ignore = []
 
 [bans]
 # Lint level for when multiple versions of the same crate are detected
@@ -71,5 +63,7 @@ allow = [
   "Zlib",
   "Unicode-3.0",
   "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "BSL-1.0",
 ]
 exceptions = []
