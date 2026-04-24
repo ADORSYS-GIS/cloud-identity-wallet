@@ -66,7 +66,7 @@ impl SessionStore for RedisSession {
         K: Into<Id> + Send + Sync,
         V: serde::Serialize + Send + Sync,
     {
-        let encoded_value = serde_json::to_vec(value)?;
+        let encoded_value = postcard::to_allocvec(value)?;
         let key = self.key(key.into().as_bytes());
         let ttl_ms = self.ttl.as_millis().try_into().unwrap_or(u64::MAX);
 
@@ -89,7 +89,7 @@ impl SessionStore for RedisSession {
         let value: Option<Vec<u8>> = conn.get(&key).await?;
 
         if let Some(v) = value {
-            Ok(Some(serde_json::from_slice(&v)?))
+            Ok(Some(postcard::from_bytes(&v)?))
         } else {
             Ok(None)
         }
@@ -113,7 +113,7 @@ impl SessionStore for RedisSession {
         let value: Option<Vec<u8>> = conn.get_del(self.key(key.as_bytes())).await?;
 
         if let Some(v) = value {
-            Ok(Some(serde_json::from_slice(&v)?))
+            Ok(Some(postcard::from_bytes(&v)?))
         } else {
             Ok(None)
         }
