@@ -1,8 +1,5 @@
-/*
-   Module `outbound` contains the canonical implementations of the ports traits
-   by which external modules interact with the domain.
-*/
-
+mod session;
 mod tenant;
 
+pub use session::MemorySessionRepository;
 pub use tenant::{MemoryTenantRepository, SqlTenantRepository};

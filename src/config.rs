@@ -2,11 +2,13 @@ use std::collections::HashMap;
 
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
+    pub wallet: WalletConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +21,12 @@ pub struct ServerConfig {
 pub struct DatabaseConfig {
     /// Database URL (e.g., "sqlite::memory:" for in-memory, "postgres://user:pass@host/db")
     pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletConfig {
+    pub client_id: String,
+    pub redirect_uri: Url,
 }
 
 impl Config {
@@ -53,7 +61,9 @@ impl Config {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 3000)?
-            .set_default("database.url", "sqlite::memory:")
+            .set_default("database.url", "sqlite::memory:")?
+            .set_default("wallet.client_id", "cloud-identity-wallet")?
+            .set_default("wallet.redirect_uri", "http://127.0.0.1:3000/api/v1/issuance/callback")
     }
 }
 

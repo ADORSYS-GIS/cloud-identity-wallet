@@ -853,6 +853,7 @@ dependencies = [
  "config",
  "dashmap",
  "jsonwebtoken",
+ "percent-encoding",
  "rand 0.10.1",
  "reqwest",
  "serde",
@@ -866,6 +867,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

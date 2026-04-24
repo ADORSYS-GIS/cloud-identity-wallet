@@ -1,19 +1,20 @@
 mod auth;
-mod handlers;
+pub mod handlers;
 mod responses;
+pub mod sse;
 
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant};
+use crate::server::handlers::{health_check, home, register_tenant, submit_consent};
 
 use axum::http::Method;
 use axum::{
     Router,
     routing::{get, post},
 };
-use color_eyre::eyre::{Context, Result};
+use color_eyre::eyre::Result;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -66,7 +67,7 @@ impl Server {
 
         let listener = TcpListener::bind(format!("{}:{}", config.server.host, config.server.port))
             .await
-            .wrap_err_with(|| format!("Failed to bind to port {}", config.server.port))?;
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to bind to port {}: {}", config.server.port, e))?;
 
         Ok(Self { router, listener })
     }
@@ -84,5 +85,7 @@ impl Server {
 }
 
 fn api_routes() -> Router<AppState> {
-    Router::new().route("/tenants", post(register_tenant))
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .route("/issuance/{session_id}/consent", post(submit_consent))
 }
