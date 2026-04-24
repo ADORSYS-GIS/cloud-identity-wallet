@@ -1,6 +1,5 @@
 use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::session::Result;
@@ -16,8 +15,6 @@ pub struct IssuanceSession {
     pub flow: FlowType,
     pub code_verifier: Option<String>,
     pub issuer_state: Option<String>,
-    pub created_at: OffsetDateTime,
-    pub expires_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,8 +45,6 @@ pub type ParsedOffer = CredentialOffer;
 
 impl IssuanceSession {
     pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
-        let now = OffsetDateTime::now_utc();
-        let expires_at = now + time::Duration::minutes(15);
         Self {
             id: utils::generate_session_id(),
             tenant_id,
@@ -58,13 +53,7 @@ impl IssuanceSession {
             flow,
             code_verifier: None,
             issuer_state: None,
-            created_at: now,
-            expires_at,
         }
-    }
-
-    pub fn is_expired(&self) -> bool {
-        OffsetDateTime::now_utc() >= self.expires_at
     }
 }
 
@@ -90,20 +79,12 @@ fn is_transition_allowed(from: IssuanceState, to: IssuanceState, flow: FlowType)
         (AwaitingConsent, AwaitingTxCode) if flow == PreAuthorizedCode => true,
         // awaiting_consent -> processing (Consent accepted, pre-auth flow, no tx_code)
         (AwaitingConsent, Processing) if flow == PreAuthorizedCode => true,
-        // awaiting_consent -> failed (Consent rejected or any error)
-        (AwaitingConsent, Failed) => true,
         // awaiting_authorization -> processing (Authorization callback received with valid code)
         (AwaitingAuthorization, Processing) if flow == AuthorizationCode => true,
-        // awaiting_authorization -> failed (AS returns error or session expires)
-        (AwaitingAuthorization, Failed) => true,
         // awaiting_tx_code -> processing (tx_code submitted)
         (AwaitingTxCode, Processing) if flow == PreAuthorizedCode => true,
-        // awaiting_tx_code -> failed (Any error)
-        (AwaitingTxCode, Failed) => true,
         // processing -> completed (Credential stored successfully)
         (Processing, Completed) => true,
-        // processing -> failed (Token, credential, or deferred error)
-        (Processing, Failed) => true,
         // Any non-terminal -> failed (POST /cancel or session expiry)
         (from, Failed) if !from.is_terminal() => true,
 
