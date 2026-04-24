@@ -1,6 +1,6 @@
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
-use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions, aio::ConnectionManager};
+use redis::{AsyncCommands, Script, aio::ConnectionManager};
 
 use crate::session::{Id, Result, SessionError, SessionStore};
 
@@ -31,7 +31,7 @@ impl RedisSession {
 
     /// Overrides the default prefix for all session keys in this store.
     ///
-    /// The default prefix is `"session"`.
+    /// The default prefix is `"sessions"`.
     pub fn with_prefix(self, prefix: impl Into<String>) -> Self {
         Self {
             prefix: prefix.into(),
@@ -53,6 +53,7 @@ impl RedisSession {
     fn key(&self, id: &[u8]) -> Box<[u8]> {
         let mut key = Vec::with_capacity(self.prefix.len() + id.len());
         key.extend_from_slice(self.prefix.as_bytes());
+        key.push(b':');
         key.extend_from_slice(id);
         key.into_boxed_slice()
     }
@@ -69,27 +70,13 @@ impl SessionStore for RedisSession {
         let key = self.key(key.into().as_bytes());
         let ttl_ms = self.ttl.as_millis().try_into().unwrap_or(u64::MAX);
 
-        loop {
-            let mut conn = self.conn.clone();
-            let options = SetOptions::default()
-                .conditional_set(ExistenceCheck::XX)
-                .with_expiration(SetExpiry::KEEPTTL);
-            let updated: Option<String> = conn.set_options(&key, &encoded_value, options).await?;
-
-            if updated.is_some() {
-                return Ok(());
-            }
-
-            let options = SetOptions::default()
-                .conditional_set(ExistenceCheck::NX)
-                .with_expiration(SetExpiry::PX(ttl_ms));
-            let inserted: Option<String> = conn.set_options(&key, &encoded_value, options).await?;
-
-            if inserted.is_some() {
-                return Ok(());
-            }
-            tokio::task::yield_now().await;
-        }
+        upsert_script()
+            .key(&key)
+            .arg(&encoded_value)
+            .arg(ttl_ms)
+            .invoke_async::<()>(&mut self.conn.clone())
+            .await?;
+        Ok(())
     }
 
     async fn get<K, V>(&self, key: K) -> Result<Option<V>>
@@ -138,6 +125,31 @@ impl SessionStore for RedisSession {
         let _: usize = conn.del(self.key(key.as_bytes())).await?;
         Ok(())
     }
+}
+
+// Logic:
+//   KEYS[1] = the full Redis key
+//   ARGV[1] = serialized value bytes
+//   ARGV[2] = TTL in milliseconds (used only for new keys)
+//
+//   If the key already exists → SET KEEPTTL (preserve the original expiry).
+//   If the key is new         → SET PX <ttl> (install the configured TTL).
+//
+// Both branches execute as one atomic unit — no other command can observe an
+// intermediate state.
+fn upsert_script() -> &'static Script {
+    static SCRIPT: OnceLock<Script> = OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        Script::new(
+            r"
+            if redis.call('EXISTS', KEYS[1]) == 1 then
+                return redis.call('SET', KEYS[1], ARGV[1], 'KEEPTTL')
+            else
+                return redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+            end
+            ",
+        )
+    })
 }
 
 impl From<redis::RedisError> for SessionError {
