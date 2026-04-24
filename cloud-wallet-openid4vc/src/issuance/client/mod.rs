@@ -1,5 +1,7 @@
 mod error;
 mod signer;
+#[cfg(test)]
+mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
@@ -15,7 +17,6 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
-use serde::Serialize;
 use url::Url;
 
 use crate::issuance::authz_details::AuthorizationDetails;
@@ -37,6 +38,7 @@ use crate::issuance::error::{
     TokenErrorResponse,
 };
 use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
+use crate::issuance::notification::{NotificationEvent, NotificationRequest};
 use crate::issuance::token_request::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest,
 };
@@ -114,15 +116,6 @@ pub struct AuthorizationUrlResult {
 pub enum AuthorizationCallback {
     Success(AuthorizationResponse),
     Error(Oid4vciError<AuthzErrorResponse>),
-}
-
-/// Notification event value for notification endpoint calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NotificationEvent {
-    CredentialAccepted,
-    CredentialDeleted,
-    CredentialFailure,
 }
 
 /// Configuration for the OID4VCI client.
@@ -619,10 +612,10 @@ impl Oid4vciClient {
         signer: &S,
     ) -> Result<Vec<CredentialResponse>> {
         let resolved = resolve_credential_ids(token)?;
-        let mut futures = FuturesUnordered::new();
         let token = &token.access_token;
         let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
         let mut results = Vec::with_capacity(total);
+        let mut futures = FuturesUnordered::new();
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
@@ -695,19 +688,11 @@ impl Oid4vciClient {
     pub async fn send_notification(
         &self,
         notification_endpoint: &Url,
-        access_token: impl Into<String>,
+        access_token: &str,
         notification_id: impl Into<String>,
         event: NotificationEvent,
         event_description: Option<impl Into<String>>,
     ) {
-        #[derive(Serialize)]
-        struct NotificationRequest {
-            notification_id: String,
-            event: NotificationEvent,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            event_description: Option<String>,
-        }
-
         let request = NotificationRequest {
             notification_id: notification_id.into(),
             event,
@@ -717,7 +702,7 @@ impl Oid4vciClient {
         let _ = self
             .http_client
             .post(notification_endpoint.as_str())
-            .bearer_auth(access_token.into())
+            .bearer_auth(access_token)
             .json(&request)
             .send()
             .await;
