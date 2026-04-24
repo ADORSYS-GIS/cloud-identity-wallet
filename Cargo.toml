@@ -74,6 +74,7 @@ rand.workspace = true
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sqlx = { workspace = true, features = ["any", "runtime-tokio", "sqlite"] }
 thiserror.workspace = true
 time = { workspace = true, features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }

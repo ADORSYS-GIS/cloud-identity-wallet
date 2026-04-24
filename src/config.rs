@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub server: ServerConfig,
     pub redis: RedisConfig,
+    pub database: DatabaseConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +24,12 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedisConfig {
     pub uri: SecretString,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseConfig {
+    /// Database URL
+    pub url: SecretString,
 }
 
 impl RedisConfig {
@@ -75,7 +82,8 @@ impl Config {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 3000)?
-            .set_default("redis.uri", "redis://127.0.0.1:6379")
+            .set_default("redis.uri", "redis://127.0.0.1:6379")?
+            .set_default("database.url", "sqlite::memory:")
     }
 }
 

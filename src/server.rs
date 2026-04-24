@@ -6,11 +6,14 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home};
+use crate::server::handlers::{health_check, home, register_tenant};
 use crate::session::SessionStore;
 
 use axum::http::Method;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
@@ -65,6 +68,7 @@ impl Server {
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
+            .nest("/api/v1", api_routes())
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -86,4 +90,8 @@ impl Server {
         axum::serve(self.listener, self.router).await?;
         Ok(())
     }
+}
+
+fn api_routes<S: SessionStore>() -> Router<AppState<S>> {
+    Router::new().route("/tenants", post(register_tenant))
 }
