@@ -1,5 +1,6 @@
 use cloud_identity_wallet::{
     config::Config, domain::service::Service, outbound::SqlTenantRepository, server::Server,
+    session::MemorySession,
 };
 
 pub async fn spawn_server() -> String {
@@ -21,8 +22,9 @@ pub async fn spawn_server() -> String {
         .unwrap();
     let tenant_repo = SqlTenantRepository::new(pool);
     tenant_repo.init_schema().await.unwrap();
+    let session_store = MemorySession::default();
 
-    let service = Service::new(tenant_repo);
+    let service = Service::new(session_store, tenant_repo);
     let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();
