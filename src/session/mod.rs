@@ -1,3 +1,4 @@
+use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
 use color_eyre::eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ pub struct IssuanceSession {
     pub flow: FlowType,
     pub code_verifier: Option<String>,
     pub issuer_state: Option<String>,
+    pub authz_server_metadata: AuthorizationServerMetadata,
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
 }
@@ -46,9 +48,22 @@ impl IssuanceState {
 pub type ParsedOffer = CredentialOffer;
 
 impl IssuanceSession {
-    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Result<Self> {
+    pub fn new(
+        tenant_id: Uuid,
+        offer: ParsedOffer,
+        flow: FlowType,
+        authz_server_metadata: AuthorizationServerMetadata,
+    ) -> Result<Self> {
         let now = OffsetDateTime::now_utc();
         let expires_at = now + time::Duration::minutes(15);
+        
+        // Extract issuer_state from authorization_code grant if present
+        let issuer_state = offer
+            .grants
+            .as_ref()
+            .and_then(|g| g.authorization_code.as_ref())
+            .and_then(|ac| ac.issuer_state.clone());
+        
         Ok(Self {
             id: utils::generate_session_id(),
             tenant_id,
@@ -56,7 +71,8 @@ impl IssuanceSession {
             offer,
             flow,
             code_verifier: None,
-            issuer_state: None,
+            issuer_state,
+            authz_server_metadata,
             created_at: now,
             expires_at,
         })
@@ -127,7 +143,14 @@ mod tests {
         }))
         .unwrap();
 
-        IssuanceSession::new(Uuid::new_v4(), offer, flow).unwrap()
+        let authz_server_metadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "https://as.example.com/token"
+        }))
+        .unwrap();
+
+        IssuanceSession::new(Uuid::new_v4(), offer, flow, authz_server_metadata).unwrap()
     }
 
     #[test]

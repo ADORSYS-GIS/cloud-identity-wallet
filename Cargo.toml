@@ -68,6 +68,7 @@ color-eyre.workspace = true
 config = "0.15"
 dashmap.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+percent-encoding = "2"
 serde = { workspace = true, features = ["derive"] }
 sqlx = { workspace = true, features = ["runtime-tokio", "any", "sqlite"] }
 serde_json.workspace = true
@@ -76,6 +77,7 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 time = { workspace = true, features = ["serde"] }
 base64.workspace = true
