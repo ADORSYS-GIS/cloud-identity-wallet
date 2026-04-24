@@ -109,8 +109,7 @@ async fn handle_authorization_code_consent(
         .await
         .map_err(bad_gateway)?;
 
-    transition(&mut session, IssuanceState::AwaitingAuthorization)
-        .map_err(internal_error)?;
+    transition(&mut session, IssuanceState::AwaitingAuthorization).map_err(internal_error)?;
     state
         .service
         .session_repo
