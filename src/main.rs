@@ -1,5 +1,6 @@
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
+use cloud_identity_wallet::outbound::MemoryTenantRepository;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::session::MemorySession;
 use cloud_identity_wallet::telemetry;
@@ -19,9 +20,12 @@ async fn main() -> color_eyre::Result<()> {
 
     // TODO: Replace with Redis session store when ready
     let session_store = MemorySession::default();
-    let service = Service::new(session_store);
 
-    // Create and run server
+    // TODO: Replace with actual database repository when ready
+    let tenant_repo = MemoryTenantRepository::new();
+
+    // Create service and server
+    let service = Service::new(session_store, tenant_repo);
     let server = Server::new(&config, service).await?;
     server.run().await
 }
