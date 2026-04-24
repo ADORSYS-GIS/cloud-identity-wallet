@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dashmap::DashMap;
+use dashmap::{DashMap, Entry};
 
 use crate::session::{Id, Result, SessionStore};
 use serde::de::DeserializeOwned;
@@ -17,6 +17,7 @@ struct SessionEntry {
 /// An in-memory session manager.
 ///
 /// Expired entries are cleaned up lazily during reads/writes on the same key.
+/// Because of this behavior, it is suitable for testing and development purposes only.
 #[derive(Debug, Clone)]
 pub struct MemorySession {
     entries: Arc<DashMap<Box<[u8]>, SessionEntry>>,
@@ -63,22 +64,22 @@ impl SessionStore for MemorySession {
     {
         let key = key.into();
         let value_bytes = postcard::to_allocvec(value)?;
+        let key_bytes: Box<[u8]> = key.as_bytes().into();
 
-        if let Some(mut entry) = self.entries.get_mut(key.as_bytes()) {
-            if Self::is_expired(&entry) {
-                drop(entry);
-                self.entries
-                    .insert(key.as_bytes().into(), self.make_entry(&value_bytes));
-                return Ok(());
+        match self.entries.entry(key_bytes) {
+            Entry::Occupied(mut occupied) => {
+                if Self::is_expired(occupied.get()) {
+                    // Entry is expired, replace it atomically
+                    occupied.insert(self.make_entry(&value_bytes));
+                } else {
+                    // Update in place without refreshing TTL
+                    occupied.get_mut().value = value_bytes.into_boxed_slice();
+                }
             }
-
-            // Do not refresh TTL on update; keep existing expiration deadline.
-            entry.value = value_bytes.into_boxed_slice();
-            return Ok(());
+            Entry::Vacant(vacant) => {
+                vacant.insert(self.make_entry(&value_bytes));
+            }
         }
-
-        self.entries
-            .insert(key.as_bytes().into(), self.make_entry(&value_bytes));
         Ok(())
     }
 
