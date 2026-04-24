@@ -51,6 +51,7 @@ impl Server {
             });
 
         let cors_layer = CorsLayer::new()
+            // TODO : Replace Any with specific origins
             .allow_origin(Any)
             .allow_headers(Any)
             .allow_methods([
