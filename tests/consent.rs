@@ -5,17 +5,17 @@ use axum::{
 use cloud_identity_wallet::{
     domain::service::Service,
     issuance::AuthorizationUrlBuilder,
-    outbound::{MemorySessionRepository, MemoryTenantRepository},
+    outbound::MemoryTenantRepository,
     server::{AppState, handlers::submit_consent, sse::SseEvent},
-    session::{FlowType, IssuanceSession},
+    session::{FlowType, IssuanceSession, MemorySession, SessionStore},
 };
 use cloud_wallet_openid4vc::http::HttpClientBuilder;
 use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn create_test_state() -> AppState {
-    let session_repo = MemorySessionRepository::new();
+fn create_test_state() -> AppState<MemorySession> {
+    let session_store = MemorySession::default();
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);
 
     let http_client = HttpClientBuilder::new()
@@ -29,8 +29,8 @@ fn create_test_state() -> AppState {
     );
 
     let service = Service::new(
+        session_store,
         MemoryTenantRepository::new(),
-        session_repo,
         authz_url_builder,
         sse_broadcast,
     );
@@ -67,7 +67,7 @@ async fn test_consent_rejected() {
     let state = create_test_state();
     let session = create_test_session(FlowType::AuthorizationCode);
     let session_id = session.id.clone();
-    state.service.session_repo.save(&session).await.unwrap();
+    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -105,7 +105,7 @@ async fn test_consent_invalid_state() {
     let mut session = create_test_session(FlowType::AuthorizationCode);
     session.state = cloud_identity_wallet::session::IssuanceState::Processing;
     let session_id = session.id.clone();
-    state.service.session_repo.save(&session).await.unwrap();
+    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -172,9 +172,9 @@ async fn test_consent_authorization_code_flow() {
     let session = create_test_session(FlowType::AuthorizationCode);
     let session_id = session.id.clone();
 
-    // Clone session_repo for later verification before moving state
-    let session_repo = state.service.session_repo.clone();
-    session_repo.save(&session).await.unwrap();
+    // Clone session_store for later verification before moving state
+    let session_store = state.service.session.clone();
+    session_store.upsert(session_id.as_str(), &session).await.unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -243,7 +243,7 @@ async fn test_consent_authorization_code_flow() {
     );
 
     // Verify session was updated with code_verifier stored internally
-    let updated_session = session_repo.get(&session_id).await.unwrap().unwrap();
+    let updated_session: IssuanceSession = session_store.get(session_id.as_str()).await.unwrap().unwrap();
     assert!(
         updated_session.code_verifier.is_some(),
         "code_verifier should be stored in session"
@@ -283,7 +283,7 @@ async fn test_consent_pre_authorized_no_tx_code() {
     )
     .unwrap();
     let session_id = session.id.clone();
-    state.service.session_repo.save(&session).await.unwrap();
+    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -345,7 +345,7 @@ async fn test_consent_pre_authorized_with_tx_code() {
     )
     .unwrap();
     let session_id = session.id.clone();
-    state.service.session_repo.save(&session).await.unwrap();
+    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
 
     let app = axum::Router::new()
         .route(

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{health_check, home, register_tenant, submit_consent};
+use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
@@ -22,10 +23,17 @@ use tower_http::{
 };
 
 /// The global application state shared between all request handlers.
-#[derive(Clone)]
-pub struct AppState {
-    /// Service for tenant operations.
-    pub service: Arc<Service>,
+pub struct AppState<S: SessionStore> {
+    pub service: Arc<Service<S>>,
+}
+
+// We manually implement Clone here to avoid bounds on generic types
+impl<S: SessionStore> Clone for AppState<S> {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+        }
+    }
 }
 
 pub struct Server {
@@ -34,8 +42,8 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTP server.
-    pub async fn new(config: &Config, service: Service) -> Result<Self> {
+    /// Creates a new HTTPS server.
+    pub async fn new<S: SessionStore>(config: &Config, service: Service<S>) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -43,6 +51,7 @@ impl Server {
             });
 
         let cors_layer = CorsLayer::new()
+            // TODO : Replace Any with specific origins
             .allow_origin(Any)
             .allow_headers(Any)
             .allow_methods([
@@ -86,7 +95,7 @@ impl Server {
     }
 }
 
-fn api_routes() -> Router<AppState> {
+fn api_routes<S: SessionStore>() -> Router<AppState<S>> {
     Router::new()
         .route("/tenants", post(register_tenant))
         .route("/issuance/{session_id}/consent", post(submit_consent))

@@ -14,17 +14,17 @@ use crate::domain::models::consent::{
 };
 use crate::server::AppState;
 use crate::server::sse::{ErrorStep, ProcessingStep, SseEvent};
-use crate::session::{FlowType, IssuanceState, transition};
+use crate::session::{FlowType, IssuanceSession, IssuanceState, SessionStore, transition};
 
-pub async fn submit_consent(
-    State(state): State<AppState>,
+pub async fn submit_consent<S: SessionStore>(
+    State(state): State<AppState<S>>,
     Path(session_id): Path<String>,
     Json(payload): Json<ConsentRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ConsentErrorResponse>)> {
-    let mut session = state
+    let mut session: IssuanceSession = state
         .service
-        .session_repo
-        .get(&session_id)
+        .session
+        .get(session_id.as_str())
         .await
         .map_err(internal_error)?
         .ok_or_else(|| not_found(&session_id))?;
@@ -41,8 +41,8 @@ pub async fn submit_consent(
         transition(&mut session, IssuanceState::Failed).map_err(internal_error)?;
         state
             .service
-            .session_repo
-            .save(&session)
+            .session
+            .upsert(session_id.as_str(), &session)
             .await
             .map_err(internal_error)?;
 
@@ -75,9 +75,9 @@ pub async fn submit_consent(
     }
 }
 
-async fn handle_authorization_code_consent(
-    state: AppState,
-    mut session: crate::session::IssuanceSession,
+async fn handle_authorization_code_consent<S: SessionStore>(
+    state: AppState<S>,
+    mut session: IssuanceSession,
     payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
     let code_verifier = generate_pkce_verifier();
@@ -112,8 +112,8 @@ async fn handle_authorization_code_consent(
     transition(&mut session, IssuanceState::AwaitingAuthorization).map_err(internal_error)?;
     state
         .service
-        .session_repo
-        .save(&session)
+        .session
+        .upsert(session.id.as_str(), &session)
         .await
         .map_err(internal_error)?;
 
@@ -127,9 +127,9 @@ async fn handle_authorization_code_consent(
     ))
 }
 
-async fn handle_pre_authorized_consent(
-    state: AppState,
-    mut session: crate::session::IssuanceSession,
+async fn handle_pre_authorized_consent<S: SessionStore>(
+    state: AppState<S>,
+    mut session: IssuanceSession,
     _payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
     let tx_code_required = session
@@ -144,8 +144,8 @@ async fn handle_pre_authorized_consent(
         transition(&mut session, IssuanceState::AwaitingTxCode).map_err(internal_error)?;
         state
             .service
-            .session_repo
-            .save(&session)
+            .session
+            .upsert(session.id.as_str(), &session)
             .await
             .map_err(internal_error)?;
 
@@ -161,8 +161,8 @@ async fn handle_pre_authorized_consent(
         transition(&mut session, IssuanceState::Processing).map_err(internal_error)?;
         state
             .service
-            .session_repo
-            .save(&session)
+            .session
+            .upsert(session.id.as_str(), &session)
             .await
             .map_err(internal_error)?;
 
@@ -256,7 +256,7 @@ fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<ConsentErrorRe
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ConsentErrorResponse {
-            error: "server_error",
+            error: "internal_error",
             error_description: e.to_string(),
         }),
     )
@@ -266,7 +266,7 @@ fn bad_gateway(e: impl std::fmt::Display) -> (StatusCode, Json<ConsentErrorRespo
     (
         StatusCode::BAD_GATEWAY,
         Json(ConsentErrorResponse {
-            error: "authorization_url_build_failed",
+            error: "bad_gateway",
             error_description: e.to_string(),
         }),
     )

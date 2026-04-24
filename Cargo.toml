@@ -63,29 +63,41 @@ invalid_html_tags = "deny"
 [dependencies]
 async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
+base64.workspace = true
 cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
 dashmap.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 percent-encoding = "2"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+rand.workspace = true
+secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
-sqlx = { workspace = true, features = ["runtime-tokio", "any", "sqlite"] }
 serde_json.workspace = true
+sqlx = { workspace = true, features = ["any", "runtime-tokio", "sqlite"] }
 thiserror.workspace = true
+time = { workspace = true, features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
-time = { workspace = true, features = ["serde"] }
-base64.workspace = true
-rand.workspace = true
+
+[dependencies.redis]
+version = "1.2"
+features = [
+  "ahash",
+  "connection-manager",
+  "tls-rustls-webpki-roots",
+  "tokio-rustls-comp"
+]
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }
-serde_json.workspace = true
+serde_json = { workspace = true }
+testcontainers-modules = { version = "0.15", features = ["redis"] }
 tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
@@ -102,7 +114,3 @@ opt-level = 3
 [profile.release]
 strip = "symbols"
 lto = "fat"
-# Abort on panic
-panic = "abort"
-# Maximize runtime speed
-codegen-units = 1

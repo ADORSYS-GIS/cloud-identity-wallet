@@ -1,9 +1,10 @@
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
 use cloud_identity_wallet::issuance::AuthorizationUrlBuilder;
-use cloud_identity_wallet::outbound::{MemorySessionRepository, MemoryTenantRepository};
+use cloud_identity_wallet::outbound::MemoryTenantRepository;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::server::sse::SseEvent;
+use cloud_identity_wallet::session::MemorySession;
 use cloud_identity_wallet::telemetry;
 
 #[cfg(not(target_env = "msvc"))]
@@ -19,9 +20,13 @@ async fn main() -> color_eyre::Result<()> {
     let config = Config::load()?;
     tracing::info!("Loaded configuration: {:?}", config);
 
-    // Create repositories
+    // Create session store
+    // TODO: Replace with Redis session store when ready
+    let session_store = MemorySession::default();
+
+    // Create tenant repository
+    // TODO: Replace with actual database repository when ready
     let tenant_repo = MemoryTenantRepository::new();
-    let session_repo = MemorySessionRepository::new();
 
     // Create SSE broadcast channel
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);
@@ -38,7 +43,7 @@ async fn main() -> color_eyre::Result<()> {
     );
 
     // Create service and server
-    let service = Service::new(tenant_repo, session_repo, authz_url_builder, sse_broadcast);
+    let service = Service::new(session_store, tenant_repo, authz_url_builder, sse_broadcast);
     let server = Server::new(&config, service).await?;
     server.run().await
 }
