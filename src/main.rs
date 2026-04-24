@@ -2,8 +2,8 @@ use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
 use cloud_identity_wallet::issuance::AuthorizationUrlBuilder;
 use cloud_identity_wallet::outbound::{MemorySessionRepository, MemoryTenantRepository};
-use cloud_identity_wallet::server::sse::SseEvent;
 use cloud_identity_wallet::server::Server;
+use cloud_identity_wallet::server::sse::SseEvent;
 use cloud_identity_wallet::telemetry;
 
 #[cfg(not(target_env = "msvc"))]

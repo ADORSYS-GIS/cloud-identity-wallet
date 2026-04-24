@@ -67,7 +67,9 @@ impl Server {
 
         let listener = TcpListener::bind(format!("{}:{}", config.server.host, config.server.port))
             .await
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to bind to port {}: {}", config.server.port, e))?;
+            .map_err(|e| {
+                color_eyre::eyre::eyre!("Failed to bind to port {}: {}", config.server.port, e)
+            })?;
 
         Ok(Self { router, listener })
     }

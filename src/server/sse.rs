@@ -49,7 +49,11 @@ impl SseEvent {
         }
     }
 
-    pub fn completed(session_id: &str, credential_ids: Vec<String>, credential_types: Vec<String>) -> Self {
+    pub fn completed(
+        session_id: &str,
+        credential_ids: Vec<String>,
+        credential_types: Vec<String>,
+    ) -> Self {
         Self::Completed {
             session_id: session_id.to_string(),
             credential_ids,
@@ -57,7 +61,12 @@ impl SseEvent {
         }
     }
 
-    pub fn failed(session_id: &str, error: &str, error_description: Option<&str>, step: ErrorStep) -> Self {
+    pub fn failed(
+        session_id: &str,
+        error: &str,
+        error_description: Option<&str>,
+        step: ErrorStep,
+    ) -> Self {
         Self::Failed {
             session_id: session_id.to_string(),
             error: error.to_string(),

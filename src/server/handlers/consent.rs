@@ -1,18 +1,20 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use cloud_wallet_openid4vc::issuance::authz_details::AuthorizationDetails;
-use cloud_wallet_openid4vc::issuance::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier};
+use cloud_wallet_openid4vc::issuance::utils::pkce::{
+    derive_pkce_challenge, generate_pkce_verifier,
+};
 
 use crate::domain::models::consent::{
     ConsentErrorResponse, ConsentRequest, ConsentResponse, NextAction,
 };
-use crate::server::sse::{ErrorStep, ProcessingStep, SseEvent};
 use crate::server::AppState;
-use crate::session::{transition, FlowType, IssuanceState};
+use crate::server::sse::{ErrorStep, ProcessingStep, SseEvent};
+use crate::session::{FlowType, IssuanceState, transition};
 
 pub async fn submit_consent(
     State(state): State<AppState>,
@@ -24,7 +26,7 @@ pub async fn submit_consent(
         .session_repo
         .get(&session_id)
         .await
-        .map_err(|e| internal_error(e))?
+        .map_err(internal_error)?
         .ok_or_else(|| not_found(&session_id))?;
 
     if session.is_expired() {
@@ -36,8 +38,13 @@ pub async fn submit_consent(
     }
 
     if !payload.accepted {
-        transition(&mut session, IssuanceState::Failed).map_err(|e| internal_error(e))?;
-        state.service.session_repo.save(&session).await.map_err(|e| internal_error(e))?;
+        transition(&mut session, IssuanceState::Failed).map_err(internal_error)?;
+        state
+            .service
+            .session_repo
+            .save(&session)
+            .await
+            .map_err(internal_error)?;
 
         emit_sse_event(
             &state.service.sse_broadcast,
@@ -64,9 +71,7 @@ pub async fn submit_consent(
         FlowType::AuthorizationCode => {
             handle_authorization_code_consent(state, session, payload).await
         }
-        FlowType::PreAuthorizedCode => {
-            handle_pre_authorized_consent(state, session, payload).await
-        }
+        FlowType::PreAuthorizedCode => handle_pre_authorized_consent(state, session, payload).await,
     }
 }
 
@@ -102,11 +107,16 @@ async fn handle_authorization_code_consent(
             &session.authz_server_metadata,
         )
         .await
-        .map_err(|e| bad_gateway(e))?;
+        .map_err(bad_gateway)?;
 
     transition(&mut session, IssuanceState::AwaitingAuthorization)
-        .map_err(|e| internal_error(e))?;
-    state.service.session_repo.save(&session).await.map_err(|e| internal_error(e))?;
+        .map_err(internal_error)?;
+    state
+        .service
+        .session_repo
+        .save(&session)
+        .await
+        .map_err(internal_error)?;
 
     Ok((
         StatusCode::OK,
@@ -132,9 +142,13 @@ async fn handle_pre_authorized_consent(
         .unwrap_or(false);
 
     if tx_code_required {
-        transition(&mut session, IssuanceState::AwaitingTxCode)
-            .map_err(|e| internal_error(e))?;
-        state.service.session_repo.save(&session).await.map_err(|e| internal_error(e))?;
+        transition(&mut session, IssuanceState::AwaitingTxCode).map_err(internal_error)?;
+        state
+            .service
+            .session_repo
+            .save(&session)
+            .await
+            .map_err(internal_error)?;
 
         Ok((
             StatusCode::OK,
@@ -145,9 +159,13 @@ async fn handle_pre_authorized_consent(
             }),
         ))
     } else {
-        transition(&mut session, IssuanceState::Processing)
-            .map_err(|e| internal_error(e))?;
-        state.service.session_repo.save(&session).await.map_err(|e| internal_error(e))?;
+        transition(&mut session, IssuanceState::Processing).map_err(internal_error)?;
+        state
+            .service
+            .session_repo
+            .save(&session)
+            .await
+            .map_err(internal_error)?;
 
         emit_sse_event(
             &state.service.sse_broadcast,
@@ -171,7 +189,11 @@ fn build_authorization_details(
     selected_ids: &[&str],
 ) -> Option<Vec<AuthorizationDetails>> {
     let config_ids: Vec<&str> = if selected_ids.is_empty() {
-        offer.credential_configuration_ids.iter().map(|s| s.as_str()).collect()
+        offer
+            .credential_configuration_ids
+            .iter()
+            .map(|s| s.as_str())
+            .collect()
     } else {
         selected_ids.to_vec()
     };
@@ -182,13 +204,17 @@ fn build_authorization_details(
 
     let details: Vec<AuthorizationDetails> = config_ids
         .into_iter()
-        .map(|id| AuthorizationDetails::for_configuration(id))
+        .map(AuthorizationDetails::for_configuration)
         .collect();
 
     Some(details)
 }
 
-fn emit_sse_event(broadcast: &tokio::sync::broadcast::Sender<SseEvent>, session_id: &str, event: SseEvent) {
+fn emit_sse_event(
+    broadcast: &tokio::sync::broadcast::Sender<SseEvent>,
+    session_id: &str,
+    event: SseEvent,
+) {
     if broadcast.send(event.clone()).is_err() {
         tracing::warn!(
             session_id = %session_id,

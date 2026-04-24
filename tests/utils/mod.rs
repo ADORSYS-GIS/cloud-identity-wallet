@@ -3,7 +3,7 @@ use cloud_identity_wallet::{
     domain::service::Service,
     issuance::AuthorizationUrlBuilder,
     outbound::{MemorySessionRepository, SqlTenantRepository},
-    server::{sse::SseEvent, Server},
+    server::{Server, sse::SseEvent},
 };
 
 pub async fn spawn_server() -> String {

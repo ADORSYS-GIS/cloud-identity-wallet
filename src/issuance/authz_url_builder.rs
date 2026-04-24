@@ -92,6 +92,7 @@ impl AuthorizationUrlBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_with_par(
         &self,
         par_endpoint: &str,
@@ -171,8 +172,9 @@ impl AuthorizationUrlBuilder {
             }
 
             if let Some(details) = authorization_details {
-                let json = serde_json::to_string(details)
-                    .map_err(|e| AuthorizationUrlBuilderError::UrlConstructionFailed(e.to_string()))?;
+                let json = serde_json::to_string(details).map_err(|e| {
+                    AuthorizationUrlBuilderError::UrlConstructionFailed(e.to_string())
+                })?;
                 let encoded = percent_encode(json.as_bytes(), FRAGMENT_ENCODE_SET).to_string();
                 query_pairs.append_pair("authorization_details", &encoded);
             }
