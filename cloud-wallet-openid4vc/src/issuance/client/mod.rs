@@ -34,11 +34,11 @@ use crate::issuance::credential_request::{
 };
 use crate::issuance::credential_response::{CredentialResponse, DeferredCredentialResult};
 use crate::issuance::error::{
-    AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse, Oid4vciError,
-    TokenErrorResponse,
+    AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse,
+    NotificationErrorResponse, Oid4vciError, TokenErrorResponse,
 };
 use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
-use crate::issuance::notification::{NotificationEvent, NotificationRequest};
+use crate::issuance::notification::NotificationRequest;
 use crate::issuance::token_request::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest,
 };
@@ -683,29 +683,37 @@ impl Oid4vciClient {
 
     /// Send a credential storage notification to the issuer.
     ///
-    /// Failures are logged but do not propagate, the notification endpoint
+    /// Failures should not propagate, the notification endpoint
     /// is optional and its failure must not break the issuance flow.
     pub async fn send_notification(
         &self,
         notification_endpoint: &Url,
         access_token: &str,
-        notification_id: impl Into<String>,
-        event: NotificationEvent,
-        event_description: Option<impl Into<String>>,
-    ) {
-        let request = NotificationRequest {
-            notification_id: notification_id.into(),
-            event,
-            event_description: event_description.map(|d| d.into()),
-        };
-
-        let _ = self
+        req: &NotificationRequest,
+    ) -> Result<()> {
+        let response = self
             .http_client
             .post(notification_endpoint.as_str())
             .bearer_auth(access_token)
-            .json(&request)
+            .json(&req)
             .send()
-            .await;
+            .await
+            .map_err(|e| ClientError::http("Failed to send notification", e))?;
+
+        if !response.status().is_success() {
+            // Try to parse as notification error
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+
+            // Check if it's a notification error
+            if let Ok(error) =
+                serde_json::from_str::<Oid4vciError<NotificationErrorResponse>>(&body)
+            {
+                return Err(ClientError::Notification(error));
+            }
+            return Err(ClientError::http_response(status.as_u16(), body));
+        }
+        Ok(())
     }
 
     /// Determine the issuance flow based on the offer and metadata.
