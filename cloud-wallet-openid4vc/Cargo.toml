@@ -16,7 +16,6 @@ dashmap = { workspace = true, optional = true }
 futures = "0.3"
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 percent-encoding = "2"
-pkcs8 = { version = "0.10", features = ["std"] }
 reqwest = { version = "0.13", features = ["form", "json", "rustls"] }
 reqwest-middleware = { version = "0.5", features = ["form", "json"] }
 reqwest-retry = "0.9"
@@ -29,7 +28,6 @@ time.workspace = true
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 validator = { version = "0.20", features = ["derive"] }
-zeroize.workspace = true
 
 [dependencies.sqlx]
 workspace = true
@@ -37,7 +35,6 @@ features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
 optional = true
 
 [dev-dependencies]
-testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
 
