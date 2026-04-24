@@ -22,7 +22,7 @@ pub trait ProofSigner: Send + Sync + 'static {
 ///
 /// [OID4VCI Appendix F]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-jwt-proof-type
 #[skip_serializing_none]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Header {
     /// Digital signature algorithm identifier
     pub alg: Algorithm,
@@ -45,7 +45,7 @@ pub struct Header {
 ///
 /// [OID4VCI Appendix F]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-jwt-proof-type
 #[skip_serializing_none]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Audience: the `credential_issuer` URL from issuer metadata.
     pub aud: String,
@@ -185,7 +185,7 @@ impl CryptoSigner {
         signing_input.extend_from_slice(payload_b64.as_bytes());
 
         let signature = self.sign_bytes(&signing_input)?;
-        let sig_b64 = URL_SAFE_NO_PAD.encode(&signature);
+        let sig_b64 = b64_encode(signature);
 
         let jwt_len = header_len + 1 + payload_len + 1 + sig_b64.len();
         let mut jwt = String::with_capacity(jwt_len);
@@ -199,11 +199,12 @@ impl CryptoSigner {
 
     /// Sign `msg`, returning signature bytes.
     fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
+        use ecdsa::Curve;
         match &self.key {
             KeyMaterial::Ecdsa(keypair) => match keypair.curve() {
-                ecdsa::Curve::P256 | ecdsa::Curve::P256K1 => Ok(keypair.sign_sha256(msg)?.to_vec()),
-                ecdsa::Curve::P384 => Ok(keypair.sign_sha384(msg)?.to_vec()),
-                ecdsa::Curve::P521 => Ok(keypair.sign_sha512(msg)?.to_vec()),
+                Curve::P256 | Curve::P256K1 => Ok(keypair.sign_sha256(msg)?.to_vec()),
+                Curve::P384 => Ok(keypair.sign_sha384(msg)?.to_vec()),
+                Curve::P521 => Ok(keypair.sign_sha512(msg)?.to_vec()),
             },
             KeyMaterial::Ed25519(keypair) => Ok(keypair.sign(msg).to_vec()),
             KeyMaterial::Rsa(keypair) => {
@@ -273,8 +274,8 @@ fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<String> {
 }
 
 fn base64_encode_type<T: Serialize>(value: &T) -> Result<String> {
-    let buffer = serde_json::to_vec(value)?;
-    Ok(b64_encode(buffer))
+    let serialized = serde_json::to_vec(value)?;
+    Ok(b64_encode(serialized))
 }
 
 fn b64_encode<T: AsRef<[u8]>>(value: T) -> String {
@@ -296,5 +297,98 @@ impl From<serde_json::Error> for ClientError {
 impl From<base64::EncodeSliceError> for ClientError {
     fn from(error: base64::EncodeSliceError) -> Self {
         ClientError::internal(format!("base64 encoding error: {error}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
+    use cloud_wallet_crypto::ed25519::KeyPair as Ed25519KeyPair;
+    use cloud_wallet_crypto::rsa::KeyPair as RsaKeyPair;
+
+    fn get_ecdsa_p256_der() -> Vec<u8> {
+        let keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+        keypair.to_pkcs8_der().to_vec()
+    }
+
+    fn get_ed25519_der() -> Vec<u8> {
+        let keypair = Ed25519KeyPair::generate().unwrap();
+        let mut buf = [0u8; 100];
+        let der = keypair.to_pkcs8_der(&mut buf).unwrap();
+        der.to_vec()
+    }
+
+    fn get_rsa_der() -> Vec<u8> {
+        use cloud_wallet_crypto::rsa::RsaKeySize;
+        let keypair = RsaKeyPair::generate(RsaKeySize::Rsa2048).unwrap();
+        let mut buf = vec![0u8; 2000];
+        let der = keypair.to_pkcs8_der(&mut buf).unwrap();
+        der.to_vec()
+    }
+
+    fn sample_claims() -> Claims {
+        Claims {
+            aud: "https://issuer.example.com".to_string(),
+            iat: time::UtcDateTime::now().unix_timestamp(),
+            iss: Some("client-123".to_string()),
+            nonce: Some("nonce-456".to_string()),
+        }
+    }
+
+    fn decode_and_validate_jwt(token: &str) -> Claims {
+        let header = jsonwebtoken::decode_header(token).unwrap();
+        let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&header.jwk.unwrap()).unwrap();
+        let mut validation = jsonwebtoken::Validation::new(header.alg);
+        validation.set_audience(&["https://issuer.example.com"]);
+        validation.set_required_spec_claims(&["iat", "iss", "aud"]);
+        let claims = jsonwebtoken::decode::<Claims>(token, &decoding_key, &validation).unwrap();
+        claims.claims
+    }
+
+    #[test]
+    fn test_ecdsa_p256_signer() {
+        let der = get_ecdsa_p256_der();
+        let signer = CryptoSigner::from_ecdsa_der(&der).unwrap();
+        assert_eq!(signer.algorithm(), Algorithm::ES256);
+
+        let claims = sample_claims();
+        let jwt = signer.sign(&claims).expect("failed to sign claims");
+
+        // Decode and validate the JWT
+        let decoded_claims = decode_and_validate_jwt(&jwt);
+        assert_eq!(decoded_claims.aud, claims.aud);
+        assert_eq!(decoded_claims.iss, claims.iss);
+        assert_eq!(decoded_claims.nonce, claims.nonce);
+    }
+
+    #[test]
+    fn test_ed25519_signer() {
+        let der = get_ed25519_der();
+        let signer = CryptoSigner::from_ed25519_der(&der).unwrap();
+        assert_eq!(signer.algorithm(), Algorithm::EdDSA);
+
+        let claims = sample_claims();
+        let jwt = signer.sign(&claims).expect("failed to sign claims");
+
+        let decoded_claims = decode_and_validate_jwt(&jwt);
+        assert_eq!(decoded_claims.aud, claims.aud);
+        assert_eq!(decoded_claims.iss, claims.iss);
+        assert_eq!(decoded_claims.nonce, claims.nonce);
+    }
+
+    #[test]
+    fn test_rsa_signer() {
+        let der = get_rsa_der();
+        let signer = CryptoSigner::from_rsa_der(&der).unwrap();
+        assert_eq!(signer.algorithm(), Algorithm::PS256);
+
+        let claims = sample_claims();
+        let jwt = signer.sign(&claims).expect("failed to sign claims");
+
+        let decoded_claims = decode_and_validate_jwt(&jwt);
+        assert_eq!(decoded_claims.aud, claims.aud);
+        assert_eq!(decoded_claims.iss, claims.iss);
+        assert_eq!(decoded_claims.nonce, claims.nonce);
     }
 }
