@@ -3,45 +3,40 @@
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
 use crate::{
-    domain::models::tenants::{
-        RegisterTenantRequest, TenantError, TenantErrorResponse, TenantName,
-    },
-    server::AppState,
+    domain::models::tenants::{RegisterTenantRequest, TenantError, TenantName},
+    server::{AppState, error::ApiError, responses::ResponseBody},
 };
 
 /// Registers a new tenant.
 pub async fn register_tenant(
     State(state): State<AppState>,
     Json(payload): Json<RegisterTenantRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<TenantErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     // Validate the name before passing to the repository
-    let _tenant_name = TenantName::new(&payload.name).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(TenantErrorResponse {
-                error: "invalid_request",
-                error_description: e,
-            }),
-        )
+    let tenant_name = TenantName::new(&payload.name).map_err(|e| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        error: "invalid_request",
+        error_description: Some(e),
     })?;
 
-    // Persist the tenant
-    match state.service.tenant_repo.create(payload).await {
-        Ok(response) => Ok((StatusCode::CREATED, Json(response))),
-        Err(TenantError::InvalidName(msg)) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(TenantErrorResponse {
+    // Create a new request with the validated name
+    let validated_request = RegisterTenantRequest {
+        name: tenant_name.into_inner(),
+    };
+
+    let response = state
+        .service
+        .tenant_repo
+        .create(validated_request)
+        .await
+        .map_err(|e| match e {
+            TenantError::InvalidName(msg) => ApiError {
+                status: StatusCode::BAD_REQUEST,
                 error: "invalid_request",
-                error_description: msg,
-            }),
-        )),
-        Err(TenantError::Backend(_)) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(TenantErrorResponse {
-                error: "server_error",
-                error_description: "An internal error occurred while processing your request"
-                    .to_string(),
-            }),
-        )),
-    }
+                error_description: Some(msg),
+            },
+            TenantError::Backend(source) => ApiError::internal(source),
+        })?;
+
+    Ok(ResponseBody::new(StatusCode::CREATED, response))
 }

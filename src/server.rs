@@ -1,7 +1,7 @@
 mod auth;
+mod error;
 mod handlers;
 mod responses;
-mod error;
 
 use std::sync::Arc;
 
