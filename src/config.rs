@@ -63,7 +63,10 @@ impl Config {
             .set_default("server.port", 3000)?
             .set_default("database.url", "sqlite::memory:")?
             .set_default("wallet.client_id", "cloud-identity-wallet")?
-            .set_default("wallet.redirect_uri", "http://127.0.0.1:3000/api/v1/issuance/callback")
+            .set_default(
+                "wallet.redirect_uri",
+                "http://127.0.0.1:3000/api/v1/issuance/callback",
+            )
     }
 }
 

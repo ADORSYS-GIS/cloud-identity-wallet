@@ -56,14 +56,14 @@ impl IssuanceSession {
     ) -> Result<Self> {
         let now = OffsetDateTime::now_utc();
         let expires_at = now + time::Duration::minutes(15);
-        
+
         // Extract issuer_state from authorization_code grant if present
         let issuer_state = offer
             .grants
             .as_ref()
             .and_then(|g| g.authorization_code.as_ref())
             .and_then(|ac| ac.issuer_state.clone());
-        
+
         Ok(Self {
             id: utils::generate_session_id(),
             tenant_id,

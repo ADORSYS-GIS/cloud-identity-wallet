@@ -1,7 +1,6 @@
-use serde::{Deserialize, Serialize};
 use color_eyre::eyre::Report;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
 
 #[derive(Debug, Error)]
 pub enum SessionError {
