@@ -2,14 +2,13 @@
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
-use crate::{
-    domain::models::tenants::{RegisterTenantRequest, TenantError, TenantName},
-    server::{AppState, error::ApiError, responses::ResponseBody},
-};
+use crate::domain::models::tenants::{RegisterTenantRequest, TenantError, TenantName};
+use crate::server::{AppState, error::ApiError, responses::ResponseBody};
+use crate::session::SessionStore;
 
 /// Registers a new tenant.
-pub async fn register_tenant(
-    State(state): State<AppState>,
+pub async fn register_tenant<S: SessionStore>(
+    State(state): State<AppState<S>>,
     Json(payload): Json<RegisterTenantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate the name before passing to the repository
