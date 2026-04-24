@@ -14,6 +14,8 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 #[async_trait::async_trait]
 pub trait SessionStore: Send + Sync + 'static {
     /// Inserts or updates a session in the store.
+    ///
+    /// The update operation doesn't reset the expiration time.
     async fn upsert<K, V>(&self, key: K, value: &V) -> Result<()>
     where
         K: Into<Id> + Send + Sync,
