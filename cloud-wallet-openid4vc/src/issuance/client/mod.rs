@@ -195,7 +195,7 @@ pub struct Oid4vciClient {
 
 impl Oid4vciClient {
     /// Creates a new client with custom HTTP options for the internal request client.
-    pub fn new_with_http_options(config: Config) -> Result<Self> {
+    pub fn new(config: Config) -> Result<Self> {
         let retry_policy = ExponentialBackoff::builder()
             .jitter(Jitter::Bounded)
             .build_with_max_retries(HTTP_MAX_RETRIES);
