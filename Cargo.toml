@@ -69,7 +69,6 @@ color-eyre.workspace = true
 config = "0.15"
 dashmap.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
-percent-encoding = "2"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand.workspace = true
 secrecy = { version = "0.10", features = ["serde"] }

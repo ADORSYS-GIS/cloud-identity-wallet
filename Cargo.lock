@@ -877,7 +877,6 @@ dependencies = [
  "config",
  "dashmap",
  "jsonwebtoken",
- "percent-encoding",
  "postcard",
  "rand 0.10.1",
  "redis",
