@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use axum::{
     Json,
     extract::{Extension, State},
@@ -8,7 +6,6 @@ use axum::{
 };
 use cloud_wallet_openid4vc::issuance::client::GrantType;
 use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::models::issuance::{
@@ -42,8 +39,6 @@ pub async fn start_issuance<S: SessionStore>(
     };
 
     let session = IssuanceSession::new(tenant_id, context.offer.clone(), flow_type);
-
-    let expires_at = OffsetDateTime::now_utc() + Duration::from_secs(3600);
 
     let issuer_display = context
         .issuer_metadata
@@ -93,7 +88,7 @@ pub async fn start_issuance<S: SessionStore>(
 
     let response = StartIssuanceResponse {
         session_id,
-        expires_at: expires_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
+        expires_at: session.expires_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
         issuer,
         credential_types,
         flow: flow_type.to_string(),
@@ -107,26 +102,19 @@ pub async fn start_issuance<S: SessionStore>(
 fn map_client_error(e: cloud_wallet_openid4vc::issuance::client::ClientError) -> (StatusCode, Json<IssuanceErrorResponse>) {
     use cloud_wallet_openid4vc::issuance::client::ClientError::*;
 
-    match &e {
-        Http { .. } | MetadataDiscovery { .. } => {
-            let msg = e.to_string();
-            if msg.contains("issuer metadata") || msg.contains("issuer_metadata") {
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(msg)),
-                )
-            } else if msg.contains("AS metadata") || msg.contains("authorization server") {
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(IssuanceErrorResponse::auth_server_metadata_fetch_failed(msg)),
-                )
-            } else {
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(msg)),
-                )
-            }
-        }
+    match e {
+        IssuerMetadataDiscovery { message } => (
+            StatusCode::BAD_GATEWAY,
+            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(message)),
+        ),
+        AsMetadataDiscovery { message } => (
+            StatusCode::BAD_GATEWAY,
+            Json(IssuanceErrorResponse::auth_server_metadata_fetch_failed(message)),
+        ),
+        Http { .. } | MetadataDiscovery { .. } => (
+            StatusCode::BAD_GATEWAY,
+            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(e.to_string())),
+        ),
         Validation { .. } | InvalidResponse { .. } | NoSupportedGrantType => (
             StatusCode::BAD_REQUEST,
             Json(IssuanceErrorResponse::invalid_credential_offer(e.to_string())),

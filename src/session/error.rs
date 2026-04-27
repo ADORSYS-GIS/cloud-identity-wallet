@@ -12,6 +12,9 @@ pub enum Error {
     #[error("Invalid state transition from {0} to {1}")]
     InvalidStateTransition(Cow<'static, str>, Cow<'static, str>),
 
+    #[error("session has expired")]
+    ExpiredSession,
+
     #[error("{0}")]
     Other(color_eyre::eyre::Report),
 }
