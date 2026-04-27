@@ -2,6 +2,7 @@ use cloud_identity_wallet::{
     config::Config, domain::service::Service, outbound::SqlTenantRepository, server::Server,
     session::MemorySession,
 };
+use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 
 pub async fn spawn_server() -> String {
     // Install default drivers for sqlx
@@ -24,7 +25,13 @@ pub async fn spawn_server() -> String {
     tenant_repo.init_schema().await.unwrap();
     let session_store = MemorySession::default();
 
-    let service = Service::new(session_store, tenant_repo);
+    let oid4vci_config = Oid4vciClientConfig::new(
+        &config.oid4vci.client_id,
+        config.oid4vci.redirect_uri.clone(),
+    );
+    let oid4vci_client = Oid4vciClient::new(oid4vci_config).unwrap();
+
+    let service = Service::new(session_store, tenant_repo, oid4vci_client);
     let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();
