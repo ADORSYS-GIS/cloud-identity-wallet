@@ -6,15 +6,142 @@ use cloud_identity_wallet::{
     domain::service::Service,
     outbound::MemoryTenantRepository,
     server::{AppState, handlers::submit_consent, sse::SseEvent},
-    session::{FlowType, IssuanceSession, MemorySession, SessionStore},
+    session::{FlowType, IssuanceSession, SessionStore, Id},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
 use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
+use std::time::{Duration, Instant};
+use dashmap::{DashMap, Entry};
+use serde::de::DeserializeOwned;
 
-fn create_test_state() -> AppState<MemorySession> {
-    let session_store = MemorySession::default();
+/// A JSON-based in-memory session store for testing.
+/// 
+/// This store uses JSON serialization instead of postcard to support
+/// types like `serde_json::Value` which cannot be serialized with postcard.
+#[derive(Debug, Clone)]
+struct JsonMemorySession {
+    entries: Arc<DashMap<Box<[u8]>, SessionEntry>>,
+    ttl: Duration,
+}
+
+#[derive(Debug, Clone)]
+struct SessionEntry {
+    value: Box<[u8]>,
+    expires_at: Instant,
+}
+
+impl JsonMemorySession {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            entries: Arc::default(),
+            ttl,
+        }
+    }
+
+    fn make_entry(&self, value: &[u8]) -> SessionEntry {
+        SessionEntry {
+            value: value.into(),
+            expires_at: Instant::now() + self.ttl,
+        }
+    }
+
+    fn is_expired(entry: &SessionEntry) -> bool {
+        Instant::now() >= entry.expires_at
+    }
+}
+
+impl Default for JsonMemorySession {
+    fn default() -> Self {
+        Self::new(Duration::from_mins(15))
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for JsonMemorySession {
+    async fn upsert<K, V>(&self, key: K, value: &V) -> cloud_identity_wallet::session::Result<()>
+    where
+        K: Into<Id> + Send + Sync,
+        V: serde::Serialize + Send + Sync,
+    {
+        let key = key.into();
+        let value_bytes = serde_json::to_vec(value)
+            .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
+        let key_bytes: Box<[u8]> = key.as_bytes().into();
+
+        match self.entries.entry(key_bytes) {
+            Entry::Occupied(mut occupied) => {
+                if Self::is_expired(occupied.get()) {
+                    occupied.insert(self.make_entry(&value_bytes));
+                } else {
+                    occupied.get_mut().value = value_bytes.into_boxed_slice();
+                }
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(self.make_entry(&value_bytes));
+            }
+        }
+        Ok(())
+    }
+
+    async fn get<K, V>(&self, key: K) -> cloud_identity_wallet::session::Result<Option<V>>
+    where
+        K: Into<Id> + Send + Sync,
+        V: DeserializeOwned + Send + Sync,
+    {
+        let key = key.into();
+        if let Some(entry) = self.entries.get(key.as_bytes()) {
+            if Self::is_expired(&entry) {
+                drop(entry);
+                self.entries.remove(key.as_bytes());
+                return Ok(None);
+            }
+            let item: V = serde_json::from_slice(&entry.value)
+                .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
+            return Ok(Some(item));
+        }
+        Ok(None)
+    }
+
+    async fn exists<K: Into<Id> + Send + Sync>(&self, key: K) -> cloud_identity_wallet::session::Result<bool> {
+        let key = key.into();
+        if let Some(entry) = self.entries.get(key.as_bytes()) {
+            if Self::is_expired(&entry) {
+                drop(entry);
+                self.entries.remove(key.as_bytes());
+                return Ok(false);
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn consume<K, V>(&self, key: K) -> cloud_identity_wallet::session::Result<Option<V>>
+    where
+        K: Into<Id> + Send + Sync,
+        V: DeserializeOwned + Send + Sync,
+    {
+        let key = key.into();
+        match self.entries.remove(key.as_bytes()) {
+            Some((_, entry)) if !Self::is_expired(&entry) => {
+                let item: V = serde_json::from_slice(&entry.value)
+                    .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
+                Ok(Some(item))
+            }
+            Some(_) | None => Ok(None),
+        }
+    }
+
+    async fn remove<K: Into<Id> + Send + Sync>(&self, key: K) -> cloud_identity_wallet::session::Result<()> {
+        let key = key.into();
+        self.entries.remove(key.as_bytes());
+        Ok(())
+    }
+}
+
+fn create_test_state() -> AppState<JsonMemorySession> {
+    let session_store = JsonMemorySession::default();
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);
 
     let oid4vci_config = Oid4vciConfig::new(

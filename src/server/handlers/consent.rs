@@ -100,7 +100,7 @@ async fn handle_authorization_code_consent<S: SessionStore>(
             &payload.selected_configuration_ids,
         )
         .await
-        .map_err(|e| bad_gateway(&format!("Failed to build authorization URL: {e}")))?;
+        .map_err(|e| bad_gateway(format!("Failed to build authorization URL: {e}")))?;
 
     // Store the PKCE verifier in the session
     session.code_verifier = Some(result.pkce_verifier);
