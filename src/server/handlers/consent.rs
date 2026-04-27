@@ -4,10 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use cloud_wallet_openid4vc::issuance::authz_details::AuthorizationDetails;
-use cloud_wallet_openid4vc::issuance::utils::pkce::{
-    derive_pkce_challenge, generate_pkce_verifier,
-};
+use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
 
 use crate::domain::models::consent::{
     ConsentErrorResponse, ConsentRequest, ConsentResponse, NextAction,
@@ -80,34 +77,33 @@ async fn handle_authorization_code_consent<S: SessionStore>(
     mut session: IssuanceSession,
     payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
-    let code_verifier = generate_pkce_verifier();
-    let code_challenge = derive_pkce_challenge(&code_verifier);
+    // Build the IssuanceFlow from session data
+    let flow = IssuanceFlow::AuthorizationCode {
+        issuer_state: session.issuer_state.clone(),
+    };
 
-    session.code_verifier = Some(code_verifier);
+    // Build the resolved offer context
+    let context = ResolvedOfferContext {
+        offer: session.offer.clone(),
+        issuer_metadata: session.issuer_metadata.clone(),
+        as_metadata: session.authz_server_metadata.clone(),
+        flow,
+    };
 
-    let selected_ids: Vec<&str> = payload
-        .selected_configuration_ids
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    let authz_details = build_authorization_details(&session.offer, &selected_ids);
-
-    let issuer_state = session.issuer_state.as_deref();
-
-    let authz_url = state
+    // Build authorization URL using the OID4VCI client
+    let result = state
         .service
-        .authz_url_builder
-        .build(
-            &session.id,
-            &code_challenge,
-            issuer_state,
-            authz_details.as_deref(),
-            None,
-            &session.authz_server_metadata,
+        .oid4vci_client
+        .build_authorization_url(
+            &context,
+            session.id.clone(),
+            &payload.selected_configuration_ids,
         )
         .await
-        .map_err(bad_gateway)?;
+        .map_err(|e| bad_gateway(&format!("Failed to build authorization URL: {e}")))?;
+
+    // Store the PKCE verifier in the session
+    session.code_verifier = Some(result.pkce_verifier);
 
     transition(&mut session, IssuanceState::AwaitingAuthorization).map_err(internal_error)?;
     state
@@ -122,7 +118,7 @@ async fn handle_authorization_code_consent<S: SessionStore>(
         Json(ConsentResponse {
             session_id: session.id.clone(),
             next_action: NextAction::Redirect,
-            authorization_url: Some(authz_url),
+            authorization_url: Some(result.authz_url.to_string()),
         }),
     ))
 }
@@ -181,32 +177,6 @@ async fn handle_pre_authorized_consent<S: SessionStore>(
             }),
         ))
     }
-}
-
-fn build_authorization_details(
-    offer: &cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer,
-    selected_ids: &[&str],
-) -> Option<Vec<AuthorizationDetails>> {
-    let config_ids: Vec<&str> = if selected_ids.is_empty() {
-        offer
-            .credential_configuration_ids
-            .iter()
-            .map(|s| s.as_str())
-            .collect()
-    } else {
-        selected_ids.to_vec()
-    };
-
-    if config_ids.is_empty() {
-        return None;
-    }
-
-    let details: Vec<AuthorizationDetails> = config_ids
-        .into_iter()
-        .map(AuthorizationDetails::for_configuration)
-        .collect();
-
-    Some(details)
 }
 
 fn emit_sse_event(

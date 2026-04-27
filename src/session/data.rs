@@ -1,5 +1,6 @@
 use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
+use cloud_wallet_openid4vc::issuance::issuer_metadata::CredentialIssuerMetadata;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -17,6 +18,7 @@ pub struct IssuanceSession {
     pub flow: FlowType,
     pub code_verifier: Option<String>,
     pub issuer_state: Option<String>,
+    pub issuer_metadata: CredentialIssuerMetadata,
     pub authz_server_metadata: AuthorizationServerMetadata,
     #[serde(with = "time::serde::iso8601")]
     pub created_at: OffsetDateTime,
@@ -55,6 +57,7 @@ impl IssuanceSession {
         tenant_id: Uuid,
         offer: ParsedOffer,
         flow: FlowType,
+        issuer_metadata: CredentialIssuerMetadata,
         authz_server_metadata: AuthorizationServerMetadata,
     ) -> Result<Self> {
         let now = OffsetDateTime::now_utc();
@@ -75,6 +78,7 @@ impl IssuanceSession {
             flow,
             code_verifier: None,
             issuer_state,
+            issuer_metadata,
             authz_server_metadata,
             created_at: now,
             expires_at,
@@ -137,6 +141,13 @@ mod tests {
         }))
         .unwrap();
 
+        let issuer_metadata = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_endpoint": "https://issuer.example.com/credential",
+            "credential_configurations_supported": {}
+        }))
+        .unwrap();
+
         let authz_server_metadata = serde_json::from_value(serde_json::json!({
             "issuer": "https://as.example.com",
             "authorization_endpoint": "https://as.example.com/authorize",
@@ -144,7 +155,14 @@ mod tests {
         }))
         .unwrap();
 
-        IssuanceSession::new(Uuid::new_v4(), offer, flow, authz_server_metadata).unwrap()
+        IssuanceSession::new(
+            Uuid::new_v4(),
+            offer,
+            flow,
+            issuer_metadata,
+            authz_server_metadata,
+        )
+        .unwrap()
     }
 
     #[test]
