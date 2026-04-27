@@ -1,11 +1,11 @@
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
-use cloud_identity_wallet::issuance::AuthorizationUrlBuilder;
 use cloud_identity_wallet::outbound::MemoryTenantRepository;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::server::sse::SseEvent;
 use cloud_identity_wallet::session::MemorySession;
 use cloud_identity_wallet::telemetry;
+use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -31,19 +31,16 @@ async fn main() -> color_eyre::Result<()> {
     // Create SSE broadcast channel
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);
 
-    // Create HTTP client and authorization URL builder
-    let http_client = cloud_wallet_openid4vc::http::HttpClientBuilder::new()
-        .build()
-        .map_err(|e| color_eyre::eyre::eyre!("Failed to create HTTP client: {e}"))?;
-
-    let authz_url_builder = AuthorizationUrlBuilder::new(
+    // Create OID4VCI client
+    let oid4vci_config = Oid4vciConfig::new(
         config.wallet.client_id.clone(),
         config.wallet.redirect_uri.clone(),
-        http_client,
     );
+    let oid4vci_client = Oid4vciClient::new(oid4vci_config)
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to create OID4VCI client: {e}"))?;
 
     // Create service and server
-    let service = Service::new(session_store, tenant_repo, authz_url_builder, sse_broadcast);
+    let service = Service::new(session_store, tenant_repo, oid4vci_client, sse_broadcast);
     let server = Server::new(&config, service).await?;
     server.run().await
 }

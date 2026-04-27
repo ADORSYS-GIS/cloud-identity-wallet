@@ -4,12 +4,11 @@ use axum::{
 };
 use cloud_identity_wallet::{
     domain::service::Service,
-    issuance::AuthorizationUrlBuilder,
     outbound::MemoryTenantRepository,
     server::{AppState, handlers::submit_consent, sse::SseEvent},
     session::{FlowType, IssuanceSession, MemorySession, SessionStore},
 };
-use cloud_wallet_openid4vc::http::HttpClientBuilder;
+use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
 use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -18,20 +17,16 @@ fn create_test_state() -> AppState<MemorySession> {
     let session_store = MemorySession::default();
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);
 
-    let http_client = HttpClientBuilder::new()
-        .allow_http_urls(true)
-        .build()
-        .unwrap();
-    let authz_url_builder = AuthorizationUrlBuilder::new(
+    let oid4vci_config = Oid4vciConfig::new(
         "test-wallet".to_string(),
         url::Url::parse("http://localhost:3000/api/v1/issuance/callback").unwrap(),
-        http_client,
     );
+    let oid4vci_client = Oid4vciClient::new(oid4vci_config).unwrap();
 
     let service = Service::new(
         session_store,
         MemoryTenantRepository::new(),
-        authz_url_builder,
+        oid4vci_client,
         sse_broadcast,
     );
 
@@ -52,6 +47,13 @@ fn create_test_session(flow: FlowType) -> IssuanceSession {
     }))
     .unwrap();
 
+    let issuer_metadata = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {}
+    }))
+    .unwrap();
+
     let authz_server_metadata = serde_json::from_value(json!({
         "issuer": "https://as.example.com",
         "authorization_endpoint": "https://as.example.com/authorize",
@@ -59,7 +61,14 @@ fn create_test_session(flow: FlowType) -> IssuanceSession {
     }))
     .unwrap();
 
-    IssuanceSession::new(uuid::Uuid::new_v4(), offer, flow, authz_server_metadata).unwrap()
+    IssuanceSession::new(
+        uuid::Uuid::new_v4(),
+        offer,
+        flow,
+        issuer_metadata,
+        authz_server_metadata,
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -67,7 +76,12 @@ async fn test_consent_rejected() {
     let state = create_test_state();
     let session = create_test_session(FlowType::AuthorizationCode);
     let session_id = session.id.clone();
-    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
+    state
+        .service
+        .session
+        .upsert(session_id.as_str(), &session)
+        .await
+        .unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -105,7 +119,12 @@ async fn test_consent_invalid_state() {
     let mut session = create_test_session(FlowType::AuthorizationCode);
     session.state = cloud_identity_wallet::session::IssuanceState::Processing;
     let session_id = session.id.clone();
-    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
+    state
+        .service
+        .session
+        .upsert(session_id.as_str(), &session)
+        .await
+        .unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -174,7 +193,10 @@ async fn test_consent_authorization_code_flow() {
 
     // Clone session_store for later verification before moving state
     let session_store = state.service.session.clone();
-    session_store.upsert(session_id.as_str(), &session).await.unwrap();
+    session_store
+        .upsert(session_id.as_str(), &session)
+        .await
+        .unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -243,7 +265,11 @@ async fn test_consent_authorization_code_flow() {
     );
 
     // Verify session was updated with code_verifier stored internally
-    let updated_session: IssuanceSession = session_store.get(session_id.as_str()).await.unwrap().unwrap();
+    let updated_session: IssuanceSession = session_store
+        .get(session_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         updated_session.code_verifier.is_some(),
         "code_verifier should be stored in session"
@@ -269,6 +295,13 @@ async fn test_consent_pre_authorized_no_tx_code() {
     }))
     .unwrap();
 
+    let issuer_metadata = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {}
+    }))
+    .unwrap();
+
     let authz_server_metadata = serde_json::from_value(json!({
         "issuer": "https://as.example.com",
         "token_endpoint": "https://as.example.com/token"
@@ -279,11 +312,17 @@ async fn test_consent_pre_authorized_no_tx_code() {
         uuid::Uuid::new_v4(),
         offer,
         FlowType::PreAuthorizedCode,
+        issuer_metadata,
         authz_server_metadata,
     )
     .unwrap();
     let session_id = session.id.clone();
-    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
+    state
+        .service
+        .session
+        .upsert(session_id.as_str(), &session)
+        .await
+        .unwrap();
 
     let app = axum::Router::new()
         .route(
@@ -331,6 +370,13 @@ async fn test_consent_pre_authorized_with_tx_code() {
     }))
     .unwrap();
 
+    let issuer_metadata = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {}
+    }))
+    .unwrap();
+
     let authz_server_metadata = serde_json::from_value(json!({
         "issuer": "https://as.example.com",
         "token_endpoint": "https://as.example.com/token"
@@ -341,11 +387,17 @@ async fn test_consent_pre_authorized_with_tx_code() {
         uuid::Uuid::new_v4(),
         offer,
         FlowType::PreAuthorizedCode,
+        issuer_metadata,
         authz_server_metadata,
     )
     .unwrap();
     let session_id = session.id.clone();
-    state.service.session.upsert(session_id.as_str(), &session).await.unwrap();
+    state
+        .service
+        .session
+        .upsert(session_id.as_str(), &session)
+        .await
+        .unwrap();
 
     let app = axum::Router::new()
         .route(
