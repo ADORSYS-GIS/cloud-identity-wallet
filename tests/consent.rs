@@ -6,18 +6,18 @@ use cloud_identity_wallet::{
     domain::service::Service,
     outbound::MemoryTenantRepository,
     server::{AppState, handlers::submit_consent, sse::SseEvent},
-    session::{FlowType, IssuanceSession, SessionStore, Id},
+    session::{FlowType, Id, IssuanceSession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
-use serde_json::json;
-use std::sync::Arc;
-use tower::ServiceExt;
-use std::time::{Duration, Instant};
 use dashmap::{DashMap, Entry};
 use serde::de::DeserializeOwned;
+use serde_json::json;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tower::ServiceExt;
 
 /// A JSON-based in-memory session store for testing.
-/// 
+///
 /// This store uses JSON serialization instead of postcard to support
 /// types like `serde_json::Value` which cannot be serialized with postcard.
 #[derive(Debug, Clone)]
@@ -104,7 +104,10 @@ impl SessionStore for JsonMemorySession {
         Ok(None)
     }
 
-    async fn exists<K: Into<Id> + Send + Sync>(&self, key: K) -> cloud_identity_wallet::session::Result<bool> {
+    async fn exists<K: Into<Id> + Send + Sync>(
+        &self,
+        key: K,
+    ) -> cloud_identity_wallet::session::Result<bool> {
         let key = key.into();
         if let Some(entry) = self.entries.get(key.as_bytes()) {
             if Self::is_expired(&entry) {
@@ -125,15 +128,19 @@ impl SessionStore for JsonMemorySession {
         let key = key.into();
         match self.entries.remove(key.as_bytes()) {
             Some((_, entry)) if !Self::is_expired(&entry) => {
-                let item: V = serde_json::from_slice(&entry.value)
-                    .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
+                let item: V = serde_json::from_slice(&entry.value).map_err(|e| {
+                    cloud_identity_wallet::session::SessionError::Store(Box::new(e))
+                })?;
                 Ok(Some(item))
             }
             Some(_) | None => Ok(None),
         }
     }
 
-    async fn remove<K: Into<Id> + Send + Sync>(&self, key: K) -> cloud_identity_wallet::session::Result<()> {
+    async fn remove<K: Into<Id> + Send + Sync>(
+        &self,
+        key: K,
+    ) -> cloud_identity_wallet::session::Result<()> {
         let key = key.into();
         self.entries.remove(key.as_bytes());
         Ok(())
