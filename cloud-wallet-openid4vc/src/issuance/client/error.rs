@@ -74,6 +74,14 @@ pub enum ClientError {
     NoSupportedGrantType,
 
     /// Issuer metadata discovery failed (invalid or missing metadata).
+    #[error("issuer metadata discovery failed: {message}")]
+    IssuerMetadataDiscovery { message: Cow<'static, str> },
+
+    /// Authorization server metadata discovery failed (invalid or missing metadata).
+    #[error("authorization server metadata discovery failed: {message}")]
+    AsMetadataDiscovery { message: Cow<'static, str> },
+
+    /// Metadata discovery failed (generic, for backward compatibility).
     #[error("metadata discovery failed: {message}")]
     MetadataDiscovery { message: Cow<'static, str> },
 
@@ -127,6 +135,20 @@ impl ClientError {
         }
     }
 
+    /// Creates an issuer metadata discovery error.
+    pub fn issuer_metadata(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::IssuerMetadataDiscovery {
+            message: message.into(),
+        }
+    }
+
+    /// Creates an authorization server metadata discovery error.
+    pub fn as_metadata(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::AsMetadataDiscovery {
+            message: message.into(),
+        }
+    }
+
     /// Creates an internal error.
     pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
         Self::Internal {
@@ -142,10 +164,14 @@ impl From<Error> for ClientError {
                 ClientError::validation(format!("invalid credential offer: {err}"))
             }
             ErrorKind::InvalidIssuerMetadata => {
-                ClientError::metadata(format!("invalid issuer metadata: {err}"))
+                ClientError::IssuerMetadataDiscovery {
+                    message: format!("invalid issuer metadata: {err}").into(),
+                }
             }
             ErrorKind::InvalidAuthorizationServerMetadata => {
-                ClientError::metadata(format!("invalid AS metadata: {err}"))
+                ClientError::AsMetadataDiscovery {
+                    message: format!("invalid AS metadata: {err}").into(),
+                }
             }
             ErrorKind::InvalidAuthorizationResponse => {
                 ClientError::validation(format!("invalid authorization response: {err}"))
