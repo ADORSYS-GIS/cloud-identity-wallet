@@ -5,21 +5,23 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cloud-wallet-crypto = { path = "../cloud-wallet-crypto", features = ["jwk"] }
 cloud-wallet-kms = { path = "../cloud-wallet-kms", optional = true }
-cloud-wallet-crypto = { path = "../cloud-wallet-crypto" }
-
 
 async-trait.workspace = true
 base64.workspace = true
 color-eyre.workspace = true
-
 csscolorparser = { version = "0.8", features = ["serde"] }
 dashmap = { workspace = true, optional = true }
-jsonwebtoken.workspace = true
+futures = "0.3"
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 percent-encoding = "2"
-reqwest = { version = "0.13", features = ["form", "json"] }
+reqwest = { version = "0.13", features = ["form", "json", "rustls"] }
+reqwest-middleware = { version = "0.5", features = ["form", "json"] }
+reqwest-retry = "0.9"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+serde_urlencoded = "0.7"
 serde_with.workspace = true
 thiserror.workspace = true
 time.workspace = true
@@ -33,8 +35,8 @@ features = ["runtime-tokio", "tls-rustls-aws-lc-rs"]
 optional = true
 
 [dev-dependencies]
-wiremock = "0.6"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"
 
 [features]
 default = ["memory-repo"]
