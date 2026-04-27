@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::issuance::authz_details::AuthorizationDetails;
 pub use crate::issuance::authz_details::{AuthorizationDetailType, AuthzDetailsClaim};
+use crate::issuance::utils::serialize_json_string;
 
 /// PKCE code challenge method.
 ///
@@ -41,7 +42,7 @@ impl std::fmt::Display for CodeChallengeMethod {
 /// An OAuth 2.0 Authorization Request for OID4VCI.
 ///
 /// Compliant with [OID4VCI §5.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-authorization-request).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthorizationRequest {
     /// Fixed to `"code"` for the Authorization Code flow.
     pub response_type: String,
@@ -55,14 +56,31 @@ pub struct AuthorizationRequest {
     /// OPTIONAL. Scope values requesting Credential issuance (space-separated).
     /// See [OID4VCI §5.1.2].
     pub scope: Option<String>,
+    /// OAuth2 resource indicator.
+    ///
+    /// Must be set to credential_issuer when using the scope parameter and
+    /// when the Credential Issuer metadata contains an authorization_servers property.
+    pub resource: Option<Url>,
     /// OPTIONAL. Processing context value originally received in a Credential Offer.
     /// Passed back to the Credential Issuer. See [OID4VCI §5.1.3].
     pub issuer_state: Option<String>,
     /// OPTIONAL. RAR authorization details requesting specific Credentials.
     /// See [OID4VCI §5.1.1].
+    #[serde(serialize_with = "serialize_json_string")]
     pub authorization_details: Option<Vec<AuthorizationDetails>>,
     /// OPTIONAL. PKCE code challenge (base64url-encoded SHA-256 of the verifier).
     pub code_challenge: Option<String>,
     /// OPTIONAL. PKCE challenge method. Will always be `S256` when present.
     pub code_challenge_method: Option<CodeChallengeMethod>,
+}
+
+/// An OAuth 2.0 Pushed Authorization Request (PAR) as outlined in [OID4VCI §5.1.4].
+///
+/// [OID4VCI §5.1.4]: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-5.1.4
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushedAuthorizationRequest {
+    /// The client identifier for the wallet.
+    pub client_id: String,
+    /// The request URI returned by the authorization server.
+    pub request_uri: String,
 }
