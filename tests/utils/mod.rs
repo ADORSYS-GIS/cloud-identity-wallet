@@ -10,23 +10,44 @@ use cloud_identity_wallet::{
     server::Server,
     session::MemorySession,
 };
+use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
 
 pub async fn spawn_server() -> String {
+    spawn_server_inner(false, false).await
+}
+
+#[allow(dead_code)]
+pub async fn spawn_server_with_mock_issuer() -> String {
+    spawn_server_inner(true, true).await
+}
+
+async fn spawn_server_inner(accept_untrusted_hosts: bool, enable_test_bypass: bool) -> String {
     let config = {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
         config.server.port = 0;
         config
     };
+
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
 
-    let service = Service::new(session_store, tenant_repo);
-    let server = Server::new(&config, service).await.unwrap();
+    let oid4vci_config = Oid4vciClientConfig::new(
+        &config.oid4vci.client_id,
+        config.oid4vci.redirect_uri.clone(),
+    )
+    .accept_untrusted_hosts(accept_untrusted_hosts)
+    .https_only(!accept_untrusted_hosts);
+    let oid4vci_client = Oid4vciClient::new(oid4vci_config).unwrap();
+
+    let service = Service::new(session_store, tenant_repo, oid4vci_client);
+    let server = Server::new_with_test_bypass(&config, service, enable_test_bypass)
+        .await
+        .unwrap();
 
     let port = server.port();
     tokio::spawn(server.run());

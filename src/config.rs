@@ -7,12 +7,14 @@ use redis::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
     pub redis: RedisConfig,
     pub database: DatabaseConfig,
+    pub oid4vci: Oid4vciConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +32,15 @@ pub struct RedisConfig {
 pub struct DatabaseConfig {
     /// Database URL
     pub url: SecretString,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Oid4vciConfig {
+    /// OAuth 2.0 client_id registered with the issuer's authorization server
+    pub client_id: String,
+
+    /// Redirect URI for the authorization code flow
+    pub redirect_uri: Url,
 }
 
 impl RedisConfig {
@@ -79,11 +90,13 @@ impl Config {
     /// Set default values for the configuration.
     /// This is used when no environment variables or config file are provided
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
-        ConfigLib::builder()
+        Ok(ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
-            .set_default("server.port", 3000)?
+            .set_default("server.port", "3000")?
             .set_default("redis.uri", "redis://127.0.0.1:6379")?
-            .set_default("database.url", "sqlite::memory:")
+            .set_default("database.url", "sqlite::memory:")?
+            .set_default("oid4vci.client_id", "cloud-identity-wallet")?
+            .set_default("oid4vci.redirect_uri", "http://127.0.0.1:3000/callback")?)
     }
 }
 
