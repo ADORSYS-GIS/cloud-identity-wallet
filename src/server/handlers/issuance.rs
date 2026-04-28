@@ -79,11 +79,19 @@ pub async fn start_issuance<S: SessionStore>(
         .session
         .upsert(session_id.as_str(), &session)
         .await
-        .map_err(|e| {
-            (
+        .map_err(|e| match e {
+            crate::session::SessionError::InvalidStateTransition(from, to) => (
+                StatusCode::BAD_REQUEST,
+                Json(IssuanceErrorResponse::invalid_session_state(format!("invalid state transition from {from} to {to}"))),
+            ),
+            crate::session::SessionError::ExpiredSession => (
+                StatusCode::BAD_REQUEST,
+                Json(IssuanceErrorResponse::session_expired("session has expired")), // TODO: use specific HTTP status code for expired session
+            ),
+            _ => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(IssuanceErrorResponse::server_error(e.to_string())),
-            )
+                Json(IssuanceErrorResponse::server_error(format!("Session storage error: {}", e.to_string()))),
+            ),
         })?;
 
     let response = StartIssuanceResponse {
@@ -118,6 +126,38 @@ fn map_client_error(e: cloud_wallet_openid4vc::issuance::client::ClientError) ->
         Validation { .. } | InvalidResponse { .. } | NoSupportedGrantType => (
             StatusCode::BAD_REQUEST,
             Json(IssuanceErrorResponse::invalid_credential_offer(e.to_string())),
+        ),
+        Authorization(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::auth_error(e.to_string())),
+        ),
+        Token(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::token_error(e.to_string())),
+        ),
+        Credential(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::credential_error(e.to_string())),
+        ),
+        DeferredCredential(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::deferred_credential_error(e.to_string())),
+        ),
+        Notification(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::notification_error(e.to_string())),
+        ),
+        Configuration { message } => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(IssuanceErrorResponse::server_error(format!("Configuration error: {}", message))),
+        ),
+        UnknownCredentialConfiguration { id } => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::invalid_credential_offer(format!("unknown credential configuration: {id}"))),
+        ),
+        Internal { message } => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(IssuanceErrorResponse::server_error(format!("Internal client error: {}", message))),
         ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,

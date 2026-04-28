@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use percent_encoding::percent_decode_str;
+use tracing;
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -465,6 +466,8 @@ pub async fn resolve_by_reference(
 ) -> Result<CredentialOffer, Error> {
     // Validate URI scheme
     let parsed = Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
+
+    tracing::debug!("Resolving credential offer by reference from: {}", parsed);
 
     if parsed.scheme() != "https" {
         return Err(Error::message(

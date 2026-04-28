@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
+use crate::server::auth::auth;
 use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
+use axum::middleware;
 use crate::session::SessionStore;
 
 use axum::http::Method;
@@ -96,5 +98,10 @@ impl Server {
 fn api_routes<S: SessionStore>() -> Router<AppState<S>> {
     Router::new()
         .route("/tenants", post(register_tenant))
-        .route("/issuance/start", post(start_issuance))
+        .nest(
+            "/issuance",
+            Router::new()
+                .route("/start", post(start_issuance))
+                .layer(middleware::from_fn(auth)),
+        )
 }

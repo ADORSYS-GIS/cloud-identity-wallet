@@ -86,4 +86,53 @@ impl IssuanceErrorResponse {
             error_description: description.into(),
         }
     }
+
+    pub fn auth_error(description: impl Into<String>) -> Self {
+        Self {
+            error: "authorization_error",
+            error_description: description.into(),
+        }
+    }
+
+    pub fn token_error(description: impl Into<String>) -> Self {
+        Self {
+            error: "token_error",
+            error_description: description.into(),
+        }
+    }
+
+    pub fn credential_error(description: impl Into<String>) -> Self {
+        Self {
+            error: "credential_error",
+            error_description: description.into(),
+        }
+    }
+
+    pub fn deferred_credential_error(description: impl Into<String>) -> Self {
+        Self {
+            error: "deferred_credential_error",
+            error_description: description.into(),
+        }
+    }
+
+    pub fn notification_error(description: impl Into<String>) -> Self {
+        Self {
+            error: "notification_error",
+            error_description: description.into(),
+        }
+    }
+
+    pub fn invalid_session_state(description: impl Into<String>) -> Self {
+        Self {
+            error: "invalid_session_state",
+            error_description: description.into(),
+        }
+    }
+
+    pub fn session_expired(description: impl Into<String>) -> Self {
+        Self {
+            error: "session_expired",
+            error_description: description.into(),
+        }
+    }
 }
