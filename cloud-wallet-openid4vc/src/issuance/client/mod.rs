@@ -131,6 +131,8 @@ pub struct Config {
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
     pub accept_untrusted_hosts: bool,
+    /// Enforce HTTPS for all requests (testing only - set false for wiremock).
+    pub https_only: bool,
 }
 
 impl Config {
@@ -140,6 +142,7 @@ impl Config {
     /// - timeout: 10 seconds
     /// - user_agent: None
     /// - accept_untrusted_hosts: false
+    /// - https_only: true
     pub fn new(client_id: impl Into<String>, redirect_uri: Url) -> Self {
         Self {
             client_id: client_id.into(),
@@ -147,6 +150,7 @@ impl Config {
             timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
             user_agent: None,
             accept_untrusted_hosts: false,
+            https_only: true,
         }
     }
 
@@ -173,6 +177,13 @@ impl Config {
             accept_untrusted_hosts,
             ..self
         }
+    }
+
+    /// Enables or disables HTTPS-only mode.
+    ///
+    /// This should only be disabled in test environments with HTTP mock servers.
+    pub fn https_only(self, https_only: bool) -> Self {
+        Self { https_only, ..self }
     }
 }
 
@@ -203,8 +214,9 @@ impl Oid4vciClient {
         let mut inner_client_builder = reqwest::Client::builder()
             .timeout(config.timeout)
             .tls_backend_rustls()
+            .tls_certs_only([])
             .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts)
-            .https_only(true);
+            .https_only(config.https_only);
 
         if let Some(ref user_agent) = config.user_agent {
             inner_client_builder = inner_client_builder.user_agent(user_agent);

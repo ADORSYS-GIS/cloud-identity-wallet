@@ -106,6 +106,7 @@ features = [
 ]
 
 [dev-dependencies]
+percent-encoding = "2"
 reqwest = { version = "0.13", features = ["json"] }
 serde_json = { workspace = true }
 testcontainers-modules = { version = "0.15", features = [
@@ -113,7 +114,9 @@ testcontainers-modules = { version = "0.15", features = [
   "postgres",
   "redis"
 ] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
+wiremock = "0.6"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
