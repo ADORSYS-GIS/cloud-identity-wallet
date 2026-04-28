@@ -90,13 +90,13 @@ impl Config {
     /// Set default values for the configuration.
     /// This is used when no environment variables or config file are provided
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
-        Ok(ConfigLib::builder()
+        ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", "3000")?
             .set_default("redis.uri", "redis://127.0.0.1:6379")?
             .set_default("database.url", "sqlite::memory:")?
             .set_default("oid4vci.client_id", "cloud-identity-wallet")?
-            .set_default("oid4vci.redirect_uri", "http://127.0.0.1:3000/callback")?)
+            .set_default("oid4vci.redirect_uri", "http://127.0.0.1:3000/callback")
     }
 }
 
