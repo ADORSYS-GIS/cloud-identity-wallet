@@ -163,16 +163,12 @@ impl From<Error> for ClientError {
             ErrorKind::InvalidCredentialOffer => {
                 ClientError::validation(format!("invalid credential offer: {err}"))
             }
-            ErrorKind::InvalidIssuerMetadata => {
-                ClientError::IssuerMetadataDiscovery {
-                    message: format!("invalid issuer metadata: {err}").into(),
-                }
-            }
-            ErrorKind::InvalidAuthorizationServerMetadata => {
-                ClientError::AsMetadataDiscovery {
-                    message: format!("invalid AS metadata: {err}").into(),
-                }
-            }
+            ErrorKind::InvalidIssuerMetadata => ClientError::IssuerMetadataDiscovery {
+                message: format!("invalid issuer metadata: {err}").into(),
+            },
+            ErrorKind::InvalidAuthorizationServerMetadata => ClientError::AsMetadataDiscovery {
+                message: format!("invalid AS metadata: {err}").into(),
+            },
             ErrorKind::InvalidAuthorizationResponse => {
                 ClientError::validation(format!("invalid authorization response: {err}"))
             }

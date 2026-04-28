@@ -9,7 +9,7 @@ use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
 use uuid::Uuid;
 
 use crate::domain::models::issuance::{
-    CredentialDisplay, CredentialTypeDisplay, IssuerSummary, IssuanceErrorResponse, Logo,
+    CredentialDisplay, CredentialTypeDisplay, IssuanceErrorResponse, IssuerSummary, Logo,
     StartIssuanceRequest, StartIssuanceResponse, TxCodeSpec,
 };
 use crate::server::AppState;
@@ -88,7 +88,10 @@ pub async fn start_issuance<S: SessionStore>(
 
     let response = StartIssuanceResponse {
         session_id,
-        expires_at: session.expires_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
+        expires_at: session
+            .expires_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
         issuer,
         credential_types,
         flow: flow_type.to_string(),
@@ -99,7 +102,9 @@ pub async fn start_issuance<S: SessionStore>(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
-fn map_client_error(e: cloud_wallet_openid4vc::issuance::client::ClientError) -> (StatusCode, Json<IssuanceErrorResponse>) {
+fn map_client_error(
+    e: cloud_wallet_openid4vc::issuance::client::ClientError,
+) -> (StatusCode, Json<IssuanceErrorResponse>) {
     use cloud_wallet_openid4vc::issuance::client::ClientError::*;
 
     match e {
@@ -109,15 +114,21 @@ fn map_client_error(e: cloud_wallet_openid4vc::issuance::client::ClientError) ->
         ),
         AsMetadataDiscovery { message } => (
             StatusCode::BAD_GATEWAY,
-            Json(IssuanceErrorResponse::auth_server_metadata_fetch_failed(message)),
+            Json(IssuanceErrorResponse::auth_server_metadata_fetch_failed(
+                message,
+            )),
         ),
         Http { .. } | MetadataDiscovery { .. } => (
             StatusCode::BAD_GATEWAY,
-            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(e.to_string())),
+            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(
+                e.to_string(),
+            )),
         ),
         Validation { .. } | InvalidResponse { .. } | NoSupportedGrantType => (
             StatusCode::BAD_REQUEST,
-            Json(IssuanceErrorResponse::invalid_credential_offer(e.to_string())),
+            Json(IssuanceErrorResponse::invalid_credential_offer(
+                e.to_string(),
+            )),
         ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -157,13 +168,17 @@ fn build_credential_types(
     config_ids
         .iter()
         .filter_map(|id| {
-            let config = issuer_metadata.credential_configurations_supported.get(id)?;
+            let config = issuer_metadata
+                .credential_configurations_supported
+                .get(id)?;
 
             let display = config
                 .credential_metadata
                 .as_ref()
                 .and_then(|cm| cm.display.as_ref())
-                .and_then(|displays| select_credential_display_by_locale(displays, accept_language));
+                .and_then(|displays| {
+                    select_credential_display_by_locale(displays, accept_language)
+                });
 
             Some(CredentialTypeDisplay {
                 credential_configuration_id: id.clone(),

@@ -391,7 +391,10 @@ impl Oid4vciClient {
             }
             Err(_) => {
                 // Grants absent or ambiguous, fetch AS metadata to determine flow
-                Some(self.fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer).await?)
+                Some(
+                    self.fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer)
+                        .await?,
+                )
             }
         };
 
@@ -569,9 +572,13 @@ impl Oid4vciClient {
             ));
         }
 
-        let token_endpoint = context.as_metadata.as_ref().and_then(|m| m.token_endpoint.as_ref()).ok_or_else(|| {
-            ClientError::configuration("authorization server does not have a token endpoint")
-        })?;
+        let token_endpoint = context
+            .as_metadata
+            .as_ref()
+            .and_then(|m| m.token_endpoint.as_ref())
+            .ok_or_else(|| {
+                ClientError::configuration("authorization server does not have a token endpoint")
+            })?;
 
         // Include authorization_details so the AS can return credential_identifiers
         // in the token response per §6.2
@@ -603,12 +610,21 @@ impl Oid4vciClient {
             ));
         }
 
-        let token_endpoint = context.as_metadata.as_ref().and_then(|m| m.token_endpoint.as_ref()).ok_or_else(|| {
-            ClientError::configuration("authorization server does not have a token endpoint")
-        })?;
+        let token_endpoint = context
+            .as_metadata
+            .as_ref()
+            .and_then(|m| m.token_endpoint.as_ref())
+            .ok_or_else(|| {
+                ClientError::configuration("authorization server does not have a token endpoint")
+            })?;
 
         // Check if AS allows anonymous access
-        let client_id = if context.as_metadata.as_ref().map(|m| m.allows_anonymous_pre_authorized_grant()).unwrap_or(false) {
+        let client_id = if context
+            .as_metadata
+            .as_ref()
+            .map(|m| m.allows_anonymous_pre_authorized_grant())
+            .unwrap_or(false)
+        {
             None
         } else {
             Some(self.config.client_id.clone())
@@ -667,7 +683,11 @@ impl Oid4vciClient {
         credential_config_id: &str,
         signer: &S,
     ) -> Result<CredentialResponse> {
-        let is_anonymous = context.as_metadata.as_ref().map(|m| m.allows_anonymous_pre_authorized_grant()).unwrap_or(false)
+        let is_anonymous = context
+            .as_metadata
+            .as_ref()
+            .map(|m| m.allows_anonymous_pre_authorized_grant())
+            .unwrap_or(false)
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
 
         let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;

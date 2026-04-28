@@ -49,7 +49,10 @@ impl From<CredentialOffer> for SessionOfferData {
         Self {
             credential_issuer: offer.credential_issuer,
             credential_configuration_ids: offer.credential_configuration_ids,
-            grants: offer.grants.map(SessionGrantsData::from).unwrap_or_default(),
+            grants: offer
+                .grants
+                .map(SessionGrantsData::from)
+                .unwrap_or_default(),
         }
     }
 }
@@ -57,7 +60,9 @@ impl From<CredentialOffer> for SessionOfferData {
 impl From<Grants> for SessionGrantsData {
     fn from(grants: Grants) -> Self {
         Self {
-            authorization_code: grants.authorization_code.map(SessionAuthorizationCodeGrant::from),
+            authorization_code: grants
+                .authorization_code
+                .map(SessionAuthorizationCodeGrant::from),
             pre_authorized_code: grants
                 .pre_authorized_code
                 .map(SessionPreAuthorizedCodeGrant::from),
@@ -68,7 +73,9 @@ impl From<Grants> for SessionGrantsData {
 impl From<cloud_wallet_openid4vc::issuance::credential_offer::AuthorizationCodeGrant>
     for SessionAuthorizationCodeGrant
 {
-    fn from(grant: cloud_wallet_openid4vc::issuance::credential_offer::AuthorizationCodeGrant) -> Self {
+    fn from(
+        grant: cloud_wallet_openid4vc::issuance::credential_offer::AuthorizationCodeGrant,
+    ) -> Self {
         Self {
             issuer_state: grant.issuer_state,
             authorization_server: grant.authorization_server,
@@ -79,7 +86,9 @@ impl From<cloud_wallet_openid4vc::issuance::credential_offer::AuthorizationCodeG
 impl From<cloud_wallet_openid4vc::issuance::credential_offer::PreAuthorizedCodeGrant>
     for SessionPreAuthorizedCodeGrant
 {
-    fn from(grant: cloud_wallet_openid4vc::issuance::credential_offer::PreAuthorizedCodeGrant) -> Self {
+    fn from(
+        grant: cloud_wallet_openid4vc::issuance::credential_offer::PreAuthorizedCodeGrant,
+    ) -> Self {
         // NOTE: pre_authorized_code (the sensitive single-use token) is intentionally
         // NOT stored in the session to prevent token replay if the session store is compromised.
         Self {
@@ -128,7 +137,8 @@ const DEFAULT_SESSION_TTL_SECS: i64 = 3600;
 
 impl IssuanceSession {
     pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
-        let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(DEFAULT_SESSION_TTL_SECS);
+        let expires_at =
+            OffsetDateTime::now_utc() + time::Duration::seconds(DEFAULT_SESSION_TTL_SECS);
         Self {
             id: utils::generate_session_id(),
             tenant_id,
