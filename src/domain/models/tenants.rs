@@ -1,17 +1,71 @@
+use std::str::FromStr;
+
 use color_eyre::eyre::Report;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// Re-export Tenant from cloud-wallet-openid4vc
-
-/// Errors that can occur during tenant operations.
+/// Errors that can occur during tenant management operations.
 #[derive(Debug, Error)]
 pub enum TenantError {
     #[error("Storage backend error: {0}")]
     Backend(#[from] Report),
 
+    #[error("Encryption or decryption error: {0}")]
+    Encryption(Box<dyn std::error::Error + Send + Sync>),
+
     #[error("Invalid tenant name: {0}")]
     InvalidName(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct TenantKey {
+    pub algorithm: SignatureAlgorithm,
+    pub der_bytes: Box<[u8]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureAlgorithm {
+    Ecdsa,
+    Rsa,
+    EdDsa,
+}
+
+impl SignatureAlgorithm {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ecdsa => "ecdsa",
+            Self::Rsa => "rsa",
+            Self::EdDsa => "eddsa",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "ecdsa" => Some(Self::Ecdsa),
+            "rsa" => Some(Self::Rsa),
+            "eddsa" => Some(Self::EdDsa),
+            _ => None,
+        }
+    }
+}
+
+impl FromStr for SignatureAlgorithm {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ecdsa" => Ok(Self::Ecdsa),
+            "rsa" => Ok(Self::Rsa),
+            "eddsa" => Ok(Self::EdDsa),
+            _ => Err("Invalid signature algorithm"),
+        }
+    }
+}
+
+impl std::fmt::Display for SignatureAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 /// A validated tenant name string.
@@ -56,13 +110,6 @@ pub struct RegisterTenantRequest {
 pub struct TenantResponse {
     pub tenant_id: String,
     pub name: String,
-}
-
-/// Error response following RFC 7807 / OID4VCI conventions.
-#[derive(Debug, Serialize)]
-pub struct TenantErrorResponse {
-    pub error: &'static str,
-    pub error_description: String,
 }
 
 #[cfg(test)]
