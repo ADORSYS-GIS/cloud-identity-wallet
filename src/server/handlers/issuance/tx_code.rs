@@ -19,7 +19,7 @@ pub async fn submit_tx_code(
     Json(payload): Json<TxCodeRequest>,
 ) -> Result<(StatusCode, Json<TxCodeResponse>), (StatusCode, Json<ErrorResponse>)> {
     let session = state
-        .session_store
+        .issuance_store
         .get(&session_id)
         .await
         .map_err(|e| match e {
@@ -63,13 +63,13 @@ pub async fn submit_tx_code(
     }
 
     state
-        .session_store
+        .issuance_store
         .set_tx_code(&session_id, payload.tx_code)
         .await
         .map_err(|_| IssuanceError::SessionNotFound)?;
 
     state
-        .session_store
+        .issuance_store
         .update_state(&session_id, IssuanceState::Processing)
         .await
         .map_err(|_| IssuanceError::SessionNotFound)?;

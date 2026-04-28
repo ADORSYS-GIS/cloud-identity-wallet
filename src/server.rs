@@ -3,15 +3,18 @@ mod handlers;
 mod responses;
 pub mod sse;
 
+use std::sync::Arc;
+
 use crate::config::Config;
+use crate::domain::ports::TenantRepository;
 use crate::domain::InMemorySessionStore;
-use crate::server::handlers::{cancel_session, health_check, home, submit_tx_code};
+use crate::server::handlers::{cancel_session, health_check, home, register_tenant, submit_tx_code};
 use crate::server::sse::SseBroadcaster;
 
 use axum::http::Method;
-use axum::{Router, routing::get};
+use axum::Router;
+use axum::routing::get;
 use color_eyre::eyre::{Context, Result};
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -21,7 +24,8 @@ use tower_http::{
 #[derive(Debug, Clone)]
 /// The global application state shared between all request handlers.
 pub struct AppState {
-    pub session_store: Arc<dyn crate::domain::SessionStore>,
+    pub issuance_store: Arc<dyn crate::domain::SessionStore>,
+    pub tenant_repo: Arc<dyn TenantRepository>,
     pub broadcaster: SseBroadcaster,
 }
 
@@ -31,8 +35,22 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
+    /// Creates a new HTTPS server with default in-memory stores.
     pub async fn new(config: &Config) -> Result<Self> {
+        let issuance_store = Arc::new(InMemorySessionStore::new());
+        let tenant_repo = Arc::new(crate::outbound::MemoryTenantRepository::new());
+        let broadcaster = SseBroadcaster::new();
+
+        Self::with_stores(config, issuance_store, tenant_repo, broadcaster).await
+    }
+
+    /// Creates a new HTTPS server with the provided stores.
+    pub async fn with_stores(
+        config: &Config,
+        issuance_store: Arc<dyn crate::domain::SessionStore>,
+        tenant_repo: Arc<dyn TenantRepository>,
+        broadcaster: SseBroadcaster,
+    ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -40,6 +58,7 @@ impl Server {
             });
 
         let cors_layer = CorsLayer::new()
+            // TODO : Replace Any with specific origins
             .allow_origin(Any)
             .allow_headers(Any)
             .allow_methods([
@@ -50,11 +69,9 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let session_store = Arc::new(InMemorySessionStore::new());
-        let broadcaster = SseBroadcaster::new();
-
         let state = Arc::new(AppState {
-            session_store,
+            issuance_store,
+            tenant_repo,
             broadcaster,
         });
 
@@ -66,6 +83,7 @@ impl Server {
             .route("/", get(home))
             .route("/health", get(health_check))
             .nest("/api/v1/issuance", issuance_router)
+            .route("/api/v1/tenants", axum::routing::post(register_tenant))
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);

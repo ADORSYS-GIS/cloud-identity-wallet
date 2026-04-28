@@ -15,7 +15,7 @@ pub async fn cancel_session(
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, axum::Json<ErrorResponse>)> {
     let session = state
-        .session_store
+        .issuance_store
         .get(&session_id)
         .await
         .map_err(|e| match e {
@@ -36,7 +36,7 @@ pub async fn cancel_session(
     state.broadcaster.send(&session_id, event);
 
     state
-        .session_store
+        .issuance_store
         .delete(&session_id)
         .await
         .map_err(|_| IssuanceError::SessionNotFound)?;

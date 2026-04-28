@@ -18,7 +18,8 @@ use crate::server::sse::SseBroadcaster;
 use crate::session::{FlowType, IssuanceSession, IssuanceState};
 
 async fn create_test_state() -> (Arc<AppState>, String) {
-    let session_store = Arc::new(InMemorySessionStore::new());
+    let issuance_store = Arc::new(InMemorySessionStore::new());
+    let tenant_repo = Arc::new(crate::outbound::MemoryTenantRepository::new());
     let broadcaster = SseBroadcaster::new();
 
     let offer = serde_json::from_value(serde_json::json!({
@@ -41,10 +42,11 @@ async fn create_test_state() -> (Arc<AppState>, String) {
         IssuanceSession::new(uuid::Uuid::nil(), offer, FlowType::PreAuthorizedCode).unwrap();
     session.state = IssuanceState::AwaitingTxCode;
     let session_id = session.id.clone();
-    session_store.insert(session).await.unwrap();
+    issuance_store.insert(session).await.unwrap();
 
     let state = Arc::new(AppState {
-        session_store,
+        issuance_store,
+        tenant_repo,
         broadcaster,
     });
 
@@ -172,7 +174,7 @@ async fn test_submit_tx_code_invalid_session_state() {
     let (state, session_id) = create_test_state().await;
 
     state
-        .session_store
+        .issuance_store
         .update_state(&session_id, IssuanceState::Processing)
         .await
         .unwrap();
@@ -248,7 +250,7 @@ async fn test_cancel_session_already_completed() {
     let (state, session_id) = create_test_state().await;
 
     state
-        .session_store
+        .issuance_store
         .update_state(&session_id, IssuanceState::Completed)
         .await
         .unwrap();
@@ -280,7 +282,7 @@ async fn test_cancel_session_already_failed() {
     let (state, session_id) = create_test_state().await;
 
     state
-        .session_store
+        .issuance_store
         .update_state(&session_id, IssuanceState::Failed)
         .await
         .unwrap();

@@ -1,4 +1,5 @@
-use cloud_identity_wallet::{config::Config, server::Server};
+use cloud_identity_wallet::{config::Config, domain::InMemorySessionStore, outbound::MemoryTenantRepository, server::Server, server::sse::SseBroadcaster};
+use std::sync::Arc;
 
 pub async fn spawn_server() -> String {
     let config = {
@@ -8,7 +9,13 @@ pub async fn spawn_server() -> String {
         config
     };
 
-    let server = Server::new(&config).await.unwrap();
+    let issuance_store = Arc::new(InMemorySessionStore::new());
+    let tenant_repo = Arc::new(MemoryTenantRepository::new());
+    let broadcaster = SseBroadcaster::new();
+
+    let server = Server::with_stores(&config, issuance_store, tenant_repo, broadcaster)
+        .await
+        .unwrap();
 
     let port = server.port();
     tokio::spawn(server.run());
