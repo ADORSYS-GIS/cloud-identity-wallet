@@ -467,6 +467,13 @@ impl CredentialRequest {
     }
 }
 
+/// Represents a deferred credential request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredCredentialRequest {
+    pub transaction_id: String,
+    pub credential_response_encryption: Option<CredentialResponseEncryption>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
