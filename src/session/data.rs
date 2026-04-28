@@ -26,7 +26,7 @@ pub struct SessionOfferData {
     pub grants: SessionGrantsData,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionGrantsData {
     pub authorization_code: Option<SessionAuthorizationCodeGrant>,
     pub pre_authorized_code: Option<SessionPreAuthorizedCodeGrant>,
@@ -94,15 +94,6 @@ impl From<cloud_wallet_openid4vc::issuance::credential_offer::PreAuthorizedCodeG
         Self {
             tx_code: grant.tx_code,
             authorization_server: grant.authorization_server,
-        }
-    }
-}
-
-impl Default for SessionGrantsData {
-    fn default() -> Self {
-        Self {
-            authorization_code: None,
-            pre_authorized_code: None,
         }
     }
 }
@@ -276,5 +267,171 @@ mod tests {
         let mut session = mock_session(FlowType::AuthorizationCode);
         session.state = IssuanceState::AwaitingTxCode;
         assert!(transition(&mut session, IssuanceState::Processing).is_err());
+    }
+
+    #[test]
+    fn test_issuance_session_new_initializes_correctly() {
+        let offer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test_cred"],
+            "grants": {
+                "authorization_code": {
+                    "issuer_state": "state123"
+                }
+            }
+        }))
+        .unwrap();
+
+        let tenant_id = Uuid::new_v4();
+        let session = IssuanceSession::new(tenant_id, offer, FlowType::AuthorizationCode);
+
+        assert!(session.id.starts_with("ses_"));
+        assert_eq!(session.tenant_id, tenant_id);
+        assert_eq!(session.state, IssuanceState::AwaitingConsent);
+        assert_eq!(session.flow, FlowType::AuthorizationCode);
+        assert!(session.code_verifier.is_none());
+        assert!(session.issuer_state.is_none());
+        assert!(session.expires_at > OffsetDateTime::now_utc());
+    }
+
+    #[test]
+    fn test_issuance_session_new_pre_authorized_code() {
+        let offer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test_cred"],
+            "grants": {
+                "pre_authorized_code": {
+                    "tx_code": {
+                        "input_mode": "numeric",
+                        "length": 6
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let session = IssuanceSession::new(Uuid::new_v4(), offer, FlowType::PreAuthorizedCode);
+        assert_eq!(session.flow, FlowType::PreAuthorizedCode);
+        assert_eq!(session.state, IssuanceState::AwaitingConsent);
+    }
+
+    #[test]
+    fn test_issuance_session_is_expired() {
+        let offer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test"],
+            "grants": {}
+        }))
+        .unwrap();
+
+        let mut session = IssuanceSession::new(Uuid::new_v4(), offer, FlowType::PreAuthorizedCode);
+        assert!(!session.is_expired());
+
+        // Manually set to past
+        session.expires_at = OffsetDateTime::now_utc() - time::Duration::seconds(1);
+        assert!(session.is_expired());
+    }
+
+    #[test]
+    fn test_issuance_state_is_terminal() {
+        assert!(IssuanceState::Completed.is_terminal());
+        assert!(IssuanceState::Failed.is_terminal());
+        assert!(!IssuanceState::AwaitingConsent.is_terminal());
+        assert!(!IssuanceState::AwaitingAuthorization.is_terminal());
+        assert!(!IssuanceState::AwaitingTxCode.is_terminal());
+        assert!(!IssuanceState::Processing.is_terminal());
+    }
+
+    #[test]
+    fn test_session_grants_data_default() {
+        let grants = SessionGrantsData::default();
+        assert!(grants.authorization_code.is_none());
+        assert!(grants.pre_authorized_code.is_none());
+    }
+
+    #[test]
+    fn test_flow_type_display() {
+        assert_eq!(
+            format!("{}", FlowType::AuthorizationCode),
+            "authorization_code"
+        );
+        assert_eq!(
+            format!("{}", FlowType::PreAuthorizedCode),
+            "pre_authorized_code"
+        );
+    }
+
+    #[test]
+    fn test_session_offer_data_from_credential_offer_no_grants() {
+        let offer: CredentialOffer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test"],
+        }))
+        .unwrap();
+
+        let session_offer: SessionOfferData = offer.into();
+        assert_eq!(session_offer.credential_configuration_ids, vec!["test"]);
+        assert!(session_offer.grants.authorization_code.is_none());
+        assert!(session_offer.grants.pre_authorized_code.is_none());
+    }
+
+    #[test]
+    fn test_session_offer_data_from_credential_offer_with_pre_authorized_grant() {
+        let offer: CredentialOffer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test"],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": "test_code_abc"
+                }
+            }
+        }))
+        .unwrap();
+
+        let session_offer: SessionOfferData = offer.into();
+        assert!(session_offer.grants.authorization_code.is_none());
+        assert!(session_offer.grants.pre_authorized_code.is_some());
+    }
+
+    #[test]
+    fn test_expired_session_transition_fails() {
+        let offer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test"],
+            "grants": {}
+        }))
+        .unwrap();
+
+        let mut session = IssuanceSession::new(Uuid::new_v4(), offer, FlowType::PreAuthorizedCode);
+        session.expires_at = OffsetDateTime::now_utc() - time::Duration::seconds(1);
+
+        let result = transition(&mut session, IssuanceState::Processing);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SessionError::ExpiredSession => {}
+            _ => panic!("Expected ExpiredSession error"),
+        }
+    }
+
+    #[test]
+    fn test_session_serialization_roundtrip() {
+        let offer = serde_json::from_value(serde_json::json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["test_id"],
+            "grants": {
+                "authorization_code": {
+                    "issuer_state": "state123"
+                }
+            }
+        }))
+        .unwrap();
+
+        let session = IssuanceSession::new(Uuid::new_v4(), offer, FlowType::AuthorizationCode);
+        let serialized = serde_json::to_string(&session).unwrap();
+        let deserialized: IssuanceSession = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(session.id, deserialized.id);
+        assert_eq!(session.state, deserialized.state);
+        assert_eq!(session.flow, deserialized.flow);
     }
 }
