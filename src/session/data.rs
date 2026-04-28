@@ -98,7 +98,10 @@ pub enum TxCodeValidationError {
     InvalidCharacters { expected: String },
 }
 
-pub fn validate_tx_code(spec: &TxCode, code: &str) -> std::result::Result<(), TxCodeValidationError> {
+pub fn validate_tx_code(
+    spec: &TxCode,
+    code: &str,
+) -> std::result::Result<(), TxCodeValidationError> {
     if let Some(length) = spec.length
         && code.len() != length as usize
     {

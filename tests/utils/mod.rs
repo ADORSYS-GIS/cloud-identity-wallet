@@ -1,4 +1,7 @@
-use cloud_identity_wallet::{config::Config, domain::InMemorySessionStore, outbound::MemoryTenantRepository, server::Server, server::sse::SseBroadcaster};
+use cloud_identity_wallet::{
+    config::Config, domain::InMemorySessionStore, outbound::MemoryTenantRepository, server::Server,
+    server::sse::SseBroadcaster,
+};
 use std::sync::Arc;
 
 pub async fn spawn_server() -> String {

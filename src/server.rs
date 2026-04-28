@@ -6,13 +6,15 @@ pub mod sse;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::domain::ports::TenantRepository;
 use crate::domain::InMemorySessionStore;
-use crate::server::handlers::{cancel_session, health_check, home, register_tenant, submit_tx_code};
+use crate::domain::ports::TenantRepository;
+use crate::server::handlers::{
+    cancel_session, health_check, home, register_tenant, submit_tx_code,
+};
 use crate::server::sse::SseBroadcaster;
 
-use axum::http::Method;
 use axum::Router;
+use axum::http::Method;
 use axum::routing::get;
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
