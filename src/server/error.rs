@@ -58,50 +58,27 @@ impl IntoResponse for ApiError {
 }
 
 /// Implemented by every domain error type that can be returned from an API handler.
-///
-/// Provides the three components of an HTTP error response:
-/// - The HTTP status code
-/// - The machine-readable error code
-/// - An optional human-readable description
 pub trait IntoApiError {
-    fn status(&self) -> StatusCode;
-    fn error_code(&self) -> &'static str;
-    fn error_description(&self) -> Option<String>;
+    fn into_api_error(self) -> ApiError;
 }
 
 /// Blanket impl: any type implementing `IntoApiError` converts to `ApiError`
 /// automatically.
 impl<E: IntoApiError> From<E> for ApiError {
     fn from(e: E) -> Self {
-        ApiError {
-            status: e.status(),
-            error: e.error_code(),
-            error_description: e.error_description(),
-        }
+        e.into_api_error()
     }
 }
 
 impl IntoApiError for TenantError {
-    fn status(&self) -> StatusCode {
+    fn into_api_error(self) -> ApiError {
         match self {
-            TenantError::InvalidName(_) => StatusCode::BAD_REQUEST,
-            TenantError::Backend(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    fn error_code(&self) -> &'static str {
-        match self {
-            TenantError::InvalidName(_) => "invalid_request",
-            TenantError::Backend(_) => "internal_error",
-        }
-    }
-
-    fn error_description(&self) -> Option<String> {
-        match self {
-            TenantError::InvalidName(msg) => Some(msg.clone()),
-            TenantError::Backend(_) => {
-                Some("An internal error occurred while processing your request".into())
-            }
+            TenantError::InvalidName(msg) => ApiError {
+                status: StatusCode::BAD_REQUEST,
+                error: "invalid_request",
+                error_description: Some(msg),
+            },
+            TenantError::Backend(src) => ApiError::internal(src),
         }
     }
 }

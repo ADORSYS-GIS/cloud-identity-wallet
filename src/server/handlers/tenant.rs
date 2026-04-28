@@ -2,7 +2,7 @@
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
-use crate::domain::models::tenants::{RegisterTenantRequest, TenantError, TenantName};
+use crate::domain::models::tenants::RegisterTenantRequest;
 use crate::server::{AppState, error::ApiError, responses::ResponseBody};
 use crate::session::SessionStore;
 
@@ -11,31 +11,6 @@ pub async fn register_tenant<S: SessionStore>(
     State(state): State<AppState<S>>,
     Json(payload): Json<RegisterTenantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Validate the name before passing to the repository
-    let tenant_name = TenantName::new(&payload.name).map_err(|e| ApiError {
-        status: StatusCode::BAD_REQUEST,
-        error: "invalid_request",
-        error_description: Some(e),
-    })?;
-
-    // Create a new request with the validated name
-    let validated_request = RegisterTenantRequest {
-        name: tenant_name.into_inner(),
-    };
-
-    let response = state
-        .service
-        .tenant_repo
-        .create(validated_request)
-        .await
-        .map_err(|e| match e {
-            TenantError::InvalidName(msg) => ApiError {
-                status: StatusCode::BAD_REQUEST,
-                error: "invalid_request",
-                error_description: Some(msg),
-            },
-            TenantError::Backend(source) => ApiError::internal(source),
-        })?;
-
+    let response = state.service.tenant_repo.create(payload).await?;
     Ok(ResponseBody::new(StatusCode::CREATED, response))
 }
