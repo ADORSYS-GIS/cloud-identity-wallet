@@ -115,7 +115,8 @@ impl CredentialIssuerMetadata {
                         return Err(Error::message(
                             ErrorKind::InvalidIssuerMetadata,
                             format!(
-                                "credential configuration \"{id}\": proof_types_supported.\"{proof_type}\".proof_signing_alg_values_supported must be non-empty"
+                                "credential configuration \"{id}\": proof_types_supported.\"{proof_type:?}\".\
+                                proof_signing_alg_values_supported must be non-empty"
                             ),
                         ));
                     }
@@ -139,9 +140,12 @@ impl CredentialIssuerMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::issuance::credential_formats::{
-        CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
-        MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
+    use crate::issuance::{
+        credential_configuration::ProofType,
+        credential_formats::{
+            CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
+            MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
+        },
     };
     use serde_json::json;
 
@@ -376,7 +380,9 @@ mod tests {
         assert!(binding.contains(&"jwk".to_string()));
 
         let proof_types = config.proof_types_supported.as_ref().unwrap();
-        let jwt_proof = proof_types.get("jwt").expect("jwt proof type not found");
+        let jwt_proof = proof_types
+            .get(&ProofType::Jwt)
+            .expect("jwt proof type not found");
         assert!(
             jwt_proof
                 .proof_signing_alg_values_supported
@@ -667,7 +673,7 @@ mod tests {
             .get("HighAssuranceCred")
             .unwrap();
         let proof_types = config.proof_types_supported.as_ref().unwrap();
-        let jwt_proof = proof_types.get("jwt").unwrap();
+        let jwt_proof = proof_types.get(&ProofType::Jwt).unwrap();
         let key_att = jwt_proof.key_attestations_required.as_ref().unwrap();
 
         assert_eq!(
