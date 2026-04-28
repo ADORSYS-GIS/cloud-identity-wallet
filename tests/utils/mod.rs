@@ -17,6 +17,7 @@ use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 pub async fn spawn_server() -> String {
     spawn_server_inner(false, false).await
 }
