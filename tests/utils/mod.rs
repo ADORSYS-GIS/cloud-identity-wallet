@@ -12,6 +12,7 @@ use cloud_identity_wallet::{
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 use sqlx::{AnyPool, ConnectOptions};
+use std::time::Duration;
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -26,6 +27,9 @@ pub async fn spawn_server_with_mock_issuer() -> String {
 }
 
 async fn spawn_server_inner(accept_untrusted_hosts: bool, enable_test_bypass: bool) -> String {
+    // Install default drivers for sqlx
+    sqlx::any::install_default_drivers();
+
     let config = {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
@@ -40,6 +44,7 @@ async fn spawn_server_inner(accept_untrusted_hosts: bool, enable_test_bypass: bo
         &config.oid4vci.client_id,
         config.oid4vci.redirect_uri.clone(),
     )
+    .timeout(Duration::from_secs(5))
     .accept_untrusted_hosts(accept_untrusted_hosts)
     .https_only(!accept_untrusted_hosts);
     let oid4vci_client = Oid4vciClient::new(oid4vci_config).unwrap();

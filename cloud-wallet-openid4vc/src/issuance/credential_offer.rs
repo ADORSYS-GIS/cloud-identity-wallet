@@ -218,7 +218,14 @@ impl CredentialOffer {
     /// - If `grants` is absent or empty, the wallet must determine grant types from issuer metadata
     /// - When multiple grants are present, it's at the wallet's discretion which one to use
     pub fn validate(&self) -> Result<(), Error> {
-        if self.credential_issuer.scheme() != "https" {
+        let scheme = self.credential_issuer.scheme();
+        let is_localhost = self
+            .credential_issuer
+            .host_str()
+            .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
+            .unwrap_or(false);
+
+        if scheme != "https" && !is_localhost {
             return Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
                 "credential_issuer must use the https scheme",
