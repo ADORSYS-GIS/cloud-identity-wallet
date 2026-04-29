@@ -26,10 +26,6 @@ pub async fn submit_consent<S: SessionStore>(
         .map_err(internal_error)?
         .ok_or_else(|| not_found(&session_id))?;
 
-    if session.is_expired() {
-        return Err(expired(&session_id));
-    }
-
     if session.state != IssuanceState::AwaitingConsent {
         return Err(invalid_state());
     }
@@ -77,6 +73,26 @@ async fn handle_authorization_code_consent<S: SessionStore>(
     mut session: IssuanceSession,
     payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
+    // Fetch issuer metadata on-demand
+    let issuer_metadata = state
+        .service
+        .oid4vci_client
+        .fetch_issuer_metadata(&session.offer.credential_issuer)
+        .await
+        .map_err(|e| bad_gateway(format!("Failed to fetch issuer metadata: {e}")))?;
+
+    // Fetch authorization server metadata on-demand
+    let as_metadata = state
+        .service
+        .oid4vci_client
+        .fetch_as_metadata(
+            &session.offer.credential_issuer,
+            &issuer_metadata,
+            &session.offer,
+        )
+        .await
+        .map_err(|e| bad_gateway(format!("Failed to fetch AS metadata: {e}")))?;
+
     // Build the IssuanceFlow from session data
     let flow = IssuanceFlow::AuthorizationCode {
         issuer_state: session.issuer_state.clone(),
@@ -85,8 +101,8 @@ async fn handle_authorization_code_consent<S: SessionStore>(
     // Build the resolved offer context
     let context = ResolvedOfferContext {
         offer: session.offer.clone(),
-        issuer_metadata: session.issuer_metadata.clone(),
-        as_metadata: session.authz_server_metadata.clone(),
+        issuer_metadata,
+        as_metadata,
         flow,
     };
 
@@ -197,17 +213,7 @@ fn not_found(session_id: &str) -> (StatusCode, Json<ConsentErrorResponse>) {
         StatusCode::NOT_FOUND,
         Json(ConsentErrorResponse {
             error: "session_not_found",
-            error_description: format!("Session {} does not exist or has expired", session_id),
-        }),
-    )
-}
-
-fn expired(session_id: &str) -> (StatusCode, Json<ConsentErrorResponse>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ConsentErrorResponse {
-            error: "session_not_found",
-            error_description: format!("Session {} has expired", session_id),
+            error_description: format!("Session {} does not exist", session_id),
         }),
     )
 }
