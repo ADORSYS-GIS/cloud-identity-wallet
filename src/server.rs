@@ -1,4 +1,5 @@
 mod auth;
+mod error;
 mod handlers;
 mod responses;
 pub mod sse;
