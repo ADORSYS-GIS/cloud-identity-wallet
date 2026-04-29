@@ -45,13 +45,6 @@ pub type ParsedOffer = CredentialOffer;
 
 impl IssuanceSession {
     pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
-        // Extract issuer_state from authorization_code grant if present
-        let issuer_state = offer
-            .grants
-            .as_ref()
-            .and_then(|g| g.authorization_code.as_ref())
-            .and_then(|ac| ac.issuer_state.clone());
-
         Self {
             id: utils::generate_session_id(),
             tenant_id,
@@ -59,7 +52,7 @@ impl IssuanceSession {
             offer,
             flow,
             code_verifier: None,
-            issuer_state,
+            issuer_state: None,
         }
     }
 }
