@@ -1,8 +1,5 @@
-use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
-use cloud_wallet_openid4vc::issuance::issuer_metadata::CredentialIssuerMetadata;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::session::Result;
@@ -18,12 +15,6 @@ pub struct IssuanceSession {
     pub flow: FlowType,
     pub code_verifier: Option<String>,
     pub issuer_state: Option<String>,
-    pub issuer_metadata: CredentialIssuerMetadata,
-    pub authz_server_metadata: AuthorizationServerMetadata,
-    #[serde(with = "time::serde::iso8601")]
-    pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::iso8601")]
-    pub expires_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,16 +44,7 @@ impl IssuanceState {
 pub type ParsedOffer = CredentialOffer;
 
 impl IssuanceSession {
-    pub fn new(
-        tenant_id: Uuid,
-        offer: ParsedOffer,
-        flow: FlowType,
-        issuer_metadata: CredentialIssuerMetadata,
-        authz_server_metadata: AuthorizationServerMetadata,
-    ) -> Result<Self> {
-        let now = OffsetDateTime::now_utc();
-        let expires_at = now + time::Duration::minutes(15);
-
+    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
         // Extract issuer_state from authorization_code grant if present
         let issuer_state = offer
             .grants
@@ -70,7 +52,7 @@ impl IssuanceSession {
             .and_then(|g| g.authorization_code.as_ref())
             .and_then(|ac| ac.issuer_state.clone());
 
-        Ok(Self {
+        Self {
             id: utils::generate_session_id(),
             tenant_id,
             state: IssuanceState::AwaitingConsent,
@@ -78,15 +60,7 @@ impl IssuanceSession {
             flow,
             code_verifier: None,
             issuer_state,
-            issuer_metadata,
-            authz_server_metadata,
-            created_at: now,
-            expires_at,
-        })
-    }
-
-    pub fn is_expired(&self) -> bool {
-        OffsetDateTime::now_utc() >= self.expires_at
+        }
     }
 }
 
@@ -141,28 +115,7 @@ mod tests {
         }))
         .unwrap();
 
-        let issuer_metadata = serde_json::from_value(serde_json::json!({
-            "credential_issuer": "https://issuer.example.com",
-            "credential_endpoint": "https://issuer.example.com/credential",
-            "credential_configurations_supported": {}
-        }))
-        .unwrap();
-
-        let authz_server_metadata = serde_json::from_value(serde_json::json!({
-            "issuer": "https://as.example.com",
-            "authorization_endpoint": "https://as.example.com/authorize",
-            "token_endpoint": "https://as.example.com/token"
-        }))
-        .unwrap();
-
-        IssuanceSession::new(
-            Uuid::new_v4(),
-            offer,
-            flow,
-            issuer_metadata,
-            authz_server_metadata,
-        )
-        .unwrap()
+        IssuanceSession::new(Uuid::new_v4(), offer, flow)
     }
 
     #[test]
