@@ -30,7 +30,7 @@ pub trait CredentialRepo: Send + Sync + 'static {
 
     /// Retrieves a Credential by its ID and tenant ID.
     ///
-    /// Returns [`Error::NotFound`] if the credential is not found.
+    /// Returns [`CredentialError::NotFound`] if the credential is not found.
     async fn find_by_id(&self, id: Uuid, tenant_id: Uuid) -> Result<Credential, CredentialError>;
 
     /// Lists credentials that match the given filter criteria.
