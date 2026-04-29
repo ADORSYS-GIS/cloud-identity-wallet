@@ -1,8 +1,10 @@
 use std::str::FromStr;
 
+use cloud_wallet_crypto::secret::Secret;
 use color_eyre::eyre::Report;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Errors that can occur during tenant management operations.
 #[derive(Debug, Error)]
@@ -15,22 +17,30 @@ pub enum TenantError {
 
     #[error("Invalid tenant name: {0}")]
     InvalidName(String),
+
+    #[error("Invalid stored data: {0}")]
+    InvalidData(String),
+
+    #[error("Tenant not found: {id}")]
+    NotFound { id: Uuid },
 }
 
+/// Tenant key material
 #[derive(Debug, Clone)]
 pub struct TenantKey {
-    pub algorithm: SignatureAlgorithm,
-    pub der_bytes: Box<[u8]>,
+    pub algorithm: SignAlgorithm,
+    pub der_bytes: Secret,
 }
 
+/// Signature algorithm for tenant key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignatureAlgorithm {
+pub enum SignAlgorithm {
     Ecdsa,
     Rsa,
     EdDsa,
 }
 
-impl SignatureAlgorithm {
+impl SignAlgorithm {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ecdsa => "ecdsa",
@@ -38,18 +48,9 @@ impl SignatureAlgorithm {
             Self::EdDsa => "eddsa",
         }
     }
-
-    pub fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "ecdsa" => Some(Self::Ecdsa),
-            "rsa" => Some(Self::Rsa),
-            "eddsa" => Some(Self::EdDsa),
-            _ => None,
-        }
-    }
 }
 
-impl FromStr for SignatureAlgorithm {
+impl FromStr for SignAlgorithm {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -62,7 +63,7 @@ impl FromStr for SignatureAlgorithm {
     }
 }
 
-impl std::fmt::Display for SignatureAlgorithm {
+impl std::fmt::Display for SignAlgorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
