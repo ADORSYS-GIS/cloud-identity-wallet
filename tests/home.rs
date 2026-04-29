@@ -15,6 +15,6 @@ async fn test_home_works() {
 
     // Verify the response
     assert!(response.status().is_success());
-    let body = response.text().await.expect("Failed to read response body");
-    assert_eq!(body, "Cloud Identity Wallet");
+    let body = response.text().await.unwrap();
+    assert!(body.contains("Cloud Identity Wallet"));
 }

@@ -15,5 +15,5 @@ async fn test_health_check_works() {
 
     // Verify the response
     assert!(response.status().is_success());
-    assert_eq!(Some(0), response.content_length());
+    assert!(response.text().await.unwrap().contains("OK"));
 }
