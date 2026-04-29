@@ -7,7 +7,7 @@ mod credential;
 mod tenant;
 
 pub use credential::{MemoryCredentialRepo, SqlCredentialRepo};
-pub use tenant::{MemoryTenantRepo, SqlTenantRepo};
+pub use tenant::{MemoryTenantRepo, SqlTenantRepo, TenantKeyAlg};
 
 mod cipher {
     use cloud_wallet_kms::{self as kms, provider::Provider};
