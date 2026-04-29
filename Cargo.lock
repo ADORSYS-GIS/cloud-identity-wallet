@@ -866,6 +866,8 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "cloud-wallet-crypto",
+ "cloud-wallet-kms",
  "cloud-wallet-openid4vc",
  "color-eyre",
  "config",
@@ -888,6 +890,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -939,13 +942,10 @@ dependencies = [
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "base64 0.22.1",
  "cloud-wallet-crypto",
- "cloud-wallet-kms",
  "color-eyre",
  "csscolorparser",
- "dashmap",
  "futures",
  "jsonwebtoken",
  "percent-encoding",
@@ -956,12 +956,10 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "serde_with",
- "sqlx",
  "thiserror 2.0.18",
  "time",
  "tokio",
  "url",
- "uuid",
  "validator",
  "wiremock",
 ]
