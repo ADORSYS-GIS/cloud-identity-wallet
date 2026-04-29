@@ -5,7 +5,7 @@ use axum::{
 use cloud_identity_wallet::{
     domain::service::Service,
     outbound::MemoryTenantRepository,
-    server::{AppState, handlers::submit_consent, sse::SseEvent},
+    server::{AppState, sse::SseEvent, submit_consent},
     session::{FlowType, Id, IssuanceSession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
