@@ -127,6 +127,9 @@ impl TenantRepo for SqlTenantRepo {
 }
 
 /// In-memory tenant repository implementation.
+///
+/// Since this is an in-memory implementation, it is not persistent and
+/// will not survive restarts. It is mainly used for testing and development.
 #[derive(Clone)]
 pub struct MemoryTenantRepo {
     tenants: Arc<DashMap<Uuid, StoredTenantKey>>,
