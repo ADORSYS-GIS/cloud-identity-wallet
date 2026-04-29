@@ -45,7 +45,7 @@ tracing = "0.1"
 base64 = "0.22"
 dashmap = "6"
 rand = "0.10"
-sqlx = { version = "0.8", default-features = false }
+sqlx = "0.8"
 time = "0.3"
 url = "2.5"
 uuid = "1"
@@ -98,8 +98,6 @@ features = [
 workspace = true
 features = [
   "any",
-  "macros",
-  "migrate",
   "mysql",
   "postgres",
   "runtime-tokio",
