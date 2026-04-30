@@ -19,6 +19,11 @@ fn make_offer_uri(issuer_url: &str, grants: Option<serde_json::Value>) -> String
     format!("openid-credential-offer://?credential_offer={encoded}")
 }
 
+fn make_offer_by_reference(offer_uri: &str) -> String {
+    let encoded = utf8_percent_encode(offer_uri, NON_ALPHANUMERIC);
+    format!("openid-credential-offer://?credential_offer_uri={encoded}")
+}
+
 fn make_pre_auth_offer(issuer_url: &str, pre_auth_code: &str) -> String {
     make_offer_uri(
         issuer_url,
@@ -533,4 +538,79 @@ async fn setup_as_metadata_mock(mock_server: &MockServer, as_url: &str) {
         .respond_with(ResponseTemplate::new(200).set_body_json(as_metadata_json))
         .mount(mock_server)
         .await;
+}
+
+#[tokio::test]
+async fn start_issuance_by_reference_offer_uri_returns_201() {
+    let mock_server = MockServer::start().await;
+    let base_url = utils::spawn_server_with_mock_issuer().await;
+    let client = Client::new();
+
+    let issuer_url = mock_server.uri();
+    let as_url = issuer_url.replace("http://", "https://");
+
+    setup_issuer_metadata_mock(&mock_server, &issuer_url).await;
+    setup_as_metadata_mock(&mock_server, &as_url).await;
+
+    // Create the offer JSON that will be served at the offer_uri
+    let offer_json = json!({
+        "credential_issuer": issuer_url,
+        "credential_configuration_ids": ["UniversityDegreeCredential"],
+        "grants": {
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                "pre-authorized_code": "test_pre_auth_code_ref"
+            }
+        }
+    });
+
+    // Set up mock to serve the offer JSON at /offer endpoint
+    Mock::given(method("GET"))
+        .and(path("/offer"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(offer_json))
+        .mount(&mock_server)
+        .await;
+
+    // Create offer URI by reference
+    let offer_uri_endpoint = format!("{}/offer", issuer_url);
+    let offer_uri = make_offer_by_reference(&offer_uri_endpoint);
+
+    let response = client
+        .post(format!("{}/api/v1/issuance/start", base_url))
+        .json(&serde_json::json!({ "offer": offer_uri }))
+        .send()
+        .await
+        .expect("Failed to send request");
+
+    assert_eq!(response.status(), 201);
+
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert!(body.get("session_id").is_some());
+    assert!(body.get("expires_at").is_some());
+    assert_eq!(body.get("flow").unwrap(), "pre_authorized_code");
+}
+
+#[tokio::test]
+async fn start_issuance_by_reference_unreachable_uri_returns_502() {
+    let mock_server = MockServer::start().await;
+    let base_url = utils::spawn_server_with_mock_issuer().await;
+    let client = Client::new();
+
+    let issuer_url = mock_server.uri();
+
+    setup_issuer_metadata_mock(&mock_server, &issuer_url).await;
+
+    // Create offer URI pointing to non-existent server
+    let offer_uri = make_offer_by_reference("https://non-existent-offer.example.com/offer");
+
+    let response = client
+        .post(format!("{}/api/v1/issuance/start", base_url))
+        .json(&serde_json::json!({ "offer": offer_uri }))
+        .send()
+        .await
+        .expect("Failed to send request");
+
+    assert_eq!(response.status(), 502);
+
+    let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(body.get("error").unwrap(), "issuer_metadata_fetch_failed");
 }

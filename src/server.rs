@@ -130,7 +130,7 @@ fn api_routes<S: SessionStore>(enable_test_bypass: bool) -> Router<AppState<S>> 
         // which may not match the production authentication strategy.
         // Currently, without middleware, requests to /issuance/start will fail with 500
         // due to missing `tenant_id` extension. This is intentional for development.
-        // See: https://github.com/ADORSYS-GIS/cloud-identity-wallet/issues/XXX
+        // See: https://github.com/ADORSYS-GIS/cloud-identity-wallet/issues/181
         router = router.route("/issuance/start", issuance_route);
     }
 

@@ -473,7 +473,13 @@ pub async fn resolve_by_reference(
     // Validate URI scheme
     let parsed = Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
 
-    if parsed.scheme() != "https" {
+    // Allow HTTP for localhost addresses (for testing with mock servers)
+    let is_localhost = parsed
+        .host_str()
+        .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
+        .unwrap_or(false);
+
+    if parsed.scheme() != "https" && !is_localhost {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOffer,
             format!(
@@ -495,15 +501,29 @@ pub async fn resolve_by_reference(
     // Re-validate the final URL to detect redirect attacks.
     // If the caller passed a redirect-following client, a 30x could bounce
     // this request to a different host. We check that the final URL still
-    // uses HTTPS and matches the originally validated host.
+    // uses the same scheme (HTTPS or HTTP for localhost) and matches the
+    // originally validated host.
     let final_url = response.url().clone();
-    if final_url.scheme() != "https" {
+    let final_is_localhost = final_url
+        .host_str()
+        .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
+        .unwrap_or(false);
+
+    // For HTTPS URLs, redirect must stay HTTPS
+    // For HTTP localhost URLs, redirect must stay HTTP and localhost
+    if parsed.scheme() == "https" && final_url.scheme() != "https" {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOffer,
             format!(
                 "redirect changed scheme from https to '{}'",
                 final_url.scheme()
             ),
+        ));
+    }
+    if is_localhost && !final_is_localhost {
+        return Err(Error::message(
+            ErrorKind::InvalidCredentialOffer,
+            "redirect from localhost to non-localhost address is not allowed",
         ));
     }
     if final_url.host() != parsed.host() {

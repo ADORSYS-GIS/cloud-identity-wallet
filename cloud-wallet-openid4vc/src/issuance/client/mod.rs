@@ -131,7 +131,24 @@ pub struct Config {
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
     pub accept_untrusted_hosts: bool,
-    /// Enforce HTTPS for all requests (testing only - set false for wiremock).
+    /// Enforce HTTPS for all external requests (SSRF protection).
+    ///
+    /// When `true` (default, required for production), the client rejects HTTP URLs
+    /// in credential offers, issuer metadata, and authorization server metadata.
+    /// This prevents Server-Side Request Forgery (SSRF) attacks where a malicious
+    /// user could trick the server into making requests to internal network resources.
+    ///
+    /// # Security Note
+    /// This field MUST NOT be exposed via environment variables or external configuration
+    /// in production deployments. It should only be set to `false` in controlled test
+    /// environments using HTTP mock servers (e.g., wiremock).
+    ///
+    /// # Example Attack Prevented
+    /// Without HTTPS enforcement, an attacker could submit:
+    /// ```text
+    /// credential_offer_uri=http://169.254.169.254/latest/meta-data/
+    /// ```
+    /// This would cause the server to fetch internal cloud metadata.
     pub https_only: bool,
 }
 

@@ -178,9 +178,27 @@ impl From<Error> for ClientError {
             ErrorKind::InvalidTokenResponse => ClientError::InvalidResponse {
                 message: format!("invalid token response: {err}").into(),
             },
-            ErrorKind::InvalidCredentialRequest => {
-                ClientError::validation(format!("invalid credential request: {err}"))
-            }
+            ErrorKind::CredentialOfferFetchFailed => ClientError::Http {
+                message: Some(format!("failed to fetch credential offer: {err}").into()),
+                status: None,
+                body: None,
+                source: None,
+            },
+            ErrorKind::HttpRequestFailed => ClientError::Http {
+                message: Some(format!("http request failed: {err}").into()),
+                status: None,
+                body: None,
+                source: None,
+            },
+            ErrorKind::HttpErrorResponse => ClientError::Http {
+                message: Some(format!("http error response: {err}").into()),
+                status: None,
+                body: None,
+                source: None,
+            },
+            ErrorKind::HttpResponseParsingFailed => ClientError::InvalidResponse {
+                message: format!("http response parsing failed: {err}").into(),
+            },
             _ => ClientError::internal(format!("{err}")),
         }
     }
