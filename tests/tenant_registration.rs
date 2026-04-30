@@ -2,15 +2,16 @@
 
 mod utils;
 
-use reqwest::Client;
+use axum::http::header;
 
 #[tokio::test]
 async fn valid_name_returns_201() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let response = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": "Acme Corporation" }))
         .send()
         .await
@@ -30,10 +31,11 @@ async fn valid_name_returns_201() {
 #[tokio::test]
 async fn empty_name_returns_400() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let response = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": "" }))
         .send()
         .await
@@ -48,10 +50,11 @@ async fn empty_name_returns_400() {
 #[tokio::test]
 async fn whitespace_only_name_returns_400() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let response = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": "   " }))
         .send()
         .await
@@ -66,12 +69,13 @@ async fn whitespace_only_name_returns_400() {
 #[tokio::test]
 async fn name_256_chars_returns_400() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let long_name = "a".repeat(256);
 
     let response = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": long_name }))
         .send()
         .await
@@ -86,12 +90,13 @@ async fn name_256_chars_returns_400() {
 #[tokio::test]
 async fn name_255_chars_returns_201() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let max_name = "a".repeat(255);
 
     let response = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": max_name }))
         .send()
         .await
@@ -106,13 +111,14 @@ async fn name_255_chars_returns_201() {
 #[tokio::test]
 async fn duplicate_names_produce_distinct_ids() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let name = "Same Name Inc.";
 
     // First registration
     let response1 = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": name }))
         .send()
         .await
@@ -124,6 +130,7 @@ async fn duplicate_names_produce_distinct_ids() {
     // Second registration with same name
     let response2 = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": name }))
         .send()
         .await
@@ -139,10 +146,11 @@ async fn duplicate_names_produce_distinct_ids() {
 #[tokio::test]
 async fn name_is_trimmed_in_response() {
     let base_url = utils::spawn_server().await;
-    let client = Client::new();
+    let (client, auth_header, _) = utils::create_authenticated_client_and_token().await;
 
     let response = client
         .post(format!("{}/api/v1/tenants", base_url))
+        .header(header::AUTHORIZATION, &auth_header)
         .json(&serde_json::json!({ "name": "  Trimmed Name  " }))
         .send()
         .await

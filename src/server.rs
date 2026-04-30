@@ -71,8 +71,10 @@ impl Server {
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
-            .nest("/api/v1", api_routes())
-            .layer(axum::middleware::from_fn(auth))
+            .nest(
+                "/api/v1",
+                api_routes().layer(axum::middleware::from_fn(auth)),
+            )
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
