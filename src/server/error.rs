@@ -78,7 +78,14 @@ impl IntoApiError for TenantError {
                 error: "invalid_request",
                 error_description: Some(msg),
             },
+            TenantError::NotFound { .. } => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: "not_found",
+                error_description: Some("Tenant not found.".into()),
+            },
+            TenantError::InvalidData(msg) => ApiError::internal(msg),
             TenantError::Backend(src) => ApiError::internal(src),
+            TenantError::Encryption(src) => ApiError::internal(src),
         }
     }
 }

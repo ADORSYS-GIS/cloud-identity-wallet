@@ -1,6 +1,6 @@
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
-use cloud_identity_wallet::outbound::MemoryTenantRepository;
+use cloud_identity_wallet::outbound::MemoryTenantRepo;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::session::MemorySession;
 use cloud_identity_wallet::telemetry;
@@ -22,7 +22,7 @@ async fn main() -> color_eyre::Result<()> {
     let session_store = MemorySession::default();
 
     // TODO: Replace with actual database repository when ready
-    let tenant_repo = MemoryTenantRepository::new();
+    let tenant_repo = MemoryTenantRepo::new();
 
     // Create service and server
     let service = Service::new(session_store, tenant_repo);
