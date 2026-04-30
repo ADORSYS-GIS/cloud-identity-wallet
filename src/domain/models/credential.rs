@@ -4,6 +4,27 @@ use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
 
+type DynError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Errors that can occur during credential storage operations.
+#[derive(Debug, thiserror::Error)]
+pub enum CredentialError {
+    #[error("Storage backend error: {0}")]
+    Backend(DynError),
+
+    #[error("Credential not found for id={id}, tenant_id={tenant_id}")]
+    NotFound { id: Uuid, tenant_id: Uuid },
+
+    #[error("Invalid stored credential data: {0}")]
+    InvalidData(String),
+
+    #[error("Encryption or decryption error: {0}")]
+    Encryption(DynError),
+
+    #[error("Storage error: {0}")]
+    Other(String),
+}
+
 /// Lifecycle status of an issued credential.
 ///
 /// Represents the current state of a credential in its lifecycle.
@@ -142,4 +163,59 @@ pub struct Credential {
 
     /// The actual serialized credential string (e.g., the SD-JWT or base64 mdoc).
     pub raw_credential: String,
+}
+
+/// Filter criteria for listing credentials.
+#[derive(Debug, Clone, Default)]
+pub struct CredentialFilter {
+    pub tenant_id: Option<Uuid>,
+    pub credential_types: Option<Vec<String>>,
+    pub status: Option<CredentialStatus>,
+    pub format: Option<CredentialFormat>,
+    pub issuer: Option<String>,
+    pub subject: Option<String>,
+    pub exclude_expired: bool,
+}
+
+impl CredentialFilter {
+    /// Checks if a credential matches the filter criteria.
+    pub fn matches(&self, credential: &Credential) -> bool {
+        if let Some(tenant_id) = self.tenant_id
+            && credential.tenant_id != tenant_id
+        {
+            return false;
+        }
+        if let Some(status) = self.status
+            && credential.status != status
+        {
+            return false;
+        }
+        if let Some(format) = self.format
+            && credential.format != format
+        {
+            return false;
+        }
+        if let Some(issuer) = &self.issuer
+            && credential.issuer != *issuer
+        {
+            return false;
+        }
+        if let Some(subject) = &self.subject
+            && credential.subject.as_deref() != Some(subject.as_str())
+        {
+            return false;
+        }
+        if let Some(types) = &self.credential_types
+            && &credential.credential_types != types
+        {
+            return false;
+        }
+        if self.exclude_expired
+            && let Some(valid_until) = credential.valid_until
+            && valid_until <= time::UtcDateTime::now()
+        {
+            return false;
+        }
+        true
+    }
 }

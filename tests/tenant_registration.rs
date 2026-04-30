@@ -1,6 +1,6 @@
 //! Integration tests for POST /api/v1/tenants
 
-mod utils;
+pub mod utils;
 
 use axum::http::header;
 
