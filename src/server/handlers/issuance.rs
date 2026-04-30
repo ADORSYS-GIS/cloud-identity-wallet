@@ -86,12 +86,22 @@ pub async fn start_issuance<S: SessionStore>(
             )
         })?;
 
+    let expires_at = session
+        .expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| {
+            tracing::error!("failed to format session expiry time: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(IssuanceErrorResponse::server_error(
+                    "failed to format session expiry time",
+                )),
+            )
+        })?;
+
     let response = StartIssuanceResponse {
         session_id,
-        expires_at: session
-            .expires_at
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap(),
+        expires_at,
         issuer,
         credential_types,
         flow: flow_type.to_string(),
@@ -107,33 +117,93 @@ fn map_client_error(
 ) -> (StatusCode, Json<IssuanceErrorResponse>) {
     use cloud_wallet_openid4vc::issuance::client::ClientError::*;
 
-    match e {
+    match &e {
         IssuerMetadataDiscovery { message } => (
             StatusCode::BAD_GATEWAY,
-            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(message)),
+            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(
+                sanitize_error_message(message),
+            )),
         ),
         AsMetadataDiscovery { message } => (
             StatusCode::BAD_GATEWAY,
             Json(IssuanceErrorResponse::auth_server_metadata_fetch_failed(
+                sanitize_error_message(message),
+            )),
+        ),
+        MetadataDiscovery { message } => {
+            tracing::warn!("metadata discovery error: {message}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(
+                    "failed to fetch metadata",
+                )),
+            )
+        }
+        Http { message, status, .. } => {
+            tracing::warn!("http error: status={status:?}, message={message:?}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(
+                    "failed to connect to external service",
+                )),
+            )
+        }
+        Validation { message } => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::invalid_credential_offer(sanitize_error_message(
                 message,
-            )),
+            ))),
         ),
-        Http { .. } | MetadataDiscovery { .. } => (
-            StatusCode::BAD_GATEWAY,
-            Json(IssuanceErrorResponse::issuer_metadata_fetch_failed(
-                e.to_string(),
-            )),
+        InvalidResponse { message } => (
+            StatusCode::BAD_REQUEST,
+            Json(IssuanceErrorResponse::invalid_credential_offer(sanitize_error_message(
+                message,
+            ))),
         ),
-        Validation { .. } | InvalidResponse { .. } | NoSupportedGrantType => (
+        NoSupportedGrantType => (
             StatusCode::BAD_REQUEST,
             Json(IssuanceErrorResponse::invalid_credential_offer(
-                e.to_string(),
+                "no supported grant type found",
             )),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(IssuanceErrorResponse::server_error(e.to_string())),
-        ),
+        Configuration { message } => {
+            tracing::error!("configuration error: {message}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(IssuanceErrorResponse::server_error("configuration error")),
+            )
+        }
+        Internal { message } => {
+            tracing::error!("internal error: {message}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(IssuanceErrorResponse::server_error("internal server error")),
+            )
+        }
+        _ => {
+            tracing::error!("unhandled client error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(IssuanceErrorResponse::server_error("internal server error")),
+            )
+        }
+    }
+}
+
+fn sanitize_error_message(message: &str) -> String {
+    let sanitized = message
+        .replace("https://", "")
+        .replace("http://", "")
+        .split_whitespace()
+        .filter(|s| {
+            !s.contains(':') || s.starts_with("invalid") || s.starts_with("missing")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if sanitized.len() > 200 {
+        format!("{}...", &sanitized[..200])
+    } else {
+        sanitized
     }
 }
 
@@ -230,15 +300,6 @@ fn map_credential_display(
             uri: l.uri.to_string(),
             alt_text: l.alt_text.clone(),
         }),
-    }
-}
-
-impl std::fmt::Display for FlowType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FlowType::AuthorizationCode => write!(f, "authorization_code"),
-            FlowType::PreAuthorizedCode => write!(f, "pre_authorized_code"),
-        }
     }
 }
 
