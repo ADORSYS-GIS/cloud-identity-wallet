@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
+use crate::server::auth::auth;
 use crate::server::handlers::{health_check, home, register_tenant};
 use crate::session::SessionStore;
 
@@ -71,6 +72,7 @@ impl Server {
             .route("/", get(home))
             .route("/health", get(health_check))
             .nest("/api/v1", api_routes())
+            .layer(axum::middleware::from_fn(auth))
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
