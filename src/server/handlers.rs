@@ -1,4 +1,5 @@
 mod health;
+pub mod issuance;
 mod root;
 mod tenant;
 
