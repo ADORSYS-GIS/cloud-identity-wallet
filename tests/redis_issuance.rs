@@ -24,8 +24,6 @@ use testcontainers_modules::{
 use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 const REDIS_TAG: &str = "8-alpine";
 
 /// Start a Redis container and return a plain connection manager (no push channel).
@@ -92,8 +90,6 @@ fn make_task(session_id: &str) -> IssuanceTask {
         tx_code: None,
     }
 }
-
-// ── RedisTaskQueue ───────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn task_queue_push_pop_round_trip() {
@@ -242,8 +238,6 @@ async fn task_queue_concurrent_consumers_get_distinct_tasks() {
         "each consumer should get a distinct task"
     );
 }
-
-// ── RedisEventPublisher + RedisEventSubscriber ───────────────────────────────
 
 #[tokio::test]
 async fn event_publish_subscribe_round_trip() {
