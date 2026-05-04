@@ -4,6 +4,7 @@ mod task;
 
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
+use serde::{Deserialize, Serialize};
 pub use task::{IssuanceTask, TaskResult};
 
 type Result<T> = std::result::Result<T, IssuanceError>;
@@ -23,10 +24,17 @@ use uuid::Uuid;
 use crate::domain::models::credential::{Credential, CredentialFormat, CredentialStatus};
 use crate::domain::models::tenants::SignAlgorithm;
 use crate::domain::ports::{CredentialRepo, IssuanceEventPublisher, IssuanceTaskQueue, TenantRepo};
-use crate::session::{FlowType, IssuanceSession, IssuanceState, SessionStore, transition};
+use crate::session::{IssuanceSession, IssuanceState, SessionStore, transition};
 
 /// Maximum number of deferred credential polling attempts.
 const MAX_DEFERRED_RETRIES: u32 = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowType {
+    AuthorizationCode,
+    PreAuthorizedCode,
+}
 
 /// The issuance engine.
 ///

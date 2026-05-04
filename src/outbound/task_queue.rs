@@ -277,7 +277,7 @@ impl IssuanceTaskQueue for MemoryTaskQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::FlowType;
+    use crate::domain::models::issuance::FlowType;
     use uuid::Uuid;
 
     fn make_task(session_id: &str) -> IssuanceTask {
