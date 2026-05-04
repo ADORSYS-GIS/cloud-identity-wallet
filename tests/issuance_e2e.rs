@@ -85,7 +85,7 @@ async fn start_issuance_pre_authorized_code_returns_201() {
     let offer_json = make_pre_auth_offer(&issuer_url, "test_pre_auth_code_123");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -115,7 +115,7 @@ async fn start_issuance_authorization_code_returns_201() {
     let offer_json = make_authz_code_offer(&issuer_url, "test_issuer_state");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -135,7 +135,7 @@ async fn start_issuance_invalid_offer_returns_400() {
     let client = Client::new();
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": "not_a_valid_offer" }))
         .send()
         .await
@@ -153,7 +153,7 @@ async fn start_issuance_missing_offer_returns_400() {
     let client = Client::new();
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({}))
         .send()
         .await
@@ -178,7 +178,7 @@ async fn start_issuance_returns_expires_at() {
     let offer_json = make_pre_auth_offer(&issuer_url, "test_code");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -210,7 +210,7 @@ async fn start_issuance_with_tx_code_returns_tx_code_spec() {
     let offer_json = make_pre_auth_offer_with_tx_code(&issuer_url, "test_code");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -240,7 +240,7 @@ async fn start_issuance_issuer_metadata_failure_returns_502() {
     let offer_uri = format!("openid-credential-offer://?credential_offer={encoded}");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_uri }))
         .send()
         .await
@@ -268,7 +268,7 @@ async fn start_issuance_empty_grants_falls_back_to_as_metadata() {
     let offer_json = make_empty_grants_offer(&issuer_url);
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -297,7 +297,7 @@ async fn start_issuance_no_grants_uses_as_metadata() {
     let offer_json = make_no_grants_offer(&issuer_url);
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -336,7 +336,7 @@ async fn start_issuance_no_supported_grant_type_returns_400() {
     let offer_json = make_no_grants_offer(&issuer_url);
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -378,7 +378,7 @@ async fn start_issuance_as_metadata_with_pre_authorized_code_grant() {
     let offer_json = make_no_grants_offer(&issuer_url);
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -406,7 +406,7 @@ async fn start_issuance_session_contains_sanitized_offer() {
     let offer_json = make_pre_auth_offer(&issuer_url, "sensitive_token_12345");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -440,7 +440,7 @@ async fn start_issuance_response_contains_issuer_info() {
     let offer_json = make_pre_auth_offer(&issuer_url, "test_code");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -468,7 +468,7 @@ async fn start_issuance_response_contains_credential_types() {
     let offer_json = make_pre_auth_offer(&issuer_url, "test_code");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_json }))
         .send()
         .await
@@ -575,7 +575,7 @@ async fn start_issuance_by_reference_offer_uri_returns_201() {
     let offer_uri = make_offer_by_reference(&offer_uri_endpoint);
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_uri }))
         .send()
         .await
@@ -603,7 +603,7 @@ async fn start_issuance_by_reference_unreachable_uri_returns_502() {
     let offer_uri = make_offer_by_reference("https://non-existent-offer.example.com/offer");
 
     let response = client
-        .post(format!("{}/api/v1/issuance/start", base_url))
+        .post(format!("{}/api/v1/protected/issuance/start", base_url))
         .json(&serde_json::json!({ "offer": offer_uri }))
         .send()
         .await

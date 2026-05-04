@@ -16,27 +16,42 @@ pub struct Claims {
 }
 
 #[allow(dead_code)]
-pub async fn auth(mut request: Request<Body>, next: Next) -> Result<impl IntoResponse, AuthError> {
-    let token = request
+pub async fn auth(mut request: Request<Body>, next: Next) -> impl IntoResponse {
+    let token = match request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
         .and_then(|auth| auth.strip_prefix("Bearer "))
-        .ok_or(AuthError::InvalidAuthorizationHeader)?;
+    {
+        Some(token) => token,
+        None => return AuthError::InvalidAuthorizationHeader.into_response(),
+    };
 
-    let header = decode_header(token)?;
+    let header = match decode_header(token) {
+        Ok(h) => h,
+        Err(e) => return AuthError::JwtError(e).into_response(),
+    };
 
-    let jwk = header.jwk.ok_or(AuthError::MissingKey)?;
+    let jwk = match header.jwk {
+        Some(jwk) => jwk,
+        None => return AuthError::MissingKey.into_response(),
+    };
 
-    let decoding_key = DecodingKey::from_jwk(&jwk)?;
+    let decoding_key = match DecodingKey::from_jwk(&jwk) {
+        Ok(key) => key,
+        Err(e) => return AuthError::JwtError(e).into_response(),
+    };
 
     let validation = Validation::new(header.alg);
 
-    let token_data = decode::<Claims>(token, &decoding_key, &validation)?;
+    let token_data = match decode::<Claims>(token, &decoding_key, &validation) {
+        Ok(data) => data,
+        Err(e) => return AuthError::JwtError(e).into_response(),
+    };
 
     request.extensions_mut().insert(token_data.claims.sub);
 
-    Ok(next.run(request).await)
+    next.run(request).await
 }
 
 #[cfg(test)]
