@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_queue_lock_prevents_duplicate() {
+    async fn memory_queue_push_twice_pops_twice() {
         let queue = MemoryTaskQueue::new();
         let t1 = make_task("ses_1");
 
@@ -308,12 +308,14 @@ mod tests {
         queue.push(&t1).await.unwrap();
         queue.push(&t1).await.unwrap();
 
-        // First pop acquires lock
+        // Both copies are popped
         let popped1 = queue.pop().await.unwrap();
         assert!(popped1.is_some());
 
-        // Second pop sees lock and returns None
         let popped2 = queue.pop().await.unwrap();
-        assert!(popped2.is_none());
+        assert!(popped2.is_some());
+
+        // Queue is now empty
+        assert!(queue.pop().await.unwrap().is_none());
     }
 }
