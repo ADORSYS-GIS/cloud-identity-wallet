@@ -1,5 +1,5 @@
 mod auth;
-mod error;
+pub(crate) mod error;
 mod handlers;
 mod responses;
 
@@ -7,16 +7,12 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
+use crate::server::handlers::{health_check, home, register_tenant};
 use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
     Router,
-    body::Body,
-    extract::Request,
-    middleware::Next,
-    response::IntoResponse,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -25,11 +21,10 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use uuid::Uuid;
 
 #[derive(Debug)]
 /// The global application state shared between all request handlers.
-struct AppState<S: SessionStore> {
+pub(crate) struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
 
@@ -47,26 +42,11 @@ pub struct Server {
     listener: TcpListener,
 }
 
-/// Middleware that injects a nil UUID as tenant_id for testing purposes.
-/// This bypasses the auth middleware and should only be used in test environments.
-async fn test_tenant_bypass(request: Request<Body>, next: Next) -> impl IntoResponse {
-    let test_tenant_id = Uuid::nil();
-    let mut request = request;
-    request.extensions_mut().insert(test_tenant_id);
-    next.run(request).await
-}
-
 impl Server {
     /// Creates a new HTTPS server.
-    pub async fn new<S: SessionStore>(config: &Config, service: Service<S>) -> Result<Self> {
-        Self::new_with_test_bypass(config, service, false).await
-    }
-
-    /// Creates a new server, optionally with test tenant bypass middleware.
-    pub async fn new_with_test_bypass<S: SessionStore>(
+    pub async fn new<S: SessionStore + Clone>(
         config: &Config,
         service: Service<S>,
-        enable_test_bypass: bool,
     ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -75,6 +55,7 @@ impl Server {
             });
 
         let cors_layer = CorsLayer::new()
+            // TODO : Replace Any with specific origins
             .allow_origin(Any)
             .allow_headers(Any)
             .allow_methods([
@@ -92,7 +73,7 @@ impl Server {
         let router = Router::new()
             .route("/", get(home))
             .route("/health", get(health_check))
-            .nest("/api/v1", api_routes(enable_test_bypass))
+            .nest("/api/v1", api_routes())
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -116,26 +97,6 @@ impl Server {
     }
 }
 
-fn api_routes<S: SessionStore>(enable_test_bypass: bool) -> Router<AppState<S>> {
-    let public_routes = Router::new().route("/tenants", post(register_tenant));
-
-    let protected_routes = create_protected_routes::<S>(enable_test_bypass);
-
-    Router::new()
-        .merge(public_routes)
-        .nest("/protected", protected_routes)
-}
-
-/// Creates the protected routes router with authentication middleware.
-///
-/// All routes under this router require authentication. The middleware
-/// extracts tenant_id from JWT claims and injects it into request extensions.
-fn create_protected_routes<S: SessionStore>(enable_test_bypass: bool) -> Router<AppState<S>> {
-    let issuance_routes = Router::new().route("/issuance/start", post(start_issuance));
-
-    if enable_test_bypass {
-        issuance_routes.layer(axum::middleware::from_fn(test_tenant_bypass))
-    } else {
-        issuance_routes.layer(axum::middleware::from_fn(auth::auth))
-    }
+fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
+    Router::new().route("/tenants", post(register_tenant))
 }
