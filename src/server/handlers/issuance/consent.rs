@@ -1,43 +1,45 @@
-use crate::domain::models::consent::{
-    ConsentErrorResponse, ConsentRequest, ConsentResponse, NextAction,
-};
+//! HTTP handler for consent submission.
+
+use crate::domain::models::consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
+use crate::domain::models::issuance::FlowType;
 use crate::domain::models::issuance::{
     IssuanceEvent, IssuanceStep, ProcessingStep, SseFailedEvent, SseProcessingEvent,
 };
-use crate::server::AppState;
-use crate::session::{FlowType, IssuanceSession, IssuanceState, SessionStore, transition};
+use crate::server::{AppState, error::ApiError, responses::ResponseBody};
+use crate::session::{IssuanceSession, IssuanceState, SessionStore, transition};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
 };
 
+/// Submit consent for a credential issuance session.
 pub async fn submit_consent<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
     Path(session_id): Path<String>,
     Json(payload): Json<ConsentRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ConsentErrorResponse>)> {
+) -> Result<ResponseBody<ConsentResponse>, ApiError> {
     let mut session: IssuanceSession = state
         .service
         .session
         .get(session_id.as_str())
         .await
-        .map_err(internal_error)?
-        .ok_or_else(|| not_found(&session_id))?;
+        .map_err(|e| ConsentError::Storage(e.into()))?
+        .ok_or_else(|| ConsentError::NotFound(session_id.clone()))?;
 
     if session.state != IssuanceState::AwaitingConsent {
-        return Err(invalid_state());
+        return Err(ConsentError::InvalidState.into());
     }
 
     if !payload.accepted {
-        transition(&mut session, IssuanceState::Failed).map_err(internal_error)?;
+        transition(&mut session, IssuanceState::Failed)
+            .map_err(|e| ConsentError::Storage(e.into()))?;
         state
             .service
             .session
             .upsert(session_id.as_str(), &session)
             .await
-            .map_err(internal_error)?;
+            .map_err(|e| ConsentError::Storage(e.into()))?;
 
         // Emit failed event via the event publisher
         let event = IssuanceEvent::Failed(SseFailedEvent::new(
@@ -60,13 +62,13 @@ pub async fn submit_consent<S: SessionStore + Clone>(
             );
         }
 
-        return Ok((
+        return Ok(ResponseBody::new(
             StatusCode::OK,
-            Json(ConsentResponse {
+            ConsentResponse {
                 session_id: session.id.clone(),
                 next_action: NextAction::Rejected,
                 authorization_url: None,
-            }),
+            },
         ));
     }
 
@@ -82,7 +84,7 @@ async fn handle_authorization_code_consent<S: SessionStore + Clone>(
     state: AppState<S>,
     mut session: IssuanceSession,
     payload: ConsentRequest,
-) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
+) -> Result<ResponseBody<ConsentResponse>, ApiError> {
     // Build authorization URL using the OID4VCI client from the issuance engine
     let result = state
         .service
@@ -94,26 +96,29 @@ async fn handle_authorization_code_consent<S: SessionStore + Clone>(
             &payload.selected_configuration_ids,
         )
         .await
-        .map_err(|e| bad_gateway(format!("Failed to build authorization URL: {e}")))?;
+        .map_err(|e| {
+            ConsentError::AuthorizationUrlFailed(format!("Failed to build authorization URL: {e}"))
+        })?;
 
     // Store the PKCE verifier in the session
     session.code_verifier = Some(result.pkce_verifier);
 
-    transition(&mut session, IssuanceState::AwaitingAuthorization).map_err(internal_error)?;
+    transition(&mut session, IssuanceState::AwaitingAuthorization)
+        .map_err(|e| ConsentError::Storage(e.into()))?;
     state
         .service
         .session
         .upsert(session.id.as_str(), &session)
         .await
-        .map_err(internal_error)?;
+        .map_err(|e| ConsentError::Storage(e.into()))?;
 
-    Ok((
+    Ok(ResponseBody::new(
         StatusCode::OK,
-        Json(ConsentResponse {
+        ConsentResponse {
             session_id: session.id.clone(),
             next_action: NextAction::Redirect,
             authorization_url: Some(result.authz_url.to_string()),
-        }),
+        },
     ))
 }
 
@@ -121,34 +126,36 @@ async fn handle_pre_authorized_consent<S: SessionStore + Clone>(
     state: AppState<S>,
     mut session: IssuanceSession,
     _payload: ConsentRequest,
-) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
+) -> Result<ResponseBody<ConsentResponse>, ApiError> {
     let tx_code_required = session.context.flow.tx_code_required();
 
     if tx_code_required {
-        transition(&mut session, IssuanceState::AwaitingTxCode).map_err(internal_error)?;
+        transition(&mut session, IssuanceState::AwaitingTxCode)
+            .map_err(|e| ConsentError::Storage(e.into()))?;
         state
             .service
             .session
             .upsert(session.id.as_str(), &session)
             .await
-            .map_err(internal_error)?;
+            .map_err(|e| ConsentError::Storage(e.into()))?;
 
-        Ok((
+        Ok(ResponseBody::new(
             StatusCode::OK,
-            Json(ConsentResponse {
+            ConsentResponse {
                 session_id: session.id.clone(),
                 next_action: NextAction::ProvideTxCode,
                 authorization_url: None,
-            }),
+            },
         ))
     } else {
-        transition(&mut session, IssuanceState::Processing).map_err(internal_error)?;
+        transition(&mut session, IssuanceState::Processing)
+            .map_err(|e| ConsentError::Storage(e.into()))?;
         state
             .service
             .session
             .upsert(session.id.as_str(), &session)
             .await
-            .map_err(internal_error)?;
+            .map_err(|e| ConsentError::Storage(e.into()))?;
 
         // Emit processing event via the event publisher
         let event = IssuanceEvent::Processing(SseProcessingEvent::new(
@@ -169,53 +176,13 @@ async fn handle_pre_authorized_consent<S: SessionStore + Clone>(
             );
         }
 
-        Ok((
+        Ok(ResponseBody::new(
             StatusCode::OK,
-            Json(ConsentResponse {
+            ConsentResponse {
                 session_id: session.id.clone(),
                 next_action: NextAction::None,
                 authorization_url: None,
-            }),
+            },
         ))
     }
-}
-
-fn not_found(session_id: &str) -> (StatusCode, Json<ConsentErrorResponse>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ConsentErrorResponse {
-            error: "session_not_found",
-            error_description: format!("Session {} does not exist", session_id),
-        }),
-    )
-}
-
-fn invalid_state() -> (StatusCode, Json<ConsentErrorResponse>) {
-    (
-        StatusCode::CONFLICT,
-        Json(ConsentErrorResponse {
-            error: "invalid_session_state",
-            error_description: "Session is not in awaiting_consent state".to_string(),
-        }),
-    )
-}
-
-fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<ConsentErrorResponse>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ConsentErrorResponse {
-            error: "internal_error",
-            error_description: e.to_string(),
-        }),
-    )
-}
-
-fn bad_gateway(e: impl std::fmt::Display) -> (StatusCode, Json<ConsentErrorResponse>) {
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(ConsentErrorResponse {
-            error: "bad_gateway",
-            error_description: e.to_string(),
-        }),
-    )
 }

@@ -75,6 +75,7 @@ impl Server {
             .route("/", get(home))
             .route("/health", get(health_check))
             .nest("/api/v1", api_routes())
+            .nest("/api/v1", private_routes())
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -101,7 +102,9 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    Router::new()
-        .route("/tenants", post(register_tenant))
-        .route("/issuance/{session_id}/consent", post(submit_consent))
+    Router::new().route("/tenants", post(register_tenant))
+}
+
+fn private_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
+    Router::new().route("/issuance/{session_id}/consent", post(submit_consent))
 }
