@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -27,6 +28,7 @@ pub struct RedisTaskQueue {
     consumer: String,
     max_len: usize,
     claim_idle_timeout: Duration,
+    group_ready: Arc<AtomicBool>,
 }
 
 impl RedisTaskQueue {
@@ -38,6 +40,7 @@ impl RedisTaskQueue {
             consumer: default_consumer_name(),
             max_len: DEFAULT_STREAM_MAX_LEN,
             claim_idle_timeout: DEFAULT_CLAIM_IDLE_TIMEOUT,
+            group_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -76,14 +79,24 @@ impl RedisTaskQueue {
 
     // Ensure the consumer group exists for the task stream
     async fn ensure_group(&self) -> Result<(), IssuanceError> {
+        if self.group_ready.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
         let mut conn = self.conn.clone();
         let result: redis::RedisResult<()> = conn
             .xgroup_create_mkstream(TASK_STREAM_KEY, self.group, "0")
             .await;
 
         match result {
-            Ok(()) => Ok(()),
-            Err(e) if e.code() == Some("BUSYGROUP") => Ok(()),
+            Ok(()) => {
+                self.group_ready.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(e) if e.code() == Some("BUSYGROUP") => {
+                self.group_ready.store(true, Ordering::Relaxed);
+                Ok(())
+            }
             Err(e) => Err(map_redis_err(e)),
         }
     }
