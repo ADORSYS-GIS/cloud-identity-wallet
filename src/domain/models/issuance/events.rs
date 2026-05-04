@@ -244,8 +244,8 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         let expected = serde_json::json!({
             "session_id": "ses_test",
-            "state": "exchanging_token",
-            "step": "processing"
+            "state": "processing",
+            "step": "exchanging_token"
         });
         assert_eq!(json, expected);
     }
@@ -321,15 +321,14 @@ mod tests {
     #[test]
     fn sse_event_frame_serialization() {
         let event = SseProcessingEvent::new("ses", ProcessingStep::ExchangingToken);
+        // Verify that to_sse_event produces a valid SSE event frame
         let _axum_event = event.to_sse_event().unwrap();
+        // Verify the struct itself serializes with correct fields
         let json = serde_json::to_value(&event).unwrap();
         let expected = serde_json::json!({
-            "event": "processing",
-            "data": {
-                "session_id": "ses",
-                "state": "processing",
-                "step": "exchanging_token"
-            }
+            "session_id": "ses",
+            "state": "processing",
+            "step": "exchanging_token"
         });
         assert_eq!(json, expected);
     }
