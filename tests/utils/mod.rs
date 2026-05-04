@@ -18,6 +18,7 @@ pub async fn spawn_server() -> String {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
         config.server.port = 0;
+        config.oid4vci.use_system_proxy = false;
         config
     };
     let session_store = MemorySession::default();

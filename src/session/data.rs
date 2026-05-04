@@ -98,18 +98,41 @@ mod tests {
     use super::*;
 
     fn mock_session(flow: FlowType) -> IssuanceSession {
-        let offer = serde_json::from_value(serde_json::json!({
-            "credential_issuer": "https://issuer.example.com",
-            "credential_configuration_ids": ["test_id"],
-            "grants": {
-                "authorization_code": {
+        let context = serde_json::from_value(serde_json::json!({
+            "offer": {
+                "credential_issuer": "https://issuer.example.com",
+                "credential_configuration_ids": ["test_id"],
+                "grants": {
+                    "authorization_code": {
+                        "issuer_state": "test_state"
+                    }
+                }
+            },
+            "issuer_metadata": {
+                "credential_issuer": "https://issuer.example.com",
+                "credential_endpoint": "https://issuer.example.com/credential",
+                "credential_configurations_supported": {
+                    "test_id": {
+                        "format": "dc+sd-jwt",
+                        "vct": "https://credentials.example.com/test"
+                    }
+                }
+            },
+            "as_metadata": {
+                "issuer": "https://issuer.example.com",
+                "authorization_endpoint": "https://issuer.example.com/authorize",
+                "token_endpoint": "https://issuer.example.com/token",
+                "response_types_supported": ["code"]
+            },
+            "flow": {
+                "AuthorizationCode": {
                     "issuer_state": "test_state"
                 }
-            }
+            },
         }))
         .unwrap();
 
-        IssuanceSession::new(Uuid::new_v4(), offer, flow)
+        IssuanceSession::new(Uuid::new_v4(), context, flow)
     }
 
     #[test]
