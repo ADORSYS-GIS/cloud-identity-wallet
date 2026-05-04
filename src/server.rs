@@ -47,6 +47,8 @@ pub struct Server {
     listener: TcpListener,
 }
 
+/// Middleware that injects a nil UUID as tenant_id for testing purposes.
+/// This bypasses the auth middleware and should only be used in test environments.
 async fn test_tenant_bypass(request: Request<Body>, next: Next) -> impl IntoResponse {
     let test_tenant_id = Uuid::nil();
     let mut request = request;
@@ -73,7 +75,6 @@ impl Server {
             });
 
         let cors_layer = CorsLayer::new()
-            // TODO : Replace Any with specific origins
             .allow_origin(Any)
             .allow_headers(Any)
             .allow_methods([
@@ -116,23 +117,25 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore>(enable_test_bypass: bool) -> Router<AppState<S>> {
-    let mut router = Router::new().route("/tenants", post(register_tenant));
+    let public_routes = Router::new().route("/tenants", post(register_tenant));
 
-    let issuance_route = post(start_issuance);
+    let protected_routes = create_protected_routes::<S>(enable_test_bypass);
+
+    Router::new()
+        .merge(public_routes)
+        .nest("/protected", protected_routes)
+}
+
+/// Creates the protected routes router with authentication middleware.
+///
+/// All routes under this router require authentication. The middleware
+/// extracts tenant_id from JWT claims and injects it into request extensions.
+fn create_protected_routes<S: SessionStore>(enable_test_bypass: bool) -> Router<AppState<S>> {
+    let issuance_routes = Router::new().route("/issuance/start", post(start_issuance));
+
     if enable_test_bypass {
-        router = router.route(
-            "/issuance/start",
-            issuance_route.layer(axum::middleware::from_fn(test_tenant_bypass)),
-        );
+        issuance_routes.layer(axum::middleware::from_fn(test_tenant_bypass))
     } else {
-        // TODO(auth): Wire auth middleware here once authentication flow is finalized.
-        // The `auth` middleware in `server::auth` requires JWT tokens with embedded JWK,
-        // which may not match the production authentication strategy.
-        // Currently, without middleware, requests to /issuance/start will fail with 500
-        // due to missing `tenant_id` extension. This is intentional for development.
-        // See: https://github.com/ADORSYS-GIS/cloud-identity-wallet/issues/181
-        router = router.route("/issuance/start", issuance_route);
+        issuance_routes.layer(axum::middleware::from_fn(auth::auth))
     }
-
-    router
 }
