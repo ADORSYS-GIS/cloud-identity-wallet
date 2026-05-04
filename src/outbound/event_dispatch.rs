@@ -55,6 +55,8 @@ impl RedisEventSubscriber {
     /// the manager is created, otherwise push messages will not be received.
     ///
     /// ```no_run
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// use cloud_identity_wallet::outbound::RedisEventSubscriber;
     /// use redis::{Client, aio::ConnectionManagerConfig};
     ///
     /// let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -62,7 +64,9 @@ impl RedisEventSubscriber {
     /// let client = Client::open("redis://127.0.0.1/?protocol=resp3")?;
     /// let conn = client.get_connection_manager_with_config(config).await?;
     ///
-    /// let subscriber = RedisEventSubscriber::new(conn, rx);
+    /// let _subscriber = RedisEventSubscriber::new(conn, rx);
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// [RESP3]: https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md
