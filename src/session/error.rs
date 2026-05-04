@@ -7,13 +7,10 @@ pub enum Error {
     Store(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("Encoding or decoding error: {0}")]
-    Encoding(#[from] postcard::Error),
+    Encoding(#[from] serde_json::Error),
 
     #[error("Invalid state transition from {0} to {1}")]
     InvalidStateTransition(Cow<'static, str>, Cow<'static, str>),
-
-    #[error("session has expired")]
-    ExpiredSession,
 
     #[error("{0}")]
     Other(color_eyre::eyre::Report),
@@ -24,25 +21,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_expired_session_error_message() {
-        let error = Error::ExpiredSession;
-        assert_eq!(format!("{}", error), "session has expired");
-    }
-
-    #[test]
     fn test_invalid_state_transition_error_message() {
         let error = Error::InvalidStateTransition("AwaitingConsent".into(), "Completed".into());
         assert_eq!(
             format!("{}", error),
             "Invalid state transition from AwaitingConsent to Completed"
         );
-    }
-
-    #[test]
-    fn test_encoding_error_from_postcard() {
-        let postcard_error = postcard::from_bytes::<String>(&[0xFF, 0xFE]).unwrap_err();
-        let error: Error = Error::from(postcard_error);
-        assert!(format!("{}", error).contains("Encoding or decoding error"));
     }
 
     #[test]

@@ -2,58 +2,29 @@
 
 use cloud_identity_wallet::{
     config::Config,
-    domain::{
-        models::credential::{Credential, CredentialFormat, CredentialStatus},
-        service::Service,
-    },
+    domain::models::credential::{Credential, CredentialFormat, CredentialStatus},
     outbound::MemoryTenantRepo,
     server::Server,
     session::MemorySession,
+    setup,
 };
-use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 use sqlx::{AnyPool, ConnectOptions};
-use std::time::Duration;
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
 
-#[allow(dead_code)]
 pub async fn spawn_server() -> String {
-    spawn_server_inner(false, false).await
-}
-
-#[allow(dead_code)]
-pub async fn spawn_server_with_mock_issuer() -> String {
-    spawn_server_inner(true, true).await
-}
-
-async fn spawn_server_inner(accept_untrusted_hosts: bool, enable_test_bypass: bool) -> String {
-    // Install default drivers for sqlx
-    sqlx::any::install_default_drivers();
-
     let config = {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
         config.server.port = 0;
+        config.oid4vci.use_system_proxy = false;
         config
     };
-
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
-
-    let oid4vci_config = Oid4vciClientConfig::new(
-        &config.oid4vci.client_id,
-        config.oid4vci.redirect_uri.clone(),
-    )
-    .timeout(Duration::from_secs(5))
-    .accept_untrusted_hosts(accept_untrusted_hosts)
-    .https_only(!accept_untrusted_hosts);
-    let oid4vci_client = Oid4vciClient::new(oid4vci_config).unwrap();
-
-    let service = Service::new(session_store, tenant_repo, oid4vci_client);
-    let server = Server::new_with_test_bypass(&config, service, enable_test_bypass)
-        .await
-        .unwrap();
+    let service = setup::build_service(session_store, tenant_repo, &config).unwrap();
+    let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();
     tokio::spawn(server.run());

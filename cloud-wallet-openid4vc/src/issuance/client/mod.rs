@@ -5,6 +5,7 @@ mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
+use serde::{Deserialize, Serialize};
 pub use signer::{
     Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
 };
@@ -54,23 +55,23 @@ const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 const JSON_HEADER: &str = "application/json";
 
 /// Fully resolved context from a single credential offer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedOfferContext {
     pub offer: CredentialOffer,
     pub issuer_metadata: CredentialIssuerMetadata,
-    pub as_metadata: Option<AuthorizationServerMetadata>,
+    pub as_metadata: AuthorizationServerMetadata,
     pub flow: IssuanceFlow,
 }
 
 /// Which grant type the orchestrator should use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantType {
     AuthorizationCode,
     PreAuthorizedCode,
 }
 
 /// Chosen issuance flow data after offer resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IssuanceFlow {
     AuthorizationCode {
         issuer_state: Option<String>,
@@ -105,14 +106,14 @@ impl IssuanceFlow {
 }
 
 /// Result of building the authorization URL.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationUrlResult {
     pub authz_url: Url,
     pub pkce_verifier: String,
 }
 
 /// Parsed authorization callback outcome.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum AuthorizationCallback {
     Success(AuthorizationResponse),
     Error(Oid4vciError<AuthzErrorResponse>),
@@ -131,25 +132,8 @@ pub struct Config {
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
     pub accept_untrusted_hosts: bool,
-    /// Enforce HTTPS for all external requests (SSRF protection).
-    ///
-    /// When `true` (default, required for production), the client rejects HTTP URLs
-    /// in credential offers, issuer metadata, and authorization server metadata.
-    /// This prevents Server-Side Request Forgery (SSRF) attacks where a malicious
-    /// user could trick the server into making requests to internal network resources.
-    ///
-    /// # Security Note
-    /// This field MUST NOT be exposed via environment variables or external configuration
-    /// in production deployments. It should only be set to `false` in controlled test
-    /// environments using HTTP mock servers (e.g., wiremock).
-    ///
-    /// # Example Attack Prevented
-    /// Without HTTPS enforcement, an attacker could submit:
-    /// ```text
-    /// credential_offer_uri=http://169.254.169.254/latest/meta-data/
-    /// ```
-    /// This would cause the server to fetch internal cloud metadata.
-    pub https_only: bool,
+    /// Use system proxy configuration discovered by the HTTP client.
+    pub use_system_proxy: bool,
 }
 
 impl Config {
@@ -159,7 +143,6 @@ impl Config {
     /// - timeout: 10 seconds
     /// - user_agent: None
     /// - accept_untrusted_hosts: false
-    /// - https_only: true
     pub fn new(client_id: impl Into<String>, redirect_uri: Url) -> Self {
         Self {
             client_id: client_id.into(),
@@ -167,7 +150,7 @@ impl Config {
             timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
             user_agent: None,
             accept_untrusted_hosts: false,
-            https_only: true,
+            use_system_proxy: true,
         }
     }
 
@@ -196,11 +179,15 @@ impl Config {
         }
     }
 
-    /// Enables or disables HTTPS-only mode.
+    /// Enables or disables system proxy discovery.
     ///
-    /// This should only be disabled in test environments with HTTP mock servers.
-    pub fn https_only(self, https_only: bool) -> Self {
-        Self { https_only, ..self }
+    /// Disabling this is useful in tests and restricted runtime environments
+    /// where reading host networking configuration may fail during client setup.
+    pub fn use_system_proxy(self, use_system_proxy: bool) -> Self {
+        Self {
+            use_system_proxy,
+            ..self
+        }
     }
 }
 
@@ -231,17 +218,23 @@ impl Oid4vciClient {
         let mut inner_client_builder = reqwest::Client::builder()
             .timeout(config.timeout)
             .tls_backend_rustls()
-            .tls_certs_only([])
-            .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts)
-            .https_only(config.https_only);
+            .https_only(true);
+
+        if config.accept_untrusted_hosts {
+            inner_client_builder = inner_client_builder.tls_danger_accept_invalid_certs(true);
+        }
+
+        if !config.use_system_proxy {
+            inner_client_builder = inner_client_builder.no_proxy();
+        }
 
         if let Some(ref user_agent) = config.user_agent {
             inner_client_builder = inner_client_builder.user_agent(user_agent);
         }
 
-        let inner_client = inner_client_builder
-            .build()
-            .map_err(|e| ClientError::configuration(format!("failed to build HTTP client: {e}")))?;
+        let inner_client = inner_client_builder.build().map_err(|e| {
+            ClientError::configuration(format!("failed to build HTTP client: {e:?}"))
+        })?;
 
         let http_client = ClientBuilder::new(inner_client)
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -383,9 +376,6 @@ impl Oid4vciClient {
     /// Supported `raw_offer` forms:
     /// - Full `openid-credential-offer://` URI
     /// - Query string containing `credential_offer` or `credential_offer_uri`
-    ///
-    /// Per OID4VCI §4.1.1, AS metadata is only fetched when the offer has no grants
-    /// or when grants are ambiguous, reducing unnecessary network calls and SSRF surface.
     pub async fn resolve_offer_with_metadata(
         &self,
         raw_offer: &str,
@@ -393,29 +383,10 @@ impl Oid4vciClient {
     ) -> Result<ResolvedOfferContext> {
         let offer = self.resolve_offer(raw_offer).await?;
         let issuer_metadata = self.fetch_issuer_metadata(&offer.credential_issuer).await?;
-
-        // Try to determine flow from offer grants first (no AS metadata needed)
-        let flow_type = self.try_determine_flow_from_offer(&offer, preferred);
-
-        let as_metadata = match flow_type {
-            Ok(flow) => {
-                return Ok(ResolvedOfferContext {
-                    offer,
-                    issuer_metadata,
-                    as_metadata: None,
-                    flow,
-                });
-            }
-            Err(_) => {
-                // Grants absent or ambiguous, fetch AS metadata to determine flow
-                Some(
-                    self.fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer)
-                        .await?,
-                )
-            }
-        };
-
-        let flow_type = self.determine_flow(&offer, as_metadata.as_ref().unwrap(), preferred)?;
+        let as_metadata = self
+            .fetch_as_metadata(&offer.credential_issuer, &issuer_metadata, &offer)
+            .await?;
+        let flow_type = self.determine_flow(&offer, &as_metadata, preferred)?;
 
         Ok(ResolvedOfferContext {
             offer,
@@ -423,50 +394,6 @@ impl Oid4vciClient {
             as_metadata,
             flow: flow_type,
         })
-    }
-
-    /// Try to determine the issuance flow from the offer grants alone.
-    ///
-    /// Returns Ok(flow) when grants are unambiguous, Err(()) when grants are absent
-    /// or when both grant types are present (ambiguous).
-    fn try_determine_flow_from_offer(
-        &self,
-        offer: &CredentialOffer,
-        preferred: Option<GrantType>,
-    ) -> std::result::Result<IssuanceFlow, ()> {
-        let grants = offer.grants.as_ref();
-        let has_any_grants = grants
-            .map(|g| g.authorization_code.is_some() || g.pre_authorized_code.is_some())
-            .unwrap_or(false);
-
-        if !has_any_grants {
-            return Err(());
-        }
-
-        let authz = grants.and_then(|g| g.authorization_code.as_ref());
-        let pre_auth = grants.and_then(|g| g.pre_authorized_code.as_ref());
-
-        match (authz, pre_auth) {
-            // Both present — use preferred to disambiguate, or default to pre-authorized code
-            (Some(a), Some(p)) => match preferred {
-                Some(GrantType::AuthorizationCode) => Ok(IssuanceFlow::AuthorizationCode {
-                    issuer_state: a.issuer_state.clone(),
-                }),
-                Some(GrantType::PreAuthorizedCode) | None => Ok(IssuanceFlow::PreAuthorizedCode {
-                    pre_authorized_code: p.pre_authorized_code.clone(),
-                    tx_code: p.tx_code.clone(),
-                }),
-            },
-            (Some(a), None) => Ok(IssuanceFlow::AuthorizationCode {
-                issuer_state: a.issuer_state.clone(),
-            }),
-            (None, Some(p)) => Ok(IssuanceFlow::PreAuthorizedCode {
-                pre_authorized_code: p.pre_authorized_code.clone(),
-                tx_code: p.tx_code.clone(),
-            }),
-            // Unreachable: has_any_grants would be false
-            (None, None) => Err(()),
-        }
     }
 
     /// Build the authorization URL and PKCE parameters for the authorization
@@ -492,8 +419,8 @@ impl Oid4vciClient {
 
         let authz_endpoint = context
             .as_metadata
+            .authorization_endpoint
             .as_ref()
-            .and_then(|m| m.authorization_endpoint.as_ref())
             .ok_or_else(|| ClientError::Configuration {
                 message: "authorization server does not have an authorization endpoint".into(),
             })?;
@@ -522,8 +449,7 @@ impl Oid4vciClient {
 
         let authz_url = if context
             .as_metadata
-            .as_ref()
-            .and_then(|m| m.pushed_authorization_request_endpoint.as_ref())
+            .pushed_authorization_request_endpoint
             .is_some()
         {
             // PAR is advertised, use it.
@@ -540,14 +466,7 @@ impl Oid4vciClient {
     }
 
     /// Parses authorization callback from redirect URI into success/error result.
-    ///
-    /// Validates the `state` parameter against the expected value to prevent CSRF attacks
-    /// per RFC 6749 §4.1.1 and OID4VCI §5.2.
-    pub fn parse_authz_callback(
-        &self,
-        redirect_uri: &str,
-        expected_state: &str,
-    ) -> Result<AuthorizationCallback> {
+    pub fn parse_authz_callback(&self, redirect_uri: &str) -> Result<AuthorizationCallback> {
         let url = Url::parse(redirect_uri)
             .map_err(|e| ClientError::validation(format!("invalid redirect uri: {e}")))?;
         let query = url.query().unwrap_or_default();
@@ -560,17 +479,10 @@ impl Oid4vciClient {
             return Ok(AuthorizationCallback::Error(error));
         }
 
-        let response: AuthorizationResponse =
+        let response =
             serde_urlencoded::from_str(query).map_err(|e| ClientError::InvalidResponse {
                 message: format!("failed to parse authorization response: {e}").into(),
             })?;
-
-        if response.state.as_deref() != Some(expected_state) {
-            return Err(ClientError::validation(
-                "state mismatch: possible CSRF attack",
-            ));
-        }
-
         Ok(AuthorizationCallback::Success(response))
     }
 
@@ -589,13 +501,9 @@ impl Oid4vciClient {
             ));
         }
 
-        let token_endpoint = context
-            .as_metadata
-            .as_ref()
-            .and_then(|m| m.token_endpoint.as_ref())
-            .ok_or_else(|| {
-                ClientError::configuration("authorization server does not have a token endpoint")
-            })?;
+        let token_endpoint = context.as_metadata.token_endpoint.as_ref().ok_or_else(|| {
+            ClientError::configuration("authorization server does not have a token endpoint")
+        })?;
 
         // Include authorization_details so the AS can return credential_identifiers
         // in the token response per §6.2
@@ -627,21 +535,12 @@ impl Oid4vciClient {
             ));
         }
 
-        let token_endpoint = context
-            .as_metadata
-            .as_ref()
-            .and_then(|m| m.token_endpoint.as_ref())
-            .ok_or_else(|| {
-                ClientError::configuration("authorization server does not have a token endpoint")
-            })?;
+        let token_endpoint = context.as_metadata.token_endpoint.as_ref().ok_or_else(|| {
+            ClientError::configuration("authorization server does not have a token endpoint")
+        })?;
 
         // Check if AS allows anonymous access
-        let client_id = if context
-            .as_metadata
-            .as_ref()
-            .map(|m| m.allows_anonymous_pre_authorized_grant())
-            .unwrap_or(false)
-        {
+        let client_id = if context.as_metadata.allows_anonymous_pre_authorized_grant() {
             None
         } else {
             Some(self.config.client_id.clone())
@@ -700,11 +599,7 @@ impl Oid4vciClient {
         credential_config_id: &str,
         signer: &S,
     ) -> Result<CredentialResponse> {
-        let is_anonymous = context
-            .as_metadata
-            .as_ref()
-            .map(|m| m.allows_anonymous_pre_authorized_grant())
-            .unwrap_or(false)
+        let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
 
         let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
@@ -901,8 +796,8 @@ impl Oid4vciClient {
     ) -> Result<PushedAuthorizationResponse> {
         let par_endpoint = context
             .as_metadata
+            .pushed_authorization_request_endpoint
             .as_ref()
-            .and_then(|m| m.pushed_authorization_request_endpoint.as_ref())
             .ok_or_else(|| ClientError::configuration("PAR endpoint not available"))?;
 
         let body = serde_urlencoded::to_string(request)
@@ -1112,20 +1007,12 @@ fn extract_authorization_server_hint(offer: &CredentialOffer) -> Option<&Url> {
 fn determine_flow_from_as_metadata(
     as_metadata: &AuthorizationServerMetadata,
 ) -> Result<IssuanceFlow> {
-    const PRE_AUTH_CODE: &str = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
     const AUTHZ_CODE: &str = "authorization_code";
 
     let supported = as_metadata
         .grant_types_supported
         .as_deref()
         .unwrap_or_default();
-
-    if supported.iter().any(|g| g == PRE_AUTH_CODE) {
-        return Ok(IssuanceFlow::PreAuthorizedCode {
-            pre_authorized_code: String::new(),
-            tx_code: None,
-        });
-    }
 
     let supports_authz_code = supported.iter().any(|g| g == AUTHZ_CODE)
         // If grant_types_supported is absent the AS implicitly supports
