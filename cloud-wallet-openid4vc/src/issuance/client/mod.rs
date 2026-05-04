@@ -5,6 +5,7 @@ mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
+use serde::{Deserialize, Serialize};
 pub use signer::{
     Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
 };
@@ -54,7 +55,7 @@ const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 const JSON_HEADER: &str = "application/json";
 
 /// Fully resolved context from a single credential offer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedOfferContext {
     pub offer: CredentialOffer,
     pub issuer_metadata: CredentialIssuerMetadata,
@@ -63,14 +64,14 @@ pub struct ResolvedOfferContext {
 }
 
 /// Which grant type the orchestrator should use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantType {
     AuthorizationCode,
     PreAuthorizedCode,
 }
 
 /// Chosen issuance flow data after offer resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IssuanceFlow {
     AuthorizationCode {
         issuer_state: Option<String>,
@@ -105,14 +106,14 @@ impl IssuanceFlow {
 }
 
 /// Result of building the authorization URL.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationUrlResult {
     pub authz_url: Url,
     pub pkce_verifier: String,
 }
 
 /// Parsed authorization callback outcome.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum AuthorizationCallback {
     Success(AuthorizationResponse),
     Error(Oid4vciError<AuthzErrorResponse>),
