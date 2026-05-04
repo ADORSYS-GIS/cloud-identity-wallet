@@ -117,7 +117,7 @@ mod tests {
 
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 3000);
-        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379");
+        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379?protocol=resp3");
     }
 
     #[test]
@@ -130,7 +130,7 @@ mod tests {
 
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 443);
-        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379");
+        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379?protocol=resp3");
     }
 
     #[test]
@@ -144,6 +144,6 @@ mod tests {
         assert_eq!(config.server.host, "192.168.1.1");
         // The other values should use default
         assert_eq!(config.server.port, 3000);
-        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379");
+        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379?protocol=resp3");
     }
 }
