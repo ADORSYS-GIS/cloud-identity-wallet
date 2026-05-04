@@ -38,6 +38,7 @@ pub struct DatabaseConfig {
 pub struct Oid4vciConfig {
     pub client_id: String,
     pub redirect_uri: Url,
+    pub use_system_proxy: bool,
 }
 
 impl RedisConfig {
@@ -102,7 +103,8 @@ impl Config {
             .set_default("redis.uri", "redis://127.0.0.1:6379?protocol=resp3")?
             .set_default("database.url", "sqlite::memory:")?
             .set_default("oid4vci.client_id", "cloud-identity-wallet")?
-            .set_default("oid4vci.redirect_uri", "http://localhost:3000/callback")
+            .set_default("oid4vci.redirect_uri", "http://localhost:3000/callback")?
+            .set_default("oid4vci.use_system_proxy", true)
     }
 }
 
@@ -117,7 +119,10 @@ mod tests {
 
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 3000);
-        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379?protocol=resp3");
+        assert_eq!(
+            config.redis.uri.expose_secret(),
+            "redis://127.0.0.1:6379?protocol=resp3"
+        );
     }
 
     #[test]
@@ -130,7 +135,10 @@ mod tests {
 
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 443);
-        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379?protocol=resp3");
+        assert_eq!(
+            config.redis.uri.expose_secret(),
+            "redis://127.0.0.1:6379?protocol=resp3"
+        );
     }
 
     #[test]
@@ -144,6 +152,9 @@ mod tests {
         assert_eq!(config.server.host, "192.168.1.1");
         // The other values should use default
         assert_eq!(config.server.port, 3000);
-        assert_eq!(config.redis.uri.expose_secret(), "redis://127.0.0.1:6379?protocol=resp3");
+        assert_eq!(
+            config.redis.uri.expose_secret(),
+            "redis://127.0.0.1:6379?protocol=resp3"
+        );
     }
 }

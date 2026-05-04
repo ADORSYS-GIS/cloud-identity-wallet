@@ -132,6 +132,8 @@ pub struct Config {
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
     pub accept_untrusted_hosts: bool,
+    /// Use system proxy configuration discovered by the HTTP client.
+    pub use_system_proxy: bool,
 }
 
 impl Config {
@@ -148,6 +150,7 @@ impl Config {
             timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
             user_agent: None,
             accept_untrusted_hosts: false,
+            use_system_proxy: true,
         }
     }
 
@@ -172,6 +175,17 @@ impl Config {
     pub fn accept_untrusted_hosts(self, accept_untrusted_hosts: bool) -> Self {
         Self {
             accept_untrusted_hosts,
+            ..self
+        }
+    }
+
+    /// Enables or disables system proxy discovery.
+    ///
+    /// Disabling this is useful in tests and restricted runtime environments
+    /// where reading host networking configuration may fail during client setup.
+    pub fn use_system_proxy(self, use_system_proxy: bool) -> Self {
+        Self {
+            use_system_proxy,
             ..self
         }
     }
@@ -204,16 +218,23 @@ impl Oid4vciClient {
         let mut inner_client_builder = reqwest::Client::builder()
             .timeout(config.timeout)
             .tls_backend_rustls()
-            .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts)
             .https_only(true);
+
+        if config.accept_untrusted_hosts {
+            inner_client_builder = inner_client_builder.tls_danger_accept_invalid_certs(true);
+        }
+
+        if !config.use_system_proxy {
+            inner_client_builder = inner_client_builder.no_proxy();
+        }
 
         if let Some(ref user_agent) = config.user_agent {
             inner_client_builder = inner_client_builder.user_agent(user_agent);
         }
 
-        let inner_client = inner_client_builder
-            .build()
-            .map_err(|e| ClientError::configuration(format!("failed to build HTTP client: {e}")))?;
+        let inner_client = inner_client_builder.build().map_err(|e| {
+            ClientError::configuration(format!("failed to build HTTP client: {e:?}"))
+        })?;
 
         let http_client = ClientBuilder::new(inner_client)
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
