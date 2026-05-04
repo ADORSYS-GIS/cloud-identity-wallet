@@ -230,6 +230,8 @@ impl From<ClientError> for IssuanceError {
                 "no supported grant type found in credential offer or issuer metadata",
             ),
             ClientError::MetadataDiscovery { message } => Self::metadata(message),
+            ClientError::IssuerMetadataDiscovery { message } => Self::metadata(message),
+            ClientError::AsMetadataDiscovery { message } => Self::metadata(message),
             ClientError::Http {
                 message,
                 status,
