@@ -273,7 +273,7 @@ impl IssuanceEventSubscriber for MemoryEventSubscriber {
 type SseStream =
     Sse<KeepAliveStream<Pin<Box<dyn Stream<Item = Result<SseEvent, axum::Error>> + Send>>>>;
 
-/// Converts an [`IssuanceEventStream`] into an [`Sse`](axum::response::sse::Sse) response.
+/// Converts an [`IssuanceEventStream`] into an [`Sse`] response.
 pub fn event_stream_to_sse(stream: IssuanceEventStream) -> SseStream {
     use futures::StreamExt;
 
