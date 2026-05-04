@@ -1,34 +1,37 @@
-use std::borrow::Cow;
-use std::fmt::Write;
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use cloud_wallet_kms::provider::Provider as KmsProvider;
-use sqlx::{AnyPool, ConnectOptions, FromRow, Transaction};
+use dashmap::DashMap;
+use sqlx::{AnyPool, FromRow, Transaction};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
 
-use crate::credential::{Credential, CredentialFormat, CredentialStatus};
-use crate::storage::cipher::{self, Cipher};
-use crate::storage::{CredentialFilter, CredentialRepository, Error, Result};
+use crate::domain::models::credential::{
+    Credential, CredentialError, CredentialFilter, CredentialFormat, CredentialStatus,
+};
+use crate::domain::ports::CredentialRepo;
+use crate::outbound::cipher::{self, Cipher};
+use crate::utils::{Driver, Query};
 
-static POSTGRES_MIGRATOR: sqlx::migrate::Migrator =
-    sqlx::migrate!("src/storage/migrations/postgres");
-static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator =
-    sqlx::migrate!("src/storage/migrations/mysql_sqlite");
+type Result<T> = std::result::Result<T, CredentialError>;
+
+static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql_sqlite");
 
 /// Persistent relational database backend for credentials.
 ///
 /// Supports PostgreSQL, MySQL, and SQLite databases.
 #[derive(Clone)]
-pub struct SqlRepository {
+pub struct SqlCredentialRepo {
     pool: AnyPool,
     driver: Driver,
     cipher: Option<Arc<dyn Cipher>>,
 }
 
-impl std::fmt::Debug for SqlRepository {
+impl std::fmt::Debug for SqlCredentialRepo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqlRepository")
             .field("driver", &self.driver)
@@ -37,7 +40,7 @@ impl std::fmt::Debug for SqlRepository {
     }
 }
 
-impl SqlRepository {
+impl SqlCredentialRepo {
     /// Creates a new SQL repository using the provided connection pool.
     ///
     /// After creating the backend, you should call [`init_schema`](Self::init_schema)
@@ -117,7 +120,7 @@ impl SqlRepository {
             return Ok(());
         }
         let Some(cipher) = &self.cipher else {
-            return Err(Error::Other(
+            return Err(CredentialError::Other(
                 "credential payload is encrypted but no cipher is configured".into(),
             ));
         };
@@ -142,7 +145,7 @@ impl SqlRepository {
             // Compact plaintext in-place
             raw_credential.truncate(plaintext_len);
         } else {
-            return Err(Error::InvalidData(
+            return Err(CredentialError::InvalidData(
                 "decrypted plaintext is not backed by source buffer".into(),
             ));
         }
@@ -252,7 +255,7 @@ impl CredentialRecord {
 }
 
 #[async_trait::async_trait]
-impl CredentialRepository for SqlRepository {
+impl CredentialRepo for SqlCredentialRepo {
     async fn upsert(&self, mut credential: Credential) -> Result<Uuid> {
         let credential_id = credential.id;
         let mut raw_credential = std::mem::take(&mut credential.raw_credential).into_bytes();
@@ -276,7 +279,7 @@ impl CredentialRepository for SqlRepository {
             .bind(tenant_id.to_string())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(Error::NotFound { id, tenant_id })?;
+            .ok_or(CredentialError::NotFound { id, tenant_id })?;
 
         let (parsed_id, parsed_tenant_id) = row.parse_ids()?;
         self.maybe_decrypt(
@@ -399,44 +402,6 @@ impl<'d> FilterBuilder<'d> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Driver {
-    Postgres,
-    MySql,
-    Sqlite,
-}
-
-impl Driver {
-    fn from_pool(pool: &AnyPool) -> Self {
-        let url = pool.connect_options().to_url_lossy();
-        let url = url.as_str();
-        if url.starts_with("postgres://") || url.starts_with("postgresql://") {
-            Self::Postgres
-        } else if url.starts_with("mysql://") || url.starts_with("mariadb://") {
-            Self::MySql
-        } else {
-            Self::Sqlite
-        }
-    }
-
-    #[inline]
-    fn is_postgres(&self) -> bool {
-        matches!(self, Self::Postgres)
-    }
-
-    /// Write a bind placeholder into `buf`.
-    /// Postgres uses `$N`; MySQL and SQLite use `?`.
-    #[inline]
-    fn write_placeholder(&self, buf: &mut String, index: usize) {
-        if self.is_postgres() {
-            buf.push('$');
-            write!(buf, "{index}").unwrap();
-        } else {
-            buf.push('?');
-        }
-    }
-}
-
 async fn insert_credential(
     driver: &Driver,
     tx: &mut Transaction<'_, sqlx::Any>,
@@ -520,127 +485,234 @@ static UPDATE_CREDENTIAL: Query = Query::new(
 static DELETE_CREDENTIAL: Query =
     Query::new("DELETE FROM credentials WHERE id = $1 AND tenant_id = $2");
 
-struct Query {
-    raw: &'static str,
-    rewritten: OnceLock<String>,
-}
-
-impl Query {
-    const fn new(raw: &'static str) -> Self {
-        Self {
-            raw,
-            rewritten: OnceLock::new(),
-        }
-    }
-
-    fn for_driver(&self, driver: &Driver) -> &str {
-        match driver {
-            Driver::Postgres => self.raw,
-            Driver::MySql | Driver::Sqlite => self
-                .rewritten
-                .get_or_init(|| rewrite_to_positional(self.raw).into_owned()),
-        }
-    }
-}
-
-fn rewrite_to_positional(sql: &str) -> Cow<'_, str> {
-    let bytes = sql.as_bytes();
-    let mut result = String::with_capacity(sql.len());
-    let mut last = 0usize;
-    let mut index = 0usize;
-
-    while index < bytes.len() {
-        if bytes[index] == b'$' {
-            let start_digits = index + 1;
-            let mut end_digits = start_digits;
-            while end_digits < bytes.len() && bytes[end_digits].is_ascii_digit() {
-                end_digits += 1;
-            }
-
-            if end_digits > start_digits {
-                result.push_str(&sql[last..index]);
-                result.push('?');
-                index = end_digits;
-                last = index;
-                continue;
-            }
-        }
-        index += 1;
-    }
-    result.push_str(&sql[last..]);
-    Cow::Owned(result)
-}
-
 fn raw_credential_from_bytes(value: Vec<u8>) -> Result<String> {
     Ok(String::from_utf8(value)?)
 }
 
-impl From<sqlx::Error> for crate::storage::Error {
+/// A volatile, in-memory credential storage backend.
+///
+/// Useful for tests or local development where data persistence across restarts
+/// is not required.
+#[derive(Clone)]
+pub struct MemoryCredentialRepo {
+    credentials: Arc<DashMap<(Uuid, Uuid), StoredCredential>>,
+    cipher: Option<Arc<dyn Cipher>>,
+}
+
+#[derive(Clone)]
+struct StoredCredential {
+    credential: Credential,
+    raw_credential: Vec<u8>,
+    payload_encrypted: bool,
+}
+
+impl std::fmt::Debug for MemoryCredentialRepo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemoryRepository")
+            .field("credentials_len", &self.credentials.len())
+            .field("cipher_enabled", &self.cipher.is_some())
+            .finish()
+    }
+}
+
+impl Default for MemoryCredentialRepo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemoryCredentialRepo {
+    /// Creates a new, empty in-memory repository.
+    pub fn new() -> Self {
+        Self {
+            credentials: Arc::default(),
+            cipher: None,
+        }
+    }
+
+    /// Configures the repository with a KMS provider for encrypting credential payloads.
+    ///
+    /// By default, the `MemoryCredentialRepo` does not encrypt data. Calling this method
+    /// enables payload encryption and decryption using the provided KMS provider.
+    pub fn with_cipher<K: KmsProvider + Send + Sync + 'static>(provider: K) -> Self {
+        Self {
+            credentials: Arc::default(),
+            cipher: Some(cipher::from_provider(provider)),
+        }
+    }
+
+    /// Encrypts the raw credential payload if a cipher is configured.
+    async fn maybe_encrypt(&self, id: &Uuid, raw_credential: &mut Vec<u8>) -> Result<bool> {
+        if let Some(cipher) = &self.cipher {
+            cipher
+                .encrypt(id.as_bytes(), raw_credential)
+                .await
+                .map_err(|e| CredentialError::Encryption(e.into()))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Decrypts the raw credential payload if it was previously encrypted.
+    async fn maybe_decrypt(&self, entry: &StoredCredential) -> Result<Credential> {
+        let mut credential = entry.credential.clone();
+        let mut raw_credential = entry.raw_credential.clone();
+
+        if entry.payload_encrypted {
+            let Some(cipher) = &self.cipher else {
+                return Err(CredentialError::Other(
+                    "credential payload is encrypted but no cipher is configured".into(),
+                ));
+            };
+
+            let dst = raw_credential.as_ptr() as usize;
+            let plaintext = cipher
+                .decrypt(credential.id.as_bytes(), raw_credential.as_mut_slice())
+                .await
+                .map_err(|e| CredentialError::Encryption(e.into()))?;
+            let src = plaintext.as_ptr() as usize;
+            let plaintext_len = plaintext.len();
+            let offset = src.checked_sub(dst).ok_or_else(|| {
+                CredentialError::InvalidData(
+                    "decrypted plaintext is not backed by source buffer".into(),
+                )
+            })?;
+            compact_plaintext_in_place(&mut raw_credential, offset, plaintext_len)?;
+        }
+        credential.raw_credential = raw_credential_from_bytes(raw_credential)?;
+        Ok(credential)
+    }
+}
+
+/// Helper function to compact the plaintext in place after decryption.
+fn compact_plaintext_in_place(
+    buffer: &mut Vec<u8>,
+    plaintext_offset: usize,
+    plaintext_len: usize,
+) -> Result<()> {
+    let end = plaintext_offset + plaintext_len;
+    if end > buffer.len() {
+        return Err(CredentialError::InvalidData(
+            "decrypted plaintext is outside source buffer".to_string(),
+        ));
+    }
+
+    if plaintext_offset > 0 {
+        buffer.copy_within(plaintext_offset..end, 0);
+    }
+    buffer.truncate(plaintext_len);
+    Ok(())
+}
+
+#[async_trait]
+impl CredentialRepo for MemoryCredentialRepo {
+    async fn upsert(&self, mut credential: Credential) -> Result<Uuid> {
+        let credential_id = credential.id;
+        let mut raw_credential = std::mem::take(&mut credential.raw_credential).into_bytes();
+        let payload_encrypted = self
+            .maybe_encrypt(&credential.id, &mut raw_credential)
+            .await?;
+        let key = (credential.tenant_id, credential.id);
+        self.credentials.insert(
+            key,
+            StoredCredential {
+                credential,
+                raw_credential,
+                payload_encrypted,
+            },
+        );
+        Ok(credential_id)
+    }
+
+    async fn find_by_id(&self, id: Uuid, tenant_id: Uuid) -> Result<Credential> {
+        let entry = self
+            .credentials
+            .get(&(tenant_id, id))
+            .ok_or(CredentialError::NotFound { id, tenant_id })?;
+        self.maybe_decrypt(entry.value()).await
+    }
+
+    async fn list(&self, filter: CredentialFilter) -> Result<Vec<Credential>> {
+        let mut out = Vec::with_capacity(self.credentials.len());
+
+        for entry in self.credentials.iter() {
+            let stored = entry.value();
+
+            if filter.matches(&stored.credential) {
+                out.push(self.maybe_decrypt(stored).await?);
+            }
+        }
+
+        out.sort_by_key(|b| std::cmp::Reverse(b.issued_at));
+        Ok(out)
+    }
+
+    async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<()> {
+        self.credentials
+            .remove(&(tenant_id, id))
+            .ok_or(CredentialError::NotFound { id, tenant_id })?;
+        Ok(())
+    }
+}
+
+impl From<sqlx::Error> for CredentialError {
     fn from(error: sqlx::Error) -> Self {
         Self::Backend(error.into())
     }
 }
 
-impl From<sqlx::migrate::MigrateError> for crate::storage::Error {
+impl From<sqlx::migrate::MigrateError> for CredentialError {
     fn from(error: sqlx::migrate::MigrateError) -> Self {
         Self::Backend(error.into())
     }
 }
 
-impl From<serde_json::Error> for crate::storage::Error {
+impl From<serde_json::Error> for CredentialError {
     fn from(error: serde_json::Error) -> Self {
         Self::InvalidData(error.to_string())
     }
 }
 
-impl From<uuid::Error> for crate::storage::Error {
+impl From<uuid::Error> for CredentialError {
     fn from(error: uuid::Error) -> Self {
         Self::InvalidData(error.to_string())
     }
 }
 
-impl From<time::error::ComponentRange> for crate::storage::Error {
+impl From<time::error::ComponentRange> for CredentialError {
     fn from(error: time::error::ComponentRange) -> Self {
         Self::InvalidData(error.to_string())
     }
 }
 
-impl From<url::ParseError> for crate::storage::Error {
+impl From<url::ParseError> for CredentialError {
     fn from(error: url::ParseError) -> Self {
         Self::InvalidData(error.to_string())
     }
 }
 
-impl From<std::string::FromUtf8Error> for crate::storage::Error {
+impl From<std::string::FromUtf8Error> for CredentialError {
     fn from(error: std::string::FromUtf8Error) -> Self {
         Self::InvalidData(error.to_string())
     }
 }
 
-impl From<&'static str> for crate::storage::Error {
+impl From<&'static str> for CredentialError {
     fn from(error: &'static str) -> Self {
         Self::InvalidData(error.to_string())
     }
 }
 
-impl From<cloud_wallet_kms::Error> for crate::storage::Error {
+impl From<cloud_wallet_kms::Error> for CredentialError {
     fn from(error: cloud_wallet_kms::Error) -> Self {
-        Self::Encryption(error.to_string())
+        Self::Encryption(Box::new(error))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rewrites_postgres_bindings_to_question_marks() {
-        let sql = "SELECT * FROM credentials WHERE id = $1 AND tenant_id = $2";
-        assert_eq!(
-            rewrite_to_positional(sql).as_ref(),
-            "SELECT * FROM credentials WHERE id = ? AND tenant_id = ?"
-        );
-    }
 
     #[test]
     fn filter_builder_no_filters_produces_valid_sql() {
@@ -681,5 +753,101 @@ mod tests {
         assert_eq!(q_count, 2, "expected 2 placeholders, sql: {sql}");
         assert_eq!(values.len(), 1);
         assert!(exclude_expired_ts.is_some());
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct PrefixCipher;
+
+    const PREFIX: &[u8] = b"encrypted:";
+
+    #[async_trait::async_trait]
+    impl KmsProvider for PrefixCipher {
+        async fn encrypt<T>(
+            &self,
+            _key_id: &[u8],
+            plaintext: &mut T,
+        ) -> cloud_wallet_kms::Result<()>
+        where
+            T: AsMut<[u8]> + for<'a> Extend<&'a u8> + Send,
+        {
+            plaintext.extend(PREFIX.iter());
+            let payload = plaintext.as_mut();
+            let plaintext_len = payload.len() - PREFIX.len();
+            payload.copy_within(0..plaintext_len, PREFIX.len());
+            payload[..PREFIX.len()].copy_from_slice(PREFIX);
+            Ok(())
+        }
+
+        async fn decrypt<'a>(
+            &self,
+            _key_id: &[u8],
+            ciphertext: &'a mut [u8],
+        ) -> cloud_wallet_kms::Result<&'a [u8]> {
+            if ciphertext.starts_with(PREFIX) {
+                Ok(&ciphertext[PREFIX.len()..])
+            } else {
+                Err(cloud_wallet_kms::Error::Other("invalid prefix".to_string()))
+            }
+        }
+    }
+
+    fn sample_credential(tenant_id: Uuid) -> Credential {
+        Credential {
+            id: Uuid::new_v4(),
+            tenant_id,
+            issuer: "https://issuer.example".to_string(),
+            subject: Some("did:example:alice".to_string()),
+            credential_types: vec![
+                "VerifiableCredential".to_string(),
+                "EmployeeBadge".to_string(),
+            ],
+            format: CredentialFormat::JwtVcJson,
+            external_id: Some("ext-123".to_string()),
+            status: CredentialStatus::Active,
+            issued_at: UtcDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            valid_until: Some(UtcDateTime::from_unix_timestamp(2_000_000_000).unwrap()),
+            is_revoked: false,
+            status_location: Some(Url::parse("https://status.example/1").unwrap()),
+            status_index: Some(7),
+            raw_credential: "{\"vc\":\"payload\"}".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn in_memory_crud_roundtrip() {
+        let repo = MemoryCredentialRepo::with_cipher(PrefixCipher);
+        let tenant_id = Uuid::new_v4();
+        let credential = sample_credential(tenant_id);
+
+        repo.upsert(credential.clone()).await.unwrap();
+
+        let found = repo.find_by_id(credential.id, tenant_id).await.unwrap();
+        assert_eq!(found.id, credential.id);
+        assert_eq!(found.raw_credential, credential.raw_credential);
+
+        let listed = repo
+            .list(CredentialFilter {
+                tenant_id: Some(tenant_id),
+                format: Some(CredentialFormat::JwtVcJson),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+
+        repo.delete(credential.id, tenant_id).await.unwrap();
+        assert!(repo.find_by_id(credential.id, tenant_id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn in_memory_with_cipher_decrypts_on_read() {
+        let repo = MemoryCredentialRepo::with_cipher(PrefixCipher);
+        let tenant_id = Uuid::new_v4();
+        let credential = sample_credential(tenant_id);
+
+        repo.upsert(credential.clone()).await.unwrap();
+        let found = repo.find_by_id(credential.id, tenant_id).await.unwrap();
+
+        assert_eq!(found.raw_credential, credential.raw_credential);
     }
 }
