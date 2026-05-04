@@ -4,7 +4,7 @@ use axum::{
 };
 use cloud_identity_wallet::{
     domain::service::Service,
-    outbound::MemoryTenantRepository,
+    outbound::MemoryTenantRepo,
     server::{AppState, sse::SseEvent, submit_consent},
     session::{FlowType, Id, IssuanceSession, SessionStore},
 };
@@ -159,7 +159,7 @@ fn create_test_state() -> AppState<JsonMemorySession> {
 
     let service = Service::new(
         session_store,
-        MemoryTenantRepository::new(),
+        MemoryTenantRepo::new(),
         oid4vci_client,
         sse_broadcast,
     );
