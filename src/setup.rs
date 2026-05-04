@@ -15,6 +15,7 @@ pub fn build_issuance_engine(
         config.oid4vci.client_id.clone(),
         config.oid4vci.redirect_uri.clone(),
     )
+    .use_system_proxy(config.oid4vci.use_system_proxy)
     // TODO : remove this later on - only for local testing
     .accept_untrusted_hosts(true);
     let client = Oid4vciClient::new(client_config)?;
