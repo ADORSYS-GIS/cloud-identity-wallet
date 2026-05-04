@@ -13,11 +13,7 @@ pub struct Service<S: SessionStore + Clone> {
 
 impl<S: SessionStore + Clone> Service<S> {
     /// Creates a new Service with the given session store, tenant repository, and issuance engine.
-    pub fn new<R: TenantRepo>(
-        session: S,
-        tenant_repo: R,
-        issuance_engine: IssuanceEngine,
-    ) -> Self {
+    pub fn new<R: TenantRepo>(session: S, tenant_repo: R, issuance_engine: IssuanceEngine) -> Self {
         Self {
             session,
             tenant_repo: Arc::new(tenant_repo),

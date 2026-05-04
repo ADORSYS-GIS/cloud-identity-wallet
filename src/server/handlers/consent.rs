@@ -1,15 +1,17 @@
+use crate::domain::models::consent::{
+    ConsentErrorResponse, ConsentRequest, ConsentResponse, NextAction,
+};
+use crate::domain::models::issuance::{
+    IssuanceEvent, IssuanceStep, ProcessingStep, SseFailedEvent, SseProcessingEvent,
+};
+use crate::server::AppState;
+use crate::session::{FlowType, IssuanceSession, IssuanceState, SessionStore, transition};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use crate::domain::models::consent::{
-    ConsentErrorResponse, ConsentRequest, ConsentResponse, NextAction,
-};
-use crate::domain::models::issuance::{IssuanceEvent, IssuanceStep, ProcessingStep, SseFailedEvent, SseProcessingEvent};
-use crate::server::AppState;
-use crate::session::{FlowType, IssuanceSession, IssuanceState, SessionStore, transition};
 
 pub async fn submit_consent<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
@@ -44,7 +46,13 @@ pub async fn submit_consent<S: SessionStore + Clone>(
             Some("User rejected the credential offer".to_string()),
             IssuanceStep::Internal,
         ));
-        if let Err(e) = state.service.issuance_engine.event_publisher.publish(&event).await {
+        if let Err(e) = state
+            .service
+            .issuance_engine
+            .event_publisher
+            .publish(&event)
+            .await
+        {
             tracing::warn!(
                 session_id = %session.id,
                 error = %e,
@@ -114,10 +122,7 @@ async fn handle_pre_authorized_consent<S: SessionStore + Clone>(
     mut session: IssuanceSession,
     _payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
-    let tx_code_required = session
-        .context
-        .flow
-        .tx_code_required();
+    let tx_code_required = session.context.flow.tx_code_required();
 
     if tx_code_required {
         transition(&mut session, IssuanceState::AwaitingTxCode).map_err(internal_error)?;
@@ -150,7 +155,13 @@ async fn handle_pre_authorized_consent<S: SessionStore + Clone>(
             &session.id,
             ProcessingStep::ExchangingToken,
         ));
-        if let Err(e) = state.service.issuance_engine.event_publisher.publish(&event).await {
+        if let Err(e) = state
+            .service
+            .issuance_engine
+            .event_publisher
+            .publish(&event)
+            .await
+        {
             tracing::warn!(
                 session_id = %session.id,
                 error = %e,

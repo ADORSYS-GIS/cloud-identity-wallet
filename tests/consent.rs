@@ -183,10 +183,10 @@ fn create_test_state() -> AppState<JsonMemorySession> {
 }
 
 fn create_test_session(flow: FlowType) -> IssuanceSession {
-    use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
-    use cloud_wallet_openid4vc::issuance::issuer_metadata::CredentialIssuerMetadata;
     use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
     use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
+    use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
+    use cloud_wallet_openid4vc::issuance::issuer_metadata::CredentialIssuerMetadata;
 
     let offer: CredentialOffer = serde_json::from_value(json!({
         "credential_issuer": "https://issuer.example.com",
