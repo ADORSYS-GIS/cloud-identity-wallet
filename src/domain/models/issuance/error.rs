@@ -186,8 +186,9 @@ impl IssuanceError {
 }
 
 fn oid4vci_error_code<T: Serialize>(error: &T) -> String {
-    serde_json::to_string(error)
+    serde_json::to_value(error)
         .ok()
+        .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| "external_error".to_owned())
 }
 
