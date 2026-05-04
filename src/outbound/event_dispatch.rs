@@ -277,8 +277,11 @@ type SseStream =
 pub fn event_stream_to_sse(stream: IssuanceEventStream) -> SseStream {
     use futures::StreamExt;
 
-    let id = UtcDateTime::now().unix_timestamp_nanos();
-    let sse_stream = stream.map(move |event| event.to_sse_event().map(|e| e.id(id.to_string())));
+    let sse_stream = stream.map(move |event| {
+        event
+            .to_sse_event()
+            .map(|e| e.id(UtcDateTime::now().unix_timestamp_nanos().to_string()))
+    });
     let boxed_stream: Pin<Box<dyn Stream<Item = Result<SseEvent, axum::Error>> + Send>> =
         Box::pin(sse_stream);
     Sse::new(boxed_stream).keep_alive(KeepAlive::default())
