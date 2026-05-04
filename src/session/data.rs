@@ -1,4 +1,4 @@
-use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
+use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,10 +11,13 @@ pub struct IssuanceSession {
     pub id: String,
     pub tenant_id: Uuid,
     pub state: IssuanceState,
-    pub offer: ParsedOffer,
+    pub context: ResolvedOfferContext,
+    /// Selected configuration IDs for issuance.
+    /// Empty by default, should be overridden
+    /// after user consent.
+    pub selected_config_ids: Vec<String>,
     pub flow: FlowType,
     pub code_verifier: Option<String>,
-    pub issuer_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,18 +44,16 @@ impl IssuanceState {
     }
 }
 
-pub type ParsedOffer = CredentialOffer;
-
 impl IssuanceSession {
-    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
+    pub fn new(tenant_id: Uuid, context: ResolvedOfferContext, flow: FlowType) -> Self {
         Self {
             id: utils::generate_session_id(),
             tenant_id,
             state: IssuanceState::AwaitingConsent,
-            offer,
+            context,
+            selected_config_ids: vec![],
             flow,
             code_verifier: None,
-            issuer_state: None,
         }
     }
 }
