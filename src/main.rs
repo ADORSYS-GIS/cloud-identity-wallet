@@ -1,6 +1,6 @@
 use cloud_identity_wallet::config::Config;
 use cloud_identity_wallet::domain::service::Service;
-use cloud_identity_wallet::outbound::MemoryTenantRepository;
+use cloud_identity_wallet::outbound::MemoryTenantRepo;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::server::sse::SseEvent;
 use cloud_identity_wallet::session::MemorySession;
@@ -26,7 +26,7 @@ async fn main() -> color_eyre::Result<()> {
 
     // Create tenant repository
     // TODO: Replace with actual database repository when ready
-    let tenant_repo = MemoryTenantRepository::new();
+    let tenant_repo = MemoryTenantRepo::new();
 
     // Create SSE broadcast channel
     let (sse_broadcast, _) = tokio::sync::broadcast::channel::<SseEvent>(16);

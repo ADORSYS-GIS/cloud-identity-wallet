@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::ports::TenantRepository;
+use crate::domain::ports::TenantRepo;
 use crate::server::sse::SseEvent;
 use crate::session::SessionStore;
 use cloud_wallet_openid4vc::issuance::client::{Config, Oid4vciClient};
@@ -8,14 +8,14 @@ use cloud_wallet_openid4vc::issuance::client::{Config, Oid4vciClient};
 #[derive(Clone)]
 pub struct Service<S: SessionStore> {
     pub session: S,
-    pub tenant_repo: Arc<dyn TenantRepository>,
+    pub tenant_repo: Arc<dyn TenantRepo>,
     pub oid4vci_client: Arc<Oid4vciClient>,
     pub sse_broadcast: tokio::sync::broadcast::Sender<SseEvent>,
 }
 
 impl<S: SessionStore> Service<S> {
     /// Creates a new Service with the given session store, tenant repository, and components.
-    pub fn new<R: TenantRepository>(
+    pub fn new<R: TenantRepo>(
         session: S,
         tenant_repo: R,
         oid4vci_client: Oid4vciClient,
