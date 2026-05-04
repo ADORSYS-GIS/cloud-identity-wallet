@@ -7,13 +7,12 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::auth::auth;
 use crate::server::handlers::{health_check, home, register_tenant};
 use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
-    Router, middleware,
+    Router,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -99,9 +98,5 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    let protected = Router::new().route_layer(middleware::from_fn(auth));
-
-    Router::new()
-        .route("/tenants", post(register_tenant))
-        .merge(protected)
+    Router::new().route("/tenants", post(register_tenant))
 }
