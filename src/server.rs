@@ -1,5 +1,5 @@
 mod auth;
-mod error;
+pub(crate) mod error;
 mod handlers;
 mod responses;
 
@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
+use crate::server::auth::auth;
 use crate::server::handlers::{health_check, home, register_tenant};
 use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -24,7 +25,7 @@ use tower_http::{
 
 #[derive(Debug)]
 /// The global application state shared between all request handlers.
-struct AppState<S: SessionStore> {
+pub(crate) struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
 
@@ -44,7 +45,10 @@ pub struct Server {
 
 impl Server {
     /// Creates a new HTTPS server.
-    pub async fn new<S: SessionStore>(config: &Config, service: Service<S>) -> Result<Self> {
+    pub async fn new<S: SessionStore + Clone>(
+        config: &Config,
+        service: Service<S>,
+    ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -94,6 +98,10 @@ impl Server {
     }
 }
 
-fn api_routes<S: SessionStore>() -> Router<AppState<S>> {
-    Router::new().route("/tenants", post(register_tenant))
+fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
+    let protected = Router::new().route_layer(middleware::from_fn(auth));
+
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .merge(protected)
 }
