@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use axum::{
     Json,
     http::StatusCode,
@@ -5,6 +7,7 @@ use axum::{
 };
 use serde::Serialize;
 
+use crate::domain::models::issuance::{IssuanceError, IssuanceErrorCode};
 use crate::domain::models::tenants::TenantError;
 
 /// The unified error type used by all HTTP handlers.
@@ -22,7 +25,7 @@ pub struct ApiError {
     /// HTTP status code.
     pub status: StatusCode,
     /// Machine-readable error code (snake_case ASCII).
-    pub error: &'static str,
+    pub error: Cow<'static, str>,
     /// Optional human-readable description. Omitted from JSON when None.
     pub error_description: Option<String>,
 }
@@ -33,7 +36,7 @@ impl ApiError {
         tracing::error!(error = %source, "internal server error");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            error: "internal_error",
+            error: Cow::Borrowed("internal_error"),
             error_description: Some("The server encountered an unexpected error.".into()),
         }
     }
@@ -49,7 +52,7 @@ impl IntoResponse for ApiError {
         }
 
         let body = Body {
-            error: self.error,
+            error: self.error.as_ref(),
             error_description: self.error_description.as_deref(),
         };
 
@@ -75,17 +78,41 @@ impl IntoApiError for TenantError {
         match self {
             TenantError::InvalidName(msg) => ApiError {
                 status: StatusCode::BAD_REQUEST,
-                error: "invalid_request",
+                error: Cow::Borrowed("invalid_request"),
                 error_description: Some(msg),
             },
             TenantError::NotFound { .. } => ApiError {
                 status: StatusCode::NOT_FOUND,
-                error: "not_found",
+                error: Cow::Borrowed("not_found"),
                 error_description: Some("Tenant not found.".into()),
             },
             TenantError::InvalidData(msg) => ApiError::internal(msg),
             TenantError::Backend(src) => ApiError::internal(src),
             TenantError::Encryption(src) => ApiError::internal(src),
+        }
+    }
+}
+
+impl IntoApiError for IssuanceError {
+    fn into_api_error(self) -> ApiError {
+        let status = match &self.error {
+            IssuanceErrorCode::InvalidCredentialOffer => StatusCode::BAD_REQUEST,
+            IssuanceErrorCode::IssuerMetadataFetchFailed => StatusCode::BAD_GATEWAY,
+            IssuanceErrorCode::AuthServerMetadataFetchFailed => StatusCode::BAD_GATEWAY,
+            IssuanceErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
+            IssuanceErrorCode::InvalidSessionState => StatusCode::CONFLICT,
+            IssuanceErrorCode::InvalidTxCode => StatusCode::BAD_REQUEST,
+            IssuanceErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+            IssuanceErrorCode::CredentialNotFound => StatusCode::NOT_FOUND,
+            IssuanceErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+            IssuanceErrorCode::Cancelled => StatusCode::CONFLICT,
+            IssuanceErrorCode::External(_) => StatusCode::BAD_GATEWAY,
+        };
+
+        ApiError {
+            status,
+            error: self.error.to_string().into(),
+            error_description: self.error_description,
         }
     }
 }

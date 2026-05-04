@@ -1,8 +1,7 @@
 mod auth;
-mod error;
+pub(crate) mod error;
 mod handlers;
 mod responses;
-pub mod sse;
 
 pub use handlers::submit_consent;
 
@@ -26,12 +25,12 @@ use tower_http::{
 };
 
 /// The global application state shared between all request handlers.
-pub struct AppState<S: SessionStore> {
+pub struct AppState<S: SessionStore + Clone> {
     pub service: Arc<Service<S>>,
 }
 
 // We manually implement Clone here to avoid bounds on generic types
-impl<S: SessionStore> Clone for AppState<S> {
+impl<S: SessionStore + Clone> Clone for AppState<S> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
@@ -46,7 +45,10 @@ pub struct Server {
 
 impl Server {
     /// Creates a new HTTPS server.
-    pub async fn new<S: SessionStore>(config: &Config, service: Service<S>) -> Result<Self> {
+    pub async fn new<S: SessionStore + Clone>(
+        config: &Config,
+        service: Service<S>,
+    ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -98,7 +100,7 @@ impl Server {
     }
 }
 
-fn api_routes<S: SessionStore>() -> Router<AppState<S>> {
+fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     Router::new()
         .route("/tenants", post(register_tenant))
         .route("/issuance/{session_id}/consent", post(submit_consent))

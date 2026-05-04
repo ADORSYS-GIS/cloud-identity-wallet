@@ -1,40 +1,37 @@
 use std::sync::Arc;
 
+use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
-use crate::server::sse::SseEvent;
 use crate::session::SessionStore;
-use cloud_wallet_openid4vc::issuance::client::{Config, Oid4vciClient};
 
 #[derive(Clone)]
-pub struct Service<S: SessionStore> {
+pub struct Service<S: SessionStore + Clone> {
     pub session: S,
     pub tenant_repo: Arc<dyn TenantRepo>,
-    pub oid4vci_client: Arc<Oid4vciClient>,
-    pub sse_broadcast: tokio::sync::broadcast::Sender<SseEvent>,
+    pub issuance_engine: IssuanceEngine,
 }
 
-impl<S: SessionStore> Service<S> {
-    /// Creates a new Service with the given session store, tenant repository, and components.
+impl<S: SessionStore + Clone> Service<S> {
+    /// Creates a new Service with the given session store, tenant repository, and issuance engine.
     pub fn new<R: TenantRepo>(
         session: S,
         tenant_repo: R,
-        oid4vci_client: Oid4vciClient,
-        sse_broadcast: tokio::sync::broadcast::Sender<SseEvent>,
+        issuance_engine: IssuanceEngine,
     ) -> Self {
         Self {
             session,
             tenant_repo: Arc::new(tenant_repo),
-            oid4vci_client: Arc::new(oid4vci_client),
-            sse_broadcast,
+            issuance_engine,
         }
     }
 }
 
-/// Creates an OID4VCI client with the given configuration.
-pub fn create_oid4vci_client(
-    client_id: String,
-    redirect_uri: url::Url,
-) -> Result<Oid4vciClient, String> {
-    let config = Config::new(client_id, redirect_uri);
-    Oid4vciClient::new(config).map_err(|e| format!("Failed to create OID4VCI client: {e}"))
+impl<S: SessionStore + Clone> std::fmt::Debug for Service<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Service")
+            .field("session", &std::any::type_name::<S>())
+            .field("tenant_repo", &std::any::type_name::<dyn TenantRepo>())
+            .field("issuance_engine", &self.issuance_engine)
+            .finish()
+    }
 }

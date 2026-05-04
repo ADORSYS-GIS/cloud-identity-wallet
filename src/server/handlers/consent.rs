@@ -4,16 +4,14 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
-
 use crate::domain::models::consent::{
     ConsentErrorResponse, ConsentRequest, ConsentResponse, NextAction,
 };
+use crate::domain::models::issuance::{IssuanceEvent, IssuanceStep, ProcessingStep, SseFailedEvent, SseProcessingEvent};
 use crate::server::AppState;
-use crate::server::sse::{ErrorStep, ProcessingStep, SseEvent};
 use crate::session::{FlowType, IssuanceSession, IssuanceState, SessionStore, transition};
 
-pub async fn submit_consent<S: SessionStore>(
+pub async fn submit_consent<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
     Path(session_id): Path<String>,
     Json(payload): Json<ConsentRequest>,
@@ -39,16 +37,20 @@ pub async fn submit_consent<S: SessionStore>(
             .await
             .map_err(internal_error)?;
 
-        emit_sse_event(
-            &state.service.sse_broadcast,
+        // Emit failed event via the event publisher
+        let event = IssuanceEvent::Failed(SseFailedEvent::new(
             &session.id,
-            SseEvent::failed(
-                &session.id,
-                "consent_rejected",
-                Some("User rejected the credential offer"),
-                ErrorStep::Internal,
-            ),
-        );
+            "consent_rejected",
+            Some("User rejected the credential offer".to_string()),
+            IssuanceStep::Internal,
+        ));
+        if let Err(e) = state.service.issuance_engine.event_publisher.publish(&event).await {
+            tracing::warn!(
+                session_id = %session.id,
+                error = %e,
+                "Failed to publish consent rejected event"
+            );
+        }
 
         return Ok((
             StatusCode::OK,
@@ -68,50 +70,18 @@ pub async fn submit_consent<S: SessionStore>(
     }
 }
 
-async fn handle_authorization_code_consent<S: SessionStore>(
+async fn handle_authorization_code_consent<S: SessionStore + Clone>(
     state: AppState<S>,
     mut session: IssuanceSession,
     payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
-    // Fetch issuer metadata on-demand
-    let issuer_metadata = state
-        .service
-        .oid4vci_client
-        .fetch_issuer_metadata(&session.offer.credential_issuer)
-        .await
-        .map_err(|e| bad_gateway(format!("Failed to fetch issuer metadata: {e}")))?;
-
-    // Fetch authorization server metadata on-demand
-    let as_metadata = state
-        .service
-        .oid4vci_client
-        .fetch_as_metadata(
-            &session.offer.credential_issuer,
-            &issuer_metadata,
-            &session.offer,
-        )
-        .await
-        .map_err(|e| bad_gateway(format!("Failed to fetch AS metadata: {e}")))?;
-
-    // Build the IssuanceFlow from session data
-    let flow = IssuanceFlow::AuthorizationCode {
-        issuer_state: session.issuer_state.clone(),
-    };
-
-    // Build the resolved offer context
-    let context = ResolvedOfferContext {
-        offer: session.offer.clone(),
-        issuer_metadata,
-        as_metadata,
-        flow,
-    };
-
-    // Build authorization URL using the OID4VCI client
+    // Build authorization URL using the OID4VCI client from the issuance engine
     let result = state
         .service
-        .oid4vci_client
+        .issuance_engine
+        .client
         .build_authorization_url(
-            &context,
+            &session.context,
             session.id.clone(),
             &payload.selected_configuration_ids,
         )
@@ -139,18 +109,15 @@ async fn handle_authorization_code_consent<S: SessionStore>(
     ))
 }
 
-async fn handle_pre_authorized_consent<S: SessionStore>(
+async fn handle_pre_authorized_consent<S: SessionStore + Clone>(
     state: AppState<S>,
     mut session: IssuanceSession,
     _payload: ConsentRequest,
 ) -> Result<(StatusCode, Json<ConsentResponse>), (StatusCode, Json<ConsentErrorResponse>)> {
     let tx_code_required = session
-        .offer
-        .grants
-        .as_ref()
-        .and_then(|g| g.pre_authorized_code.as_ref())
-        .map(|pac| pac.tx_code.is_some())
-        .unwrap_or(false);
+        .context
+        .flow
+        .tx_code_required();
 
     if tx_code_required {
         transition(&mut session, IssuanceState::AwaitingTxCode).map_err(internal_error)?;
@@ -178,11 +145,18 @@ async fn handle_pre_authorized_consent<S: SessionStore>(
             .await
             .map_err(internal_error)?;
 
-        emit_sse_event(
-            &state.service.sse_broadcast,
+        // Emit processing event via the event publisher
+        let event = IssuanceEvent::Processing(SseProcessingEvent::new(
             &session.id,
-            SseEvent::processing(&session.id, ProcessingStep::ExchangingToken),
-        );
+            ProcessingStep::ExchangingToken,
+        ));
+        if let Err(e) = state.service.issuance_engine.event_publisher.publish(&event).await {
+            tracing::warn!(
+                session_id = %session.id,
+                error = %e,
+                "Failed to publish processing event"
+            );
+        }
 
         Ok((
             StatusCode::OK,
@@ -192,19 +166,6 @@ async fn handle_pre_authorized_consent<S: SessionStore>(
                 authorization_url: None,
             }),
         ))
-    }
-}
-
-fn emit_sse_event(
-    broadcast: &tokio::sync::broadcast::Sender<SseEvent>,
-    session_id: &str,
-    event: SseEvent,
-) {
-    if broadcast.send(event.clone()).is_err() {
-        tracing::warn!(
-            session_id = %session_id,
-            "No active SSE listeners for session"
-        );
     }
 }
 
