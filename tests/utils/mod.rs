@@ -1,11 +1,7 @@
 #![allow(dead_code)]
 
 use cloud_identity_wallet::{
-    config::Config,
-    outbound::MemoryTenantRepo,
-    server::Server,
-    session::MemorySession,
-    setup,
+    config::Config, outbound::MemoryTenantRepo, server::Server, session::MemorySession, setup,
 };
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
