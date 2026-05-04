@@ -139,7 +139,9 @@ fn map_client_error(
                 )),
             )
         }
-        Http { message, status, .. } => {
+        Http {
+            message, status, ..
+        } => {
             tracing::warn!("http error: status={status:?}, message={message:?}");
             (
                 StatusCode::BAD_GATEWAY,
@@ -150,15 +152,15 @@ fn map_client_error(
         }
         Validation { message } => (
             StatusCode::BAD_REQUEST,
-            Json(IssuanceErrorResponse::invalid_credential_offer(sanitize_error_message(
-                message,
-            ))),
+            Json(IssuanceErrorResponse::invalid_credential_offer(
+                sanitize_error_message(message),
+            )),
         ),
         InvalidResponse { message } => (
             StatusCode::BAD_REQUEST,
-            Json(IssuanceErrorResponse::invalid_credential_offer(sanitize_error_message(
-                message,
-            ))),
+            Json(IssuanceErrorResponse::invalid_credential_offer(
+                sanitize_error_message(message),
+            )),
         ),
         NoSupportedGrantType => (
             StatusCode::BAD_REQUEST,
@@ -195,9 +197,7 @@ fn sanitize_error_message(message: &str) -> String {
         .replace("https://", "")
         .replace("http://", "")
         .split_whitespace()
-        .filter(|s| {
-            !s.contains(':') || s.starts_with("invalid") || s.starts_with("missing")
-        })
+        .filter(|s| !s.contains(':') || s.starts_with("invalid") || s.starts_with("missing"))
         .collect::<Vec<_>>()
         .join(" ");
     if sanitized.len() > 200 {
