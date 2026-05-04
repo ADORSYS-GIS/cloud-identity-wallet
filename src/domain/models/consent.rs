@@ -24,8 +24,21 @@ pub enum NextAction {
     Rejected,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ConsentErrorResponse {
-    pub error: &'static str,
-    pub error_description: String,
+/// Consent domain errors.
+#[derive(thiserror::Error, Debug)]
+pub enum ConsentError {
+    #[error("Session {0} does not exist")]
+    NotFound(String),
+
+    #[error("Session is not in awaiting_consent state")]
+    InvalidState,
+
+    #[error("Failed to build authorization URL: {0}")]
+    AuthorizationUrlFailed(String),
+
+    #[error("Session storage error: {0}")]
+    Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("Event publishing failed: {0}")]
+    EventPublishing(String),
 }

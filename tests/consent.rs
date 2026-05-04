@@ -3,11 +3,11 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use cloud_identity_wallet::{
-    domain::models::issuance::IssuanceEngine,
+    domain::models::issuance::{FlowType, IssuanceEngine},
     domain::service::Service,
     outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo},
     server::{AppState, submit_consent},
-    session::{FlowType, Id, IssuanceSession, SessionStore},
+    session::{Id, IssuanceSession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
 use dashmap::{DashMap, Entry};
