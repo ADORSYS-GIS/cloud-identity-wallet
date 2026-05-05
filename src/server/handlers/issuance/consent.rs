@@ -1,5 +1,3 @@
-//! HTTP handler for consent submission.
-
 use std::borrow::Cow;
 
 use axum::{

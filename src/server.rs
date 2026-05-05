@@ -3,6 +3,7 @@ pub(crate) mod error;
 mod handlers;
 mod responses;
 
+use axum::middleware;
 pub use handlers::submit_consent;
 
 use std::sync::Arc;
@@ -25,8 +26,9 @@ use tower_http::{
 };
 
 /// The global application state shared between all request handlers.
-pub struct AppState<S: SessionStore> {
-    pub service: Arc<Service<S>>,
+#[derive(Debug)]
+pub(crate) struct AppState<S: SessionStore> {
+    service: Arc<Service<S>>,
 }
 
 // We manually implement Clone here to avoid bounds on generic types
@@ -75,7 +77,6 @@ impl Server {
             .route("/", get(home))
             .route("/health", get(health_check))
             .nest("/api/v1", api_routes())
-            .nest("/api/v1", private_routes())
             .layer(cors_layer)
             .layer(trace_layer)
             .with_state(state);
@@ -100,9 +101,11 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    Router::new().route("/tenants", post(register_tenant))
-}
-
-fn private_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    Router::new().route("/issuance/{session_id}/consent", post(submit_consent))
+    let protected_routes = Router::new()
+        .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route_layer(middleware::from_fn(auth::auth));
+    
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .merge(protected_routes)
 }
