@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::domain::models::consent::ConsentError;
 use crate::domain::models::issuance::{IssuanceError, IssuanceErrorCode};
 use crate::domain::models::tenants::TenantError;
+use crate::session::SessionError;
 
 /// The unified error type used by all HTTP handlers.
 ///
@@ -146,6 +147,21 @@ impl IntoApiError for ConsentError {
                     error_description: Some(msg),
                 }
             }
+        }
+    }
+}
+
+impl IntoApiError for SessionError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            SessionError::Store(err) => ApiError::internal(err),
+            SessionError::Encoding(err) => ApiError::internal(err),
+            SessionError::InvalidStateTransition(from, to) => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_state_transition"),
+                error_description: Some(format!("Invalid state transition from {} to {}", from, to)),
+            },
+            SessionError::Other(err) => ApiError::internal(err),
         }
     }
 }
