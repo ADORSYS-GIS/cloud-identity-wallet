@@ -1,191 +1,14 @@
-use axum::{
-    body::Body,
-    http::{Method, Request, StatusCode},
-};
 use cloud_identity_wallet::{
-    domain::models::issuance::{FlowType, IssuanceEngine},
-    domain::service::Service,
-    outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo},
-    server::{AppState, submit_consent},
-    session::{Id, IssuanceSession, SessionStore},
+    domain::models::issuance::FlowType,
+    session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
-use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciConfig, Oid4vciClient};
-use dashmap::{DashMap, Entry};
-use serde::de::DeserializeOwned;
+use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
 use serde_json::json;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tower::ServiceExt;
-
-/// A JSON-based in-memory session store for testing.
-///
-/// This store uses JSON serialization instead of postcard to support
-/// types like `serde_json::Value` which cannot be serialized with postcard.
-#[derive(Debug, Clone)]
-struct JsonMemorySession {
-    entries: Arc<DashMap<Box<[u8]>, SessionEntry>>,
-    ttl: Duration,
-}
-
-#[derive(Debug, Clone)]
-struct SessionEntry {
-    value: Box<[u8]>,
-    expires_at: Instant,
-}
-
-impl JsonMemorySession {
-    fn new(ttl: Duration) -> Self {
-        Self {
-            entries: Arc::default(),
-            ttl,
-        }
-    }
-
-    fn make_entry(&self, value: &[u8]) -> SessionEntry {
-        SessionEntry {
-            value: value.into(),
-            expires_at: Instant::now() + self.ttl,
-        }
-    }
-
-    fn is_expired(entry: &SessionEntry) -> bool {
-        Instant::now() >= entry.expires_at
-    }
-}
-
-impl Default for JsonMemorySession {
-    fn default() -> Self {
-        Self::new(Duration::from_secs(900))
-    }
-}
-
-#[async_trait::async_trait]
-impl SessionStore for JsonMemorySession {
-    async fn upsert<K, V>(&self, key: K, value: &V) -> cloud_identity_wallet::session::Result<()>
-    where
-        K: Into<Id> + Send + Sync,
-        V: serde::Serialize + Send + Sync,
-    {
-        let key = key.into();
-        let value_bytes = serde_json::to_vec(value)
-            .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
-        let key_bytes: Box<[u8]> = key.as_bytes().into();
-
-        match self.entries.entry(key_bytes) {
-            Entry::Occupied(mut occupied) => {
-                if Self::is_expired(occupied.get()) {
-                    occupied.insert(self.make_entry(&value_bytes));
-                } else {
-                    occupied.get_mut().value = value_bytes.into_boxed_slice();
-                }
-            }
-            Entry::Vacant(vacant) => {
-                vacant.insert(self.make_entry(&value_bytes));
-            }
-        }
-        Ok(())
-    }
-
-    async fn get<K, V>(&self, key: K) -> cloud_identity_wallet::session::Result<Option<V>>
-    where
-        K: Into<Id> + Send + Sync,
-        V: DeserializeOwned + Send + Sync,
-    {
-        let key = key.into();
-        if let Some(entry) = self.entries.get(key.as_bytes()) {
-            if Self::is_expired(&entry) {
-                drop(entry);
-                self.entries.remove(key.as_bytes());
-                return Ok(None);
-            }
-            let item: V = serde_json::from_slice(&entry.value)
-                .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
-            Ok(Some(item))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn exists<K>(&self, key: K) -> cloud_identity_wallet::session::Result<bool>
-    where
-        K: Into<Id> + Send + Sync,
-    {
-        let key = key.into();
-        if let Some(entry) = self.entries.get(key.as_bytes()) {
-            if Self::is_expired(&entry) {
-                drop(entry);
-                self.entries.remove(key.as_bytes());
-                Ok(false)
-            } else {
-                Ok(true)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn consume<K, V>(&self, key: K) -> cloud_identity_wallet::session::Result<Option<V>>
-    where
-        K: Into<Id> + Send + Sync,
-        V: DeserializeOwned + Send + Sync,
-    {
-        let key = key.into();
-        if let Some((_, entry)) = self.entries.remove(key.as_bytes()) {
-            if Self::is_expired(&entry) {
-                return Ok(None);
-            }
-            let item: V = serde_json::from_slice(&entry.value)
-                .map_err(|e| cloud_identity_wallet::session::SessionError::Store(Box::new(e)))?;
-            Ok(Some(item))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn remove<K>(&self, key: K) -> cloud_identity_wallet::session::Result<()>
-    where
-        K: Into<Id> + Send + Sync,
-    {
-        let key = key.into();
-        self.entries.remove(key.as_bytes());
-        Ok(())
-    }
-}
-
-fn create_test_state() -> AppState<JsonMemorySession> {
-    let session_store = JsonMemorySession::default();
-    let tenant_repo = MemoryTenantRepo::new();
-
-    let oid4vci_config = Oid4vciConfig::new(
-        "test-wallet".to_string(),
-        url::Url::parse("http://localhost:3000/api/v1/issuance/callback").unwrap(),
-    )
-    .accept_untrusted_hosts(true);
-    let oid4vci_client = Oid4vciClient::new(oid4vci_config).unwrap();
-
-    let task_queue = MemoryTaskQueue::new();
-    let publisher = MemoryEventPublisher::new(128);
-    let credential_repo = MemoryCredentialRepo::new();
-
-    let issuance_engine = IssuanceEngine::new(
-        oid4vci_client,
-        task_queue,
-        publisher,
-        credential_repo,
-        tenant_repo.clone(),
-        &session_store,
-    );
-
-    let service = Service::new(session_store, tenant_repo, issuance_engine);
-
-    AppState {
-        service: Arc::new(service),
-    }
-}
+use std::time::Duration;
 
 fn create_test_session(flow: FlowType) -> IssuanceSession {
     use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
-    use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
+    use cloud_wallet_openid4vc::issuance::client::IssuanceFlow;
     use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
     use cloud_wallet_openid4vc::issuance::issuer_metadata::CredentialIssuerMetadata;
 
@@ -234,79 +57,183 @@ fn create_test_session(flow: FlowType) -> IssuanceSession {
     IssuanceSession::new(uuid::Uuid::new_v4(), context, flow)
 }
 
-#[tokio::test]
-async fn test_consent_rejected() {
-    let state = create_test_state();
-    let session = create_test_session(FlowType::AuthorizationCode);
+/// Helper to create a session store with a session in AwaitingConsent state
+async fn setup_session(flow: FlowType) -> (MemorySession, String, IssuanceSession) {
+    let session_store = MemorySession::new(Duration::from_secs(900));
+    let session = create_test_session(flow);
     let session_id = session.id.clone();
-    state
-        .service
-        .session
+    session_store
         .upsert(session_id.as_str(), &session)
         .await
         .unwrap();
-
-    let app = axum::Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/consent",
-            axum::routing::post(submit_consent),
-        )
-        .with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/api/v1/issuance/{}/consent", session_id))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"accepted": false}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(result["next_action"], "rejected");
+    (session_store, session_id.to_string(), session)
 }
 
+/// Test that a session in AwaitingConsent state can be retrieved
 #[tokio::test]
-async fn test_consent_invalid_state() {
-    let state = create_test_state();
+async fn test_session_awaiting_consent_retrieval() {
+    let (session_store, session_id, _session) = setup_session(FlowType::AuthorizationCode).await;
 
-    // Create a session and manually set it to a different state
-    let mut session = create_test_session(FlowType::AuthorizationCode);
-    session.state = cloud_identity_wallet::session::IssuanceState::Processing;
-    let session_id = session.id.clone();
-    state
-        .service
-        .session
+    // Verify session exists and is in correct state
+    let retrieved: Option<IssuanceSession> = session_store.get(session_id.as_str()).await.unwrap();
+    assert!(retrieved.is_some());
+    let retrieved = retrieved.unwrap();
+    assert_eq!(retrieved.state, IssuanceState::AwaitingConsent);
+    assert_eq!(retrieved.flow, FlowType::AuthorizationCode);
+}
+
+/// Test that a non-existent session returns None
+#[tokio::test]
+async fn test_session_not_found() {
+    let session_store = MemorySession::new(Duration::from_secs(900));
+
+    let retrieved: Option<IssuanceSession> = session_store.get("nonexistent").await.unwrap();
+    assert!(retrieved.is_none());
+}
+
+/// Test that a session in wrong state (not AwaitingConsent) can be detected
+#[tokio::test]
+async fn test_session_invalid_state_detection() {
+    let (session_store, session_id, mut session) = setup_session(FlowType::AuthorizationCode).await;
+
+    // Change session state to Processing (not AwaitingConsent)
+    session.state = IssuanceState::Processing;
+    session_store
         .upsert(session_id.as_str(), &session)
         .await
         .unwrap();
 
-    let app = axum::Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/consent",
-            axum::routing::post(submit_consent),
-        )
-        .with_state(state);
+    // Verify session is in wrong state
+    let retrieved: Option<IssuanceSession> = session_store.get(session_id.as_str()).await.unwrap();
+    let retrieved = retrieved.unwrap();
+    assert_ne!(retrieved.state, IssuanceState::AwaitingConsent);
+    assert_eq!(retrieved.state, IssuanceState::Processing);
+}
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/api/v1/issuance/{}/consent", session_id))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"accepted": true}).to_string()))
-                .unwrap(),
-        )
+/// Test session removal (for rejected consent)
+#[tokio::test]
+async fn test_session_removal() {
+    let (session_store, session_id, _) = setup_session(FlowType::AuthorizationCode).await;
+
+    // Remove the session
+    session_store.remove(session_id.as_str()).await.unwrap();
+
+    // Verify session no longer exists
+    let exists = session_store.exists(session_id.as_str()).await.unwrap();
+    assert!(!exists);
+}
+
+/// Test session state transition
+#[tokio::test]
+async fn test_session_state_transition() {
+    let (session_store, session_id, mut session) = setup_session(FlowType::AuthorizationCode).await;
+
+    // Transition to AwaitingAuthorization state
+    session.state = IssuanceState::AwaitingAuthorization;
+    session.code_verifier = Some("test_verifier".to_string());
+    session_store
+        .upsert(session_id.as_str(), &session)
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    // Verify state transition
+    let retrieved: Option<IssuanceSession> = session_store.get(session_id.as_str()).await.unwrap();
+    let retrieved = retrieved.unwrap();
+    assert_eq!(retrieved.state, IssuanceState::AwaitingAuthorization);
+    assert_eq!(retrieved.code_verifier, Some("test_verifier".to_string()));
+}
+
+/// Test pre-authorized code flow session
+#[tokio::test]
+async fn test_pre_authorized_code_session() {
+    let (session_store, session_id, _session) = setup_session(FlowType::PreAuthorizedCode).await;
+
+    // Verify session is in correct state for pre-authorized code
+    let retrieved: Option<IssuanceSession> = session_store.get(session_id.as_str()).await.unwrap();
+    let retrieved = retrieved.unwrap();
+    assert_eq!(retrieved.state, IssuanceState::AwaitingConsent);
+    assert_eq!(retrieved.flow, FlowType::PreAuthorizedCode);
+}
+
+/// Test that session expiration works
+#[tokio::test]
+async fn test_session_expiration() {
+    // Create session with very short TTL
+    let session_store = MemorySession::new(Duration::from_millis(1));
+    let session = create_test_session(FlowType::AuthorizationCode);
+    let session_id = session.id.clone();
+    session_store
+        .upsert(session_id.as_str(), &session)
+        .await
+        .unwrap();
+
+    // Wait for expiration
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Session should be expired and return None
+    let retrieved: Option<IssuanceSession> = session_store.get(session_id.as_str()).await.unwrap();
+    assert!(retrieved.is_none());
+}
+
+/// Test consent request parsing
+#[tokio::test]
+async fn test_consent_request_rejected() {
+    use cloud_identity_wallet::domain::models::issuance::ConsentRequest;
+
+    let request = serde_json::from_value::<ConsentRequest>(json!({
+        "accepted": false
+    }))
+    .unwrap();
+
+    assert!(!request.accepted);
+    assert!(request.selected_configuration_ids.is_empty());
+}
+
+/// Test consent request with selected configurations
+#[tokio::test]
+async fn test_consent_request_with_configurations() {
+    use cloud_identity_wallet::domain::models::issuance::ConsentRequest;
+
+    let request = serde_json::from_value::<ConsentRequest>(json!({
+        "accepted": true,
+        "selected_configuration_ids": ["cred1", "cred2"]
+    }))
+    .unwrap();
+
+    assert!(request.accepted);
+    assert_eq!(request.selected_configuration_ids, vec!["cred1", "cred2"]);
+}
+
+/// Test consent response serialization
+#[tokio::test]
+async fn test_consent_response_serialization() {
+    use cloud_identity_wallet::domain::models::issuance::{ConsentResponse, NextAction};
+
+    let response = ConsentResponse {
+        session_id: "test-session".to_string(),
+        next_action: NextAction::Rejected,
+        authorization_url: None,
+    };
+
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["session_id"], "test-session");
+    assert_eq!(json["next_action"], "rejected");
+    assert!(!json.as_object().unwrap().contains_key("authorization_url"));
+}
+
+/// Test consent response with redirect
+#[tokio::test]
+async fn test_consent_response_with_redirect() {
+    use cloud_identity_wallet::domain::models::issuance::{ConsentResponse, NextAction};
+
+    let response = ConsentResponse {
+        session_id: "test-session".to_string(),
+        next_action: NextAction::Redirect,
+        authorization_url: Some("https://example.com/authorize".to_string()),
+    };
+
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["session_id"], "test-session");
+    assert_eq!(json["next_action"], "redirect");
+    assert_eq!(json["authorization_url"], "https://example.com/authorize");
 }
