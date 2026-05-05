@@ -65,7 +65,13 @@ async fn handle_rejected_consent<S: SessionStore + Clone>(
     publish_result?;
 
     warn!(session_id = %session_id, "consent rejected by user");
-    Ok(StatusCode::OK.into_response())
+    
+    let resp = ConsentResponse {
+        session_id: session_id.clone(),
+        next_action: NextAction::Rejected,
+        authorization_url: None,
+    };
+    Ok(ResponseBody::new(StatusCode::OK, resp).into_response())
 }
 
 async fn handle_authorization_code_consent<S: SessionStore + Clone>(
@@ -156,19 +162,19 @@ async fn load_awaiting_consent<S: SessionStore>(
 ) -> Result<IssuanceSession, ApiError> {
     let session: Option<IssuanceSession> = session_store.get(session_id).await?;
     let Some(session) = session else {
-        return Err(invalid_consent("session_id does not exist or has expired."));
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            error: Cow::Borrowed("session_not_found"),
+            error_description: Some("session_id does not exist or has expired.".into()),
+        });
     };
 
     if session.state != IssuanceState::AwaitingConsent {
-        return Err(invalid_consent("Session is not in awaiting_consent state"));
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            error: Cow::Borrowed("invalid_session_state"),
+            error_description: Some("Session is not in awaiting_consent state".into()),
+        });
     }
     Ok(session)
-}
-
-fn invalid_consent(description: impl Into<String>) -> ApiError {
-    ApiError {
-        status: StatusCode::BAD_REQUEST,
-        error: Cow::Borrowed("invalid_request"),
-        error_description: Some(description.into()),
-    }
 }
