@@ -1,8 +1,13 @@
-use axum::{Json, extract::{Extension, State}, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Extension, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use uuid::Uuid;
 
-use crate::domain::models::issuance::start_issuance_session;
 use crate::domain::models::issuance::StartIssuanceRequest;
+use crate::domain::models::issuance::start_issuance_session;
 use crate::server::error::IntoApiError;
 use crate::server::{AppState, responses::ResponseBody};
 use crate::session::SessionStore;

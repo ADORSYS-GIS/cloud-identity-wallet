@@ -12,11 +12,11 @@ use crate::server::handlers::{health_check, home, register_tenant, start_issuanc
 use crate::session::SessionStore;
 
 use axum::http::Method;
+use axum::middleware;
 use axum::{
     Router,
     routing::{get, post},
 };
-use axum::middleware;
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
