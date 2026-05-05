@@ -116,3 +116,9 @@ impl IntoApiError for IssuanceError {
         }
     }
 }
+
+impl IntoApiError for crate::session::SessionError {
+    fn into_api_error(self) -> ApiError {
+        ApiError::internal(self)
+    }
+}
