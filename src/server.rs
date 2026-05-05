@@ -100,8 +100,7 @@ impl Server {
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     // Public routes (no authentication required)
-    let public_routes = Router::new()
-        .route("/tenants", post(register_tenant));
+    let public_routes = Router::new().route("/tenants", post(register_tenant));
 
     // Private routes (authentication required)
     let private_routes = Router::new()
