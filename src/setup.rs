@@ -46,6 +46,12 @@ pub fn build_service<S: SessionStore + Clone>(
     tenant_repo: impl TenantRepo + Clone,
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
-    let (engine, event_subscriber) = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
-    Ok(Service::new(session_store, tenant_repo, engine, event_subscriber))
+    let (engine, event_subscriber) =
+        build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
+    Ok(Service::new(
+        session_store,
+        tenant_repo,
+        engine,
+        event_subscriber,
+    ))
 }
