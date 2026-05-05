@@ -1,10 +1,10 @@
 mod auth;
-pub(crate) mod error;
+mod error;
 mod handlers;
 mod responses;
 
 use axum::middleware;
-pub(crate) use handlers::submit_consent;
+use handlers::submit_consent;
 
 use std::sync::Arc;
 

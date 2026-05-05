@@ -20,7 +20,7 @@ use crate::{
 
 /// Submit consent for a credential issuance session.
 #[instrument(skip_all)]
-pub(crate) async fn submit_consent<S: SessionStore + Clone>(
+pub async fn submit_consent<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
     Path(session_id): Path<String>,
     Json(payload): Json<ConsentRequest>,
