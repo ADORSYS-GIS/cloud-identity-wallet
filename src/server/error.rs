@@ -7,8 +7,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::domain::models::consent::ConsentError;
-use crate::domain::models::issuance::{IssuanceError, IssuanceErrorCode};
+use crate::domain::models::issuance::{ConsentError, IssuanceError, IssuanceErrorCode};
 use crate::domain::models::tenants::TenantError;
 use crate::session::SessionError;
 
