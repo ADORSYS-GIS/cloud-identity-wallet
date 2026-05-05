@@ -7,9 +7,10 @@ use crate::domain::service::Service;
 use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue};
 use crate::session::SessionStore;
 
-pub fn build_issuance_engine(
+pub fn build_issuance_engine<S: SessionStore + Clone>(
     config: &Config,
     tenant_repo: impl TenantRepo,
+    session_store: &S,
 ) -> color_eyre::Result<IssuanceEngine> {
     let client_config = Oid4vciClientConfig::new(
         config.oid4vci.client_id.clone(),
@@ -25,7 +26,14 @@ pub fn build_issuance_engine(
     let publisher = MemoryEventPublisher::new(128);
     let credential_repo = MemoryCredentialRepo::new();
 
-    let engine = IssuanceEngine::new(client, task_queue, publisher, credential_repo, tenant_repo);
+    let engine = IssuanceEngine::new(
+        client,
+        task_queue,
+        publisher,
+        credential_repo,
+        tenant_repo,
+        session_store,
+    );
     Ok(engine)
 }
 
@@ -35,6 +43,6 @@ pub fn build_service<S: SessionStore + Clone>(
     tenant_repo: impl TenantRepo + Clone,
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
-    let engine = build_issuance_engine(config, tenant_repo.clone())?;
+    let engine = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
     Ok(Service::new(session_store, tenant_repo, engine))
 }
