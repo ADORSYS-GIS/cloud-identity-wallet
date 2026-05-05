@@ -2,4 +2,4 @@
 
 mod consent;
 
-pub(crate) use consent::submit_consent;
+pub use consent::submit_consent;
