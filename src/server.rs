@@ -1,5 +1,5 @@
 mod auth;
-mod error;
+pub(crate) mod error;
 mod handlers;
 mod responses;
 pub mod sse;
@@ -7,12 +7,13 @@ pub mod sse;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::domain::InMemorySessionStore;
-use crate::domain::ports::TenantRepository;
+use crate::domain::models::issuance::IssuanceEngine;
+use crate::domain::ports::TenantRepo;
 use crate::server::handlers::{
     cancel_session, health_check, home, register_tenant, submit_tx_code,
 };
 use crate::server::sse::SseBroadcaster;
+use crate::session::{MemorySession, SessionStore};
 
 use axum::Router;
 use axum::http::Method;
@@ -24,12 +25,13 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// The global application state shared between all request handlers.
-pub struct AppState {
-    pub issuance_store: Arc<dyn crate::domain::SessionStore>,
-    pub tenant_repo: Arc<dyn TenantRepository>,
+pub(crate) struct AppState<S: SessionStore + Clone> {
+    pub issuance_store: Arc<S>,
+    pub tenant_repo: Arc<dyn TenantRepo>,
     pub broadcaster: SseBroadcaster,
+    pub issuance_engine: IssuanceEngine,
 }
 
 pub struct Server {
@@ -39,20 +41,21 @@ pub struct Server {
 
 impl Server {
     /// Creates a new HTTPS server with default in-memory stores.
-    pub async fn new(config: &Config) -> Result<Self> {
-        let issuance_store = Arc::new(InMemorySessionStore::new());
-        let tenant_repo = Arc::new(crate::outbound::MemoryTenantRepository::new());
+    pub async fn new(config: &Config, engine: IssuanceEngine) -> Result<Self> {
+        let session_store = MemorySession::default();
+        let tenant_repo = Arc::new(crate::outbound::MemoryTenantRepo::new());
         let broadcaster = SseBroadcaster::new();
 
-        Self::with_stores(config, issuance_store, tenant_repo, broadcaster).await
+        Self::with_stores(config, session_store, tenant_repo, broadcaster, engine).await
     }
 
     /// Creates a new HTTPS server with the provided stores.
-    pub async fn with_stores(
+    pub async fn with_stores<S: SessionStore + Clone>(
         config: &Config,
-        issuance_store: Arc<dyn crate::domain::SessionStore>,
-        tenant_repo: Arc<dyn TenantRepository>,
+        session_store: S,
+        tenant_repo: Arc<dyn TenantRepo>,
         broadcaster: SseBroadcaster,
+        issuance_engine: IssuanceEngine,
     ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -72,11 +75,12 @@ impl Server {
                 Method::OPTIONS,
             ]);
 
-        let state = Arc::new(AppState {
-            issuance_store,
+        let state = AppState {
+            issuance_store: Arc::new(session_store),
             tenant_repo,
             broadcaster,
-        });
+            issuance_engine,
+        };
 
         let issuance_router = Router::new()
             .route("/{session_id}/tx-code", axum::routing::post(submit_tx_code))

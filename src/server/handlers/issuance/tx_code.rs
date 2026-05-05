@@ -3,29 +3,29 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use std::sync::Arc;
 
-use crate::domain::session_store::Error as StoreError;
+use crate::domain::models::issuance::IssuanceTask;
 use crate::server::AppState;
 use crate::server::handlers::issuance::{
     ErrorResponse, IssuanceError, TxCodeRequest, TxCodeResponse,
 };
 use crate::server::sse::SseEvent;
-use crate::session::{IssuanceState, ProcessingStep, TxCodeValidationError, validate_tx_code};
+use crate::session::{IssuanceSession, IssuanceState, ProcessingStep, SessionStore, TxCodeValidationError, validate_tx_code};
 
-pub async fn submit_tx_code(
-    State(state): State<Arc<AppState>>,
+pub async fn submit_tx_code<S: SessionStore + Clone>(
+    State(state): State<AppState<S>>,
     Path(session_id): Path<String>,
     Json(payload): Json<TxCodeRequest>,
 ) -> Result<(StatusCode, Json<TxCodeResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let session = state
+    let session: IssuanceSession = state
         .issuance_store
-        .get(&session_id)
+        .get(session_id.as_str())
         .await
-        .map_err(|e| match e {
-            StoreError::Expired(_) => IssuanceError::SessionExpired,
-            _ => IssuanceError::SessionNotFound,
-        })?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to get session");
+            IssuanceError::SessionNotFound
+        })?
+        .ok_or(IssuanceError::SessionNotFound)?;
 
     if session.state != IssuanceState::AwaitingTxCode {
         return Err(IssuanceError::InvalidSessionState(format!(
@@ -36,6 +36,7 @@ pub async fn submit_tx_code(
     }
 
     let tx_code_spec = session
+        .context
         .offer
         .grants
         .as_ref()
@@ -62,20 +63,42 @@ pub async fn submit_tx_code(
         return Err(IssuanceError::InvalidTxCode(desc).into());
     }
 
+    // Update session state to processing
+    let tx_code = payload.tx_code.clone();
+    let mut updated_session = session.clone();
+    updated_session.state = IssuanceState::Processing;
+    updated_session.submitted_tx_code = Some(payload.tx_code);
     state
         .issuance_store
-        .set_tx_code(&session_id, payload.tx_code)
+        .upsert(session_id.as_str(), &updated_session)
         .await
-        .map_err(|_| IssuanceError::SessionNotFound)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to update session");
+            IssuanceError::SessionNotFound
+        })?;
 
-    state
-        .issuance_store
-        .update_state(&session_id, IssuanceState::Processing)
-        .await
-        .map_err(|_| IssuanceError::SessionNotFound)?;
-
+    // Emit processing SSE event
     let event = SseEvent::processing(session_id.clone(), ProcessingStep::ExchangingToken);
     state.broadcaster.send(&session_id, event);
+
+    // Enqueue issuance task
+    let pre_authorized_code = session
+        .context
+        .offer
+        .grants
+        .as_ref()
+        .and_then(|g| g.pre_authorized_code.as_ref())
+        .map(|g| g.pre_authorized_code.clone())
+        .unwrap_or_default();
+    let task = IssuanceTask::new_pre_authz_code(&updated_session, pre_authorized_code, Some(tx_code));
+    state
+        .issuance_engine
+        .enqueue(&task)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to enqueue issuance task");
+            IssuanceError::SessionNotFound
+        })?;
 
     Ok((StatusCode::ACCEPTED, Json(TxCodeResponse { session_id })))
 }

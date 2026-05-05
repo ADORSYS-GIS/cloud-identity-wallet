@@ -7,7 +7,7 @@ pub enum Error {
     Store(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("Encoding or decoding error: {0}")]
-    Encoding(#[from] postcard::Error),
+    Encoding(#[from] serde_json::Error),
 
     #[error("Invalid state transition from {0} to {1}")]
     InvalidStateTransition(Cow<'static, str>, Cow<'static, str>),

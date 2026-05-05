@@ -1,14 +1,14 @@
 //! HTTP handler for tenant registration.
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
-use std::sync::Arc;
 
 use crate::domain::models::tenants::RegisterTenantRequest;
 use crate::server::{AppState, error::ApiError, responses::ResponseBody};
+use crate::session::SessionStore;
 
 /// Registers a new tenant.
-pub async fn register_tenant(
-    State(state): State<Arc<AppState>>,
+pub async fn register_tenant<S: SessionStore + Clone>(
+    State(state): State<AppState<S>>,
     Json(payload): Json<RegisterTenantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let response = state.tenant_repo.create(payload).await?;

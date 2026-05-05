@@ -2,26 +2,25 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use std::sync::Arc;
 
-use crate::domain::session_store::Error as StoreError;
 use crate::server::AppState;
 use crate::server::handlers::issuance::{ErrorResponse, IssuanceError};
 use crate::server::sse::SseEvent;
-use crate::session::FailureStep;
+use crate::session::{FailureStep, IssuanceSession, SessionStore};
 
-pub async fn cancel_session(
-    State(state): State<Arc<AppState>>,
+pub async fn cancel_session<S: SessionStore + Clone>(
+    State(state): State<AppState<S>>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, axum::Json<ErrorResponse>)> {
-    let session = state
+    let session: IssuanceSession = state
         .issuance_store
-        .get(&session_id)
+        .get(session_id.as_str())
         .await
         .map_err(|e| match e {
-            StoreError::Expired(_) => IssuanceError::SessionExpired,
+            crate::session::SessionError::InvalidStateTransition(_, _) => IssuanceError::SessionExpired,
             _ => IssuanceError::SessionNotFound,
-        })?;
+        })?
+        .ok_or(IssuanceError::SessionNotFound)?;
 
     if session.state.is_terminal() {
         return Err(IssuanceError::TerminalState.into());
@@ -37,7 +36,7 @@ pub async fn cancel_session(
 
     state
         .issuance_store
-        .delete(&session_id)
+        .remove(session_id.as_str())
         .await
         .map_err(|_| IssuanceError::SessionNotFound)?;
 

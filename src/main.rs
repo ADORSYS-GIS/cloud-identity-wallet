@@ -1,5 +1,8 @@
 use cloud_identity_wallet::config::Config;
+use cloud_identity_wallet::outbound::MemoryTenantRepo;
 use cloud_identity_wallet::server::Server;
+use cloud_identity_wallet::session::MemorySession;
+use cloud_identity_wallet::setup;
 use cloud_identity_wallet::telemetry;
 
 #[cfg(not(target_env = "msvc"))]
@@ -15,7 +18,11 @@ async fn main() -> color_eyre::Result<()> {
     let config = Config::load()?;
     tracing::info!("Loaded configuration: {:?}", config);
 
-    // Create server
-    let server = Server::new(&config).await?;
+    // TODO: Replace these later on with production adapters
+    let session_store = MemorySession::default();
+    let tenant_repo = MemoryTenantRepo::new();
+
+    let engine = setup::build_issuance_engine(&config, tenant_repo, &session_store)?;
+    let server = Server::new(&config, engine).await?;
     server.run().await
 }
