@@ -173,6 +173,7 @@ fn create_test_state() -> AppState<JsonMemorySession> {
         publisher,
         credential_repo,
         tenant_repo.clone(),
+        &session_store,
     );
 
     let service = Service::new(session_store, tenant_repo, issuance_engine);
