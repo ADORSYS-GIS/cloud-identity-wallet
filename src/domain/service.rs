@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
 use crate::session::SessionStore;
 
@@ -7,16 +8,15 @@ use crate::session::SessionStore;
 pub struct Service<S> {
     pub session: S,
     pub tenant_repo: Arc<dyn TenantRepo>,
+    pub issuance_engine: IssuanceEngine,
 }
 
-impl<S: SessionStore> Service<S>
-where
-    S: SessionStore,
-{
-    pub fn new<R: TenantRepo>(session: S, tenant_repo: R) -> Self {
+impl<S: SessionStore + Clone> Service<S> {
+    pub fn new<R: TenantRepo>(session: S, tenant_repo: R, issuance_engine: IssuanceEngine) -> Self {
         Self {
             session,
             tenant_repo: Arc::new(tenant_repo),
+            issuance_engine,
         }
     }
 }
@@ -26,6 +26,7 @@ impl<S> std::fmt::Debug for Service<S> {
         f.debug_struct("Service")
             .field("session", &std::any::type_name::<S>())
             .field("tenant_repo", &std::any::type_name::<dyn TenantRepo>())
+            .field("issuance_engine", &self.issuance_engine)
             .finish()
     }
 }
