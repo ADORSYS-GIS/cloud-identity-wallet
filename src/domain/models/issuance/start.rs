@@ -1,6 +1,4 @@
-use std::time::Duration;
-
-use chrono::{SecondsFormat, Utc};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, Oid4vciClient, ResolvedOfferContext};
 use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
 use serde::{Deserialize, Serialize};
@@ -8,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{FlowType, IssuanceError};
 use crate::session::{IssuanceSession, SessionStore};
 
-const SESSION_TTL: Duration = Duration::from_secs(15 * 60);
+const SESSION_TTL: Duration = Duration::minutes(15);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StartIssuanceRequest {
@@ -134,7 +132,9 @@ impl StartIssuanceResponse {
             }
         };
 
-        let expires_at = (Utc::now() + SESSION_TTL).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let expires_at = (OffsetDateTime::now_utc() + SESSION_TTL)
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "unknown".to_owned());
 
         Self {
             session_id: session.id.clone(),
