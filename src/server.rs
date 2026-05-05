@@ -28,7 +28,7 @@ use tower_http::{
 /// The global application state shared between all request handlers.
 #[derive(Debug)]
 pub(crate) struct AppState<S: SessionStore> {
-    pub service: Arc<Service<S>>,
+    service: Arc<Service<S>>,
 }
 
 // We manually implement Clone here to avoid bounds on generic types
