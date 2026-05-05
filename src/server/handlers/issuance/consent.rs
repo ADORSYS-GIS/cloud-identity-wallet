@@ -16,7 +16,7 @@ use crate::domain::models::issuance::{
 use crate::server::{AppState, error::ApiError};
 use crate::session::{IssuanceSession, IssuanceState, SessionStore};
 use crate::{
-    domain::models::consent::{ConsentRequest, ConsentResponse, NextAction},
+    domain::models::issuance::{ConsentRequest, ConsentResponse, NextAction},
     server::responses::ResponseBody,
 };
 
