@@ -28,7 +28,7 @@ use tower_http::{
 /// The global application state shared between all request handlers.
 #[derive(Debug)]
 pub(crate) struct AppState<S: SessionStore> {
-    service: Arc<Service<S>>,
+    pub service: Arc<Service<S>>,
 }
 
 // We manually implement Clone here to avoid bounds on generic types
@@ -104,7 +104,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route_layer(middleware::from_fn(auth::auth));
-    
+
     Router::new()
         .route("/tenants", post(register_tenant))
         .merge(protected_routes)
