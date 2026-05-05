@@ -68,12 +68,19 @@ fn is_transition_allowed(from: IssuanceState, to: IssuanceState, flow: FlowType)
     use FlowType::*;
     use IssuanceState::*;
     match (from, to) {
+        // awaiting_consent -> awaiting_authorization (Consent accepted, authorization code flow)
         (AwaitingConsent, AwaitingAuthorization) if flow == AuthorizationCode => true,
+        // awaiting_consent -> awaiting_tx_code (Consent accepted, pre-auth flow, tx_code required)
         (AwaitingConsent, AwaitingTxCode) if flow == PreAuthorizedCode => true,
+        // awaiting_consent -> processing (Consent accepted, pre-auth flow, no tx_code)
         (AwaitingConsent, Processing) if flow == PreAuthorizedCode => true,
+        // awaiting_authorization -> processing (Authorization callback received with valid code)
         (AwaitingAuthorization, Processing) if flow == AuthorizationCode => true,
+        // awaiting_tx_code -> processing (tx_code submitted)
         (AwaitingTxCode, Processing) if flow == PreAuthorizedCode => true,
+        // processing -> completed (Credential stored successfully)
         (Processing, Completed) => true,
+        // Any non-terminal -> failed (POST /cancel or session expiry)
         (from, Failed) if !from.is_terminal() => true,
 
         _ => false,
@@ -127,10 +134,12 @@ mod tests {
         let mut session = mock_session(FlowType::AuthorizationCode);
         assert_eq!(session.state, IssuanceState::AwaitingConsent);
 
+        // Valid transitions
         transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
         transition(&mut session, IssuanceState::Processing).unwrap();
         transition(&mut session, IssuanceState::Completed).unwrap();
 
+        // Already terminal
         assert!(transition(&mut session, IssuanceState::Failed).is_err());
     }
 
@@ -139,18 +148,22 @@ mod tests {
         let mut session = mock_session(FlowType::PreAuthorizedCode);
         assert_eq!(session.state, IssuanceState::AwaitingConsent);
 
+        // Valid transition to TxCode
         let mut s1 = session.clone();
         transition(&mut s1, IssuanceState::AwaitingTxCode).unwrap();
         transition(&mut s1, IssuanceState::Processing).unwrap();
 
+        // Valid transition directly to Processing
         let mut s2 = session.clone();
         transition(&mut s2, IssuanceState::Processing).unwrap();
 
+        // Invalid transition for this flow
         assert!(transition(&mut session, IssuanceState::AwaitingAuthorization).is_err());
     }
 
     #[test]
     fn test_failed_transitions() {
+        // Any non-terminal can fail
         let mut session = mock_session(FlowType::AuthorizationCode);
         transition(&mut session, IssuanceState::Failed).unwrap();
 
@@ -169,10 +182,12 @@ mod tests {
 
     #[test]
     fn test_invalid_flow_transitions() {
+        // AwaitingAuthorization -> Processing is NOT allowed in PreAuthorizedCode flow
         let mut session = mock_session(FlowType::PreAuthorizedCode);
         session.state = IssuanceState::AwaitingAuthorization;
         assert!(transition(&mut session, IssuanceState::Processing).is_err());
 
+        // AwaitingTxCode -> Processing is NOT allowed in AuthorizationCode flow
         let mut session = mock_session(FlowType::AuthorizationCode);
         session.state = IssuanceState::AwaitingTxCode;
         assert!(transition(&mut session, IssuanceState::Processing).is_err());
