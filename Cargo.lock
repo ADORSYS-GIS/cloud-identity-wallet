@@ -872,6 +872,7 @@ dependencies = [
  "dashmap",
  "futures",
  "jsonwebtoken",
+ "parking_lot",
  "percent-encoding",
  "rand 0.10.1",
  "redis",
@@ -4965,6 +4966,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

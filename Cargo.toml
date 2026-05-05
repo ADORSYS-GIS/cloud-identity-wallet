@@ -76,6 +76,7 @@ config = "0.15"
 dashmap.workspace = true
 futures.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+parking_lot = "0.12"
 rand.workspace = true
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
@@ -87,7 +88,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url.workspace = true
-uuid = { workspace = true, features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 
 [dependencies.redis]
 version = "1.2"

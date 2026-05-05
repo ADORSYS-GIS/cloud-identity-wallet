@@ -2,6 +2,7 @@ use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::models::issuance::FlowType;
 use crate::session::Result;
 use crate::session::SessionError;
 use crate::session::utils;
@@ -18,13 +19,6 @@ pub struct IssuanceSession {
     pub selected_config_ids: Vec<String>,
     pub flow: FlowType,
     pub code_verifier: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowType {
-    AuthorizationCode,
-    PreAuthorizedCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

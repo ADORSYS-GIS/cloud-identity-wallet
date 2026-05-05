@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::domain::models::issuance::events::IssuanceStep;
-use crate::session::{FlowType, IssuanceSession};
+use crate::domain::models::issuance::{FlowType, events::IssuanceStep};
+use crate::session::IssuanceSession;
 
 /// A task representing a credential issuance job.
 #[derive(Debug, Clone, Serialize, Deserialize)]

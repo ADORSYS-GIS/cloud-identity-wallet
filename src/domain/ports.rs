@@ -49,19 +49,22 @@ pub type IssuanceEventStream = Pin<Box<dyn Stream<Item = IssuanceEvent> + Send>>
 
 /// An issuance task queue for background task processing.
 ///
-/// Implementations handle the internal mechanics of locking and crash resilience.
+/// Implementations handle the internal mechanics of locking, leasing, stale
+/// reclaim, and crash resilience.
 #[async_trait]
 pub trait IssuanceTaskQueue: Send + Sync + 'static {
     /// Push an issuance task onto the queue for background processing.
     async fn push(&self, task: &IssuanceTask) -> Result<(), IssuanceError>;
 
-    /// Pop the next available task from the queue.
+    /// Claim the next available task from the queue.
     ///
-    /// Returns `None` if the queue is empty or the next task is already
-    /// locked by another worker.
+    /// Returned tasks are owned by the caller until they are acknowledged or
+    /// become stale according to the backend's reclaim policy. Returns `None`
+    /// if no task is currently available.
     async fn pop(&self) -> Result<Option<IssuanceTask>, IssuanceError>;
 
-    /// Mark a previously popped task as processed and remove it from the queue.
+    /// Mark a previously claimed task as terminally processed and remove it
+    /// from the queue.
     ///
     /// Queue implementations should make this idempotent enough that calling it
     /// for a task that was not popped from that backend is a no-op.
