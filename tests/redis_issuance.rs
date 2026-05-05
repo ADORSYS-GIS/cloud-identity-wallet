@@ -8,12 +8,11 @@
 use std::time::Duration;
 
 use cloud_identity_wallet::domain::models::issuance::{
-    IssuanceEvent, ProcessingStep, SseCompletedEvent, SseFailedEvent, SseProcessingEvent,
+    FlowType, IssuanceEvent, ProcessingStep, SseCompletedEvent, SseFailedEvent, SseProcessingEvent,
 };
 use cloud_identity_wallet::domain::models::issuance::{IssuanceStep, IssuanceTask};
 use cloud_identity_wallet::domain::ports::{IssuanceEventPublisher, IssuanceTaskQueue};
 use cloud_identity_wallet::outbound::{RedisEventPublisher, RedisEventSubscriber, RedisTaskQueue};
-use cloud_identity_wallet::session::FlowType;
 use futures::StreamExt;
 use redis::aio::ConnectionManagerConfig;
 use redis::{Client as RedisClient, aio::ConnectionManager};
