@@ -3,6 +3,7 @@ use cloud_identity_wallet::outbound::MemoryTenantRepo;
 use cloud_identity_wallet::server::Server;
 use cloud_identity_wallet::session::MemorySession;
 use cloud_identity_wallet::setup;
+use cloud_identity_wallet::telemetry;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -11,7 +12,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    cloud_identity_wallet::telemetry::init_tracing();
+    telemetry::init_tracing();
 
     // Load configuration
     let config = Config::load()?;

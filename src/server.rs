@@ -17,7 +17,7 @@ use axum::{
     Router,
     routing::{get, post},
 };
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -25,7 +25,7 @@ use tower_http::{
 };
 
 /// The global application state shared between all request handlers.
-pub struct AppState<S: SessionStore + Clone> {
+pub struct AppState<S: SessionStore> {
     pub service: Arc<Service<S>>,
 }
 
@@ -82,9 +82,7 @@ impl Server {
 
         let listener = TcpListener::bind(format!("{}:{}", config.server.host, config.server.port))
             .await
-            .map_err(|e| {
-                color_eyre::eyre::eyre!("Failed to bind to port {}: {}", config.server.port, e)
-            })?;
+            .wrap_err_with(|| format!("Failed to bind to port {}", config.server.port))?;
 
         Ok(Self { router, listener })
     }

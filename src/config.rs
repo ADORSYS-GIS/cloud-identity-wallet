@@ -15,7 +15,6 @@ pub struct Config {
     pub server: ServerConfig,
     pub redis: RedisConfig,
     pub database: DatabaseConfig,
-    pub wallet: WalletConfig,
     pub oid4vci: Oid4vciConfig,
 }
 
@@ -69,12 +68,6 @@ impl RedisConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalletConfig {
-    pub client_id: String,
-    pub redirect_uri: Url,
-}
-
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
         Self::load_with_sources(None)
@@ -109,11 +102,6 @@ impl Config {
             .set_default("server.port", 3000)?
             .set_default("redis.uri", "redis://127.0.0.1:6379?protocol=resp3")?
             .set_default("database.url", "sqlite::memory:")?
-            .set_default("wallet.client_id", "cloud-identity-wallet")?
-            .set_default(
-                "wallet.redirect_uri",
-                "http://127.0.0.1:3000/api/v1/issuance/callback",
-            )?
             .set_default("oid4vci.client_id", "cloud-identity-wallet")?
             .set_default("oid4vci.redirect_uri", "http://localhost:3000/callback")?
             .set_default("oid4vci.use_system_proxy", true)

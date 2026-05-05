@@ -5,14 +5,13 @@ use crate::domain::ports::TenantRepo;
 use crate::session::SessionStore;
 
 #[derive(Clone)]
-pub struct Service<S: SessionStore + Clone> {
+pub struct Service<S> {
     pub session: S,
     pub tenant_repo: Arc<dyn TenantRepo>,
     pub issuance_engine: IssuanceEngine,
 }
 
 impl<S: SessionStore + Clone> Service<S> {
-    /// Creates a new Service with the given session store, tenant repository, and issuance engine.
     pub fn new<R: TenantRepo>(session: S, tenant_repo: R, issuance_engine: IssuanceEngine) -> Self {
         Self {
             session,
@@ -22,7 +21,7 @@ impl<S: SessionStore + Clone> Service<S> {
     }
 }
 
-impl<S: SessionStore + Clone> std::fmt::Debug for Service<S> {
+impl<S> std::fmt::Debug for Service<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Service")
             .field("session", &std::any::type_name::<S>())
