@@ -1,7 +1,8 @@
-use cloud_wallet_openid4vc::issuance::credential_offer::CredentialOffer;
+use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::models::issuance::FlowType;
 use crate::session::Result;
 use crate::session::SessionError;
 use crate::session::utils;
@@ -11,17 +12,13 @@ pub struct IssuanceSession {
     pub id: String,
     pub tenant_id: Uuid,
     pub state: IssuanceState,
-    pub offer: ParsedOffer,
+    pub context: ResolvedOfferContext,
+    /// Selected configuration IDs for issuance.
+    /// Empty by default, should be overridden
+    /// after user consent.
+    pub selected_config_ids: Vec<String>,
     pub flow: FlowType,
     pub code_verifier: Option<String>,
-    pub issuer_state: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowType {
-    AuthorizationCode,
-    PreAuthorizedCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,18 +38,16 @@ impl IssuanceState {
     }
 }
 
-pub type ParsedOffer = CredentialOffer;
-
 impl IssuanceSession {
-    pub fn new(tenant_id: Uuid, offer: ParsedOffer, flow: FlowType) -> Self {
+    pub fn new(tenant_id: Uuid, context: ResolvedOfferContext, flow: FlowType) -> Self {
         Self {
             id: utils::generate_session_id(),
             tenant_id,
             state: IssuanceState::AwaitingConsent,
-            offer,
+            context,
+            selected_config_ids: vec![],
             flow,
             code_verifier: None,
-            issuer_state: None,
         }
     }
 }
@@ -97,18 +92,41 @@ mod tests {
     use super::*;
 
     fn mock_session(flow: FlowType) -> IssuanceSession {
-        let offer = serde_json::from_value(serde_json::json!({
-            "credential_issuer": "https://issuer.example.com",
-            "credential_configuration_ids": ["test_id"],
-            "grants": {
-                "authorization_code": {
+        let context = serde_json::from_value(serde_json::json!({
+            "offer": {
+                "credential_issuer": "https://issuer.example.com",
+                "credential_configuration_ids": ["test_id"],
+                "grants": {
+                    "authorization_code": {
+                        "issuer_state": "test_state"
+                    }
+                }
+            },
+            "issuer_metadata": {
+                "credential_issuer": "https://issuer.example.com",
+                "credential_endpoint": "https://issuer.example.com/credential",
+                "credential_configurations_supported": {
+                    "test_id": {
+                        "format": "dc+sd-jwt",
+                        "vct": "https://credentials.example.com/test"
+                    }
+                }
+            },
+            "as_metadata": {
+                "issuer": "https://issuer.example.com",
+                "authorization_endpoint": "https://issuer.example.com/authorize",
+                "token_endpoint": "https://issuer.example.com/token",
+                "response_types_supported": ["code"]
+            },
+            "flow": {
+                "AuthorizationCode": {
                     "issuer_state": "test_state"
                 }
-            }
+            },
         }))
         .unwrap();
 
-        IssuanceSession::new(Uuid::new_v4(), offer, flow)
+        IssuanceSession::new(Uuid::new_v4(), context, flow)
     }
 
     #[test]

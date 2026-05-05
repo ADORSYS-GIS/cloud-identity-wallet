@@ -2,13 +2,11 @@
 
 use cloud_identity_wallet::{
     config::Config,
-    domain::{
-        models::credential::{Credential, CredentialFormat, CredentialStatus},
-        service::Service,
-    },
+    domain::models::credential::{Credential, CredentialFormat, CredentialStatus},
     outbound::MemoryTenantRepo,
     server::Server,
     session::MemorySession,
+    setup,
 };
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
@@ -20,12 +18,12 @@ pub async fn spawn_server() -> String {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
         config.server.port = 0;
+        config.oid4vci.use_system_proxy = false;
         config
     };
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
-
-    let service = Service::new(session_store, tenant_repo);
+    let service = setup::build_service(session_store, tenant_repo, &config).unwrap();
     let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();
