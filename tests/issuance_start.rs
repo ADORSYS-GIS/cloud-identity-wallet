@@ -87,19 +87,27 @@ async fn start_issuance_authorization_code_flow_returns_201() {
     assert_eq!(response.status(), 201);
 
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
-    assert!(body.get("session_id").is_some(), "response should contain session_id");
+    assert!(
+        body.get("session_id").is_some(),
+        "response should contain session_id"
+    );
     assert_eq!(body.get("flow").unwrap(), "authorization_code");
     assert_eq!(body.get("tx_code_required").unwrap(), false);
     assert!(body.get("tx_code").unwrap().is_null());
 
     let issuer = body.get("issuer").unwrap();
-    assert_eq!(issuer.get("credential_issuer").unwrap(), &format!("{issuer_url}/"));
+    assert_eq!(
+        issuer.get("credential_issuer").unwrap(),
+        &format!("{issuer_url}/")
+    );
     assert_eq!(issuer.get("display_name").unwrap(), "University Degree");
 
     let credential_types = body.get("credential_types").unwrap().as_array().unwrap();
     assert_eq!(credential_types.len(), 1);
     assert_eq!(
-        credential_types[0].get("credential_configuration_id").unwrap(),
+        credential_types[0]
+            .get("credential_configuration_id")
+            .unwrap(),
         "UniversityDegreeCredential"
     );
     assert_eq!(credential_types[0].get("format").unwrap(), "jwt_vc_json");
@@ -355,11 +363,15 @@ async fn start_issuance_multiple_credential_types_returns_201() {
     let credential_types = body.get("credential_types").unwrap().as_array().unwrap();
     assert_eq!(credential_types.len(), 2);
     assert_eq!(
-        credential_types[0].get("credential_configuration_id").unwrap(),
+        credential_types[0]
+            .get("credential_configuration_id")
+            .unwrap(),
         "eu.europa.ec.eudi.pid.1"
     );
     assert_eq!(
-        credential_types[1].get("credential_configuration_id").unwrap(),
+        credential_types[1]
+            .get("credential_configuration_id")
+            .unwrap(),
         "eu.europa.ec.eudi.mdl.1"
     );
 }
