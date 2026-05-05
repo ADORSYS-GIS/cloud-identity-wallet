@@ -30,6 +30,40 @@ fn create_client() -> Oid4vciClient {
     }
 }
 
+#[test]
+fn parse_authorization_callback_success_query() {
+    let callback =
+        Oid4vciClient::parse_authorization_callback("code=abc123&state=ses_123").unwrap();
+
+    match callback {
+        AuthorizationCallback::Success(response) => {
+            assert_eq!(response.code, "abc123");
+            assert_eq!(response.state.as_deref(), Some("ses_123"));
+        }
+        other => panic!("expected success callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_authorization_callback_error_query() {
+    let callback = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123",
+    )
+    .unwrap();
+
+    match callback {
+        AuthorizationCallback::Error(response) => {
+            assert_eq!(response.error.error, AuthzErrorResponse::AccessDenied);
+            assert_eq!(
+                response.error.error_description.as_deref(),
+                Some("User cancelled")
+            );
+            assert_eq!(response.state.as_deref(), Some("ses_123"));
+        }
+        other => panic!("expected error callback, got {other:?}"),
+    }
+}
+
 fn get_ecdsa_signer() -> CryptoSigner {
     let keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
     let der = keypair.to_pkcs8_der().to_vec();
