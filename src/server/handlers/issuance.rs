@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use chrono::{SecondsFormat, Utc};
 use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
 use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
 use serde::{Deserialize, Serialize};
@@ -7,6 +10,8 @@ use crate::domain::models::issuance::IssuanceError;
 use crate::server::error::{ApiError, IntoApiError};
 use crate::server::{AppState, responses::ResponseBody};
 use crate::session::{FlowType, IssuanceSession, SessionStore};
+
+const SESSION_TTL: Duration = Duration::from_mins(15);
 
 /// Request body for starting an issuance session.
 #[derive(Debug, Clone, Deserialize)]
@@ -19,6 +24,7 @@ pub struct StartIssuanceRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct StartIssuanceResponse {
     pub session_id: String,
+    pub expires_at: String,
     pub issuer: IssuerInfo,
     pub credential_types: Vec<CredentialTypeDisplay>,
     pub flow: String,
@@ -139,8 +145,11 @@ impl StartIssuanceResponse {
             }
         };
 
+        let expires_at = (Utc::now() + SESSION_TTL).to_rfc3339_opts(SecondsFormat::Secs, true);
+
         Self {
             session_id: session.id.clone(),
+            expires_at,
             issuer,
             credential_types,
             flow,
@@ -162,6 +171,8 @@ pub async fn start_issuance<S: SessionStore + Clone>(
             error_description: Some("The credential offer must not be empty.".into()),
         });
     }
+
+    tracing::debug!(offer = %payload.offer, "received issuance start request");
 
     let context = state
         .service
@@ -371,6 +382,7 @@ mod tests {
         let response = StartIssuanceResponse::from_context(&context, &session);
 
         assert_eq!(response.session_id, session.id);
+        assert!(!response.expires_at.is_empty());
         assert_eq!(response.issuer.credential_issuer, "https://issuer.example.com/");
         assert_eq!(
             response.issuer.display_name,
