@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant};
 use crate::server::handlers::issuance::start_issuance;
+use crate::server::handlers::{health_check, home, register_tenant};
 use crate::session::SessionStore;
 
 use axum::http::Method;

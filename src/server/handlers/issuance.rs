@@ -190,11 +190,7 @@ pub async fn start_issuance<S: SessionStore + Clone>(
         IssuanceFlow::PreAuthorizedCode { .. } => FlowType::PreAuthorizedCode,
     };
 
-    let session = IssuanceSession::new(
-        uuid::Uuid::new_v4(),
-        context.clone(),
-        flow_type,
-    );
+    let session = IssuanceSession::new(uuid::Uuid::new_v4(), context.clone(), flow_type);
 
     state
         .service
@@ -213,26 +209,29 @@ pub async fn start_issuance<S: SessionStore + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::models::issuance::IssuanceEngine;
+    use crate::outbound::{
+        MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo,
+    };
+    use crate::session::MemorySession;
+    use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
     use cloud_wallet_openid4vc::issuance::client::{
         Config as Oid4vciClientConfig, IssuanceFlow, Oid4vciClient, ResolvedOfferContext,
     };
-    use cloud_wallet_openid4vc::issuance::credential_offer::{
-        AuthorizationCodeGrant, CredentialOffer, Grants, PreAuthorizedCodeGrant, TxCode, InputMode,
-    };
     use cloud_wallet_openid4vc::issuance::credential_configuration::{
-        CredentialConfiguration, CredentialDisplay, CredentialMetadata, Logo, ProofType, ProofTypeMetadata,
+        CredentialConfiguration, CredentialDisplay, CredentialMetadata, Logo, ProofType,
+        ProofTypeMetadata,
     };
     use cloud_wallet_openid4vc::issuance::credential_formats::{
-        CredentialFormatDetails, SdJwtVcCredentialConfiguration, MsoMdocCredentialConfiguration,
+        CredentialFormatDetails, MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
     };
+    use cloud_wallet_openid4vc::issuance::credential_offer::{
+        AuthorizationCodeGrant, CredentialOffer, Grants, InputMode, PreAuthorizedCodeGrant, TxCode,
+    };
+    use cloud_wallet_openid4vc::issuance::css_color::CssColor;
     use cloud_wallet_openid4vc::issuance::issuer_metadata::{
         CredentialIssuerMetadata, IssuerDisplay,
     };
-    use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
-    use cloud_wallet_openid4vc::issuance::css_color::CssColor;
-    use crate::domain::models::issuance::IssuanceEngine;
-    use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo};
-    use crate::session::MemorySession;
     use std::collections::HashMap;
     use std::sync::Arc;
     use url::Url;
@@ -247,7 +246,10 @@ mod tests {
                 }),
                 pre_authorized_code: None,
             }),
-            IssuanceFlow::PreAuthorizedCode { pre_authorized_code, tx_code } => Some(Grants {
+            IssuanceFlow::PreAuthorizedCode {
+                pre_authorized_code,
+                tx_code,
+            } => Some(Grants {
                 authorization_code: None,
                 pre_authorized_code: Some(PreAuthorizedCodeGrant {
                     pre_authorized_code: pre_authorized_code.clone(),
@@ -332,7 +334,9 @@ mod tests {
 
         let as_metadata = AuthorizationServerMetadata {
             issuer: credential_issuer.clone(),
-            authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
+            authorization_endpoint: Some(
+                Url::parse("https://issuer.example.com/authorize").unwrap(),
+            ),
             token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
             jwks_uri: None,
             registration_endpoint: None,
@@ -383,7 +387,10 @@ mod tests {
 
         assert_eq!(response.session_id, session.id);
         assert!(!response.expires_at.is_empty());
-        assert_eq!(response.issuer.credential_issuer, "https://issuer.example.com/");
+        assert_eq!(
+            response.issuer.credential_issuer,
+            "https://issuer.example.com/"
+        );
         assert_eq!(
             response.issuer.display_name,
             Some("Example EU Identity Authority".to_owned())
@@ -464,8 +471,15 @@ mod tests {
         let task_queue = MemoryTaskQueue::new();
         let event_publisher = MemoryEventPublisher::new(16);
         let credential_repo = MemoryCredentialRepo::new();
-        let engine = IssuanceEngine::new(client, task_queue, event_publisher, credential_repo, tenant_repo.clone());
-        let service = crate::domain::service::Service::new(session_store.clone(), tenant_repo, engine);
+        let engine = IssuanceEngine::new(
+            client,
+            task_queue,
+            event_publisher,
+            credential_repo,
+            tenant_repo.clone(),
+        );
+        let service =
+            crate::domain::service::Service::new(session_store.clone(), tenant_repo, engine);
         let state = AppState {
             service: Arc::new(service),
         };
@@ -498,7 +512,10 @@ mod tests {
         let response = StartIssuanceResponse::from_context(&context, &session);
 
         assert_eq!(response.session_id, session.id);
-        assert_eq!(response.issuer.credential_issuer, "https://issuer.example.com/");
+        assert_eq!(
+            response.issuer.credential_issuer,
+            "https://issuer.example.com/"
+        );
         assert_eq!(
             response.issuer.display_name,
             Some("Example EU Identity Authority".to_owned())
@@ -647,7 +664,9 @@ mod tests {
 
         let as_metadata = AuthorizationServerMetadata {
             issuer: credential_issuer.clone(),
-            authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
+            authorization_endpoint: Some(
+                Url::parse("https://issuer.example.com/authorize").unwrap(),
+            ),
             token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
             jwks_uri: None,
             registration_endpoint: None,
@@ -692,9 +711,15 @@ mod tests {
         let response = StartIssuanceResponse::from_context(&context, &session);
 
         assert_eq!(response.credential_types.len(), 2);
-        assert_eq!(response.credential_types[0].credential_configuration_id, "eu.europa.ec.eudi.pid.1");
+        assert_eq!(
+            response.credential_types[0].credential_configuration_id,
+            "eu.europa.ec.eudi.pid.1"
+        );
         assert_eq!(response.credential_types[0].format, "dc+sd-jwt");
-        assert_eq!(response.credential_types[1].credential_configuration_id, "eu.europa.ec.eudi.mdl.1");
+        assert_eq!(
+            response.credential_types[1].credential_configuration_id,
+            "eu.europa.ec.eudi.mdl.1"
+        );
         assert_eq!(response.credential_types[1].format, "mso_mdoc");
     }
 
@@ -749,7 +774,9 @@ mod tests {
 
         let as_metadata = AuthorizationServerMetadata {
             issuer: credential_issuer.clone(),
-            authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
+            authorization_endpoint: Some(
+                Url::parse("https://issuer.example.com/authorize").unwrap(),
+            ),
             token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
             jwks_uri: None,
             registration_endpoint: None,
@@ -794,7 +821,10 @@ mod tests {
         let response = StartIssuanceResponse::from_context(&context, &session);
 
         assert_eq!(response.credential_types.len(), 1);
-        assert_eq!(response.credential_types[0].credential_configuration_id, "known_config");
+        assert_eq!(
+            response.credential_types[0].credential_configuration_id,
+            "known_config"
+        );
     }
 
     #[test]
@@ -849,7 +879,9 @@ mod tests {
 
         let as_metadata = AuthorizationServerMetadata {
             issuer: credential_issuer.clone(),
-            authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
+            authorization_endpoint: Some(
+                Url::parse("https://issuer.example.com/authorize").unwrap(),
+            ),
             token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
             jwks_uri: None,
             registration_endpoint: None,
