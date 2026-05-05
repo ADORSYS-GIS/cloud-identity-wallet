@@ -218,7 +218,8 @@ impl Oid4vciClient {
         let mut inner_client_builder = reqwest::Client::builder()
             .timeout(config.timeout)
             .tls_backend_rustls()
-            .https_only(true);
+            .https_only(true)
+            .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts);
 
         if config.accept_untrusted_hosts {
             inner_client_builder = inner_client_builder.tls_danger_accept_invalid_certs(true);
