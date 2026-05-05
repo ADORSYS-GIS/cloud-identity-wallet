@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant};
+use crate::server::auth::auth;
+use crate::server::handlers::{get_session_events, health_check, home, register_tenant};
 use crate::session::SessionStore;
 
 use axum::http::Method;
@@ -98,5 +99,14 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    Router::new().route("/tenants", post(register_tenant))
+    // Public routes (no authentication required)
+    let public_routes = Router::new()
+        .route("/tenants", post(register_tenant));
+
+    // Private routes (authentication required)
+    let private_routes = Router::new()
+        .route("/issuance/{session_id}/events", get(get_session_events))
+        .layer(axum::middleware::from_fn(auth));
+
+    public_routes.merge(private_routes)
 }
