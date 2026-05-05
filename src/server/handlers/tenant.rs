@@ -7,7 +7,7 @@ use crate::server::{AppState, error::ApiError, responses::ResponseBody};
 use crate::session::SessionStore;
 
 /// Registers a new tenant.
-pub async fn register_tenant<S: SessionStore + Clone>(
+pub async fn register_tenant<S: SessionStore>(
     State(state): State<AppState<S>>,
     Json(payload): Json<RegisterTenantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {

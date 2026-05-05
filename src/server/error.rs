@@ -159,7 +159,10 @@ impl IntoApiError for SessionError {
             SessionError::InvalidStateTransition(from, to) => ApiError {
                 status: StatusCode::CONFLICT,
                 error: Cow::Borrowed("invalid_state_transition"),
-                error_description: Some(format!("Invalid state transition from {} to {}", from, to)),
+                error_description: Some(format!(
+                    "Invalid state transition from {} to {}",
+                    from, to
+                )),
             },
             SessionError::Other(err) => ApiError::internal(err),
         }

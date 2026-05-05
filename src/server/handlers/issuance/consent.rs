@@ -11,7 +11,7 @@ use axum::{
 use tracing::{debug, info, instrument, warn};
 
 use crate::domain::models::issuance::{
-    FlowType, IssuanceEvent, IssuanceStep, IssuanceTask, SseFailedEvent, transition_session
+    FlowType, IssuanceEvent, IssuanceStep, IssuanceTask, SseFailedEvent, transition_session,
 };
 use crate::server::{AppState, error::ApiError};
 use crate::session::{IssuanceSession, IssuanceState, SessionStore};
@@ -65,7 +65,7 @@ async fn handle_rejected_consent<S: SessionStore + Clone>(
     publish_result?;
 
     warn!(session_id = %session_id, "consent rejected by user");
-    
+
     let resp = ConsentResponse {
         session_id: session_id.clone(),
         next_action: NextAction::Rejected,
