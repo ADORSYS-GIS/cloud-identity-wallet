@@ -4,7 +4,9 @@ use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
 use crate::domain::service::Service;
-use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue};
+use crate::outbound::{
+    MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
+};
 use crate::session::SessionStore;
 
 pub fn build_issuance_engine(
@@ -25,7 +27,13 @@ pub fn build_issuance_engine(
     let publisher = MemoryEventPublisher::new(128);
     let credential_repo = MemoryCredentialRepo::new();
 
-    let engine = IssuanceEngine::new(client, task_queue, publisher.clone(), credential_repo, tenant_repo);
+    let engine = IssuanceEngine::new(
+        client,
+        task_queue,
+        publisher.clone(),
+        credential_repo,
+        tenant_repo,
+    );
     Ok((engine, publisher))
 }
 
@@ -37,5 +45,10 @@ pub fn build_service<S: SessionStore + Clone>(
 ) -> color_eyre::Result<Service<S>> {
     let (engine, publisher) = build_issuance_engine(config, tenant_repo.clone())?;
     let event_subscriber = MemoryEventSubscriber::new(&publisher);
-    Ok(Service::new(session_store, tenant_repo, engine, event_subscriber))
+    Ok(Service::new(
+        session_store,
+        tenant_repo,
+        engine,
+        event_subscriber,
+    ))
 }
