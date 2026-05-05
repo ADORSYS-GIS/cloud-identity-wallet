@@ -494,6 +494,7 @@ pub async fn resolve_by_reference(
     // We re-validate the final URL after the request to detect redirect attacks.
     let mut response = http_client
         .get(uri)
+        .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
         .map_err(|e| Error::new(ErrorKind::CredentialOfferFetchFailed, e))?;

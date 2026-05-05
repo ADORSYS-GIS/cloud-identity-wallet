@@ -22,6 +22,7 @@ serde_urlencoded = "0.7"
 serde_with.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tracing = "0.1"
 url = { workspace = true, features = ["serde"] }
 validator = { version = "0.20", features = ["derive"] }
 

@@ -67,6 +67,7 @@ async-stream = "0.3"
 async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
 base64.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
 cloud-wallet-crypto = { path = "cloud-wallet-crypto" }
 cloud-wallet-kms = { path = "cloud-wallet-kms", features = ["local-kms"] }
 cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
