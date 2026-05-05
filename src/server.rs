@@ -4,7 +4,7 @@ mod handlers;
 mod responses;
 
 use axum::middleware;
-pub use handlers::submit_consent;
+pub(crate) use handlers::submit_consent;
 
 use std::sync::Arc;
 
