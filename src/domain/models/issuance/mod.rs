@@ -5,12 +5,12 @@ mod task;
 
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
-pub use start::{
-    start_issuance_session, StartIssuanceRequest, StartIssuanceResponse, TxCodeInfo,
-    CredentialTypeDisplay, IssuerInfo,
-};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+pub use start::{
+    CredentialTypeDisplay, IssuerInfo, StartIssuanceRequest, StartIssuanceResponse, TxCodeInfo,
+    start_issuance_session,
+};
 pub use task::{IssuanceTask, TaskResult};
 
 use std::{sync::Arc, time::Duration};

@@ -1,3 +1,7 @@
+use cloud_identity_wallet::domain::models::issuance::{
+    FlowType, IssuanceErrorCode, StartIssuanceResponse, start_issuance_session,
+};
+use cloud_identity_wallet::session::{IssuanceSession, MemorySession};
 use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::client::{
     Config as Oid4vciClientConfig, IssuanceFlow, Oid4vciClient, ResolvedOfferContext,
@@ -14,10 +18,6 @@ use cloud_wallet_openid4vc::issuance::credential_offer::{
 };
 use cloud_wallet_openid4vc::issuance::css_color::CssColor;
 use cloud_wallet_openid4vc::issuance::issuer_metadata::{CredentialIssuerMetadata, IssuerDisplay};
-use cloud_identity_wallet::domain::models::issuance::{
-    start_issuance_session, FlowType, IssuanceErrorCode, StartIssuanceResponse,
-};
-use cloud_identity_wallet::session::{IssuanceSession, MemorySession};
 use std::collections::HashMap;
 use url::Url;
 
@@ -174,7 +174,10 @@ fn start_response_from_auth_code_context() {
 
     assert_eq!(response.session_id, session.id);
     assert!(!response.expires_at.is_empty());
-    assert_eq!(response.issuer.credential_issuer, "https://issuer.example.com/");
+    assert_eq!(
+        response.issuer.credential_issuer,
+        "https://issuer.example.com/"
+    );
     assert_eq!(
         response.issuer.display_name,
         Some("Example EU Identity Authority".to_owned())
@@ -273,7 +276,10 @@ fn start_response_serializes_authorization_code_flow() {
     let response = StartIssuanceResponse::from_context(&context, &session);
 
     assert_eq!(response.session_id, session.id);
-    assert_eq!(response.issuer.credential_issuer, "https://issuer.example.com/");
+    assert_eq!(
+        response.issuer.credential_issuer,
+        "https://issuer.example.com/"
+    );
     assert_eq!(
         response.issuer.display_name,
         Some("Example EU Identity Authority".to_owned())

@@ -1,7 +1,7 @@
-use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, Oid4vciClient, ResolvedOfferContext};
 use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
 use serde::{Deserialize, Serialize};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{FlowType, IssuanceError};
 use crate::session::{IssuanceSession, SessionStore};
