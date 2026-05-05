@@ -6,10 +6,10 @@ use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContex
 use cloud_wallet_openid4vc::issuance::credential_offer::InputMode;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::models::issuance::IssuanceError;
+use crate::domain::models::issuance::{FlowType, IssuanceError};
 use crate::server::error::{ApiError, IntoApiError};
 use crate::server::{AppState, responses::ResponseBody};
-use crate::session::{FlowType, IssuanceSession, SessionStore};
+use crate::session::{IssuanceSession, SessionStore};
 
 const SESSION_TTL: Duration = Duration::from_mins(15);
 
@@ -465,7 +465,6 @@ mod tests {
             "test-client".to_owned(),
             Url::parse("https://wallet.example.com/callback").unwrap(),
         )
-        .use_system_proxy(false)
         .accept_untrusted_hosts(true);
         let client = Oid4vciClient::new(client_config).unwrap();
         let task_queue = MemoryTaskQueue::new();
@@ -477,6 +476,7 @@ mod tests {
             event_publisher,
             credential_repo,
             tenant_repo.clone(),
+            &session_store,
         );
         let service =
             crate::domain::service::Service::new(session_store.clone(), tenant_repo, engine);

@@ -204,7 +204,7 @@ async fn test_issuance_flow() {
     let context = ResolvedOfferContext {
         offer,
         issuer_metadata,
-        as_metadata: Some(as_metadata),
+        as_metadata,
         flow: flow_type,
     };
 

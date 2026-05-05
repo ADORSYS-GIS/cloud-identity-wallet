@@ -74,14 +74,6 @@ pub enum ClientError {
     NoSupportedGrantType,
 
     /// Issuer metadata discovery failed (invalid or missing metadata).
-    #[error("issuer metadata discovery failed: {message}")]
-    IssuerMetadataDiscovery { message: Cow<'static, str> },
-
-    /// Authorization server metadata discovery failed (invalid or missing metadata).
-    #[error("authorization server metadata discovery failed: {message}")]
-    AsMetadataDiscovery { message: Cow<'static, str> },
-
-    /// Metadata discovery failed (generic, for backward compatibility).
     #[error("metadata discovery failed: {message}")]
     MetadataDiscovery { message: Cow<'static, str> },
 
@@ -135,20 +127,6 @@ impl ClientError {
         }
     }
 
-    /// Creates an issuer metadata discovery error.
-    pub fn issuer_metadata(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::IssuerMetadataDiscovery {
-            message: message.into(),
-        }
-    }
-
-    /// Creates an authorization server metadata discovery error.
-    pub fn as_metadata(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::AsMetadataDiscovery {
-            message: message.into(),
-        }
-    }
-
     /// Creates an internal error.
     pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
         Self::Internal {
@@ -163,12 +141,12 @@ impl From<Error> for ClientError {
             ErrorKind::InvalidCredentialOffer => {
                 ClientError::validation(format!("invalid credential offer: {err}"))
             }
-            ErrorKind::InvalidIssuerMetadata => ClientError::IssuerMetadataDiscovery {
-                message: format!("invalid issuer metadata: {err}").into(),
-            },
-            ErrorKind::InvalidAuthorizationServerMetadata => ClientError::AsMetadataDiscovery {
-                message: format!("invalid AS metadata: {err}").into(),
-            },
+            ErrorKind::InvalidIssuerMetadata => {
+                ClientError::metadata(format!("invalid issuer metadata: {err}"))
+            }
+            ErrorKind::InvalidAuthorizationServerMetadata => {
+                ClientError::metadata(format!("invalid AS metadata: {err}"))
+            }
             ErrorKind::InvalidAuthorizationResponse => {
                 ClientError::validation(format!("invalid authorization response: {err}"))
             }
@@ -178,27 +156,9 @@ impl From<Error> for ClientError {
             ErrorKind::InvalidTokenResponse => ClientError::InvalidResponse {
                 message: format!("invalid token response: {err}").into(),
             },
-            ErrorKind::CredentialOfferFetchFailed => ClientError::Http {
-                message: Some(format!("failed to fetch credential offer: {err}").into()),
-                status: None,
-                body: None,
-                source: None,
-            },
-            ErrorKind::HttpRequestFailed => ClientError::Http {
-                message: Some(format!("http request failed: {err}").into()),
-                status: None,
-                body: None,
-                source: None,
-            },
-            ErrorKind::HttpErrorResponse => ClientError::Http {
-                message: Some(format!("http error response: {err}").into()),
-                status: None,
-                body: None,
-                source: None,
-            },
-            ErrorKind::HttpResponseParsingFailed => ClientError::InvalidResponse {
-                message: format!("http response parsing failed: {err}").into(),
-            },
+            ErrorKind::InvalidCredentialRequest => {
+                ClientError::validation(format!("invalid credential request: {err}"))
+            }
             _ => ClientError::internal(format!("{err}")),
         }
     }

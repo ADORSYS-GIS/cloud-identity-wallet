@@ -218,14 +218,7 @@ impl CredentialOffer {
     /// - If `grants` is absent or empty, the wallet must determine grant types from issuer metadata
     /// - When multiple grants are present, it's at the wallet's discretion which one to use
     pub fn validate(&self) -> Result<(), Error> {
-        let scheme = self.credential_issuer.scheme();
-        let is_localhost = self
-            .credential_issuer
-            .host_str()
-            .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
-            .unwrap_or(false);
-
-        if scheme != "https" && !is_localhost {
+        if self.credential_issuer.scheme() != "https" {
             return Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
                 "credential_issuer must use the https scheme",
@@ -473,13 +466,7 @@ pub async fn resolve_by_reference(
     // Validate URI scheme
     let parsed = Url::parse(uri).map_err(|e| Error::new(ErrorKind::InvalidCredentialOffer, e))?;
 
-    // Allow HTTP for localhost addresses (for testing with mock servers)
-    let is_localhost = parsed
-        .host_str()
-        .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
-        .unwrap_or(false);
-
-    if parsed.scheme() != "https" && !is_localhost {
+    if parsed.scheme() != "https" {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOffer,
             format!(
@@ -494,7 +481,6 @@ pub async fn resolve_by_reference(
     // We re-validate the final URL after the request to detect redirect attacks.
     let mut response = http_client
         .get(uri)
-        .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
         .map_err(|e| Error::new(ErrorKind::CredentialOfferFetchFailed, e))?;
@@ -502,29 +488,15 @@ pub async fn resolve_by_reference(
     // Re-validate the final URL to detect redirect attacks.
     // If the caller passed a redirect-following client, a 30x could bounce
     // this request to a different host. We check that the final URL still
-    // uses the same scheme (HTTPS or HTTP for localhost) and matches the
-    // originally validated host.
+    // uses HTTPS and matches the originally validated host.
     let final_url = response.url().clone();
-    let final_is_localhost = final_url
-        .host_str()
-        .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
-        .unwrap_or(false);
-
-    // For HTTPS URLs, redirect must stay HTTPS
-    // For HTTP localhost URLs, redirect must stay HTTP and localhost
-    if parsed.scheme() == "https" && final_url.scheme() != "https" {
+    if final_url.scheme() != "https" {
         return Err(Error::message(
             ErrorKind::InvalidCredentialOffer,
             format!(
                 "redirect changed scheme from https to '{}'",
                 final_url.scheme()
             ),
-        ));
-    }
-    if is_localhost && !final_is_localhost {
-        return Err(Error::message(
-            ErrorKind::InvalidCredentialOffer,
-            "redirect from localhost to non-localhost address is not allowed",
         ));
     }
     if final_url.host() != parsed.host() {

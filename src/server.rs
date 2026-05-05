@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::issuance::start_issuance;
-use crate::server::handlers::{health_check, home, register_tenant};
+use crate::server::auth::auth;
+use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
 use crate::session::SessionStore;
 
 use axum::http::Method;
@@ -16,6 +16,7 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use axum::middleware;
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
 use tower_http::{
@@ -99,7 +100,11 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
+    let protected_routes = Router::new()
+        .route("/issuance/start", post(start_issuance))
+        .route_layer(middleware::from_fn(auth));
+
     Router::new()
         .route("/tenants", post(register_tenant))
-        .route("/issuance/start", post(start_issuance))
+        .merge(protected_routes)
 }

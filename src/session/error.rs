@@ -15,32 +15,3 @@ pub enum Error {
     #[error("{0}")]
     Other(color_eyre::eyre::Report),
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_state_transition_error_message() {
-        let error = Error::InvalidStateTransition("AwaitingConsent".into(), "Completed".into());
-        assert_eq!(
-            format!("{}", error),
-            "Invalid state transition from AwaitingConsent to Completed"
-        );
-    }
-
-    #[test]
-    fn test_store_error_wraps_source() {
-        let source =
-            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
-        let error = Error::Store(Box::new(source));
-        assert!(format!("{}", error).contains("Failure in storage backend"));
-    }
-
-    #[test]
-    fn test_other_error_wraps_report() {
-        let report = color_eyre::eyre::eyre!("something went wrong");
-        let error = Error::Other(report);
-        assert_eq!(format!("{}", error), "something went wrong");
-    }
-}
