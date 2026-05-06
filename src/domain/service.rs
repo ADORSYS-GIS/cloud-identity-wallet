@@ -34,7 +34,10 @@ impl<S> std::fmt::Debug for Service<S> {
             .field("session", &std::any::type_name::<S>())
             .field("tenant_repo", &std::any::type_name::<dyn TenantRepo>())
             .field("issuance_engine", &self.issuance_engine)
-            .field("event_subscriber", &std::any::type_name::<dyn IssuanceEventSubscriber>())
+            .field(
+                "event_subscriber",
+                &std::any::type_name::<dyn IssuanceEventSubscriber>(),
+            )
             .finish()
     }
 }
