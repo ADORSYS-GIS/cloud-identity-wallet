@@ -41,6 +41,15 @@ impl ApiError {
             error_description: Some("The server encountered an unexpected error.".into()),
         }
     }
+
+    /// Returns a 404 error for session not found.
+    pub fn session_not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            error: Cow::Borrowed("session_not_found"),
+            error_description: Some("Session not found or has expired.".into()),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
