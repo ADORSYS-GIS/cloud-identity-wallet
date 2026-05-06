@@ -159,6 +159,18 @@ impl From<Error> for ClientError {
             ErrorKind::InvalidCredentialRequest => {
                 ClientError::validation(format!("invalid credential request: {err}"))
             }
+            ErrorKind::CredentialOfferFetchFailed => ClientError::Http {
+                message: Some("failed to fetch credential offer".into()),
+                status: None,
+                body: None,
+                source: None,
+            },
+            ErrorKind::HttpRequestFailed => ClientError::Http {
+                message: Some("HTTP request failed".into()),
+                status: None,
+                body: None,
+                source: None,
+            },
             _ => ClientError::internal(format!("{err}")),
         }
     }

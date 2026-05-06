@@ -870,7 +870,6 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "parking_lot",
- "percent-encoding",
  "rand 0.10.1",
  "redis",
  "reqwest",
@@ -889,7 +888,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "wiremock",
 ]
 
 [[package]]
