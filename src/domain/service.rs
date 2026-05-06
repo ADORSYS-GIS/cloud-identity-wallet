@@ -13,21 +13,17 @@ pub struct Service<S> {
 }
 
 impl<S: SessionStore + Clone> Service<S> {
-    pub fn new<R, E>(
+    pub fn new<R: TenantRepo>(
         session: S,
         tenant_repo: R,
         issuance_engine: IssuanceEngine,
-        event_subscriber: E,
-    ) -> Self
-    where
-        R: TenantRepo,
-        E: IssuanceEventSubscriber,
-    {
+        event_subscriber: Arc<dyn IssuanceEventSubscriber>,
+    ) -> Self {
         Self {
             session,
             tenant_repo: Arc::new(tenant_repo),
             issuance_engine,
-            event_subscriber: Arc::new(event_subscriber),
+            event_subscriber,
         }
     }
 }
@@ -38,10 +34,7 @@ impl<S> std::fmt::Debug for Service<S> {
             .field("session", &std::any::type_name::<S>())
             .field("tenant_repo", &std::any::type_name::<dyn TenantRepo>())
             .field("issuance_engine", &self.issuance_engine)
-            .field(
-                "event_subscriber",
-                &std::any::type_name::<dyn IssuanceEventSubscriber>(),
-            )
+            .field("event_subscriber", &std::any::type_name::<dyn IssuanceEventSubscriber>())
             .finish()
     }
 }
