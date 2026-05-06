@@ -103,7 +103,10 @@ impl Config {
             .set_default("redis.uri", "redis://127.0.0.1:6379?protocol=resp3")?
             .set_default("database.url", "sqlite::memory:")?
             .set_default("oid4vci.client_id", "cloud-identity-wallet")?
-            .set_default("oid4vci.redirect_uri", "http://localhost:3000/callback")?
+            .set_default(
+                "oid4vci.redirect_uri",
+                "http://localhost:3000/api/v1/issuance/callback",
+            )?
             .set_default("oid4vci.use_system_proxy", true)
     }
 }

@@ -3,19 +3,18 @@ mod error;
 mod handlers;
 mod responses;
 
-use handlers::submit_consent;
-
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
+use crate::server::handlers::{
+    authorization_callback, health_check, home, register_tenant, start_issuance, submit_consent,
+};
 use crate::session::SessionStore;
 
 use axum::http::Method;
-use axum::middleware;
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -108,5 +107,6 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
 
     Router::new()
         .route("/tenants", post(register_tenant))
+        .route("/issuance/callback", get(authorization_callback))
         .merge(protected_routes)
 }

@@ -40,6 +40,7 @@ use crate::issuance::error::{
 };
 use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
 use crate::issuance::notification::NotificationRequest;
+use crate::issuance::query_params::QueryParams;
 use crate::issuance::token_request::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest,
 };
@@ -112,11 +113,28 @@ pub struct AuthorizationUrlResult {
     pub pkce_verifier: String,
 }
 
+/// Parsed OAuth authorization error callback.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthorizationErrorCallback {
+    pub error: Oid4vciError<AuthzErrorResponse>,
+    pub state: Option<String>,
+}
+
 /// Parsed authorization callback outcome.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum AuthorizationCallback {
     Success(AuthorizationResponse),
-    Error(Oid4vciError<AuthzErrorResponse>),
+    Error(AuthorizationErrorCallback),
+}
+
+impl AuthorizationCallback {
+    /// Return the callback `state` value, when present.
+    pub fn state(&self) -> Option<&str> {
+        match self {
+            Self::Success(response) => response.state.as_deref(),
+            Self::Error(response) => response.state.as_deref(),
+        }
+    }
 }
 
 /// Configuration for the OID4VCI client.
@@ -475,25 +493,37 @@ impl Oid4vciClient {
         })
     }
 
+    /// Parses authorization callback query parameters into success/error result.
+    pub fn parse_authorization_callback(query: &str) -> Result<AuthorizationCallback> {
+        const RECOGNIZED: &[&str] = &["code", "state", "error", "error_description"];
+        let params = QueryParams::parse(query, RECOGNIZED)?;
+
+        if let Some(error_code) = params.get("error") {
+            let error = serde_json::from_value(serde_json::Value::String(error_code.to_owned()))
+                .map_err(|e| ClientError::InvalidResponse {
+                    message: format!("failed to parse authorization error: {e}").into(),
+                })?;
+            let error = Oid4vciError {
+                error,
+                error_description: params.get("error_description").map(ToOwned::to_owned),
+            };
+            return Ok(AuthorizationCallback::Error(AuthorizationErrorCallback {
+                error,
+                state: params.get("state").map(ToOwned::to_owned),
+            }));
+        }
+
+        let response = AuthorizationResponse::from_query(query)?;
+        Ok(AuthorizationCallback::Success(response))
+    }
+
     /// Parses authorization callback from redirect URI into success/error result.
     pub fn parse_authz_callback(&self, redirect_uri: &str) -> Result<AuthorizationCallback> {
         let url = Url::parse(redirect_uri)
             .map_err(|e| ClientError::validation(format!("invalid redirect uri: {e}")))?;
         let query = url.query().unwrap_or_default();
 
-        if url.query_pairs().any(|(k, _)| k == "error") {
-            let error =
-                serde_urlencoded::from_str(query).map_err(|e| ClientError::InvalidResponse {
-                    message: format!("failed to parse authorization error: {e}").into(),
-                })?;
-            return Ok(AuthorizationCallback::Error(error));
-        }
-
-        let response =
-            serde_urlencoded::from_str(query).map_err(|e| ClientError::InvalidResponse {
-                message: format!("failed to parse authorization response: {e}").into(),
-            })?;
-        Ok(AuthorizationCallback::Success(response))
+        Self::parse_authorization_callback(query)
     }
 
     /// Exchange an authorization code for an access token (authorization code flow).
