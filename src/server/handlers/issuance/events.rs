@@ -7,12 +7,11 @@ use std::time::Duration;
 use axum::{
     extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::{
-        IntoResponse, Response,
-        sse::{Event, KeepAlive, KeepAliveStream, Sse},
-    },
+    response::{IntoResponse, Response},
+    response::sse::{Event, KeepAlive, KeepAliveStream, Sse},
 };
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
+use futures::stream::StreamExt;
 use time::UtcDateTime;
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
@@ -25,14 +24,24 @@ use crate::server::AppState;
 use crate::server::error::ApiError;
 use crate::session::{IssuanceSession, IssuanceState, SessionStore};
 
-/// SSE response type with keepalive support.
-type SseBody = Sse<KeepAliveStream<Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>>>>;
-
-/// Keepalive interval in seconds (per spec: 15 seconds).
-const KEEPALIVE_INTERVAL_SECS: u64 = 15;
-
 /// Header to disable nginx buffering for SSE streams.
 const X_ACCEL_BUFFERING: &str = "X-Accel-Buffering";
+
+/// SSE stream type for Axum responses.
+pub type SseStream =
+    Sse<KeepAliveStream<Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>>>>;
+
+/// Converts an [`IssuanceEventStream`] into an [`Sse`] response.
+pub fn event_stream_to_sse(stream: IssuanceEventStream) -> SseStream {
+    let sse_stream = stream.map(move |event| {
+        event
+            .to_sse_event()
+            .map(|e| e.id(UtcDateTime::now().unix_timestamp_nanos().to_string()))
+    });
+    let boxed_stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> =
+        Box::pin(sse_stream);
+    Sse::new(boxed_stream).keep_alive(KeepAlive::default())
+}
 
 /// GET /api/v1/issuance/{session_id}/events
 
@@ -54,12 +63,12 @@ pub async fn get_session_events<S: SessionStore + Clone>(
     let stream = state
         .service
         .event_subscriber
-        .subscribe(&session_id)
+        .subscribe(&session.id)
         .await
         .map_err(ApiError::internal)?;
 
     debug!(session_id = %session_id, "SSE stream established");
-    Ok((build_sse_headers(), build_sse_stream(stream)).into_response())
+    Ok((build_sse_headers(), event_stream_to_sse(stream)).into_response())
 }
 
 /// Loads a session and validates tenant ownership.
@@ -109,18 +118,9 @@ fn build_sse_headers() -> HeaderMap {
     headers
 }
 
-/// Creates a keepalive configuration per spec: `: keepalive\n\n` every 15 seconds.
-fn keepalive_config() -> KeepAlive {
-    KeepAlive::new()
-        .interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS))
-        .text("keepalive")
-}
-
 /// Emits a terminal event for a session that is already in a terminal state.
 /// Used for re-hydration when a client reconnects to a completed/failed session.
-fn emit_terminal_event(session: &IssuanceSession) -> SseBody {
-    use futures::stream;
-
+fn emit_terminal_event(session: &IssuanceSession) -> SseStream {
     let event = match session.state {
         IssuanceState::Completed => {
             IssuanceEvent::Completed(SseCompletedEvent::new(&session.id, vec![], vec![]))
@@ -139,33 +139,14 @@ fn emit_terminal_event(session: &IssuanceSession) -> SseBody {
         )),
     };
 
-    let stream = stream::iter(vec![Ok(event)]);
+    let stream = futures::stream::iter(vec![Ok(event)]);
     let mapped = stream.map(|ev| ev.and_then(|e| e.to_sse_event()));
     let boxed: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> = Box::pin(mapped);
-    Sse::new(boxed).keep_alive(keepalive_config())
-}
-
-/// Builds an SSE stream from an issuance event stream.
-/// Applies keepalive comments every 15 seconds to prevent proxy timeouts.
-fn build_sse_stream(stream: IssuanceEventStream) -> SseBody {
-    let sse_stream = stream.map(|event| {
-        let is_terminal = event.is_terminal();
-        debug!(session_id = %event.session_id(), is_terminal, "Emitting SSE event");
-
-        let sse_event = event
-            .to_sse_event()
-            .map(|e| e.id(UtcDateTime::now().unix_timestamp_nanos().to_string()));
-
-        if is_terminal {
-            debug!(session_id = %event.session_id(), "Terminal event, stream closing");
-        }
-
-        sse_event
-    });
-
-    let boxed: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> =
-        Box::pin(sse_stream);
-    Sse::new(boxed).keep_alive(keepalive_config())
+    Sse::new(boxed).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    )
 }
 
 #[cfg(test)]
