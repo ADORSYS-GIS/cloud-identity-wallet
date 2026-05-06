@@ -206,7 +206,9 @@ impl CredentialFilter {
             return false;
         }
         if let Some(types) = &self.credential_types
-            && !types.iter().any(|t| credential.credential_types.contains(t))
+            && !types
+                .iter()
+                .any(|t| credential.credential_types.contains(t))
         {
             return false;
         }

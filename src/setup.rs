@@ -44,9 +44,18 @@ pub fn build_service<S: SessionStore + Clone>(
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
     let credential_repo = MemoryCredentialRepo::new();
-    let engine =
-        build_issuance_engine(config, tenant_repo.clone(), &session_store, credential_repo.clone())?;
-    Ok(Service::new(session_store, tenant_repo, engine, credential_repo))
+    let engine = build_issuance_engine(
+        config,
+        tenant_repo.clone(),
+        &session_store,
+        credential_repo.clone(),
+    )?;
+    Ok(Service::new(
+        session_store,
+        tenant_repo,
+        engine,
+        credential_repo,
+    ))
 }
 
 /// Build a fully wired [`Service`] and return the shared credential repository.
@@ -60,8 +69,12 @@ pub fn build_service_with_repo<S: SessionStore + Clone>(
     config: &Config,
 ) -> color_eyre::Result<(Service<S>, MemoryCredentialRepo)> {
     let credential_repo = MemoryCredentialRepo::new();
-    let engine =
-        build_issuance_engine(config, tenant_repo.clone(), &session_store, credential_repo.clone())?;
+    let engine = build_issuance_engine(
+        config,
+        tenant_repo.clone(),
+        &session_store,
+        credential_repo.clone(),
+    )?;
     let service = Service::new(session_store, tenant_repo, engine, credential_repo.clone());
     Ok((service, credential_repo))
 }

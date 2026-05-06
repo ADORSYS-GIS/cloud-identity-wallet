@@ -9,7 +9,7 @@ use cloud_identity_wallet::{
     setup,
 };
 use jsonwebtoken::jwk::Jwk;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use sqlx::{AnyPool, ConnectOptions};
 use time::{OffsetDateTime, UtcDateTime};
 use url::Url;

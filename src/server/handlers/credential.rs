@@ -3,7 +3,10 @@ use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
-use serde::{Deserialize, Deserializer, de::{self, SeqAccess, Visitor}};
+use serde::{
+    Deserialize, Deserializer,
+    de::{self, SeqAccess, Visitor},
+};
 use std::fmt;
 use time::format_description::well_known::Rfc3339;
 use url::Url;
@@ -34,7 +37,10 @@ where
         }
 
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            Ok(v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
+            Ok(v.split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect())
         }
 
         fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
@@ -118,7 +124,11 @@ fn to_record(c: Credential) -> Result<CredentialRecord, String> {
         issuer: c.issuer,
         status: c.status.as_str().to_string(),
         issued_at: format_utc(c.issued_at).map_err(|e| e.to_string())?,
-        expires_at: c.valid_until.map(format_utc).transpose().map_err(|e| e.to_string())?,
+        expires_at: c
+            .valid_until
+            .map(format_utc)
+            .transpose()
+            .map_err(|e| e.to_string())?,
         claims: serde_json::Value::Null,
     })
 }
