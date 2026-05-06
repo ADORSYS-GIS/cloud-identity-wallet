@@ -133,3 +133,7 @@ opt-level = 3
 [profile.release]
 strip = "symbols"
 lto = "fat"
+# Abort on panic
+panic = "abort"
+# Maximize runtime speed
+codegen-units = 1

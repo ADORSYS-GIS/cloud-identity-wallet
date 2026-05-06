@@ -32,7 +32,7 @@ pub(crate) struct AppState<S: SessionStore> {
 }
 
 // We manually implement Clone here to avoid bounds on generic types
-impl<S: SessionStore + Clone> Clone for AppState<S> {
+impl<S: SessionStore> Clone for AppState<S> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
