@@ -4,13 +4,17 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, Oid4vciClient, ResolvedOfferContext};
+use tracing::debug;
 use uuid::Uuid;
 
-use crate::domain::models::issuance::StartIssuanceRequest;
-use crate::domain::models::issuance::start_issuance_session;
+use crate::domain::models::issuance::{
+    FlowType, IssuanceError, IssuanceErrorCode, IssuanceStep, StartIssuanceRequest,
+    StartIssuanceResponse,
+};
 use crate::server::error::ApiError;
 use crate::server::{AppState, responses::ResponseBody};
-use crate::session::SessionStore;
+use crate::session::{IssuanceSession, SessionStore};
 
 pub async fn start_issuance<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
@@ -26,4 +30,42 @@ pub async fn start_issuance<S: SessionStore + Clone>(
     .await?;
 
     Ok(ResponseBody::new(StatusCode::CREATED, response))
+}
+
+async fn start_issuance_session<S: SessionStore>(
+    client: &Oid4vciClient,
+    session_store: &S,
+    offer: &str,
+    tenant_id: Uuid,
+) -> Result<(ResolvedOfferContext, IssuanceSession, StartIssuanceResponse), IssuanceError> {
+    if offer.is_empty() {
+        return Err(IssuanceError::new(
+            IssuanceErrorCode::InvalidCredentialOffer,
+            Some("The credential offer must not be empty.".to_string()),
+            IssuanceStep::OfferResolution,
+        ));
+    }
+
+    debug!(offer = %offer, "resolving credential offer");
+
+    let context = client
+        .resolve_offer_with_metadata(offer, None)
+        .await
+        .map_err(Into::<IssuanceError>::into)?;
+
+    let flow_type = match &context.flow {
+        IssuanceFlow::AuthorizationCode { .. } => FlowType::AuthorizationCode,
+        IssuanceFlow::PreAuthorizedCode { .. } => FlowType::PreAuthorizedCode,
+    };
+
+    let session = IssuanceSession::new(tenant_id, context.clone(), flow_type);
+
+    session_store
+        .upsert(session.id.clone(), &session)
+        .await
+        .map_err(Into::<IssuanceError>::into)?;
+
+    let response = StartIssuanceResponse::from_context(&context, &session)?;
+
+    Ok((context, session, response))
 }

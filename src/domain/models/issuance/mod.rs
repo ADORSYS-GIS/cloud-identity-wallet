@@ -12,9 +12,7 @@ pub use task::{IssuanceTask, TaskResult};
 
 use std::{sync::Arc, time::Duration};
 
-use cloud_wallet_openid4vc::issuance::client::{
-    CryptoSigner, IssuanceFlow, Oid4vciClient, ResolvedOfferContext,
-};
+use cloud_wallet_openid4vc::issuance::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
 use cloud_wallet_openid4vc::issuance::credential_response::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
@@ -634,48 +632,6 @@ pub async fn transition_session<S: SessionStore>(
     transition(&mut session, new_state)?;
     session_store.upsert(session_id, &session).await?;
     Ok(())
-}
-
-/// Start an issuance session by resolving a credential offer.
-///
-/// This function resolves a credential offer, fetches issuer and authorization server
-/// metadata, creates an issuance session, and returns the response with session details.
-pub async fn start_issuance_session<S: SessionStore>(
-    client: &Oid4vciClient,
-    session_store: &S,
-    offer: &str,
-    tenant_id: Uuid,
-) -> Result<(ResolvedOfferContext, IssuanceSession, StartIssuanceResponse)> {
-    if offer.is_empty() {
-        return Err(IssuanceError::new(
-            IssuanceErrorCode::InvalidCredentialOffer,
-            Some("The credential offer must not be empty.".to_string()),
-            events::IssuanceStep::OfferResolution,
-        ));
-    }
-
-    tracing::debug!(offer = %offer, "resolving credential offer");
-
-    let context = client
-        .resolve_offer_with_metadata(offer, None)
-        .await
-        .map_err(Into::<IssuanceError>::into)?;
-
-    let flow_type = match &context.flow {
-        IssuanceFlow::AuthorizationCode { .. } => FlowType::AuthorizationCode,
-        IssuanceFlow::PreAuthorizedCode { .. } => FlowType::PreAuthorizedCode,
-    };
-
-    let session = IssuanceSession::new(tenant_id, context.clone(), flow_type);
-
-    session_store
-        .upsert(session.id.clone(), &session)
-        .await
-        .map_err(Into::<IssuanceError>::into)?;
-
-    let response = StartIssuanceResponse::from_context(&context, &session)?;
-
-    Ok((context, session, response))
 }
 
 fn default_worker_count() -> usize {

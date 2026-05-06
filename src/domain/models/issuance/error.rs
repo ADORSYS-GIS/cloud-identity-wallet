@@ -242,9 +242,9 @@ impl From<ClientError> for IssuanceError {
                     .or_else(|| status.map(|s| format!("HTTP {s}")))
                     .unwrap_or_else(|| "external HTTP request failed".into());
                 let mut error = Self::new(
-                    IssuanceErrorCode::InternalError,
+                    IssuanceErrorCode::IssuerMetadataFetchFailed,
                     Some(description),
-                    IssuanceStep::Internal,
+                    IssuanceStep::Metadata,
                 );
                 error.source = source;
                 error
