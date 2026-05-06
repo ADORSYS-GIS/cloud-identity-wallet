@@ -6,6 +6,7 @@ use axum::{
 use serde::{Deserialize, Deserializer, de::{self, SeqAccess, Visitor}};
 use std::fmt;
 use time::format_description::well_known::Rfc3339;
+use url::Url;
 use uuid::Uuid;
 
 use crate::domain::models::credential::{
@@ -151,6 +152,15 @@ pub async fn list_credentials<S: SessionStore>(
         })
         .transpose()?;
 
+    let issuer = params
+        .issuer
+        .as_deref()
+        .map(|u| {
+            Url::parse(u).map_err(|_| bad_request(format!("invalid issuer URI: '{u}'")))?;
+            Ok::<_, (StatusCode, Json<CredentialErrorResponse>)>(u.to_owned())
+        })
+        .transpose()?;
+
     let filter = CredentialFilter {
         tenant_id: Some(tenant_id),
         credential_types: if params.credential_types.is_empty() {
@@ -160,7 +170,7 @@ pub async fn list_credentials<S: SessionStore>(
         },
         status,
         format,
-        issuer: params.issuer,
+        issuer,
         ..CredentialFilter::default()
     };
 
