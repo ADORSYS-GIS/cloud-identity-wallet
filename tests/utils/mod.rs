@@ -6,7 +6,6 @@ use cloud_identity_wallet::{
     outbound::MemoryTenantRepo,
     server::Server,
     session::MemorySession,
-    setup,
 };
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
@@ -24,8 +23,7 @@ pub async fn spawn_server() -> String {
 
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
-    let engine = setup::build_issuance_engine(&config, tenant_repo, &session_store).unwrap();
-    let server = Server::new(&config, engine).await.unwrap();
+    let server = Server::new(&config).await.unwrap();
 
     let port = server.port();
     tokio::spawn(server.run());

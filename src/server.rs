@@ -7,7 +7,6 @@ pub mod sse;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
 use crate::server::handlers::{cancel_session, health_check, home, register_tenant};
 use crate::server::sse::SseBroadcaster;
@@ -29,7 +28,6 @@ pub(crate) struct AppState<S: SessionStore + Clone> {
     pub issuance_store: Arc<S>,
     pub tenant_repo: Arc<dyn TenantRepo>,
     pub broadcaster: SseBroadcaster,
-    pub issuance_engine: IssuanceEngine,
 }
 
 pub struct Server {
@@ -39,12 +37,12 @@ pub struct Server {
 
 impl Server {
     /// Creates a new HTTPS server with default in-memory stores.
-    pub async fn new(config: &Config, engine: IssuanceEngine) -> Result<Self> {
+    pub async fn new(config: &Config) -> Result<Self> {
         let session_store = MemorySession::default();
         let tenant_repo = Arc::new(crate::outbound::MemoryTenantRepo::new());
         let broadcaster = SseBroadcaster::new();
 
-        Self::with_stores(config, session_store, tenant_repo, broadcaster, engine).await
+        Self::with_stores(config, session_store, tenant_repo, broadcaster).await
     }
 
     /// Creates a new HTTPS server with the provided stores.
@@ -53,7 +51,6 @@ impl Server {
         session_store: S,
         tenant_repo: Arc<dyn TenantRepo>,
         broadcaster: SseBroadcaster,
-        issuance_engine: IssuanceEngine,
     ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
@@ -77,7 +74,6 @@ impl Server {
             issuance_store: Arc::new(session_store),
             tenant_repo,
             broadcaster,
-            issuance_engine,
         };
 
         let issuance_router =

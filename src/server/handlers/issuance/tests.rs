@@ -5,9 +5,7 @@ use axum::{
     routing::post,
 };
 use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
-use cloud_wallet_openid4vc::issuance::client::{
-    Config as Oid4vciClientConfig, IssuanceFlow, Oid4vciClient, ResolvedOfferContext,
-};
+use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
 use cloud_wallet_openid4vc::issuance::credential_offer::{
     CredentialOffer, Grants, InputMode, PreAuthorizedCodeGrant, TxCode as Oid4vciTxCode,
 };
@@ -19,10 +17,7 @@ use tower::ServiceExt;
 use url::Url;
 
 use crate::domain::models::issuance::FlowType;
-use crate::domain::models::issuance::IssuanceEngine;
-use crate::outbound::{
-    MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo,
-};
+use crate::outbound::MemoryTenantRepo;
 use crate::server::AppState;
 use crate::server::handlers::issuance::{ErrorResponse, cancel_session};
 use crate::server::sse::SseBroadcaster;
@@ -97,29 +92,10 @@ async fn create_test_state() -> (AppState<MemorySession>, String) {
         .await
         .unwrap();
 
-    let client_config = Oid4vciClientConfig::new(
-        "test-client",
-        Url::parse("https://wallet.example.com/callback").unwrap(),
-    );
-    let client = Oid4vciClient::new(client_config).unwrap();
-    let task_queue = MemoryTaskQueue::new();
-    let event_publisher = MemoryEventPublisher::new(16);
-    let credential_repo = MemoryCredentialRepo::new();
-
-    let issuance_engine = IssuanceEngine::new(
-        client,
-        task_queue,
-        event_publisher,
-        credential_repo,
-        tenant_repo.clone(),
-        &session_store,
-    );
-
     let state = AppState {
         issuance_store: Arc::new(session_store.clone()),
         tenant_repo: Arc::new(tenant_repo),
         broadcaster,
-        issuance_engine,
     };
 
     (state, session_id)
