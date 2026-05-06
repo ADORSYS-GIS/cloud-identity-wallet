@@ -56,7 +56,7 @@ pub async fn get_session_events<S: SessionStore + Clone>(
         .event_subscriber
         .subscribe(&session_id)
         .await
-        .map_err(|e| ApiError::internal(e))?;
+        .map_err(ApiError::internal)?;
 
     debug!(session_id = %session_id, "SSE stream established");
     Ok((build_sse_headers(), build_sse_stream(stream)).into_response())
@@ -71,7 +71,7 @@ async fn load_session<S: SessionStore>(
     let session: Option<IssuanceSession> = session_store
         .get(session_id)
         .await
-        .map_err(|e| ApiError::internal(e))?;
+        .map_err(ApiError::internal)?;
     let Some(session) = session else {
         return Err(session_not_found());
     };
