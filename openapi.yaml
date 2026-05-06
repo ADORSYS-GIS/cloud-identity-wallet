@@ -614,17 +614,15 @@ paths:
           in: query
           description: |
             Filter by one or more credential configuration IDs
-            (e.g. `eu.europa.ec.eudi.pid.1`). Repeat the parameter or pass a
-            comma-separated list to filter by multiple types.
+            (e.g. `eu.europa.ec.eudi.pid.1`). Pass a single value or a
+            comma-separated list to filter by multiple types:
+            `?credential_types=eu.europa.ec.eudi.pid.1,org.iso.18013.5.1.mDL`.
           required: false
           schema:
-            type: array
-            items:
-              type: string
+            type: string
           style: form
-          explode: true
-          example:
-            - eu.europa.ec.eudi.pid.1
+          explode: false
+          example: eu.europa.ec.eudi.pid.1,org.iso.18013.5.1.mDL
         - name: status
           in: query
           description: Filter by credential status.
@@ -1358,7 +1356,6 @@ components:
         - issuer
         - status
         - issued_at
-        - claims
       properties:
         id:
           type: string
@@ -1408,11 +1405,14 @@ components:
             - type: 'null'
           example: "2027-04-08T14:35:00Z"
         claims:
-          type: object
           description: |
             Decoded credential claims. The structure is credential-type
-            specific. Additional properties are permitted.
-          additionalProperties: true
+            specific. Additional properties are permitted. `null` when
+            format-specific claim decoding has not yet been performed.
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: 'null'
           example:
             given_name: Jane
             family_name: Doe
