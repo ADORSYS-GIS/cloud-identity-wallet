@@ -3,17 +3,17 @@ mod error;
 mod handlers;
 mod responses;
 
-use axum::middleware;
 use handlers::submit_consent;
 
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant};
+use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
 use crate::session::SessionStore;
 
 use axum::http::Method;
+use axum::middleware;
 use axum::{
     Router,
     routing::{get, post},
@@ -102,6 +102,7 @@ impl Server {
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
+        .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route_layer(middleware::from_fn(auth::auth));
 
