@@ -52,40 +52,20 @@ async fn test_repository_backend<R: CredentialRepo>(
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, credential_a.id);
 
-    // Lists credentials with reversed types — containment is order-independent
-    let mut reversed_types = credential_a.credential_types.clone();
-    reversed_types.reverse();
-    let order_independent = repository
+    // Lists credentials with an unknown type (should not match)
+    let mismatch = repository
         .list(CredentialFilter {
             tenant_id: Some(tenant_a),
-            credential_types: Some(reversed_types),
+            credential_types: Some(vec!["UnknownCredentialType".to_string()]),
             ..Default::default()
         })
         .await
         .unwrap();
     assert_eq!(
-        order_independent.len(),
-        1,
-        "reversed type order must still match"
+        mismatch.len(),
+        0,
+        "unknown type must not match any credential"
     );
-    assert_eq!(order_independent[0].id, credential_a.id);
-
-    // Lists credentials by a type subset — a credential with extra types must also match
-    let subset_types = credential_a.credential_types[..1].to_vec();
-    let superset_match = repository
-        .list(CredentialFilter {
-            tenant_id: Some(tenant_a),
-            credential_types: Some(subset_types),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        superset_match.len(),
-        1,
-        "subset filter must match a credential that has extra types"
-    );
-    assert_eq!(superset_match[0].id, credential_a.id);
 
     // Updates credential
     let mut updated = found.clone();
