@@ -1,7 +1,5 @@
 use cloud_identity_wallet::{
-    domain::models::
-        issuance::FlowType
-    ,
+    domain::models::issuance::FlowType,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
