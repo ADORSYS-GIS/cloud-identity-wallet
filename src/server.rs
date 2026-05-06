@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
-    health_check, home, register_tenant, submit_consent, submit_transaction_code,
+    health_check, home, register_tenant, start_issuance, submit_consent, submit_transaction_code,
 };
 use crate::session::SessionStore;
 
@@ -105,6 +105,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
             "/issuance/{session_id}/tx-code",
             post(submit_transaction_code),
         )
+        .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route_layer(middleware::from_fn(auth::auth));
 
