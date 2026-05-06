@@ -1,7 +1,12 @@
 #![allow(dead_code)]
 
 use cloud_identity_wallet::{
-    config::Config, outbound::MemoryTenantRepo, server::Server, session::MemorySession, setup,
+    config::Config,
+    domain::models::credential::{Credential, CredentialFormat, CredentialStatus},
+    outbound::MemoryTenantRepo,
+    server::Server,
+    session::MemorySession,
+    setup,
 };
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
@@ -27,13 +32,7 @@ pub async fn spawn_server() -> String {
     format!("http://{}:{}", config.server.host, port)
 }
 
-pub fn sample_credential(
-    tenant_id: Uuid,
-) -> cloud_identity_wallet::domain::models::credential::Credential {
-    use cloud_identity_wallet::domain::models::credential::{
-        Credential, CredentialFormat, CredentialStatus,
-    };
-
+pub fn sample_credential(tenant_id: Uuid) -> Credential {
     Credential {
         id: Uuid::new_v4(),
         tenant_id,
