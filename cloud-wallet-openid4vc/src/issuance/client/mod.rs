@@ -120,6 +120,20 @@ pub enum AuthorizationCallback {
 }
 
 /// Configuration for the OID4VCI client.
+///
+/// # Security Note (SSRF Protection)
+///
+/// The client enforces HTTPS-only for all outbound requests by default. This is a critical
+/// protection against Server-Side Request Forgery (SSRF) attacks where a malicious user could
+/// trick the wallet into making requests to internal network resources.
+///
+/// The HTTPS enforcement (`https_only`) is **hardcoded to `true`** in the client builder and
+/// cannot be disabled via configuration files or environment variables. The only way to bypass
+/// this is via `accept_untrusted_hosts(true)`, which is intended **exclusively for testing**
+/// with mock HTTP servers (e.g., wiremock). Never enable `accept_untrusted_hosts` in production.
+///
+/// When integrating this client, ensure that the `accept_untrusted_hosts` option is never
+/// exposed as an environment variable override in the application's config system.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The wallet's OAuth 2.0 `client_id` as registered at the issuer AS.
@@ -131,6 +145,9 @@ pub struct Config {
     /// Optional user-agent value to send with every request.
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
+    ///
+    /// **WARNING**: This bypasses TLS certificate validation and HTTPS enforcement.
+    /// Only use in test environments with mock servers. Never enable in production.
     pub accept_untrusted_hosts: bool,
     /// Use system proxy configuration discovered by the HTTP client.
     pub use_system_proxy: bool,
