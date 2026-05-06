@@ -3,7 +3,7 @@ use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, de::{self, SeqAccess, Visitor}};
 use std::fmt;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -25,7 +25,7 @@ where
 {
     struct StringOrSeq;
 
-    impl<'de> de::Visitor<'de> for StringOrSeq {
+    impl<'de> Visitor<'de> for StringOrSeq {
         type Value = Vec<String>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -36,7 +36,11 @@ where
             Ok(v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
         }
 
-        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(vec![v])
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
             let mut out = Vec::new();
             while let Some(s) = seq.next_element::<String>()? {
                 out.push(s);
@@ -51,8 +55,8 @@ where
 /// Query parameters accepted by `GET /api/v1/credentials`.
 #[derive(Debug, Deserialize)]
 pub struct CredentialListQuery {
-    /// Filter by credential configuration IDs. Comma-separated, e.g.
-    /// `?credential_types=A,B`.
+    /// Filter by credential configuration IDs. Pass a single value or a
+    /// comma-separated list: `?credential_types=A` or `?credential_types=A,B`.
     #[serde(default, deserialize_with = "deserialize_string_or_seq")]
     pub credential_types: Vec<String>,
     /// Filter by lifecycle status (`active`, `revoked`, `expired`, `suspended`).
@@ -100,15 +104,20 @@ fn format_utc(dt: time::UtcDateTime) -> Result<String, time::error::Format> {
 }
 
 /// Map a domain `Credential` to its HTTP response shape.
-fn to_record(c: Credential) -> Result<CredentialRecord, time::error::Format> {
+fn to_record(c: Credential) -> Result<CredentialRecord, String> {
+    let credential_configuration_id = c
+        .credential_types
+        .into_iter()
+        .next()
+        .ok_or_else(|| "credential has no credential_types".to_string())?;
     Ok(CredentialRecord {
         id: c.id,
-        credential_configuration_id: c.credential_types.into_iter().next().unwrap_or_default(),
+        credential_configuration_id,
         format: c.format.as_str().to_string(),
         issuer: c.issuer,
         status: c.status.as_str().to_string(),
-        issued_at: format_utc(c.issued_at)?,
-        expires_at: c.valid_until.map(format_utc).transpose()?,
+        issued_at: format_utc(c.issued_at).map_err(|e| e.to_string())?,
+        expires_at: c.valid_until.map(format_utc).transpose().map_err(|e| e.to_string())?,
         claims: serde_json::Value::Null,
     })
 }

@@ -298,9 +298,6 @@ impl CredentialRepo for SqlCredentialRepo {
         if let Some(ref tenant_id) = filter.tenant_id {
             builder.and("tenant_id", tenant_id.to_string());
         }
-        if let Some(ref types) = filter.credential_types {
-            builder.and_types_contain(types)?;
-        }
         if let Some(ref status) = filter.status {
             builder.and("status", status.as_str().to_owned());
         }
@@ -333,7 +330,12 @@ impl CredentialRepo for SqlCredentialRepo {
             let (id, tenant_id) = row.parse_ids()?;
             self.maybe_decrypt(&id, &mut row.raw_credential, row.payload_encrypted != 0)
                 .await?;
-            out.push(row.into_credential_with_ids(id, tenant_id)?);
+            let credential = row.into_credential_with_ids(id, tenant_id)?;
+            // credential_types uses containment semantics: check in Rust rather
+            // than SQL because the stored JSON array must not be exact-matched.
+            if filter.matches(&credential) {
+                out.push(credential);
+            }
         }
         Ok(out)
     }

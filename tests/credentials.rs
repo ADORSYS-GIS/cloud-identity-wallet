@@ -309,3 +309,163 @@ async fn get_credential_requires_authentication() {
     // Assert
     assert_eq!(response.status(), 401);
 }
+
+#[tokio::test]
+async fn list_credentials_filters_by_issuer() {
+    // Arrange
+    let (base_url, repo) = utils::spawn_server_with_repo().await;
+    let tenant_id = Uuid::new_v4();
+    let token = utils::create_bearer_token(&tenant_id);
+
+    let mut other_issuer = make_credential(tenant_id);
+    other_issuer.issuer = "https://other-issuer.example.com".to_string();
+    repo.upsert(other_issuer).await.unwrap();
+    repo.upsert(make_credential(tenant_id)).await.unwrap(); // issuer.example.com
+
+    // Act: filter for the known issuer only
+    let response = Client::new()
+        .get(format!(
+            "{base_url}/api/v1/credentials?issuer=https://issuer.example.com"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+
+    // Assert: only the credential from the requested issuer is returned
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let list = body["credentials"].as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["issuer"], "https://issuer.example.com");
+}
+
+#[tokio::test]
+async fn list_credentials_credential_type_filter_uses_contains_semantics() {
+    // Arrange: credential has two types; filter by just one of them
+    let (base_url, repo) = utils::spawn_server_with_repo().await;
+    let tenant_id = Uuid::new_v4();
+    let token = utils::create_bearer_token(&tenant_id);
+
+    let mut multi_type = make_credential(tenant_id);
+    multi_type.credential_types = vec![
+        "eu.europa.ec.eudi.pid.1".to_string(),
+        "urn:example:secondary-type".to_string(),
+    ];
+    let id = multi_type.id;
+    repo.upsert(multi_type).await.unwrap();
+
+    // Act: filter by only the first type
+    let response = Client::new()
+        .get(format!(
+            "{base_url}/api/v1/credentials?credential_types=eu.europa.ec.eudi.pid.1"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+
+    // Assert: the credential is returned even though it has additional types
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let list = body["credentials"].as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], id.to_string());
+}
+
+#[tokio::test]
+async fn list_credentials_filters_by_multiple_credential_types() {
+    // Arrange: three credentials each with a distinct type
+    let (base_url, repo) = utils::spawn_server_with_repo().await;
+    let tenant_id = Uuid::new_v4();
+    let token = utils::create_bearer_token(&tenant_id);
+
+    let mut cred_a = make_credential(tenant_id);
+    cred_a.credential_types = vec!["type.a".to_string()];
+    let mut cred_b = make_credential(tenant_id);
+    cred_b.credential_types = vec!["type.b".to_string()];
+    let mut cred_c = make_credential(tenant_id);
+    cred_c.credential_types = vec!["type.c".to_string()];
+    repo.upsert(cred_a).await.unwrap();
+    repo.upsert(cred_b).await.unwrap();
+    repo.upsert(cred_c).await.unwrap();
+
+    // Act: filter for type.a OR type.b using comma-separated list
+    let response = Client::new()
+        .get(format!(
+            "{base_url}/api/v1/credentials?credential_types=type.a,type.b"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+
+    // Assert: only type.a and type.b credentials are returned, not type.c
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let list = body["credentials"].as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    let returned_types: Vec<&str> = list
+        .iter()
+        .map(|c| c["credential_configuration_id"].as_str().unwrap())
+        .collect();
+    assert!(returned_types.contains(&"type.a"));
+    assert!(returned_types.contains(&"type.b"));
+}
+
+#[tokio::test]
+async fn list_credentials_returns_expires_at_when_credential_has_expiry() {
+    // Arrange: credential with a valid_until set
+    let (base_url, repo) = utils::spawn_server_with_repo().await;
+    let tenant_id = Uuid::new_v4();
+    let token = utils::create_bearer_token(&tenant_id);
+
+    let mut expiring = make_credential(tenant_id);
+    expiring.valid_until = Some(time::UtcDateTime::now());
+    let id = expiring.id;
+    repo.upsert(expiring).await.unwrap();
+
+    // Act
+    let response = Client::new()
+        .get(format!("{base_url}/api/v1/credentials/{id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+
+    // Assert: expires_at is present and is a non-null string
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(
+        body["expires_at"].is_string(),
+        "expected expires_at to be a date-time string, got: {}",
+        body["expires_at"]
+    );
+}
+
+#[tokio::test]
+async fn list_credentials_credential_types_filter_excludes_unrelated_types() {
+    // Arrange: credential with type.a; filter asks for type.b
+    let (base_url, repo) = utils::spawn_server_with_repo().await;
+    let tenant_id = Uuid::new_v4();
+    let token = utils::create_bearer_token(&tenant_id);
+
+    let mut cred = make_credential(tenant_id);
+    cred.credential_types = vec!["type.a".to_string()];
+    repo.upsert(cred).await.unwrap();
+
+    // Act: filter by a type the credential does not have
+    let response = Client::new()
+        .get(format!(
+            "{base_url}/api/v1/credentials?credential_types=type.b"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+
+    // Assert: no credentials returned
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["credentials"], serde_json::json!([]));
+}
