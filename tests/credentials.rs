@@ -3,6 +3,7 @@ mod utils;
 use cloud_identity_wallet::domain::models::credential::{
     Credential, CredentialFormat, CredentialStatus,
 };
+use cloud_identity_wallet::domain::ports::CredentialRepo;
 use reqwest::Client;
 use time::UtcDateTime;
 use uuid::Uuid;
@@ -468,4 +469,25 @@ async fn list_credentials_credential_types_filter_excludes_unrelated_types() {
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["credentials"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn list_credentials_returns_400_for_invalid_issuer_uri() {
+    // Arrange
+    let (base_url, _repo) = utils::spawn_server_with_repo().await;
+    let tenant_id = Uuid::new_v4();
+    let token = utils::create_bearer_token(&tenant_id);
+
+    // Act: issuer param is not a valid URI
+    let response = Client::new()
+        .get(format!("{base_url}/api/v1/credentials?issuer=not-a-uri"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+
+    // Assert: 400 Bad Request
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["error"], "invalid_request");
 }
