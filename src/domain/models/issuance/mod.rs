@@ -131,6 +131,7 @@ impl IssuanceEngine {
     }
 
     /// Create a new orchestrator and override how many background workers it starts.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_worker_count<Q, P, B, C, T, S>(
         client: Oid4vciClient,
         task_queue: Q,
