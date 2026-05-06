@@ -1,8 +1,10 @@
+mod consent;
 mod error;
 mod events;
 mod start;
 mod task;
 
+pub use consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
 use parking_lot::Mutex;
