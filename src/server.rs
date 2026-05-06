@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant};
+use crate::server::handlers::{health_check, home, register_tenant, submit_transaction_code};
 use crate::session::SessionStore;
 
 use axum::http::Method;
+use axum::middleware;
 use axum::{
     Router,
     routing::{get, post},
@@ -43,7 +44,7 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
+    /// Creates a new HTTP server.
     pub async fn new<S: SessionStore + Clone>(
         config: &Config,
         service: Service<S>,
@@ -98,5 +99,14 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    Router::new().route("/tenants", post(register_tenant))
+    let protected_routes = Router::new()
+        .route(
+            "/issuance/{session_id}/tx-code",
+            post(submit_transaction_code),
+        )
+        .route_layer(middleware::from_fn(auth::auth));
+
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .merge(protected_routes)
 }
