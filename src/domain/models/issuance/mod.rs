@@ -1,12 +1,14 @@
 mod error;
 mod events;
 mod task;
+mod tx_code;
 
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 pub use task::{IssuanceTask, TaskResult};
+pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
