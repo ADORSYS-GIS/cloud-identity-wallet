@@ -1,7 +1,10 @@
 mod auth;
-pub(crate) mod error;
+mod error;
 mod handlers;
 mod responses;
+
+use axum::middleware;
+use handlers::submit_consent;
 
 use std::sync::Arc;
 
@@ -22,8 +25,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug)]
 /// The global application state shared between all request handlers.
+#[derive(Debug)]
 pub(crate) struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
@@ -98,5 +101,11 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    Router::new().route("/tenants", post(register_tenant))
+    let protected_routes = Router::new()
+        .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route_layer(middleware::from_fn(auth::auth));
+
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .merge(protected_routes)
 }
