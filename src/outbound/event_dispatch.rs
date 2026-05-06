@@ -1,12 +1,8 @@
-use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::response::sse::{Event as SseEvent, KeepAlive, KeepAliveStream, Sse};
 use dashmap::DashMap;
-use futures::stream::Stream;
 use redis::{AsyncCommands, PushKind, aio::ConnectionManager};
-use time::UtcDateTime;
 use tokio::sync::{broadcast, mpsc::UnboundedReceiver};
 use tracing::warn;
 
@@ -268,23 +264,6 @@ impl IssuanceEventSubscriber for MemoryEventSubscriber {
         };
         Ok(Box::pin(stream))
     }
-}
-
-type SseStream =
-    Sse<KeepAliveStream<Pin<Box<dyn Stream<Item = Result<SseEvent, axum::Error>> + Send>>>>;
-
-/// Converts an [`IssuanceEventStream`] into an [`Sse`] response.
-pub fn event_stream_to_sse(stream: IssuanceEventStream) -> SseStream {
-    use futures::StreamExt;
-
-    let sse_stream = stream.map(move |event| {
-        event
-            .to_sse_event()
-            .map(|e| e.id(UtcDateTime::now().unix_timestamp_nanos().to_string()))
-    });
-    let boxed_stream: Pin<Box<dyn Stream<Item = Result<SseEvent, axum::Error>> + Send>> =
-        Box::pin(sse_stream);
-    Sse::new(boxed_stream).keep_alive(KeepAlive::default())
 }
 
 #[cfg(test)]

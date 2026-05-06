@@ -25,7 +25,10 @@ use uuid::Uuid;
 
 use crate::domain::models::credential::{Credential, CredentialFormat, CredentialStatus};
 use crate::domain::models::tenants::SignAlgorithm;
-use crate::domain::ports::{CredentialRepo, IssuanceEventPublisher, IssuanceTaskQueue, TenantRepo};
+use crate::domain::ports::{
+    CredentialRepo, IssuanceEventPublisher, IssuanceEventStream, IssuanceEventSubscriber,
+    IssuanceTaskQueue, TenantRepo,
+};
 use crate::session::{IssuanceSession, IssuanceState, SessionStore, transition};
 use tokio::{sync::Notify, task::JoinHandle};
 
@@ -51,6 +54,7 @@ pub struct IssuanceEngine {
     pub client: Arc<Oid4vciClient>,
     pub task_queue: Arc<dyn IssuanceTaskQueue>,
     pub event_publisher: Arc<dyn IssuanceEventPublisher>,
+    pub event_subscriber: Arc<dyn IssuanceEventSubscriber>,
     pub credential_repo: Arc<dyn CredentialRepo>,
     pub tenant_repo: Arc<dyn TenantRepo>,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -63,6 +67,7 @@ impl Clone for IssuanceEngine {
             client: Arc::clone(&self.client),
             task_queue: Arc::clone(&self.task_queue),
             event_publisher: Arc::clone(&self.event_publisher),
+            event_subscriber: Arc::clone(&self.event_subscriber),
             credential_repo: Arc::clone(&self.credential_repo),
             tenant_repo: Arc::clone(&self.tenant_repo),
             workers: Arc::clone(&self.workers),
@@ -83,6 +88,10 @@ impl std::fmt::Debug for IssuanceEngine {
                 "event_publisher",
                 &std::any::type_name::<dyn IssuanceEventPublisher>(),
             )
+            .field(
+                "event_subscriber",
+                &std::any::type_name::<dyn IssuanceEventSubscriber>(),
+            )
             .field("worker_count", &self.worker_count())
             .finish()
     }
@@ -92,10 +101,11 @@ impl IssuanceEngine {
     /// Create a new orchestrator with all required dependencies and default workers.
     ///
     /// The default worker count is the machine's available parallelism.
-    pub fn new<Q, P, C, T, S>(
+    pub fn new<Q, P, B, C, T, S>(
         client: Oid4vciClient,
         task_queue: Q,
         event_publisher: P,
+        event_subscriber: B,
         credential_repo: C,
         tenant_repo: T,
         session_store: &S,
@@ -103,6 +113,7 @@ impl IssuanceEngine {
     where
         Q: IssuanceTaskQueue,
         P: IssuanceEventPublisher,
+        B: IssuanceEventSubscriber,
         C: CredentialRepo,
         T: TenantRepo,
         S: SessionStore + Clone,
@@ -111,6 +122,7 @@ impl IssuanceEngine {
             client,
             task_queue,
             event_publisher,
+            event_subscriber,
             credential_repo,
             tenant_repo,
             session_store,
@@ -119,10 +131,12 @@ impl IssuanceEngine {
     }
 
     /// Create a new orchestrator and override how many background workers it starts.
-    pub fn with_worker_count<Q, P, C, T, S>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_worker_count<Q, P, B, C, T, S>(
         client: Oid4vciClient,
         task_queue: Q,
         event_publisher: P,
+        event_subscriber: B,
         credential_repo: C,
         tenant_repo: T,
         session_store: &S,
@@ -131,6 +145,7 @@ impl IssuanceEngine {
     where
         Q: IssuanceTaskQueue,
         P: IssuanceEventPublisher,
+        B: IssuanceEventSubscriber,
         C: CredentialRepo,
         T: TenantRepo,
         S: SessionStore + Clone,
@@ -139,6 +154,7 @@ impl IssuanceEngine {
             client: Arc::new(client),
             task_queue: Arc::new(task_queue),
             event_publisher: Arc::new(event_publisher),
+            event_subscriber: Arc::new(event_subscriber),
             credential_repo: Arc::new(credential_repo),
             tenant_repo: Arc::new(tenant_repo),
             workers: Arc::default(),
@@ -162,6 +178,14 @@ impl IssuanceEngine {
         self.task_queue.push(task).await?;
         self.worker_notify.notify_one();
         Ok(())
+    }
+
+    /// Subscribe to issuance events for a specific session.
+    ///
+    /// Returns a stream that yields events as they are published.
+    /// The stream auto-terminates after a terminal event (completed or failed).
+    pub async fn subscribe(&self, session_id: &str) -> Result<IssuanceEventStream> {
+        self.event_subscriber.subscribe(session_id).await
     }
 
     fn start_worker_count<S: SessionStore + Clone>(
@@ -651,7 +675,9 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTenantRepo};
+    use crate::outbound::{
+        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTenantRepo,
+    };
     use crate::session::MemorySession;
 
     #[derive(Debug, Clone, Default)]
@@ -708,11 +734,13 @@ mod tests {
         .unwrap();
 
         let sessions = MemorySession::default();
+        let publisher = MemoryEventPublisher::new(16);
 
         IssuanceEngine::with_worker_count(
             client,
             queue,
-            MemoryEventPublisher::new(16),
+            publisher.clone(),
+            MemoryEventSubscriber::new(&publisher),
             MemoryCredentialRepo::new(),
             MemoryTenantRepo::new(),
             &sessions,

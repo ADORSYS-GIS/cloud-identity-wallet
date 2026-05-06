@@ -4,7 +4,9 @@ use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
 use crate::domain::service::Service;
-use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue};
+use crate::outbound::{
+    MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
+};
 use crate::session::SessionStore;
 
 pub fn build_issuance_engine<S: SessionStore + Clone>(
@@ -24,12 +26,14 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     // TODO: Replace with production adapters (Redis, SQL)
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
+    let subscriber = MemoryEventSubscriber::new(&publisher);
     let credential_repo = MemoryCredentialRepo::new();
 
     let engine = IssuanceEngine::new(
         client,
         task_queue,
         publisher,
+        subscriber,
         credential_repo,
         tenant_repo,
         session_store,
