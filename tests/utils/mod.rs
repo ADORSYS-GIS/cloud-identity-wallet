@@ -32,6 +32,24 @@ pub async fn spawn_server() -> String {
     format!("http://{}:{}", config.server.host, port)
 }
 
+pub async fn spawn_server_with_session_store(session_store: MemorySession) -> String {
+    let config = {
+        let mut config = Config::load().unwrap();
+        config.server.host = "localhost".to_string();
+        config.server.port = 0;
+        config.oid4vci.use_system_proxy = false;
+        config
+    };
+    let tenant_repo = MemoryTenantRepo::new();
+    let service = setup::build_service(session_store, tenant_repo, &config).unwrap();
+    let server = Server::new(&config, service).await.unwrap();
+
+    let port = server.port();
+    tokio::spawn(server.run());
+
+    format!("http://{}:{}", config.server.host, port)
+}
+
 pub fn sample_credential(tenant_id: Uuid) -> Credential {
     Credential {
         id: Uuid::new_v4(),
