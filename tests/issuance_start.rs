@@ -2,158 +2,90 @@ use cloud_identity_wallet::domain::models::issuance::{
     FlowType, IssuanceErrorCode, StartIssuanceResponse, start_issuance_session,
 };
 use cloud_identity_wallet::session::{IssuanceSession, MemorySession};
-use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::client::{
     Config as Oid4vciClientConfig, IssuanceFlow, Oid4vciClient, ResolvedOfferContext,
 };
-use cloud_wallet_openid4vc::issuance::credential_configuration::{
-    CredentialConfiguration, CredentialDisplay, CredentialMetadata, Logo, ProofType,
-    ProofTypeMetadata,
-};
-use cloud_wallet_openid4vc::issuance::credential_formats::{
-    CredentialFormatDetails, MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
-};
-use cloud_wallet_openid4vc::issuance::credential_offer::{
-    AuthorizationCodeGrant, CredentialOffer, Grants, InputMode, PreAuthorizedCodeGrant, TxCode,
-};
-use cloud_wallet_openid4vc::issuance::css_color::CssColor;
-use cloud_wallet_openid4vc::issuance::issuer_metadata::{CredentialIssuerMetadata, IssuerDisplay};
-use std::collections::HashMap;
+use cloud_wallet_openid4vc::issuance::credential_offer::{InputMode, TxCode};
+use serde_json::json;
 use url::Url;
 
 fn make_mock_context(flow: IssuanceFlow) -> ResolvedOfferContext {
-    let credential_issuer = Url::parse("https://issuer.example.com").unwrap();
-    let grants = match &flow {
-        IssuanceFlow::AuthorizationCode { issuer_state } => Some(Grants {
-            authorization_code: Some(AuthorizationCodeGrant {
-                issuer_state: issuer_state.clone(),
-                authorization_server: None,
-            }),
-            pre_authorized_code: None,
+    let offer_json = match &flow {
+        IssuanceFlow::AuthorizationCode { issuer_state } => json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["eu.europa.ec.eudi.pid.1"],
+            "grants": {
+                "authorization_code": {
+                    "issuer_state": issuer_state
+                }
+            }
         }),
         IssuanceFlow::PreAuthorizedCode {
             pre_authorized_code,
             tx_code,
-        } => Some(Grants {
-            authorization_code: None,
-            pre_authorized_code: Some(PreAuthorizedCodeGrant {
-                pre_authorized_code: pre_authorized_code.clone(),
-                tx_code: tx_code.clone(),
-                authorization_server: None,
-            }),
+        } => json!({
+            "credential_issuer": "https://issuer.example.com",
+            "credential_configuration_ids": ["eu.europa.ec.eudi.pid.1"],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": pre_authorized_code,
+                    "tx_code": tx_code
+                }
+            }
         }),
     };
 
-    let offer = CredentialOffer {
-        credential_issuer: credential_issuer.clone(),
-        credential_configuration_ids: vec!["eu.europa.ec.eudi.pid.1".to_owned()],
-        grants,
-    };
-
-    let display = vec![IssuerDisplay {
-        name: Some("Example EU Identity Authority".to_owned()),
-        locale: Some("en-US".to_owned()),
-        logo: Some(Logo {
-            uri: Url::parse("https://issuer.example.com/logo.svg").unwrap(),
-            alt_text: Some("Issuer Logo".to_owned()),
-        }),
-    }];
-
-    let credential_config = CredentialConfiguration {
-        id: None,
-        format_details: CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
-            vct: "https://credentials.example.com/pid".to_owned(),
-        }),
-        scope: None,
-        cryptographic_binding_methods_supported: Some(vec!["jwk".to_owned()]),
-        credential_signing_alg_values_supported: Some(vec![
-            cloud_wallet_openid4vc::issuance::credential_configuration::AlgorithmIdentifier::String(
-                "ES256".to_owned(),
-            ),
-        ]),
-        proof_types_supported: Some({
-            let mut map = HashMap::new();
-            map.insert(
-                ProofType::Jwt,
-                ProofTypeMetadata {
-                    proof_signing_alg_values_supported: vec![
-                        cloud_wallet_openid4vc::issuance::credential_configuration::AlgorithmIdentifier::String(
-                            "ES256".to_owned(),
-                        ),
-                    ],
-                    key_attestations_required: None,
+    let issuer_metadata_json = json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "display": [{
+            "name": "Example EU Identity Authority",
+            "locale": "en-US",
+            "logo": {
+                "uri": "https://issuer.example.com/logo.svg",
+                "alt_text": "Issuer Logo"
+            }
+        }],
+        "credential_configurations_supported": {
+            "eu.europa.ec.eudi.pid.1": {
+                "format": "dc+sd-jwt",
+                "vct": "https://credentials.example.com/pid",
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256"]
+                    }
                 },
-            );
-            map
-        }),
-        credential_metadata: Some(CredentialMetadata {
-            display: Some(vec![CredentialDisplay {
-                name: "EU Personal ID".to_owned(),
-                locale: Some("en-US".to_owned()),
-                description: Some("Official EU personal identity document".to_owned()),
-                background_color: Some(CssColor::new("#12107c").unwrap()),
-                text_color: Some(CssColor::new("#ffffff").unwrap()),
-                background_image: None,
-                logo: Some(Logo {
-                    uri: Url::parse("https://issuer.example.com/pid-logo.svg").unwrap(),
-                    alt_text: Some("EU PID Logo".to_owned()),
-                }),
-            }]),
-            claims: None,
-        }),
-    };
+                "credential_metadata": {
+                    "display": [{
+                        "name": "EU Personal ID",
+                        "locale": "en-US",
+                        "description": "Official EU personal identity document",
+                        "background_color": "#12107c",
+                        "text_color": "#ffffff",
+                        "logo": {
+                            "uri": "https://issuer.example.com/pid-logo.svg",
+                            "alt_text": "EU PID Logo"
+                        }
+                    }]
+                }
+            }
+        }
+    });
 
-    let mut configs_supported: HashMap<String, CredentialConfiguration> = HashMap::new();
-    configs_supported.insert("eu.europa.ec.eudi.pid.1".to_owned(), credential_config);
-
-    let issuer_metadata = CredentialIssuerMetadata {
-        credential_issuer: credential_issuer.clone(),
-        authorization_servers: None,
-        credential_endpoint: Url::parse("https://issuer.example.com/credential").unwrap(),
-        nonce_endpoint: None,
-        deferred_credential_endpoint: None,
-        notification_endpoint: None,
-        batch_credential_endpoint: None,
-        credential_request_encryption: None,
-        credential_response_encryption: None,
-        batch_credential_issuance: None,
-        credential_configurations_supported: configs_supported,
-        display: Some(display),
-    };
-
-    let as_metadata = AuthorizationServerMetadata {
-        issuer: credential_issuer.clone(),
-        authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
-        token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
-        jwks_uri: None,
-        registration_endpoint: None,
-        scopes_supported: None,
-        response_types_supported: Some(vec!["code".to_owned()]),
-        response_modes_supported: None,
-        grant_types_supported: None,
-        token_endpoint_auth_methods_supported: None,
-        token_endpoint_auth_signing_alg_values_supported: None,
-        service_documentation: None,
-        ui_locales_supported: None,
-        op_policy_uri: None,
-        op_tos_uri: None,
-        revocation_endpoint: None,
-        revocation_endpoint_auth_methods_supported: None,
-        revocation_endpoint_auth_signing_alg_values_supported: None,
-        introspection_endpoint: None,
-        introspection_endpoint_auth_methods_supported: None,
-        introspection_endpoint_auth_signing_alg_values_supported: None,
-        code_challenge_methods_supported: Some(vec!["S256".to_owned()]),
-        pushed_authorization_request_endpoint: None,
-        require_pushed_authorization_requests: None,
-        pre_authorized_grant_anonymous_access_supported: None,
-        extra_fields: HashMap::new(),
-    };
+    let as_metadata_json = json!({
+        "issuer": "https://issuer.example.com",
+        "authorization_endpoint": "https://issuer.example.com/authorize",
+        "token_endpoint": "https://issuer.example.com/token",
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"]
+    });
 
     ResolvedOfferContext {
-        offer,
-        issuer_metadata,
-        as_metadata,
+        offer: serde_json::from_value(offer_json).unwrap(),
+        issuer_metadata: serde_json::from_value(issuer_metadata_json).unwrap(),
+        as_metadata: serde_json::from_value(as_metadata_json).unwrap(),
         flow,
     }
 }
@@ -170,13 +102,13 @@ fn start_response_from_auth_code_context() {
         FlowType::AuthorizationCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.session_id, session.id);
     assert!(!response.expires_at.is_empty());
     assert_eq!(
         response.issuer.credential_issuer,
-        "https://issuer.example.com/"
+        Url::parse("https://issuer.example.com").unwrap()
     );
     assert_eq!(
         response.issuer.display_name,
@@ -191,7 +123,7 @@ fn start_response_from_auth_code_context() {
     assert_eq!(cred.format, "dc+sd-jwt");
     assert!(cred.display.is_some());
     let display = cred.display.as_ref().unwrap();
-    assert_eq!(display.name, Some("EU Personal ID".to_owned()));
+    assert_eq!(display.name, "EU Personal ID");
 }
 
 #[test]
@@ -211,12 +143,12 @@ fn start_response_from_pre_auth_code_context_with_tx_code() {
         FlowType::PreAuthorizedCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.flow, "pre_authorized_code");
     assert!(response.tx_code_required);
     let tx_code = response.tx_code.as_ref().unwrap();
-    assert_eq!(tx_code.input_mode, "numeric");
+    assert_eq!(tx_code.input_mode, Some(InputMode::Numeric));
     assert_eq!(tx_code.length, Some(6));
     assert_eq!(
         tx_code.description,
@@ -237,7 +169,7 @@ fn start_response_from_pre_auth_code_context_without_tx_code() {
         FlowType::PreAuthorizedCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.flow, "pre_authorized_code");
     assert!(!response.tx_code_required);
@@ -273,12 +205,12 @@ fn start_response_serializes_authorization_code_flow() {
         FlowType::AuthorizationCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.session_id, session.id);
     assert_eq!(
         response.issuer.credential_issuer,
-        "https://issuer.example.com/"
+        Url::parse("https://issuer.example.com").unwrap()
     );
     assert_eq!(
         response.issuer.display_name,
@@ -286,7 +218,7 @@ fn start_response_serializes_authorization_code_flow() {
     );
     assert_eq!(
         response.issuer.logo_uri,
-        Some("https://issuer.example.com/logo.svg".to_owned())
+        Some(Url::parse("https://issuer.example.com/logo.svg").unwrap())
     );
     assert_eq!(response.flow, "authorization_code");
     assert!(!response.tx_code_required);
@@ -307,7 +239,7 @@ fn start_response_serializes_pre_auth_flow_without_tx_code() {
         FlowType::PreAuthorizedCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.flow, "pre_authorized_code");
     assert!(!response.tx_code_required);
@@ -331,129 +263,65 @@ fn start_response_serializes_pre_auth_flow_with_tx_code() {
         FlowType::PreAuthorizedCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.flow, "pre_authorized_code");
     assert!(response.tx_code_required);
     let tx_code = response.tx_code.as_ref().unwrap();
-    assert_eq!(tx_code.input_mode, "numeric");
+    assert_eq!(tx_code.input_mode, Some(InputMode::Numeric));
     assert_eq!(tx_code.length, Some(4));
     assert_eq!(tx_code.description, Some("Enter PIN".to_owned()));
 }
 
 #[test]
 fn start_response_handles_multiple_credential_types() {
-    let credential_issuer = Url::parse("https://issuer.example.com").unwrap();
-    let offer = CredentialOffer {
-        credential_issuer: credential_issuer.clone(),
-        credential_configuration_ids: vec![
-            "eu.europa.ec.eudi.pid.1".to_owned(),
-            "eu.europa.ec.eudi.mdl.1".to_owned(),
-        ],
-        grants: Some(Grants {
-            authorization_code: Some(AuthorizationCodeGrant {
-                issuer_state: Some("state".to_owned()),
-                authorization_server: None,
-            }),
-            pre_authorized_code: None,
-        }),
-    };
+    let offer = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["eu.europa.ec.eudi.pid.1", "eu.europa.ec.eudi.mdl.1"],
+        "grants": {
+            "authorization_code": {
+                "issuer_state": "state"
+            }
+        }
+    }))
+    .unwrap();
 
-    let mut configs_supported: HashMap<String, CredentialConfiguration> = HashMap::new();
-    configs_supported.insert(
-        "eu.europa.ec.eudi.pid.1".to_owned(),
-        CredentialConfiguration {
-            id: None,
-            format_details: CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
-                vct: "https://credentials.example.com/pid".to_owned(),
-            }),
-            scope: None,
-            cryptographic_binding_methods_supported: None,
-            credential_signing_alg_values_supported: None,
-            proof_types_supported: None,
-            credential_metadata: Some(CredentialMetadata {
-                display: Some(vec![CredentialDisplay {
-                    name: "EU PID".to_owned(),
-                    locale: Some("en-US".to_owned()),
-                    description: None,
-                    background_color: None,
-                    text_color: None,
-                    background_image: None,
-                    logo: None,
-                }]),
-                claims: None,
-            }),
-        },
-    );
-    configs_supported.insert(
-        "eu.europa.ec.eudi.mdl.1".to_owned(),
-        CredentialConfiguration {
-            id: None,
-            format_details: CredentialFormatDetails::MsoMdoc(MsoMdocCredentialConfiguration {
-                doctype: "org.iso.18013.5.1.mDL".to_owned(),
-            }),
-            scope: None,
-            cryptographic_binding_methods_supported: None,
-            credential_signing_alg_values_supported: None,
-            proof_types_supported: None,
-            credential_metadata: Some(CredentialMetadata {
-                display: Some(vec![CredentialDisplay {
-                    name: "EU MDL".to_owned(),
-                    locale: Some("en-US".to_owned()),
-                    description: None,
-                    background_color: None,
-                    text_color: None,
-                    background_image: None,
-                    logo: None,
-                }]),
-                claims: None,
-            }),
-        },
-    );
+    let issuer_metadata = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "eu.europa.ec.eudi.pid.1": {
+                "format": "dc+sd-jwt",
+                "vct": "https://credentials.example.com/pid",
+                "credential_metadata": {
+                    "display": [{
+                        "name": "EU PID",
+                        "locale": "en-US"
+                    }]
+                }
+            },
+            "eu.europa.ec.eudi.mdl.1": {
+                "format": "mso_mdoc",
+                "doctype": "org.iso.18013.5.1.mDL",
+                "credential_metadata": {
+                    "display": [{
+                        "name": "EU MDL",
+                        "locale": "en-US"
+                    }]
+                }
+            }
+        }
+    }))
+    .unwrap();
 
-    let issuer_metadata = CredentialIssuerMetadata {
-        credential_issuer: credential_issuer.clone(),
-        authorization_servers: None,
-        credential_endpoint: Url::parse("https://issuer.example.com/credential").unwrap(),
-        nonce_endpoint: None,
-        deferred_credential_endpoint: None,
-        notification_endpoint: None,
-        batch_credential_endpoint: None,
-        credential_request_encryption: None,
-        credential_response_encryption: None,
-        batch_credential_issuance: None,
-        credential_configurations_supported: configs_supported,
-        display: Some(vec![]),
-    };
-
-    let as_metadata = AuthorizationServerMetadata {
-        issuer: credential_issuer.clone(),
-        authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
-        token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
-        jwks_uri: None,
-        registration_endpoint: None,
-        scopes_supported: None,
-        response_types_supported: Some(vec!["code".to_owned()]),
-        response_modes_supported: None,
-        grant_types_supported: None,
-        token_endpoint_auth_methods_supported: None,
-        token_endpoint_auth_signing_alg_values_supported: None,
-        service_documentation: None,
-        ui_locales_supported: None,
-        op_policy_uri: None,
-        op_tos_uri: None,
-        revocation_endpoint: None,
-        revocation_endpoint_auth_methods_supported: None,
-        revocation_endpoint_auth_signing_alg_values_supported: None,
-        introspection_endpoint: None,
-        introspection_endpoint_auth_methods_supported: None,
-        introspection_endpoint_auth_signing_alg_values_supported: None,
-        code_challenge_methods_supported: Some(vec!["S256".to_owned()]),
-        pushed_authorization_request_endpoint: None,
-        require_pushed_authorization_requests: None,
-        pre_authorized_grant_anonymous_access_supported: None,
-        extra_fields: HashMap::new(),
-    };
+    let as_metadata = serde_json::from_value(json!({
+        "issuer": "https://issuer.example.com",
+        "authorization_endpoint": "https://issuer.example.com/authorize",
+        "token_endpoint": "https://issuer.example.com/token",
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"]
+    }))
+    .unwrap();
 
     let flow = IssuanceFlow::AuthorizationCode {
         issuer_state: Some("state".to_owned()),
@@ -470,7 +338,7 @@ fn start_response_handles_multiple_credential_types() {
         FlowType::AuthorizationCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.credential_types.len(), 2);
     assert_eq!(
@@ -487,78 +355,37 @@ fn start_response_handles_multiple_credential_types() {
 
 #[test]
 fn start_response_handles_missing_credential_config_gracefully() {
-    let credential_issuer = Url::parse("https://issuer.example.com").unwrap();
-    let offer = CredentialOffer {
-        credential_issuer: credential_issuer.clone(),
-        credential_configuration_ids: vec!["known_config".to_owned(), "unknown_config".to_owned()],
-        grants: Some(Grants {
-            authorization_code: Some(AuthorizationCodeGrant {
-                issuer_state: Some("state".to_owned()),
-                authorization_server: None,
-            }),
-            pre_authorized_code: None,
-        }),
-    };
+    let offer = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["known_config", "unknown_config"],
+        "grants": {
+            "authorization_code": {
+                "issuer_state": "state"
+            }
+        }
+    }))
+    .unwrap();
 
-    let mut configs_supported: HashMap<String, CredentialConfiguration> = HashMap::new();
-    configs_supported.insert(
-        "known_config".to_owned(),
-        CredentialConfiguration {
-            id: None,
-            format_details: CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
-                vct: "https://credentials.example.com/known".to_owned(),
-            }),
-            scope: None,
-            cryptographic_binding_methods_supported: None,
-            credential_signing_alg_values_supported: None,
-            proof_types_supported: None,
-            credential_metadata: None,
-        },
-    );
+    let issuer_metadata = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "known_config": {
+                "format": "dc+sd-jwt",
+                "vct": "https://credentials.example.com/known"
+            }
+        }
+    }))
+    .unwrap();
 
-    let issuer_metadata = CredentialIssuerMetadata {
-        credential_issuer: credential_issuer.clone(),
-        authorization_servers: None,
-        credential_endpoint: Url::parse("https://issuer.example.com/credential").unwrap(),
-        nonce_endpoint: None,
-        deferred_credential_endpoint: None,
-        notification_endpoint: None,
-        batch_credential_endpoint: None,
-        credential_request_encryption: None,
-        credential_response_encryption: None,
-        batch_credential_issuance: None,
-        credential_configurations_supported: configs_supported,
-        display: Some(vec![]),
-    };
-
-    let as_metadata = AuthorizationServerMetadata {
-        issuer: credential_issuer.clone(),
-        authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
-        token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
-        jwks_uri: None,
-        registration_endpoint: None,
-        scopes_supported: None,
-        response_types_supported: Some(vec!["code".to_owned()]),
-        response_modes_supported: None,
-        grant_types_supported: None,
-        token_endpoint_auth_methods_supported: None,
-        token_endpoint_auth_signing_alg_values_supported: None,
-        service_documentation: None,
-        ui_locales_supported: None,
-        op_policy_uri: None,
-        op_tos_uri: None,
-        revocation_endpoint: None,
-        revocation_endpoint_auth_methods_supported: None,
-        revocation_endpoint_auth_signing_alg_values_supported: None,
-        introspection_endpoint: None,
-        introspection_endpoint_auth_methods_supported: None,
-        introspection_endpoint_auth_signing_alg_values_supported: None,
-        code_challenge_methods_supported: Some(vec!["S256".to_owned()]),
-        pushed_authorization_request_endpoint: None,
-        require_pushed_authorization_requests: None,
-        pre_authorized_grant_anonymous_access_supported: None,
-        extra_fields: HashMap::new(),
-    };
+    let as_metadata = serde_json::from_value(json!({
+        "issuer": "https://issuer.example.com",
+        "authorization_endpoint": "https://issuer.example.com/authorize",
+        "token_endpoint": "https://issuer.example.com/token",
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"]
+    }))
+    .unwrap();
 
     let flow = IssuanceFlow::AuthorizationCode {
         issuer_state: Some("state".to_owned()),
@@ -575,7 +402,7 @@ fn start_response_handles_missing_credential_config_gracefully() {
         FlowType::AuthorizationCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.credential_types.len(), 1);
     assert_eq!(
@@ -586,83 +413,41 @@ fn start_response_handles_missing_credential_config_gracefully() {
 
 #[test]
 fn start_response_handles_missing_display_info() {
+    let offer = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["test_id"],
+        "grants": {
+            "authorization_code": {
+                "issuer_state": "state"
+            }
+        }
+    }))
+    .unwrap();
+
+    let issuer_metadata = serde_json::from_value(json!({
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "test_id": {
+                "format": "dc+sd-jwt",
+                "vct": "https://credentials.example.com/test"
+            }
+        }
+    }))
+    .unwrap();
+
+    let as_metadata = serde_json::from_value(json!({
+        "issuer": "https://issuer.example.com",
+        "authorization_endpoint": "https://issuer.example.com/authorize",
+        "token_endpoint": "https://issuer.example.com/token",
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"]
+    }))
+    .unwrap();
+
     let flow = IssuanceFlow::AuthorizationCode {
         issuer_state: Some("state".to_owned()),
     };
-
-    let credential_issuer = Url::parse("https://issuer.example.com").unwrap();
-    let offer = CredentialOffer {
-        credential_issuer: credential_issuer.clone(),
-        credential_configuration_ids: vec!["test_id".to_owned()],
-        grants: Some(Grants {
-            authorization_code: Some(AuthorizationCodeGrant {
-                issuer_state: Some("state".to_owned()),
-                authorization_server: None,
-            }),
-            pre_authorized_code: None,
-        }),
-    };
-
-    let mut configs_supported: HashMap<String, CredentialConfiguration> = HashMap::new();
-    configs_supported.insert(
-        "test_id".to_owned(),
-        CredentialConfiguration {
-            id: None,
-            format_details: CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
-                vct: "https://credentials.example.com/test".to_owned(),
-            }),
-            scope: None,
-            cryptographic_binding_methods_supported: None,
-            credential_signing_alg_values_supported: None,
-            proof_types_supported: None,
-            credential_metadata: None,
-        },
-    );
-
-    let issuer_metadata = CredentialIssuerMetadata {
-        credential_issuer: credential_issuer.clone(),
-        authorization_servers: None,
-        credential_endpoint: Url::parse("https://issuer.example.com/credential").unwrap(),
-        nonce_endpoint: None,
-        deferred_credential_endpoint: None,
-        notification_endpoint: None,
-        batch_credential_endpoint: None,
-        credential_request_encryption: None,
-        credential_response_encryption: None,
-        batch_credential_issuance: None,
-        credential_configurations_supported: configs_supported,
-        display: Some(vec![]),
-    };
-
-    let as_metadata = AuthorizationServerMetadata {
-        issuer: credential_issuer.clone(),
-        authorization_endpoint: Some(Url::parse("https://issuer.example.com/authorize").unwrap()),
-        token_endpoint: Some(Url::parse("https://issuer.example.com/token").unwrap()),
-        jwks_uri: None,
-        registration_endpoint: None,
-        scopes_supported: None,
-        response_types_supported: Some(vec!["code".to_owned()]),
-        response_modes_supported: None,
-        grant_types_supported: None,
-        token_endpoint_auth_methods_supported: None,
-        token_endpoint_auth_signing_alg_values_supported: None,
-        service_documentation: None,
-        ui_locales_supported: None,
-        op_policy_uri: None,
-        op_tos_uri: None,
-        revocation_endpoint: None,
-        revocation_endpoint_auth_methods_supported: None,
-        revocation_endpoint_auth_signing_alg_values_supported: None,
-        introspection_endpoint: None,
-        introspection_endpoint_auth_methods_supported: None,
-        introspection_endpoint_auth_signing_alg_values_supported: None,
-        code_challenge_methods_supported: Some(vec!["S256".to_owned()]),
-        pushed_authorization_request_endpoint: None,
-        require_pushed_authorization_requests: None,
-        pre_authorized_grant_anonymous_access_supported: None,
-        extra_fields: HashMap::new(),
-    };
-
     let context = ResolvedOfferContext {
         offer,
         issuer_metadata,
@@ -675,7 +460,7 @@ fn start_response_handles_missing_display_info() {
         FlowType::AuthorizationCode,
     );
 
-    let response = StartIssuanceResponse::from_context(&context, &session);
+    let response = StartIssuanceResponse::from_context(&context, &session).unwrap();
 
     assert_eq!(response.credential_types.len(), 1);
     assert!(response.credential_types[0].display.is_none());
