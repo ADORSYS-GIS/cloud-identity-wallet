@@ -472,82 +472,7 @@ paths:
                 error_description: No active session found for the given state value.
 
   # -------------------------------------------------------------------------
-  # 6. Submit Transaction Code
-  # -------------------------------------------------------------------------
-  /issuance/{session_id}/tx-code:
-    post:
-      operationId: submitTransactionCode
-      summary: Submit the transaction code for pre-authorized code flow
-      description: |
-        Submit the transaction code entered by the user. Only applicable when
-        `tx_code_required` was `true` in the `/start` response.
-
-        The backend immediately starts the token exchange and credential request
-        in the background. The frontend MUST listen on the SSE stream for the
-        outcome (`processing`, `completed`, or `failed` events).
-
-        Validation rules for `tx_code`:
-        - If `tx_code.input_mode` is `"numeric"`, the value MUST contain only
-          ASCII digits (`[0-9]`).
-        - If `tx_code.length` is set, the value length MUST exactly match it.
-      tags:
-        - Issuance
-      parameters:
-        - $ref: "#/components/parameters/SessionId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TxCodeRequest"
-            example:
-              tx_code: "493821"
-      responses:
-        "202":
-          description: |
-            Transaction code accepted. Token exchange and credential request
-            have been started in the background. Listen on the SSE stream for
-            the outcome.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TxCodeResponse"
-              example:
-                session_id: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
-        "400":
-          description: "`tx_code` is missing, wrong length, or contains invalid characters."
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: invalid_tx_code
-                error_description: "Transaction code must be exactly 6 numeric digits."
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          description: Session not found or has expired.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: session_not_found
-                error_description: No active session found for the given session_id.
-        "409":
-          description: Session is not in `awaiting_tx_code` state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: invalid_session_state
-                error_description: "Session is not awaiting a transaction code (current state: processing)."
-        "500":
-          $ref: "#/components/responses/InternalServerError"
-
-  # -------------------------------------------------------------------------
-  # 7. Cancel Session
+  # 6. Cancel Session
   # -------------------------------------------------------------------------
   /issuance/{session_id}/cancel:
     post:
@@ -844,7 +769,6 @@ components:
             - invalid_credential_offer
             - session_not_found
             - invalid_session_state
-            - invalid_tx_code
             - issuer_metadata_fetch_failed
             - auth_server_metadata_fetch_failed
             - invalid_request
@@ -1166,33 +1090,6 @@ components:
             authorization URL (including PKCE `code_challenge`, or PAR
             `request_uri`) to open in the system browser.
           example: "https://as.issuer.example.eu/authorize?response_type=code&client_id=wallet.example.eu&..."
-
-    # -----------------------------------------------------------------------
-    # Transaction Code
-    # -----------------------------------------------------------------------
-    TxCodeRequest:
-      type: object
-      required:
-        - tx_code
-      properties:
-        tx_code:
-          type: string
-          description: |
-            The transaction code entered by the user.
-            - If `tx_code.input_mode` is `"numeric"`, MUST contain only ASCII
-              digits (`[0-9]`).
-            - If `tx_code.length` is set, length MUST exactly match that value.
-          example: "493821"
-
-    TxCodeResponse:
-      type: object
-      required:
-        - session_id
-      properties:
-        session_id:
-          type: string
-          description: Session identifier (echo).
-          example: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
 
     # -----------------------------------------------------------------------
     # SSE Event Payloads

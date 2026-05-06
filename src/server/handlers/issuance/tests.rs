@@ -4,10 +4,10 @@ use axum::{
     http::{Request, StatusCode},
     routing::post,
 };
+use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::client::{
     Config as Oid4vciClientConfig, IssuanceFlow, Oid4vciClient, ResolvedOfferContext,
 };
-use cloud_wallet_openid4vc::issuance::authz_server_metadata::AuthorizationServerMetadata;
 use cloud_wallet_openid4vc::issuance::credential_offer::{
     CredentialOffer, Grants, InputMode, PreAuthorizedCodeGrant, TxCode as Oid4vciTxCode,
 };
@@ -18,13 +18,13 @@ use std::sync::Arc;
 use tower::ServiceExt;
 use url::Url;
 
-use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::models::issuance::FlowType;
-use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo};
-use crate::server::AppState;
-use crate::server::handlers::issuance::{
-    ErrorResponse, TxCodeResponse, cancel_session, submit_tx_code,
+use crate::domain::models::issuance::IssuanceEngine;
+use crate::outbound::{
+    MemoryCredentialRepo, MemoryEventPublisher, MemoryTaskQueue, MemoryTenantRepo,
 };
+use crate::server::AppState;
+use crate::server::handlers::issuance::{ErrorResponse, cancel_session};
 use crate::server::sse::SseBroadcaster;
 use crate::session::{IssuanceSession, IssuanceState, MemorySession, SessionStore};
 
@@ -86,16 +86,12 @@ async fn create_test_state() -> (AppState<MemorySession>, String) {
         flow,
     };
 
-    let session = IssuanceSession::new(
-        uuid::Uuid::new_v4(),
-        context,
-        FlowType::PreAuthorizedCode,
-    )
-    .unwrap();
+    let session =
+        IssuanceSession::new(uuid::Uuid::new_v4(), context, FlowType::PreAuthorizedCode).unwrap();
 
     let session_id = session.id.clone();
     let mut session = session;
-    session.state = IssuanceState::AwaitingTxCode;
+    session.state = IssuanceState::AwaitingConsent;
     session_store
         .upsert(session_id.as_str(), &session)
         .await
@@ -127,161 +123,6 @@ async fn create_test_state() -> (AppState<MemorySession>, String) {
     };
 
     (state, session_id)
-}
-
-#[tokio::test]
-async fn test_submit_tx_code_valid_numeric_code() {
-    let (state, session_id) = create_test_state().await;
-
-    let app = Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/tx-code",
-            post(submit_tx_code),
-        )
-        .with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/issuance/{}/tx-code", session_id))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"tx_code": "123456"}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let body: TxCodeResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body.session_id, session_id);
-}
-
-#[tokio::test]
-async fn test_submit_tx_code_invalid_non_numeric() {
-    let (state, session_id) = create_test_state().await;
-
-    let app = Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/tx-code",
-            post(submit_tx_code),
-        )
-        .with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/issuance/{}/tx-code", session_id))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"tx_code": "abcdef"}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let body: ErrorResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body.error, "invalid_tx_code");
-}
-
-#[tokio::test]
-async fn test_submit_tx_code_invalid_length() {
-    let (state, session_id) = create_test_state().await;
-
-    let app = Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/tx-code",
-            post(submit_tx_code),
-        )
-        .with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/issuance/{}/tx-code", session_id))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"tx_code": "12345"}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let body: ErrorResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body.error, "invalid_tx_code");
-}
-
-#[tokio::test]
-async fn test_submit_tx_code_session_not_found() {
-    let (state, _) = create_test_state().await;
-
-    let app = Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/tx-code",
-            post(submit_tx_code),
-        )
-        .with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/issuance/nonexistent-session/tx-code")
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"tx_code": "123456"}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_submit_tx_code_invalid_session_state() {
-    let (state, session_id) = create_test_state().await;
-
-    let mut session: IssuanceSession = state
-        .issuance_store
-        .get(session_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
-    session.state = IssuanceState::Processing;
-    state
-        .issuance_store
-        .upsert(session_id.as_str(), &session)
-        .await
-        .unwrap();
-
-    let app = Router::new()
-        .route(
-            "/api/v1/issuance/{session_id}/tx-code",
-            post(submit_tx_code),
-        )
-        .with_state(state);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/issuance/{}/tx-code", session_id))
-                .header("content-type", "application/json")
-                .body(Body::from(json!({"tx_code": "123456"}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

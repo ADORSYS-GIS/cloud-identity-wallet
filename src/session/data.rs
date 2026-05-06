@@ -1,5 +1,4 @@
 use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
-use cloud_wallet_openid4vc::issuance::credential_offer::{InputMode, TxCode};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -86,40 +85,6 @@ pub enum FailureStep {
     CredentialRequest,
     DeferredCredential,
     Internal,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TxCodeValidationError {
-    InvalidLength { expected: u32, actual: u32 },
-    InvalidCharacters { expected: String },
-}
-
-pub fn validate_tx_code(
-    spec: &TxCode,
-    code: &str,
-) -> std::result::Result<(), TxCodeValidationError> {
-    if let Some(length) = spec.length
-        && code.len() != length as usize
-    {
-        return Err(TxCodeValidationError::InvalidLength {
-            expected: length,
-            actual: code.len() as u32,
-        });
-    }
-
-    let input_mode = spec.input_mode.unwrap_or_default();
-    match input_mode {
-        InputMode::Numeric => {
-            if !code.chars().all(|c| c.is_ascii_digit()) {
-                return Err(TxCodeValidationError::InvalidCharacters {
-                    expected: "numeric".to_string(),
-                });
-            }
-        }
-        InputMode::Text => {}
-    }
-
-    Ok(())
 }
 
 pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> SessionResult<()> {

@@ -9,9 +9,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
-use crate::server::handlers::{
-    cancel_session, health_check, home, register_tenant, submit_tx_code,
-};
+use crate::server::handlers::{cancel_session, health_check, home, register_tenant};
 use crate::server::sse::SseBroadcaster;
 use crate::session::{MemorySession, SessionStore};
 
@@ -82,9 +80,8 @@ impl Server {
             issuance_engine,
         };
 
-        let issuance_router = Router::new()
-            .route("/{session_id}/tx-code", axum::routing::post(submit_tx_code))
-            .route("/{session_id}/cancel", axum::routing::post(cancel_session));
+        let issuance_router =
+            Router::new().route("/{session_id}/cancel", axum::routing::post(cancel_session));
 
         let router = Router::new()
             .route("/", get(home))

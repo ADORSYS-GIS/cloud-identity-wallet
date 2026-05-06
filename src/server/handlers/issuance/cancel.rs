@@ -17,7 +17,9 @@ pub async fn cancel_session<S: SessionStore + Clone>(
         .get(session_id.as_str())
         .await
         .map_err(|e| match e {
-            crate::session::SessionError::InvalidStateTransition(_, _) => IssuanceError::SessionExpired,
+            crate::session::SessionError::InvalidStateTransition(_, _) => {
+                IssuanceError::SessionExpired
+            }
             _ => IssuanceError::SessionNotFound,
         })?
         .ok_or(IssuanceError::SessionNotFound)?;
