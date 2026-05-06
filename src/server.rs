@@ -1,5 +1,5 @@
 mod auth;
-pub(crate) mod error;
+mod error;
 mod handlers;
 mod responses;
 
@@ -7,12 +7,14 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{authorization_callback, health_check, home, register_tenant};
+use crate::server::handlers::{
+    authorization_callback, health_check, home, register_tenant, submit_consent,
+};
 use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -22,8 +24,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug)]
 /// The global application state shared between all request handlers.
+#[derive(Debug)]
 pub(crate) struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
@@ -98,7 +100,12 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
+    let protected_routes = Router::new()
+        .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route_layer(middleware::from_fn(auth::auth));
+
     Router::new()
         .route("/tenants", post(register_tenant))
         .route("/issuance/callback", get(authorization_callback))
+        .merge(protected_routes)
 }
