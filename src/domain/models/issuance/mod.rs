@@ -1,6 +1,7 @@
 mod consent;
 mod error;
 mod events;
+mod start;
 mod task;
 
 pub use consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
@@ -8,6 +9,7 @@ pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+pub use start::{CredentialTypeDisplay, IssuerInfo, StartIssuanceRequest, StartIssuanceResponse};
 pub use task::{IssuanceTask, TaskResult};
 
 use std::{sync::Arc, time::Duration};

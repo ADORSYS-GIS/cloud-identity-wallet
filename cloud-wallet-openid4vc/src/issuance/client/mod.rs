@@ -138,6 +138,12 @@ impl AuthorizationCallback {
 }
 
 /// Configuration for the OID4VCI client.
+///
+/// # Security
+///
+/// - Outbound requests are HTTPS-only and not configurable.
+/// - For testing purposes, hostname validation can be temporarily disabled via
+///   `accept_untrusted_hosts(true)`.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The wallet's OAuth 2.0 `client_id` as registered at the issuer AS.
@@ -149,6 +155,9 @@ pub struct Config {
     /// Optional user-agent value to send with every request.
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
+    ///
+    /// **WARNING**: This bypasses TLS certificate validation and HTTPS enforcement.
+    /// Only use in test environments with mock servers. Never enable in production.
     pub accept_untrusted_hosts: bool,
     /// Use system proxy configuration discovered by the HTTP client.
     pub use_system_proxy: bool,

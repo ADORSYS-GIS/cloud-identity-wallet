@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
-    authorization_callback, health_check, home, register_tenant, submit_consent,
+    authorization_callback, health_check, home, register_tenant, start_issuance, submit_consent,
 };
 use crate::session::SessionStore;
 
@@ -101,6 +101,7 @@ impl Server {
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
+        .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route_layer(middleware::from_fn(auth::auth));
 
