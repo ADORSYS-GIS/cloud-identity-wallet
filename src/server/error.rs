@@ -7,8 +7,11 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::domain::models::issuance::{IssuanceError, IssuanceErrorCode, TxCodeError};
+use crate::domain::models::issuance::{
+    ConsentError, IssuanceError, IssuanceErrorCode, TxCodeError,
+};
 use crate::domain::models::tenants::TenantError;
+use crate::session::SessionError;
 
 /// The unified error type used by all HTTP handlers.
 ///
@@ -113,6 +116,56 @@ impl IntoApiError for IssuanceError {
             status,
             error: self.error.to_string().into(),
             error_description: self.error_description,
+        }
+    }
+}
+
+impl IntoApiError for ConsentError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            ConsentError::NotFound(session_id) => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: Cow::Borrowed("session_not_found"),
+                error_description: Some(format!("Session {} does not exist", session_id)),
+            },
+            ConsentError::InvalidState => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_session_state"),
+                error_description: Some("Session is not in awaiting_consent state".into()),
+            },
+            ConsentError::AuthorizationUrlFailed(msg) => ApiError {
+                status: StatusCode::BAD_GATEWAY,
+                error: Cow::Borrowed("bad_gateway"),
+                error_description: Some(msg),
+            },
+            ConsentError::Storage(err) => ApiError::internal(err),
+            ConsentError::EventPublishing(msg) => {
+                tracing::warn!("Event publishing failed: {}", msg);
+                // Event publishing failures are not critical, so we don't return an error to the client
+                ApiError {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    error: Cow::Borrowed("internal_error"),
+                    error_description: Some(msg),
+                }
+            }
+        }
+    }
+}
+
+impl IntoApiError for SessionError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            SessionError::Store(err) => ApiError::internal(err),
+            SessionError::Encoding(err) => ApiError::internal(err),
+            SessionError::InvalidStateTransition(from, to) => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_state_transition"),
+                error_description: Some(format!(
+                    "Invalid state transition from {} to {}",
+                    from, to
+                )),
+            },
+            SessionError::Other(err) => ApiError::internal(err),
         }
     }
 }
