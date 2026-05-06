@@ -3,6 +3,7 @@ mod error;
 mod events;
 mod start;
 mod task;
+mod tx_code;
 
 pub use consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
 pub use error::{IssuanceError, IssuanceErrorCode};
@@ -11,6 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 pub use start::{CredentialTypeDisplay, IssuerInfo, StartIssuanceRequest, StartIssuanceResponse};
 pub use task::{IssuanceTask, TaskResult};
+pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
