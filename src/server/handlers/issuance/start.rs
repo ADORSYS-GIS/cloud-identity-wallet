@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::models::issuance::StartIssuanceRequest;
 use crate::domain::models::issuance::start_issuance_session;
-use crate::server::error::IntoApiError;
+use crate::server::error::ApiError;
 use crate::server::{AppState, responses::ResponseBody};
 use crate::session::SessionStore;
 
@@ -23,10 +23,7 @@ pub async fn start_issuance<S: SessionStore + Clone>(
         &payload.offer,
         tenant_id,
     )
-    .await
-    .map_err(|e| e.into_api_error())?;
+    .await?;
 
     Ok(ResponseBody::new(StatusCode::CREATED, response))
 }
-
-type ApiError = crate::server::error::ApiError;
