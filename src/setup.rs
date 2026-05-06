@@ -6,7 +6,9 @@ use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
 use crate::domain::service::Service;
-use crate::outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue};
+use crate::outbound::{
+    MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
+};
 use crate::session::SessionStore;
 
 pub fn build_issuance_engine<S: SessionStore + Clone>(

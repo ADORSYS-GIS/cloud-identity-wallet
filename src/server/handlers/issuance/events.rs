@@ -7,8 +7,8 @@ use std::time::Duration;
 use axum::{
     extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
     response::sse::{Event, KeepAlive, KeepAliveStream, Sse},
+    response::{IntoResponse, Response},
 };
 use futures::stream::Stream;
 use futures::stream::StreamExt;
