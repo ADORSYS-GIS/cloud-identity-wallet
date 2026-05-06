@@ -3,8 +3,9 @@ mod issuance;
 mod root;
 mod tenant;
 
-// Export handlers for use in the server
 pub use health::health_check;
 pub use issuance::get_session_events;
+pub use issuance::start_issuance;
+pub use issuance::submit_consent;
 pub use root::home;
 pub use tenant::register_tenant;

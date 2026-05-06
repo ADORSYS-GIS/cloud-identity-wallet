@@ -1,17 +1,19 @@
 mod auth;
-pub(crate) mod error;
+mod error;
 mod handlers;
 mod responses;
+
+use handlers::submit_consent;
 
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::auth::auth;
-use crate::server::handlers::{get_session_events, health_check, home, register_tenant};
+use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
 use crate::session::SessionStore;
 
 use axum::http::Method;
+use axum::middleware;
 use axum::{
     Router,
     routing::{get, post},
@@ -23,8 +25,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug)]
 /// The global application state shared between all request handlers.
+#[derive(Debug)]
 pub(crate) struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
@@ -99,13 +101,13 @@ impl Server {
 }
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
-    // Public routes (no authentication required)
-    let public_routes = Router::new().route("/tenants", post(register_tenant));
-
-    // Private routes (authentication required)
-    let private_routes = Router::new()
+    let protected_routes = Router::new()
+        .route("/issuance/start", post(start_issuance))
+        .route("/issuance/{session_id}/consent", post(submit_consent))
         .route("/issuance/{session_id}/events", get(get_session_events))
-        .layer(axum::middleware::from_fn(auth));
+        .route_layer(middleware::from_fn(auth::auth));
 
-    public_routes.merge(private_routes)
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .merge(protected_routes)
 }
