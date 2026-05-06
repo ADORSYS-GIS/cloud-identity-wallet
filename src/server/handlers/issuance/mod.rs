@@ -1,7 +1,8 @@
+//! HTTP handlers for issuance-related endpoints.
+
 mod start;
 
 pub use start::start_issuance;
-//! HTTP handlers for issuance-related endpoints.
 
 mod consent;
 

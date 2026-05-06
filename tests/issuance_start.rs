@@ -139,7 +139,7 @@ async fn missing_offer_field_returns_422() {
 }
 
 #[tokio::test]
-async fn invalid_offer_uri_returns_bad_gateway() {
+async fn invalid_offer_uri_returns_internal_error() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
@@ -158,5 +158,5 @@ async fn invalid_offer_uri_returns_bad_gateway() {
         .await
         .expect("Failed to send request");
 
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

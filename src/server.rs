@@ -3,14 +3,12 @@ mod error;
 mod handlers;
 mod responses;
 
-use axum::middleware;
 use handlers::submit_consent;
 
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::auth::auth;
 use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
 use crate::session::SessionStore;
 
