@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant, start_issuance};
+use crate::server::handlers::{
+    cancel_issuance, health_check, home, register_tenant, start_issuance,
+};
 use crate::session::SessionStore;
 
 use axum::http::Method;
@@ -104,6 +106,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route("/issuance/{session_id}/cancel", post(cancel_issuance))
         .route_layer(middleware::from_fn(auth::auth));
 
     Router::new()
