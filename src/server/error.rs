@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::domain::models::issuance::{IssuanceError, IssuanceErrorCode};
+use crate::domain::models::issuance::{IssuanceError, IssuanceErrorCode, TxCodeError};
 use crate::domain::models::tenants::TenantError;
 
 /// The unified error type used by all HTTP handlers.
@@ -113,6 +113,31 @@ impl IntoApiError for IssuanceError {
             status,
             error: self.error.to_string().into(),
             error_description: self.error_description,
+        }
+    }
+}
+
+impl IntoApiError for TxCodeError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            TxCodeError::InvalidTxCode(description) => ApiError {
+                status: StatusCode::BAD_REQUEST,
+                error: Cow::Borrowed("invalid_tx_code"),
+                error_description: Some(description),
+            },
+            TxCodeError::SessionNotFound(session_id) => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: Cow::Borrowed("session_not_found"),
+                error_description: Some(format!(
+                    "No active session found for session_id {session_id}."
+                )),
+            },
+            TxCodeError::InvalidSessionState(description) => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_session_state"),
+                error_description: Some(description),
+            },
+            TxCodeError::SessionStore(source) => ApiError::internal(source),
         }
     }
 }
