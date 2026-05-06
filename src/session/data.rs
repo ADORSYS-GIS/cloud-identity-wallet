@@ -1,11 +1,14 @@
 use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::models::issuance::FlowType;
 use crate::session::Result;
 use crate::session::SessionError;
 use crate::session::utils;
+
+type SessionResult<T> = std::result::Result<T, SessionError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuanceSession {
@@ -19,6 +22,9 @@ pub struct IssuanceSession {
     pub selected_config_ids: Vec<String>,
     pub flow: FlowType,
     pub code_verifier: Option<String>,
+    pub submitted_tx_code: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,8 +45,10 @@ impl IssuanceState {
 }
 
 impl IssuanceSession {
-    pub fn new(tenant_id: Uuid, context: ResolvedOfferContext, flow: FlowType) -> Self {
-        Self {
+    pub fn new(tenant_id: Uuid, context: ResolvedOfferContext, flow: FlowType) -> Result<Self> {
+        let now = OffsetDateTime::now_utc();
+        let expires_at = now + time::Duration::minutes(15);
+        Ok(Self {
             id: utils::generate_session_id(),
             tenant_id,
             state: IssuanceState::AwaitingConsent,
@@ -48,11 +56,38 @@ impl IssuanceSession {
             selected_config_ids: vec![],
             flow,
             code_verifier: None,
-        }
+            submitted_tx_code: None,
+            created_at: now,
+            expires_at,
+        })
+    }
+
+    pub fn is_expired(&self) -> bool {
+        OffsetDateTime::now_utc() >= self.expires_at
     }
 }
 
-pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingStep {
+    ExchangingToken,
+    RequestingCredential,
+    AwaitingDeferredCredential,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureStep {
+    OfferResolution,
+    Metadata,
+    Authorization,
+    Token,
+    CredentialRequest,
+    DeferredCredential,
+    Internal,
+}
+
+pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> SessionResult<()> {
     let allowed = is_transition_allowed(session.state, new_state, session.flow);
     if !allowed {
         return Err(SessionError::InvalidStateTransition(
@@ -126,7 +161,7 @@ mod tests {
         }))
         .unwrap();
 
-        IssuanceSession::new(Uuid::new_v4(), context, flow)
+        IssuanceSession::new(Uuid::new_v4(), context, flow).unwrap()
     }
 
     #[test]

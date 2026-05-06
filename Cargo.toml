@@ -82,7 +82,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["formatting", "serde"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -110,6 +110,7 @@ features = [
 ]
 
 [dev-dependencies]
+http-body-util = "0.1"
 reqwest = { version = "0.13", features = ["json"] }
 serde_json = { workspace = true }
 testcontainers-modules = { version = "0.15", features = [
