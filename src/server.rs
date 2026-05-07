@@ -106,10 +106,10 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
-        .route("/issuance/{session_id}/events", get(get_session_events))
         .route_layer(middleware::from_fn(auth::auth));
 
     Router::new()
         .route("/tenants", post(register_tenant))
+        .route("/issuance/{session_id}/events", get(get_session_events))
         .merge(protected_routes)
 }
