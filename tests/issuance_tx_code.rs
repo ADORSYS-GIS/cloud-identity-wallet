@@ -13,7 +13,9 @@ use cloud_identity_wallet::{
         ports::IssuanceTaskQueue,
         service::Service,
     },
-    outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryTenantRepo},
+    outbound::{
+        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTenantRepo,
+    },
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
@@ -69,10 +71,13 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
     .accept_untrusted_hosts(true);
 
     let client = Oid4vciClient::new(client_config).unwrap();
+    let event_publisher = MemoryEventPublisher::new(16);
+    let event_subscriber = MemoryEventSubscriber::new(&event_publisher);
     let engine = IssuanceEngine::new(
         client,
         queue,
-        MemoryEventPublisher::new(16),
+        event_publisher,
+        event_subscriber,
         MemoryCredentialRepo::new(),
         tenant_repo.clone(),
         &session_store,
