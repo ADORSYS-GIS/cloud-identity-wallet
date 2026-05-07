@@ -1,9 +1,10 @@
 //! SSE handler for issuance session events.
 
-use std::pin::Pin;
+use std::{borrow::Cow, pin::Pin};
 
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
     response::sse::{Event, KeepAlive, KeepAliveStream, Sse},
     response::{IntoResponse, Response},
 };
@@ -26,15 +27,10 @@ pub async fn get_session_events<S: SessionStore + Clone>(
     debug!(session_id = %session_id, "SSE connection request");
 
     // Check if session exists
-    let exists = state
-        .service
-        .session
-        .exists(session_id.as_str())
-        .await
-        .map_err(ApiError::internal)?;
+    let exists = state.service.session.exists(session_id.as_str()).await?;
 
     if !exists {
-        return Err(ApiError::session_not_found());
+        return Err(session_not_found());
     }
 
     let stream = state
@@ -62,4 +58,13 @@ fn event_stream_to_sse(stream: IssuanceEventStream) -> SseStream {
     let boxed_stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> =
         Box::pin(sse_stream);
     Sse::new(boxed_stream).keep_alive(KeepAlive::default())
+}
+
+/// Returns a 404 error for session not found.
+pub fn session_not_found() -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_FOUND,
+        error: Cow::Borrowed("session_not_found"),
+        error_description: Some("Session not found or has expired.".into()),
+    }
 }
