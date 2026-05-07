@@ -8,7 +8,8 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
-    authorization_callback, health_check, home, register_tenant, start_issuance, submit_consent,
+    authorization_callback, get_session_events, health_check, home, register_tenant,
+    start_issuance, submit_consent, submit_transaction_code,
 };
 use crate::session::SessionStore;
 
@@ -45,7 +46,7 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
+    /// Creates a new HTTP server.
     pub async fn new<S: SessionStore + Clone>(
         config: &Config,
         service: Service<S>,
@@ -101,6 +102,10 @@ impl Server {
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
+        .route(
+            "/issuance/{session_id}/tx-code",
+            post(submit_transaction_code),
+        )
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route_layer(middleware::from_fn(auth::auth));
@@ -108,5 +113,6 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     Router::new()
         .route("/tenants", post(register_tenant))
         .route("/issuance/callback", get(authorization_callback))
+        .route("/issuance/{session_id}/events", get(get_session_events))
         .merge(protected_routes)
 }

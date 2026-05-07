@@ -11,7 +11,6 @@ mod tenant;
 pub use credential::{MemoryCredentialRepo, SqlCredentialRepo};
 pub use event_dispatch::{
     MemoryEventPublisher, MemoryEventSubscriber, RedisEventPublisher, RedisEventSubscriber,
-    event_stream_to_sse,
 };
 pub use task_queue::{MemoryTaskQueue, RedisTaskQueue};
 pub use tenant::{MemoryTenantRepo, SqlTenantRepo, TenantKeyAlg};
