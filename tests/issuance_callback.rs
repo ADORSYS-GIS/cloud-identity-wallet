@@ -78,6 +78,7 @@ async fn spawn_callback_test_app(session_store: MemorySession) -> CallbackTestAp
         client,
         queue,
         publisher,
+        event_subscriber.clone(),
         MemoryCredentialRepo::new(),
         tenant_repo.clone(),
         &session_store,
