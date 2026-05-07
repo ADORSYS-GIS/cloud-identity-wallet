@@ -13,7 +13,9 @@ use cloud_identity_wallet::{
         ports::IssuanceTaskQueue,
         service::Service,
     },
-    outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTenantRepo},
+    outbound::{
+        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTenantRepo,
+    },
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
