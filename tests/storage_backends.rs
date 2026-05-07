@@ -52,11 +52,13 @@ async fn test_repository_backend<R: CredentialRepo>(
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, credential_a.id);
 
-    // Lists credentials with an unknown type (should not match)
+    // Lists credentials with reversed types (should not match)
+    let mut reversed_types = credential_a.credential_types.clone();
+    reversed_types.reverse();
     let mismatch = repository
         .list(CredentialFilter {
             tenant_id: Some(tenant_a),
-            credential_types: Some(vec!["UnknownCredentialType".to_string()]),
+            credential_types: Some(reversed_types),
             ..Default::default()
         })
         .await
