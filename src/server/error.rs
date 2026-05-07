@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Serialize;
 
+use crate::domain::models::credential::CredentialError;
 use crate::domain::models::issuance::{
     ConsentError, IssuanceError, IssuanceErrorCode, TxCodeError,
 };
@@ -191,6 +192,29 @@ impl IntoApiError for TxCodeError {
                 error_description: Some(description),
             },
             TxCodeError::SessionStore(source) => ApiError::internal(source),
+        }
+    }
+}
+
+impl IntoApiError for CredentialError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            CredentialError::NotFound { id, tenant_id } => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: Cow::Borrowed("credential_not_found"),
+                error_description: Some(format!(
+                    "No credential with ID {} exists for tenant {}.",
+                    id, tenant_id
+                )),
+            },
+            CredentialError::Backend(source) => ApiError::internal(source),
+            CredentialError::InvalidData(msg) => ApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                error: Cow::Borrowed("internal_error"),
+                error_description: Some(format!("Invalid credential data: {}", msg)),
+            },
+            CredentialError::Encryption(source) => ApiError::internal(source),
+            CredentialError::Other(msg) => ApiError::internal(msg),
         }
     }
 }

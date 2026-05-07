@@ -82,7 +82,8 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
         tenant_repo.clone(),
         &session_store,
     );
-    let service = Service::new(session_store.clone(), tenant_repo, engine);
+    let credential_repo = Arc::new(MemoryCredentialRepo::new());
+    let service = Service::new(session_store.clone(), tenant_repo, credential_repo, engine);
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
 
