@@ -1,12 +1,9 @@
 //! HTTP handlers for issuance-related endpoints.
 
+mod consent;
 mod events;
-
-pub use events::get_session_events;
 mod start;
 
-pub use start::start_issuance;
-
-mod consent;
-
 pub use consent::submit_consent;
+pub use events::get_session_events;
+pub use start::start_issuance;
