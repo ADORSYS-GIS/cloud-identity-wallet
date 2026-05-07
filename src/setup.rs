@@ -55,12 +55,7 @@ pub fn build_service<S: SessionStore + Clone>(
         &session_store,
         credential_repo.clone(),
     )?;
-    Ok(Service::new(
-        session_store,
-        tenant_repo,
-        engine,
-        credential_repo,
-    ))
+    Ok(Service::new(session_store, tenant_repo, engine))
 }
 
 /// Build a fully wired [`Service`] and return the shared credential repository.
@@ -80,6 +75,6 @@ pub fn build_service_with_repo<S: SessionStore + Clone>(
         &session_store,
         credential_repo.clone(),
     )?;
-    let service = Service::new(session_store, tenant_repo, engine, credential_repo.clone());
+    let service = Service::new(session_store, tenant_repo, engine);
     Ok((service, credential_repo))
 }
