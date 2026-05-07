@@ -3,21 +3,19 @@ mod error;
 mod handlers;
 mod responses;
 
-use handlers::submit_consent;
-
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
-    get_session_events, health_check, home, register_tenant, start_issuance,
+    get_session_events, health_check, home, register_tenant, start_issuance, submit_consent,
+    submit_transaction_code,
 };
 use crate::session::SessionStore;
 
 use axum::http::Method;
-use axum::middleware;
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -48,7 +46,7 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
+    /// Creates a new HTTP server.
     pub async fn new<S: SessionStore + Clone>(
         config: &Config,
         service: Service<S>,
@@ -104,6 +102,10 @@ impl Server {
 
 fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
     let protected_routes = Router::new()
+        .route(
+            "/issuance/{session_id}/tx-code",
+            post(submit_transaction_code),
+        )
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route_layer(middleware::from_fn(auth::auth));
