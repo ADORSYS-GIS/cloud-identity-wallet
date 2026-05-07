@@ -29,7 +29,6 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
 
-
     let engine = IssuanceEngine::new(
         client,
         task_queue,
