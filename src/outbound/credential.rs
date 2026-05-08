@@ -833,8 +833,9 @@ mod tests {
             "UniversityDegree".to_owned(),
         ]);
         let (sql, values, _) = builder.build();
-        // MySQL: one JSON_CONTAINS clause per type, no $ placeholders.
-        assert!(!sql.contains('$'), "sql: {sql}");
+        // MySQL: one JSON_CONTAINS clause per type; no Postgres-style $N placeholders.
+        // Note: the JSON path literal '$' contains '$', so we check for $1/$2 specifically.
+        assert!(!sql.contains("$1") && !sql.contains("$2"), "sql: {sql}");
         let q_count = sql.chars().filter(|&c| c == '?').count();
         assert_eq!(q_count, 2, "expected one placeholder per type, sql: {sql}");
         assert!(
@@ -871,8 +872,10 @@ mod tests {
         let mut builder = FilterBuilder::new(&driver);
         builder.and_types_contain(&[]);
         let (sql, values, _) = builder.build();
-        // No extra clause should be appended for an empty filter.
-        assert!(!sql.contains("credential_types"), "sql: {sql}");
+        // No extra WHERE clause should be appended for an empty filter.
+        // (credential_types legitimately appears in the SELECT column list, so we
+        // check the WHERE clause directly: the base query ends with WHERE 1 = 1.)
+        assert!(sql.contains("WHERE 1 = 1 ORDER BY"), "sql: {sql}");
         assert!(values.is_empty());
     }
 
