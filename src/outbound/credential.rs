@@ -299,7 +299,7 @@ impl CredentialRepo for SqlCredentialRepo {
             builder.and("tenant_id", tenant_id.to_string());
         }
         if let Some(ref types) = filter.credential_types {
-            builder.and_types_contain(types);
+            builder.and_types_contain(types)?;
         }
         if let Some(ref status) = filter.status {
             builder.and("status", status.as_str().to_owned());
@@ -385,9 +385,9 @@ impl<'d> FilterBuilder<'d> {
     /// - **Postgres**: `AND credential_types::jsonb @> $N::jsonb` (one bind for the whole array)
     /// - **MySQL**: one `AND JSON_CONTAINS(credential_types, ?, '$') = 1` per type
     /// - **SQLite**: one `AND EXISTS (SELECT 1 FROM json_each(credential_types) WHERE value = ?)` per type
-    fn and_types_contain(&mut self, types: &[String]) {
+    fn and_types_contain(&mut self, types: &[String]) -> Result<()> {
         if types.is_empty() {
-            return;
+            return Ok(());
         }
         match self.driver {
             Driver::Postgres => {
@@ -396,8 +396,7 @@ impl<'d> FilterBuilder<'d> {
                 self.driver.write_placeholder(&mut self.sql, index);
                 self.sql.push_str("::jsonb");
                 // Vec<String> is always JSON-serializable.
-                let encoded =
-                    serde_json::to_string(types).expect("Vec<String> is always JSON-serializable");
+                let encoded = serde_json::to_string(types)?;
                 self.values.push(encoded);
             }
             Driver::MySql => {
@@ -408,8 +407,7 @@ impl<'d> FilterBuilder<'d> {
                     self.sql.push_str(", '$') = 1");
                     // MySQL JSON_CONTAINS expects a JSON-encoded search value,
                     // e.g. `"VerifiableCredential"` (with the surrounding quotes).
-                    let encoded = serde_json::to_string(type_str)
-                        .expect("String is always JSON-serializable");
+                    let encoded = serde_json::to_string(type_str)?;
                     self.values.push(encoded);
                 }
             }
@@ -426,6 +424,7 @@ impl<'d> FilterBuilder<'d> {
                 }
             }
         }
+        Ok(())
     }
 
     fn and_exclude_expired(&mut self) {
@@ -804,10 +803,12 @@ mod tests {
         let driver = Driver::Postgres;
         let mut builder = FilterBuilder::new(&driver);
         builder.and("tenant_id", "abc".into());
-        builder.and_types_contain(&[
-            "VerifiableCredential".to_owned(),
-            "UniversityDegree".to_owned(),
-        ]);
+        builder
+            .and_types_contain(&[
+                "VerifiableCredential".to_owned(),
+                "UniversityDegree".to_owned(),
+            ])
+            .unwrap();
         let (sql, values, _) = builder.build();
         // Postgres: single @> clause with one placeholder for the whole array.
         assert!(
@@ -828,10 +829,12 @@ mod tests {
     fn filter_builder_mysql_types_contain_uses_json_contains() {
         let driver = Driver::MySql;
         let mut builder = FilterBuilder::new(&driver);
-        builder.and_types_contain(&[
-            "VerifiableCredential".to_owned(),
-            "UniversityDegree".to_owned(),
-        ]);
+        builder
+            .and_types_contain(&[
+                "VerifiableCredential".to_owned(),
+                "UniversityDegree".to_owned(),
+            ])
+            .unwrap();
         let (sql, values, _) = builder.build();
         // MySQL: one JSON_CONTAINS clause per type; no Postgres-style $N placeholders.
         // Note: the JSON path literal '$' contains '$', so we check for $1/$2 specifically.
@@ -851,10 +854,12 @@ mod tests {
     fn filter_builder_sqlite_types_contain_uses_json_each() {
         let driver = Driver::Sqlite;
         let mut builder = FilterBuilder::new(&driver);
-        builder.and_types_contain(&[
-            "VerifiableCredential".to_owned(),
-            "UniversityDegree".to_owned(),
-        ]);
+        builder
+            .and_types_contain(&[
+                "VerifiableCredential".to_owned(),
+                "UniversityDegree".to_owned(),
+            ])
+            .unwrap();
         let (sql, values, _) = builder.build();
         // SQLite: one EXISTS/json_each clause per type, no $ placeholders.
         assert!(!sql.contains('$'), "sql: {sql}");
@@ -870,7 +875,7 @@ mod tests {
     fn filter_builder_types_contain_empty_slice_adds_no_clause() {
         let driver = Driver::Postgres;
         let mut builder = FilterBuilder::new(&driver);
-        builder.and_types_contain(&[]);
+        builder.and_types_contain(&[]).unwrap();
         let (sql, values, _) = builder.build();
         // No extra WHERE clause should be appended for an empty filter.
         // (credential_types legitimately appears in the SELECT column list, so we
