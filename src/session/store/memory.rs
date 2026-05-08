@@ -63,7 +63,7 @@ impl SessionStore for MemorySession {
         V: serde::Serialize + Send + Sync,
     {
         let key = key.into();
-        let value_bytes = postcard::to_allocvec(value)?;
+        let value_bytes = serde_json::to_vec(value)?;
         let key_bytes: Box<[u8]> = key.as_bytes().into();
 
         match self.entries.entry(key_bytes) {
@@ -95,7 +95,7 @@ impl SessionStore for MemorySession {
                 self.entries.remove(key.as_bytes());
                 return Ok(None);
             }
-            let item: V = postcard::from_bytes(&entry.value)?;
+            let item: V = serde_json::from_slice(&entry.value)?;
             return Ok(Some(item));
         }
         Ok(None)
@@ -122,7 +122,7 @@ impl SessionStore for MemorySession {
         let key = key.into();
         match self.entries.remove(key.as_bytes()) {
             Some((_, entry)) if !Self::is_expired(&entry) => {
-                let item: V = postcard::from_bytes(&entry.value)?;
+                let item: V = serde_json::from_slice(&entry.value)?;
                 Ok(Some(item))
             }
             Some(_) | None => Ok(None),

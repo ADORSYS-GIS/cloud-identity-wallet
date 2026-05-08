@@ -7,12 +7,15 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::domain::service::Service;
-use crate::server::handlers::{health_check, home, register_tenant};
+use crate::server::handlers::{
+    authorization_callback, get_session_events, health_check, home, register_tenant,
+    start_issuance, submit_consent, submit_transaction_code,
+};
 use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, post},
 };
 use color_eyre::eyre::{Context, Result};
@@ -22,9 +25,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-#[derive(Debug)]
 /// The global application state shared between all request handlers.
-struct AppState<S: SessionStore> {
+#[derive(Debug)]
+pub(crate) struct AppState<S: SessionStore> {
     service: Arc<Service<S>>,
 }
 
@@ -43,8 +46,11 @@ pub struct Server {
 }
 
 impl Server {
-    /// Creates a new HTTPS server.
-    pub async fn new<S: SessionStore>(config: &Config, service: Service<S>) -> Result<Self> {
+    /// Creates a new HTTP server.
+    pub async fn new<S: SessionStore + Clone>(
+        config: &Config,
+        service: Service<S>,
+    ) -> Result<Self> {
         let trace_layer =
             TraceLayer::new_for_http().make_span_with(|request: &'_ axum::extract::Request<_>| {
                 let uri = request.uri().to_string();
@@ -94,6 +100,19 @@ impl Server {
     }
 }
 
-fn api_routes<S: SessionStore>() -> Router<AppState<S>> {
-    Router::new().route("/tenants", post(register_tenant))
+fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
+    let protected_routes = Router::new()
+        .route(
+            "/issuance/{session_id}/tx-code",
+            post(submit_transaction_code),
+        )
+        .route("/issuance/start", post(start_issuance))
+        .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route_layer(middleware::from_fn(auth::auth));
+
+    Router::new()
+        .route("/tenants", post(register_tenant))
+        .route("/issuance/callback", get(authorization_callback))
+        .route("/issuance/{session_id}/events", get(get_session_events))
+        .merge(protected_routes)
 }

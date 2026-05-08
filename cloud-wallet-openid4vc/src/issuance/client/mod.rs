@@ -5,6 +5,7 @@ mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
+use serde::{Deserialize, Serialize};
 pub use signer::{
     Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
 };
@@ -39,6 +40,7 @@ use crate::issuance::error::{
 };
 use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
 use crate::issuance::notification::NotificationRequest;
+use crate::issuance::query_params::QueryParams;
 use crate::issuance::token_request::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest,
 };
@@ -54,7 +56,7 @@ const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 const JSON_HEADER: &str = "application/json";
 
 /// Fully resolved context from a single credential offer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedOfferContext {
     pub offer: CredentialOffer,
     pub issuer_metadata: CredentialIssuerMetadata,
@@ -63,14 +65,14 @@ pub struct ResolvedOfferContext {
 }
 
 /// Which grant type the orchestrator should use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantType {
     AuthorizationCode,
     PreAuthorizedCode,
 }
 
 /// Chosen issuance flow data after offer resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IssuanceFlow {
     AuthorizationCode {
         issuer_state: Option<String>,
@@ -105,20 +107,43 @@ impl IssuanceFlow {
 }
 
 /// Result of building the authorization URL.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationUrlResult {
     pub authz_url: Url,
     pub pkce_verifier: String,
 }
 
+/// Parsed OAuth authorization error callback.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthorizationErrorCallback {
+    pub error: Oid4vciError<AuthzErrorResponse>,
+    pub state: Option<String>,
+}
+
 /// Parsed authorization callback outcome.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum AuthorizationCallback {
     Success(AuthorizationResponse),
-    Error(Oid4vciError<AuthzErrorResponse>),
+    Error(AuthorizationErrorCallback),
+}
+
+impl AuthorizationCallback {
+    /// Return the callback `state` value, when present.
+    pub fn state(&self) -> Option<&str> {
+        match self {
+            Self::Success(response) => response.state.as_deref(),
+            Self::Error(response) => response.state.as_deref(),
+        }
+    }
 }
 
 /// Configuration for the OID4VCI client.
+///
+/// # Security
+///
+/// - Outbound requests are HTTPS-only and not configurable.
+/// - For testing purposes, hostname validation can be temporarily disabled via
+///   `accept_untrusted_hosts(true)`.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The wallet's OAuth 2.0 `client_id` as registered at the issuer AS.
@@ -130,7 +155,12 @@ pub struct Config {
     /// Optional user-agent value to send with every request.
     pub user_agent: Option<String>,
     /// Accept untrusted hosts (testing only).
+    ///
+    /// **WARNING**: This bypasses TLS certificate validation and HTTPS enforcement.
+    /// Only use in test environments with mock servers. Never enable in production.
     pub accept_untrusted_hosts: bool,
+    /// Use system proxy configuration discovered by the HTTP client.
+    pub use_system_proxy: bool,
 }
 
 impl Config {
@@ -147,6 +177,7 @@ impl Config {
             timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
             user_agent: None,
             accept_untrusted_hosts: false,
+            use_system_proxy: true,
         }
     }
 
@@ -171,6 +202,17 @@ impl Config {
     pub fn accept_untrusted_hosts(self, accept_untrusted_hosts: bool) -> Self {
         Self {
             accept_untrusted_hosts,
+            ..self
+        }
+    }
+
+    /// Enables or disables system proxy discovery.
+    ///
+    /// Disabling this is useful in tests and restricted runtime environments
+    /// where reading host networking configuration may fail during client setup.
+    pub fn use_system_proxy(self, use_system_proxy: bool) -> Self {
+        Self {
+            use_system_proxy,
             ..self
         }
     }
@@ -203,16 +245,24 @@ impl Oid4vciClient {
         let mut inner_client_builder = reqwest::Client::builder()
             .timeout(config.timeout)
             .tls_backend_rustls()
-            .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts)
-            .https_only(true);
+            .https_only(true)
+            .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts);
+
+        if config.accept_untrusted_hosts {
+            inner_client_builder = inner_client_builder.tls_danger_accept_invalid_certs(true);
+        }
+
+        if !config.use_system_proxy {
+            inner_client_builder = inner_client_builder.no_proxy();
+        }
 
         if let Some(ref user_agent) = config.user_agent {
             inner_client_builder = inner_client_builder.user_agent(user_agent);
         }
 
-        let inner_client = inner_client_builder
-            .build()
-            .map_err(|e| ClientError::configuration(format!("failed to build HTTP client: {e}")))?;
+        let inner_client = inner_client_builder.build().map_err(|e| {
+            ClientError::configuration(format!("failed to build HTTP client: {e:?}"))
+        })?;
 
         let http_client = ClientBuilder::new(inner_client)
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -443,25 +493,37 @@ impl Oid4vciClient {
         })
     }
 
+    /// Parses authorization callback query parameters into success/error result.
+    pub fn parse_authorization_callback(query: &str) -> Result<AuthorizationCallback> {
+        const RECOGNIZED: &[&str] = &["code", "state", "error", "error_description"];
+        let params = QueryParams::parse(query, RECOGNIZED)?;
+
+        if let Some(error_code) = params.get("error") {
+            let error = serde_json::from_value(serde_json::Value::String(error_code.to_owned()))
+                .map_err(|e| ClientError::InvalidResponse {
+                    message: format!("failed to parse authorization error: {e}").into(),
+                })?;
+            let error = Oid4vciError {
+                error,
+                error_description: params.get("error_description").map(ToOwned::to_owned),
+            };
+            return Ok(AuthorizationCallback::Error(AuthorizationErrorCallback {
+                error,
+                state: params.get("state").map(ToOwned::to_owned),
+            }));
+        }
+
+        let response = AuthorizationResponse::from_query(query)?;
+        Ok(AuthorizationCallback::Success(response))
+    }
+
     /// Parses authorization callback from redirect URI into success/error result.
     pub fn parse_authz_callback(&self, redirect_uri: &str) -> Result<AuthorizationCallback> {
         let url = Url::parse(redirect_uri)
             .map_err(|e| ClientError::validation(format!("invalid redirect uri: {e}")))?;
         let query = url.query().unwrap_or_default();
 
-        if url.query_pairs().any(|(k, _)| k == "error") {
-            let error =
-                serde_urlencoded::from_str(query).map_err(|e| ClientError::InvalidResponse {
-                    message: format!("failed to parse authorization error: {e}").into(),
-                })?;
-            return Ok(AuthorizationCallback::Error(error));
-        }
-
-        let response =
-            serde_urlencoded::from_str(query).map_err(|e| ClientError::InvalidResponse {
-                message: format!("failed to parse authorization response: {e}").into(),
-            })?;
-        Ok(AuthorizationCallback::Success(response))
+        Self::parse_authorization_callback(query)
     }
 
     /// Exchange an authorization code for an access token (authorization code flow).

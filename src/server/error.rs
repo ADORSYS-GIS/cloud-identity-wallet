@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use axum::{
     Json,
     http::StatusCode,
@@ -5,7 +7,11 @@ use axum::{
 };
 use serde::Serialize;
 
+use crate::domain::models::issuance::{
+    ConsentError, IssuanceError, IssuanceErrorCode, TxCodeError,
+};
 use crate::domain::models::tenants::TenantError;
+use crate::session::SessionError;
 
 /// The unified error type used by all HTTP handlers.
 ///
@@ -22,7 +28,7 @@ pub struct ApiError {
     /// HTTP status code.
     pub status: StatusCode,
     /// Machine-readable error code (snake_case ASCII).
-    pub error: &'static str,
+    pub error: Cow<'static, str>,
     /// Optional human-readable description. Omitted from JSON when None.
     pub error_description: Option<String>,
 }
@@ -33,7 +39,7 @@ impl ApiError {
         tracing::error!(error = %source, "internal server error");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            error: "internal_error",
+            error: Cow::Borrowed("internal_error"),
             error_description: Some("The server encountered an unexpected error.".into()),
         }
     }
@@ -49,7 +55,7 @@ impl IntoResponse for ApiError {
         }
 
         let body = Body {
-            error: self.error,
+            error: self.error.as_ref(),
             error_description: self.error_description.as_deref(),
         };
 
@@ -75,17 +81,116 @@ impl IntoApiError for TenantError {
         match self {
             TenantError::InvalidName(msg) => ApiError {
                 status: StatusCode::BAD_REQUEST,
-                error: "invalid_request",
+                error: Cow::Borrowed("invalid_request"),
                 error_description: Some(msg),
             },
             TenantError::NotFound { .. } => ApiError {
                 status: StatusCode::NOT_FOUND,
-                error: "not_found",
+                error: Cow::Borrowed("not_found"),
                 error_description: Some("Tenant not found.".into()),
             },
             TenantError::InvalidData(msg) => ApiError::internal(msg),
             TenantError::Backend(src) => ApiError::internal(src),
             TenantError::Encryption(src) => ApiError::internal(src),
+        }
+    }
+}
+
+impl IntoApiError for IssuanceError {
+    fn into_api_error(self) -> ApiError {
+        let status = match &self.error {
+            IssuanceErrorCode::InvalidCredentialOffer => StatusCode::BAD_REQUEST,
+            IssuanceErrorCode::IssuerMetadataFetchFailed => StatusCode::BAD_GATEWAY,
+            IssuanceErrorCode::AuthServerMetadataFetchFailed => StatusCode::BAD_GATEWAY,
+            IssuanceErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
+            IssuanceErrorCode::InvalidSessionState => StatusCode::CONFLICT,
+            IssuanceErrorCode::InvalidTxCode => StatusCode::BAD_REQUEST,
+            IssuanceErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+            IssuanceErrorCode::CredentialNotFound => StatusCode::NOT_FOUND,
+            IssuanceErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+            IssuanceErrorCode::Cancelled => StatusCode::CONFLICT,
+            IssuanceErrorCode::External(_) => StatusCode::BAD_GATEWAY,
+        };
+
+        ApiError {
+            status,
+            error: self.error.to_string().into(),
+            error_description: self.error_description,
+        }
+    }
+}
+
+impl IntoApiError for ConsentError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            ConsentError::NotFound(session_id) => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: Cow::Borrowed("session_not_found"),
+                error_description: Some(format!("Session {} does not exist", session_id)),
+            },
+            ConsentError::InvalidState => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_session_state"),
+                error_description: Some("Session is not in awaiting_consent state".into()),
+            },
+            ConsentError::AuthorizationUrlFailed(msg) => ApiError {
+                status: StatusCode::BAD_GATEWAY,
+                error: Cow::Borrowed("bad_gateway"),
+                error_description: Some(msg),
+            },
+            ConsentError::Storage(err) => ApiError::internal(err),
+            ConsentError::EventPublishing(msg) => {
+                tracing::warn!("Event publishing failed: {}", msg);
+                // Event publishing failures are not critical, so we don't return an error to the client
+                ApiError {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    error: Cow::Borrowed("internal_error"),
+                    error_description: Some(msg),
+                }
+            }
+        }
+    }
+}
+
+impl IntoApiError for SessionError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            SessionError::Store(err) => ApiError::internal(err),
+            SessionError::Encoding(err) => ApiError::internal(err),
+            SessionError::InvalidStateTransition(from, to) => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_state_transition"),
+                error_description: Some(format!(
+                    "Invalid state transition from {} to {}",
+                    from, to
+                )),
+            },
+            SessionError::Other(err) => ApiError::internal(err),
+        }
+    }
+}
+
+impl IntoApiError for TxCodeError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            TxCodeError::InvalidTxCode(description) => ApiError {
+                status: StatusCode::BAD_REQUEST,
+                error: Cow::Borrowed("invalid_tx_code"),
+                error_description: Some(description),
+            },
+            TxCodeError::SessionNotFound(session_id) => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: Cow::Borrowed("session_not_found"),
+                error_description: Some(format!(
+                    "No active session found for session_id {session_id}."
+                )),
+            },
+            TxCodeError::InvalidSessionState(description) => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_session_state"),
+                error_description: Some(description),
+            },
+            TxCodeError::SessionStore(source) => ApiError::internal(source),
         }
     }
 }

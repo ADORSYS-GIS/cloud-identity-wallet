@@ -4,9 +4,15 @@
 */
 
 mod credential;
+mod event_dispatch;
+mod task_queue;
 mod tenant;
 
 pub use credential::{MemoryCredentialRepo, SqlCredentialRepo};
+pub use event_dispatch::{
+    MemoryEventPublisher, MemoryEventSubscriber, RedisEventPublisher, RedisEventSubscriber,
+};
+pub use task_queue::{MemoryTaskQueue, RedisTaskQueue};
 pub use tenant::{MemoryTenantRepo, SqlTenantRepo, TenantKeyAlg};
 
 mod cipher {
