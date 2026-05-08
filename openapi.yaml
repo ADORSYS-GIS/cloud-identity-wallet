@@ -390,19 +390,17 @@ paths:
 
         **On success:**
         1. Validate `state` → recover session.
-        2. Exchange `code` for token (back-channel, with PKCE `code_verifier`).
-        3. Request credential(s) from the issuer's credential endpoint.
-        4. Store credential(s) and mark session `completed`.
-        5. Push `completed` SSE event.
-        6. Redirect to `<app_deep_link>?session_id=<session_id>&result=success`.
+        2. Mark the session `processing`.
+        3. Enqueue background issuance using the authorization code and PKCE
+           `code_verifier`.
+        4. Return `200 OK`. Completion or failure is reported through
+           the session's SSE stream.
 
         **On error (AS returns `error`):**
         1. Validate `state` → recover session.
-        2. Mark session `failed`; push `failed` SSE event (`step: "authorization"`).
-        3. Redirect to `<app_deep_link>?session_id=<session_id>&result=error&error=<error_code>`.
-
-        The `app_deep_link` scheme is configured per deployment and is out of
-        scope for this specification.
+        2. Push a `failed` SSE event (`step: "authorization"`).
+        3. Remove the session.
+        4. Return `200 OK`.
       security: [] # Authenticated via `state` parameter — no bearer token
       tags:
         - Issuance
@@ -436,24 +434,15 @@ paths:
           schema:
             type: string
       responses:
-        "302":
+        "200":
           description: |
-            Redirect to the frontend's registered deep link URI.
-            - Success: `<app_deep_link>?session_id=<id>&result=success`
-            - Error:   `<app_deep_link>?session_id=<id>&result=error&error=<code>`
-          headers:
-            Location:
-              required: true
-              schema:
-                type: string
-                format: uri
-              examples:
-                success:
-                  value: "wallet://issuance/callback?session_id=ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni&result=success"
-                error:
-                  value: "wallet://issuance/callback?session_id=ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni&result=error&error=access_denied"
+            Callback accepted. The response body is empty; clients observe
+            issuance progress through the session's SSE stream.
         "400":
-          description: Missing or invalid `state` parameter.
+          description: |
+            Missing or invalid `state` parameter. This includes unknown,
+            expired, or non-`awaiting_authorization` sessions; these all return
+            `400` to avoid leaking session existence to unauthenticated callers.
           content:
             application/json:
               schema:
@@ -461,15 +450,6 @@ paths:
               example:
                 error: invalid_request
                 error_description: Missing required `state` query parameter.
-        "404":
-          description: No active session found matching the given `state`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: session_not_found
-                error_description: No active session found for the given state value.
 
   # -------------------------------------------------------------------------
   # 6. Submit Transaction Code
