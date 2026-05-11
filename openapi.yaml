@@ -116,9 +116,11 @@ paths:
                     session_id: ses_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
                     expires_at: "2026-04-08T14:35:00Z"
                     issuer:
-                      credential_issuer: https://issuer.example.eu
-                      display_name: Example EU Identity Authority
-                      logo_uri: null
+                      - name: Example EU Identity Authority
+                        locale: en-US
+                        logo:
+                          uri: https://issuer.example.eu/assets/logo.svg
+                          alt_text: Example Issuer Logo
                     credential_types:
                       - credential_configuration_id: eu.europa.ec.eudi.pid.1
                         format: vc+sd-jwt
@@ -139,9 +141,8 @@ paths:
                     session_id: ses_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj
                     expires_at: "2026-04-08T14:35:00Z"
                     issuer:
-                      credential_issuer: https://issuer.example.eu
-                      display_name: Example EU Identity Authority
-                      logo_uri: null
+                      - name: Example EU Identity Authority
+                        locale: en-US
                     credential_types:
                       - credential_configuration_id: eu.europa.ec.eudi.lpid.1
                         format: vc+sd-jwt
@@ -150,7 +151,6 @@ paths:
                           description: Official EU legal entity identity credential
                           background_color: "#1a4f2e"
                           text_color: "#ffffff"
-                          logo: null
                     flow: pre_authorized_code
                     tx_code_required: true
                     tx_code:
@@ -913,7 +913,14 @@ components:
             is reached.
           example: "2026-04-08T14:35:00Z"
         issuer:
-          $ref: "#/components/schemas/IssuerSummary"
+          type: array
+          description: |
+            Display properties for the Credential Issuer per OpenID4VCI spec.
+            Contains one or more display objects for different locales.
+            Fallback: if no display metadata in issuer metadata, returns a single
+            entry with `name` set to the credential_issuer URL.
+          items:
+            $ref: "#/components/schemas/IssuerDisplay"
         credential_types:
           type: array
           description: |
@@ -944,36 +951,39 @@ components:
             - $ref: "#/components/schemas/TxCodeSpec"
             - type: "null"
 
-    IssuerSummary:
+    IssuerDisplay:
+      type: object
+      description: |
+        Display properties for a Credential Issuer per OpenID4VCI spec §12.2.4.
+        When issuer metadata lacks display info, a fallback object is created
+        with `name` set to the credential_issuer URL.
+      properties:
+        name:
+          type: string
+          description: Human-readable display name of the Credential Issuer.
+          example: Example EU Identity Authority
+        locale:
+          type: string
+          description: BCP47 language tag (e.g. "en-US").
+          example: en-US
+        logo:
+          $ref: "#/components/schemas/Logo"
+
+    Logo:
       type: object
       required:
-        - credential_issuer
-        - display_name
-        - logo_uri
-      description: Resolved issuer metadata summary returned by `/start`.
+        - uri
+      description: Logo information for display objects.
       properties:
-        credential_issuer:
+        uri:
           type: string
           format: uri
-          description: Issuer identifier URL.
-          example: https://issuer.example.eu
-        display_name:
-          description: |
-            Human-readable issuer name from issuer metadata `display[0].name`.
-            `null` if not present in the issuer metadata.
-          oneOf:
-            - type: string
-            - type: "null"
-          example: Example EU Identity Authority
-        logo_uri:
-          description: |
-            Issuer logo URI from issuer metadata `display[0].logo.uri`.
-            `null` if not present.
-          oneOf:
-            - type: string
-              format: uri
-            - type: "null"
-          example: null
+          description: URI where the logo image can be obtained.
+          example: https://issuer.example.eu/assets/logo.svg
+        alt_text:
+          type: string
+          description: Alternative text for accessibility.
+          example: EU Issuer Logo
 
     CredentialTypeDisplay:
       type: object
@@ -1025,24 +1035,8 @@ components:
         logo:
           description: Logo image metadata. `null` if no logo is available.
           oneOf:
-            - $ref: "#/components/schemas/CredentialLogo"
+            - $ref: "#/components/schemas/Logo"
             - type: "null"
-
-    CredentialLogo:
-      type: object
-      required:
-        - uri
-      description: Logo image for a credential type.
-      properties:
-        uri:
-          type: string
-          format: uri
-          description: URI of the logo image.
-          example: https://issuer.example.eu/assets/pid-logo.svg
-        alt_text:
-          type: string
-          description: Accessibility alt text for the logo image.
-          example: EU PID Logo
 
     TxCodeSpec:
       type: object
