@@ -5,10 +5,6 @@ pub mod utils;
 use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn delete_missing_auth_returns_401() {
     // Arrange
