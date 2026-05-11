@@ -8,15 +8,15 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
-    authorization_callback, get_session_events, health_check, home, register_tenant,
-    start_issuance, submit_consent, submit_transaction_code,
+    authorization_callback, delete_credential, get_session_events, health_check, home,
+    register_tenant, start_issuance, submit_consent, submit_transaction_code,
 };
 use crate::session::SessionStore;
 
 use axum::http::Method;
 use axum::{
     Router, middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
@@ -108,6 +108,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
         )
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route("/credentials/{credential_id}", delete(delete_credential))
         .route_layer(middleware::from_fn(auth::auth));
 
     Router::new()

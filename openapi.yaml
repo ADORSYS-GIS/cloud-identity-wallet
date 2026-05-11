@@ -709,6 +709,44 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+    # -----------------------------------------------------------------------
+    # 10. Delete Credential
+    # -----------------------------------------------------------------------
+    delete:
+      operationId: deleteCredential
+      summary: Delete a credential owned by the authenticated tenant
+      description: |
+        Permanently removes the credential identified by `id` from the wallet.
+
+        Ownership is verified by scoping the deletion to both the `id` path
+        parameter and the `tenant_id` extracted from the bearer JWT (`sub`
+        claim). If the credential does not exist **or** belongs to a different
+        tenant the response is `404 Not Found`; the two cases are intentionally
+        indistinguishable to avoid leaking information about other tenants'
+        credentials.
+      tags:
+        - Credentials
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '204':
+          description: Credential successfully deleted. No response body.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: |
+            No credential with that ID exists for the authenticated tenant, or
+            the credential belongs to a different tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: credential_not_found
+                error_description: "Credential not found."
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 # ---------------------------------------------------------------------------
 # Components
 # ---------------------------------------------------------------------------
