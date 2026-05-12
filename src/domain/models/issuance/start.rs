@@ -63,15 +63,17 @@ impl StartIssuanceResponse {
                     .and_then(|m| m.display.as_ref())
                     .filter(|d| !d.is_empty())
                     .cloned()
-                    .unwrap_or_else(|| vec![CredentialDisplay {
-                        name: id.clone(),
-                        locale: None,
-                        logo: None,
-                        background_color: None,
-                        background_image: None,
-                        text_color: None,
-                        description: None,
-                    }]);
+                    .unwrap_or_else(|| {
+                        vec![CredentialDisplay {
+                            name: id.clone(),
+                            locale: None,
+                            logo: None,
+                            background_color: None,
+                            background_image: None,
+                            text_color: None,
+                            description: None,
+                        }]
+                    });
 
                 Some(CredentialTypeDisplay {
                     credential_configuration_id: id.clone(),
