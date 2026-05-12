@@ -1,9 +1,9 @@
 use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
 use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
 use cloud_wallet_openid4vc::issuance::credential_offer::TxCode;
+use cloud_wallet_openid4vc::issuance::issuer_metadata::IssuerDisplay;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
-use url::Url;
 
 use super::IssuanceError;
 use crate::session::IssuanceSession;
@@ -19,7 +19,7 @@ pub struct StartIssuanceRequest {
 pub struct StartIssuanceResponse {
     pub session_id: String,
     pub expires_at: String,
-    pub issuer: IssuerInfo,
+    pub issuer: Vec<IssuerDisplay>,
     pub credential_types: Vec<CredentialTypeDisplay>,
     pub flow: String,
     pub tx_code_required: bool,
@@ -27,17 +27,10 @@ pub struct StartIssuanceResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct IssuerInfo {
-    pub credential_issuer: Url,
-    pub display_name: Option<String>,
-    pub logo_uri: Option<Url>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct CredentialTypeDisplay {
     pub credential_configuration_id: String,
     pub format: String,
-    pub display: Option<CredentialDisplay>,
+    pub display: Vec<CredentialDisplay>,
 }
 
 impl StartIssuanceResponse {
@@ -45,21 +38,13 @@ impl StartIssuanceResponse {
         context: &ResolvedOfferContext,
         session: &IssuanceSession,
     ) -> Result<Self, IssuanceError> {
-        let issuer = IssuerInfo {
-            credential_issuer: context.offer.credential_issuer.clone(),
-            display_name: context
-                .issuer_metadata
-                .display
-                .as_ref()
-                .and_then(|d| d.first())
-                .and_then(|d| d.name.clone()),
-            logo_uri: context
-                .issuer_metadata
-                .display
-                .as_ref()
-                .and_then(|d| d.first())
-                .and_then(|d| d.logo.as_ref())
-                .map(|l| l.uri.clone()),
+        let issuer = match &context.issuer_metadata.display {
+            Some(d) if !d.is_empty() => d.clone(),
+            _ => vec![IssuerDisplay {
+                name: Some(context.offer.credential_issuer.to_string()),
+                locale: None,
+                logo: None,
+            }],
         };
 
         let credential_types: Vec<CredentialTypeDisplay> = context
@@ -76,8 +61,19 @@ impl StartIssuanceResponse {
                     .credential_metadata
                     .as_ref()
                     .and_then(|m| m.display.as_ref())
-                    .and_then(|d| d.first())
-                    .cloned();
+                    .filter(|d| !d.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        vec![CredentialDisplay {
+                            name: id.clone(),
+                            locale: None,
+                            logo: None,
+                            background_color: None,
+                            background_image: None,
+                            text_color: None,
+                            description: None,
+                        }]
+                    });
 
                 Some(CredentialTypeDisplay {
                     credential_configuration_id: id.clone(),
