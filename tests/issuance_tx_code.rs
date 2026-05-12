@@ -20,7 +20,7 @@ use cloud_identity_wallet::{
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use jsonwebtoken::{Algorithm, Header, encode};
 use reqwest::Client;
 use time::OffsetDateTime;
 use url::Url;
@@ -98,31 +98,9 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
     }
 }
 
-fn create_test_keypair() -> (String, jsonwebtoken::jwk::Jwk) {
-    let private_key_pem = "-----BEGIN PRIVATE KEY-----
-        MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsJyilHyjhzXDVU2A
-        5ud6kfXPktY7wx5d8CQFe1nMzK2hRANCAAQ17IW//Yvrs4SmU1smlHTYgWKzj+UV
-        b0diaF8Xk6vqb3gB9qnvD4NxkNvLsQPPqjQKncEP831drigLydrC6WPT
-        -----END PRIVATE KEY-----
-    "
-    .to_string();
-
-    let public_key: jsonwebtoken::jwk::Jwk = serde_json::from_str(
-        r#"{
-            "kty": "EC",
-            "crv": "P-256",
-            "x": "NeyFv_2L67OEplNbJpR02IFis4_lFW9HYmhfF5Or6m8",
-            "y": "eAH2qe8Pg3GQ28uxA8-qNAqdwQ_zfV2uKAvJ2sLpY9M"
-        }"#,
-    )
-    .unwrap();
-
-    (private_key_pem, public_key)
-}
-
 fn create_test_bearer_token(tenant_id: Uuid) -> String {
-    let (private_pem, public_key) = create_test_keypair();
-    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
+    let (encoding_key, public_jwk) = utils::create_test_keypair();
+    let public_key: jsonwebtoken::jwk::Jwk = serde_json::from_value(public_jwk).unwrap();
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let claims = serde_json::json!({

@@ -8,25 +8,6 @@ use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn create_test_keypair() -> (String, serde_json::Value) {
-    let private_key_pem = "-----BEGIN PRIVATE KEY-----
-        MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsJyilHyjhzXDVU2A
-        5ud6kfXPktY7wx5d8CQFe1nMzK2hRANCAAQ17IW//Yvrs4SmU1smlHTYgWKzj+UV
-        b0diaF8Xk6vqb3gB9qnvD4NxkNvLsQPPqjQKncEP831drigLydrC6WPT
-        -----END PRIVATE KEY-----
-    "
-    .to_string();
-
-    let public_jwk = json!({
-        "kty": "EC",
-        "crv": "P-256",
-        "x": "NeyFv_2L67OEplNbJpR02IFis4_lFW9HYmhfF5Or6m8",
-        "y": "eAH2qe8Pg3GQ28uxA8-qNAqdwQ_zfV2uKAvJ2sLpY9M"
-    });
-
-    (private_key_pem, public_jwk)
-}
-
 fn create_test_token(
     tenant_id: Uuid,
     encoding_key: &EncodingKey,
@@ -98,9 +79,8 @@ async fn empty_offer_with_valid_auth_returns_400() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
-    let (private_pem, public_jwk) = create_test_keypair();
+    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
     let token = create_test_token(tenant_id, &encoding_key, public_jwk);
 
     let response = client
@@ -122,9 +102,8 @@ async fn missing_offer_field_returns_422() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
-    let (private_pem, public_jwk) = create_test_keypair();
+    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
     let token = create_test_token(tenant_id, &encoding_key, public_jwk);
 
     let response = client
@@ -143,9 +122,8 @@ async fn invalid_offer_uri_returns_internal_error() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
-    let (private_pem, public_jwk) = create_test_keypair();
+    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
     let token = create_test_token(tenant_id, &encoding_key, public_jwk);
 
     let response = client
