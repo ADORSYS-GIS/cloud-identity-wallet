@@ -163,7 +163,7 @@ async fn load_awaiting_consent<S: SessionStore>(
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             error: Cow::Borrowed("session_not_found"),
-            error_description: Some("session_id does not exist or has expired.".into()),
+            error_description: Some("Session does not exist or has expired.".into()),
         });
     };
 
