@@ -8,6 +8,8 @@ use cloud_identity_wallet::{
     session::MemorySession,
     setup,
 };
+use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
+use jsonwebtoken::EncodingKey;
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
@@ -77,4 +79,23 @@ pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// Creates a fresh P-256 keypair for testing purposes.
+/// Returns (EncodingKey, public JWK as serde_json::Value).
+///
+/// This function generates a new random keypair each time it is called,
+/// ensuring tests exercise real key generation logic.
+pub fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
+    use cloud_wallet_crypto::jwk::Jwk;
+
+    let keypair = EcdsaKeyPair::generate(Curve::P256).expect("failed to generate P-256 keypair");
+    let der = keypair.to_pkcs8_der();
+    let encoding_key = EncodingKey::from_ec_der(&der);
+
+    // Convert to JWK using the cloud_wallet_crypto library
+    let jwk: Jwk = Jwk::try_from(&keypair).expect("failed to convert to JWK");
+    let public_jwk = serde_json::to_value(jwk).expect("failed to serialize JWK");
+
+    (encoding_key, public_jwk)
 }
