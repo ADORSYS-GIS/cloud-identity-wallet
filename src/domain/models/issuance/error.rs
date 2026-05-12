@@ -237,7 +237,8 @@ impl From<ClientError> for IssuanceError {
                     IssuanceStep::DeferredCredential,
                     oid4vci_error_code(&e.error),
                     e.error_description.or(alt_description),
-            )},
+                )
+            }
             ClientError::Notification(e) => Self::external(
                 IssuanceStep::Notification,
                 oid4vci_error_code(&e.error),
