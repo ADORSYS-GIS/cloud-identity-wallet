@@ -8,8 +8,8 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
-    get_credential, get_session_events, health_check, home, list_credentials, register_tenant,
-    start_issuance, submit_consent, submit_transaction_code,
+    authorization_callback, get_credential, get_session_events, health_check, home,
+    list_credentials, register_tenant, start_issuance, submit_consent, submit_transaction_code,
 };
 use crate::session::SessionStore;
 
@@ -114,6 +114,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
 
     Router::new()
         .route("/tenants", post(register_tenant))
+        .route("/issuance/callback", get(authorization_callback))
         .route("/issuance/{session_id}/events", get(get_session_events))
         .merge(protected_routes)
 }
