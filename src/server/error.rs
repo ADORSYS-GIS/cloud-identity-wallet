@@ -112,6 +112,23 @@ impl IntoApiError for IssuanceError {
             IssuanceErrorCode::External(_) => StatusCode::BAD_GATEWAY,
         };
 
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(
+                error = %self,
+                error.source = ?self.source,
+                step = %self.step,
+                "issuance internal error"
+            );
+        }
+        if status == StatusCode::BAD_GATEWAY {
+            tracing::warn!(
+                error = %self,
+                error.source = ?self.source,
+                step = %self.step,
+                "external system error during issuance"
+            );
+        }
+
         ApiError {
             status,
             error: self.error.to_string().into(),
@@ -126,28 +143,15 @@ impl IntoApiError for ConsentError {
             ConsentError::NotFound(session_id) => ApiError {
                 status: StatusCode::NOT_FOUND,
                 error: Cow::Borrowed("session_not_found"),
-                error_description: Some(format!("Session {} does not exist", session_id)),
+                error_description: Some(format!("Session {session_id} does not exist")),
             },
             ConsentError::InvalidState => ApiError {
                 status: StatusCode::CONFLICT,
                 error: Cow::Borrowed("invalid_session_state"),
                 error_description: Some("Session is not in awaiting_consent state".into()),
             },
-            ConsentError::AuthorizationUrlFailed(msg) => ApiError {
-                status: StatusCode::BAD_GATEWAY,
-                error: Cow::Borrowed("bad_gateway"),
-                error_description: Some(msg),
-            },
             ConsentError::Storage(err) => ApiError::internal(err),
-            ConsentError::EventPublishing(msg) => {
-                tracing::warn!("Event publishing failed: {}", msg);
-                // Event publishing failures are not critical, so we don't return an error to the client
-                ApiError {
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                    error: Cow::Borrowed("internal_error"),
-                    error_description: Some(msg),
-                }
-            }
+            ConsentError::EventPublishing(msg) => ApiError::internal(msg),
         }
     }
 }
@@ -160,10 +164,7 @@ impl IntoApiError for SessionError {
             SessionError::InvalidStateTransition(from, to) => ApiError {
                 status: StatusCode::CONFLICT,
                 error: Cow::Borrowed("invalid_state_transition"),
-                error_description: Some(format!(
-                    "Invalid state transition from {} to {}",
-                    from, to
-                )),
+                error_description: Some(format!("Invalid state transition from {from} to {to}")),
             },
             SessionError::Other(err) => ApiError::internal(err),
         }

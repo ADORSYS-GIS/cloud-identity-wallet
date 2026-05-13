@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, Oid4vciClient};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -21,7 +21,7 @@ pub async fn start_issuance<S: SessionStore + Clone>(
     Extension(tenant_id): Extension<Uuid>,
     Json(payload): Json<StartIssuanceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (_, _, response) = start_issuance_session(
+    let response = start_issuance_session(
         &state.service.issuance_engine.client,
         &state.service.session,
         &payload.offer,
@@ -37,7 +37,7 @@ async fn start_issuance_session<S: SessionStore>(
     session_store: &S,
     offer: &str,
     tenant_id: Uuid,
-) -> Result<(ResolvedOfferContext, IssuanceSession, StartIssuanceResponse), IssuanceError> {
+) -> Result<StartIssuanceResponse, IssuanceError> {
     if offer.is_empty() {
         return Err(IssuanceError::new(
             IssuanceErrorCode::InvalidCredentialOffer,
@@ -48,10 +48,7 @@ async fn start_issuance_session<S: SessionStore>(
 
     debug!(offer = %offer, "resolving credential offer");
 
-    let context = client
-        .resolve_offer_with_metadata(offer, None)
-        .await
-        .map_err(Into::<IssuanceError>::into)?;
+    let context = client.resolve_offer_with_metadata(offer, None).await?;
 
     let flow_type = match &context.flow {
         IssuanceFlow::AuthorizationCode { .. } => FlowType::AuthorizationCode,
@@ -59,13 +56,9 @@ async fn start_issuance_session<S: SessionStore>(
     };
 
     let session = IssuanceSession::new(tenant_id, context.clone(), flow_type);
-
-    session_store
-        .upsert(session.id.clone(), &session)
-        .await
-        .map_err(Into::<IssuanceError>::into)?;
-
     let response = StartIssuanceResponse::from_context(&context, &session)?;
 
-    Ok((context, session, response))
+    session_store.upsert(session.id.clone(), &session).await?;
+
+    Ok(response)
 }
