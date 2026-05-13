@@ -91,7 +91,7 @@ pub fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
 
     let keypair = EcdsaKeyPair::generate(Curve::P256).expect("failed to generate P-256 keypair");
     let der = keypair.to_pkcs8_der();
-    let encoding_key = EncodingKey::from_ec_der(&der);
+    let encoding_key = EncodingKey::from_ec_der(der);
 
     // Convert to JWK using the cloud_wallet_crypto library
     let jwk: Jwk = Jwk::try_from(&keypair).expect("failed to convert to JWK");
