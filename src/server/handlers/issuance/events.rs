@@ -33,12 +33,7 @@ pub async fn get_session_events<S: SessionStore + Clone>(
         return Err(session_not_found());
     }
 
-    let stream = state
-        .service
-        .issuance_engine
-        .subscribe(&session_id)
-        .await
-        .map_err(ApiError::internal)?;
+    let stream = state.service.issuance_engine.subscribe(&session_id).await?;
 
     debug!(session_id = %session_id, "SSE stream established");
     Ok((event_stream_to_sse(stream)).into_response())
