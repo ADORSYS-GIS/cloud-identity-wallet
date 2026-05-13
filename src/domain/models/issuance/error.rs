@@ -55,13 +55,25 @@ impl fmt::Display for IssuanceErrorCode {
 
 /// Error that can occur during credential issuance orchestration.
 #[derive(Debug, thiserror::Error)]
-#[error("{error}: {error_description:?}")]
 pub struct IssuanceError {
     pub error: IssuanceErrorCode,
     pub error_description: Option<String>,
     pub step: IssuanceStep,
     #[source]
     pub source: Option<DynError>,
+}
+
+impl fmt::Display for IssuanceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.error)?;
+        if let Some(desc) = &self.error_description {
+            write!(f, ": {desc}")?;
+        }
+        if let Some(source) = &self.source {
+            write!(f, "\n\ncaused by:\n\t{source}")?;
+        }
+        Ok(())
+    }
 }
 
 impl IssuanceError {
@@ -195,26 +207,38 @@ fn oid4vci_error_code<T: Serialize>(error: &T) -> String {
 impl From<ClientError> for IssuanceError {
     fn from(err: ClientError) -> Self {
         match err {
-            ClientError::Authorization(e) => Self::external(
-                IssuanceStep::Authorization,
-                oid4vci_error_code(&e.error),
-                e.error_description,
-            ),
-            ClientError::Token(e) => Self::external(
-                IssuanceStep::Token,
-                oid4vci_error_code(&e.error),
-                e.error_description,
-            ),
-            ClientError::Credential(e) => Self::external(
-                IssuanceStep::CredentialRequest,
-                oid4vci_error_code(&e.error),
-                e.error_description,
-            ),
-            ClientError::DeferredCredential(e) => Self::external(
-                IssuanceStep::DeferredCredential,
-                oid4vci_error_code(&e.error),
-                e.error_description,
-            ),
+            ClientError::Authorization(e) => {
+                let alt_description = Some(e.to_string());
+                Self::external(
+                    IssuanceStep::Authorization,
+                    oid4vci_error_code(&e.error),
+                    e.error_description.or(alt_description),
+                )
+            }
+            ClientError::Token(e) => {
+                let alt_description = Some(e.to_string());
+                Self::external(
+                    IssuanceStep::Token,
+                    oid4vci_error_code(&e.error),
+                    e.error_description.or(alt_description),
+                )
+            }
+            ClientError::Credential(e) => {
+                let alt_description = Some(e.to_string());
+                Self::external(
+                    IssuanceStep::CredentialRequest,
+                    oid4vci_error_code(&e.error),
+                    e.error_description.or(alt_description),
+                )
+            }
+            ClientError::DeferredCredential(e) => {
+                let alt_description = Some(e.to_string());
+                Self::external(
+                    IssuanceStep::DeferredCredential,
+                    oid4vci_error_code(&e.error),
+                    e.error_description.or(alt_description),
+                )
+            }
             ClientError::Notification(e) => Self::external(
                 IssuanceStep::Notification,
                 oid4vci_error_code(&e.error),

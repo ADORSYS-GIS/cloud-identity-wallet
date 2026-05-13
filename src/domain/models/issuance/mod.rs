@@ -295,7 +295,7 @@ impl IssuanceEngine {
             .await;
 
         if let Err(ref err) = result {
-            error!(error = %err, step = %err.step(), "issuance failed");
+            error!(error = ?err, step = %err.step(), "issuance failed");
 
             // Emit failed SSE event
             let failed = IssuanceEvent::Failed(SseFailedEvent::new(
