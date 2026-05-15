@@ -27,8 +27,9 @@ impl<S: SessionStore + Clone> Service<S> {
 impl<S: SessionStore> Service<S> {
     /// Deletes a credential owned by the authenticated tenant.
     ///
-    /// Scopes the deletion to `credential_id` + `tenant_id` so that one tenant
-    /// can never remove another tenant's credential.
+    /// Returns [`CredentialError::NotFound`] when no credential with the given
+    /// `credential_id` exists for `tenant_id`, ensuring one tenant can never
+    /// observe or remove another tenant's credential.
     pub async fn delete_credential(
         &self,
         credential_id: Uuid,

@@ -2,13 +2,53 @@
 
 pub mod utils;
 
+use std::sync::Arc;
+
 use reqwest::{Client, StatusCode};
 use uuid::Uuid;
+
+use cloud_identity_wallet::{
+    domain::ports::CredentialRepo,
+    server::Server,
+    session::MemorySession,
+    outbound::MemoryTenantRepo,
+    setup,
+};
+
+/// Aborts the server task when dropped, preventing socket/fd leaks between tests.
+struct ServerHandle(tokio::task::JoinHandle<color_eyre::eyre::Result<()>>);
+
+impl Drop for ServerHandle {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Spawns a test server and returns the base URL, the shared credential
+/// repository for direct seeding, and a [`ServerHandle`] that aborts the
+/// server task when dropped.
+///
+/// Keep the `ServerHandle` alive for the duration of the test.
+async fn spawn_server_with_repo() -> (String, Arc<dyn CredentialRepo>, ServerHandle) {
+    let config = utils::make_config();
+    let session_store = MemorySession::default();
+    let tenant_repo = MemoryTenantRepo::new();
+    let service = setup::build_service(session_store, tenant_repo, &config).unwrap();
+    let credential_repo = Arc::clone(&service.issuance_engine.credential_repo);
+    let server = Server::new(&config, service).await.unwrap();
+    let port = server.port();
+    let handle = ServerHandle(tokio::spawn(server.run()));
+    (
+        format!("http://{}:{}", config.server.host, port),
+        credential_repo,
+        handle,
+    )
+}
 
 #[tokio::test]
 async fn delete_missing_auth_returns_401() {
     // Arrange
-    let (base_url, _, _handle) = utils::spawn_server_with_repo().await;
+    let (base_url, _, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
     let id = Uuid::new_v4();
 
@@ -26,7 +66,7 @@ async fn delete_missing_auth_returns_401() {
 #[tokio::test]
 async fn delete_owned_credential_returns_204() {
     // Arrange
-    let (base_url, repo, _handle) = utils::spawn_server_with_repo().await;
+    let (base_url, repo, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();
@@ -54,7 +94,7 @@ async fn delete_owned_credential_returns_204() {
 #[tokio::test]
 async fn delete_is_idempotent_second_call_returns_404() {
     // Arrange
-    let (base_url, repo, _handle) = utils::spawn_server_with_repo().await;
+    let (base_url, repo, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();
@@ -93,7 +133,7 @@ async fn delete_is_idempotent_second_call_returns_404() {
 #[tokio::test]
 async fn delete_another_tenants_credential_returns_404() {
     // Arrange — two tenants share the same server instance
-    let (base_url, repo, _handle) = utils::spawn_server_with_repo().await;
+    let (base_url, repo, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();
@@ -134,7 +174,7 @@ async fn delete_another_tenants_credential_returns_404() {
 #[tokio::test]
 async fn delete_nonexistent_credential_returns_404() {
     // Arrange
-    let (base_url, _, _handle) = utils::spawn_server_with_repo().await;
+    let (base_url, _, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();

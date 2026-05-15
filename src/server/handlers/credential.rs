@@ -12,10 +12,9 @@ use crate::session::SessionStore;
 
 /// Deletes a credential owned by the authenticated tenant.
 ///
-/// Verifies tenant ownership by scoping the deletion to both `credential_id`
-/// and the `tenant_id` extracted from the bearer token. Returns `404` when the
-/// credential does not exist **or** belongs to a different tenant, preventing
-/// information leakage about other tenants' credentials.
+/// Returns `404` when the credential does not exist **or** belongs to a
+/// different tenant, preventing information leakage about other tenants'
+/// credentials.
 pub async fn delete_credential<S: SessionStore>(
     State(state): State<AppState<S>>,
     Extension(tenant_id): Extension<Uuid>,
