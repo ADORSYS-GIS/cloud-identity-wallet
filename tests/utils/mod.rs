@@ -8,8 +8,10 @@ use cloud_identity_wallet::{
     session::MemorySession,
     setup,
 };
+use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use sqlx::{AnyPool, ConnectOptions};
-use time::UtcDateTime;
+use time::{OffsetDateTime, UtcDateTime};
 use url::Url;
 use uuid::Uuid;
 
@@ -60,7 +62,7 @@ pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
         url.as_str().starts_with("postgres://") || url.as_str().starts_with("postgresql://");
     let key_algorithm = "eddsa";
     let key_material = vec![0u8; 32];
-    let created_at = UtcDateTime::now().unix_timestamp();
+    let created_at = OffsetDateTime::now_utc().unix_timestamp();
 
     let query = if is_postgres {
         "INSERT INTO tenants (id, name, key_algorithm, key_material, created_at) VALUES ($1, $2, $3, $4, $5)"
@@ -77,4 +79,51 @@ pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// Creates a fresh P-256 keypair for testing purposes.
+/// Returns (EncodingKey, public JWK as serde_json::Value).
+///
+/// This function generates a new random keypair each time it is called,
+/// ensuring tests exercise real key generation logic.
+pub fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
+    use cloud_wallet_crypto::jwk::Jwk;
+
+    let keypair = EcdsaKeyPair::generate(Curve::P256).expect("failed to generate P-256 keypair");
+    let der = keypair.to_pkcs8_der();
+    let encoding_key = EncodingKey::from_ec_der(der);
+
+    // Convert to JWK using the cloud_wallet_crypto library
+    let jwk: Jwk = Jwk::try_from(&keypair).expect("failed to convert to JWK");
+    let public_jwk = serde_json::to_value(jwk).expect("failed to serialize JWK");
+
+    (encoding_key, public_jwk)
+}
+
+/// Creates a test JWT bearer token for authentication in integration tests.
+///
+/// This function generates a new keypair and creates a signed JWT token
+/// with the given tenant_id as the subject claim. The token is valid for 1 hour.
+///
+/// # Arguments
+/// * `tenant_id` - The UUID to use as the subject claim in the token
+///
+/// # Returns
+/// A signed JWT token string suitable for use in Authorization headers
+pub fn create_test_bearer_token(tenant_id: Uuid) -> String {
+    let (encoding_key, public_jwk) = create_test_keypair();
+    let public_key: jsonwebtoken::jwk::Jwk =
+        serde_json::from_value(public_jwk).expect("failed to parse public JWK");
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let claims = serde_json::json!({
+        "sub": tenant_id,
+        "iat": now,
+        "exp": now + 3600,
+    });
+
+    let mut header = Header::new(Algorithm::ES256);
+    header.jwk = Some(public_key);
+
+    encode(&header, &claims, &encoding_key).expect("failed to encode JWT")
 }
