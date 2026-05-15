@@ -2,30 +2,9 @@
 
 pub mod utils;
 
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::{Client, StatusCode};
 use serde_json::json;
-use time::OffsetDateTime;
 use uuid::Uuid;
-
-fn create_test_token(
-    tenant_id: Uuid,
-    encoding_key: &EncodingKey,
-    jwk: serde_json::Value,
-) -> String {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-
-    let claims = json!({
-        "sub": tenant_id,
-        "iat": now,
-        "exp": now + 3600
-    });
-
-    let mut header = Header::new(Algorithm::ES256);
-    header.jwk = Some(serde_json::from_value(jwk).unwrap());
-
-    encode(&header, &claims, encoding_key).unwrap()
-}
 
 #[tokio::test]
 async fn missing_authorization_returns_401() {
@@ -81,7 +60,7 @@ async fn empty_offer_with_valid_auth_returns_400() {
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = create_test_token(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_token_with_keypair(tenant_id, &encoding_key, public_jwk);
 
     let response = client
         .post(format!("{}/api/v1/issuance/start", base_url))
@@ -104,7 +83,7 @@ async fn missing_offer_field_returns_422() {
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = create_test_token(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_token_with_keypair(tenant_id, &encoding_key, public_jwk);
 
     let response = client
         .post(format!("{}/api/v1/issuance/start", base_url))
@@ -124,7 +103,7 @@ async fn invalid_offer_uri_returns_internal_error() {
 
     let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = create_test_token(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_token_with_keypair(tenant_id, &encoding_key, public_jwk);
 
     let response = client
         .post(format!("{}/api/v1/issuance/start", base_url))
