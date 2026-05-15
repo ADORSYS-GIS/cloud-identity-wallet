@@ -2,7 +2,10 @@
 
 use cloud_identity_wallet::{
     config::Config,
-    domain::models::credential::{Credential, CredentialFormat, CredentialStatus},
+    domain::{
+        models::credential::{Credential, CredentialFormat, CredentialStatus},
+        service::Service,
+    },
     outbound::{MemoryCredentialRepo, MemoryTenantRepo},
     server::Server,
     session::MemorySession,
@@ -72,8 +75,15 @@ async fn spawn_server_internal() -> (String, MemoryCredentialRepo) {
     };
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
-    let (service, credential_repo) =
-        setup::build_service_with_repo(session_store, tenant_repo, &config).unwrap();
+    let credential_repo = MemoryCredentialRepo::new();
+    let engine = setup::build_issuance_engine(
+        &config,
+        tenant_repo.clone(),
+        &session_store,
+        credential_repo.clone(),
+    )
+    .unwrap();
+    let service = Service::new(session_store, tenant_repo, engine);
     let server = Server::new(&config, service).await.unwrap();
 
     let port = server.port();
