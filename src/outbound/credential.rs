@@ -391,6 +391,7 @@ impl<'d> FilterBuilder<'d> {
     /// - **Postgres**: `AND credential_types::jsonb @> $N::jsonb` (one bind for the whole array)
     /// - **MySQL**: one `AND JSON_CONTAINS(credential_types, ?, '$') = 1` per type
     /// - **SQLite**: one `AND EXISTS (SELECT 1 FROM json_each(credential_types) WHERE value = ?)` per type
+    #[cfg(test)]
     fn and_types_contain(&mut self, types: &[String]) -> Result<()> {
         if types.is_empty() {
             return Ok(());
