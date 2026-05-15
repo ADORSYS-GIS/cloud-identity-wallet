@@ -10,7 +10,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::domain::models::credential::{
-    Credential, CredentialError, CredentialFilter, CredentialFormat, CredentialStatus,
+    Credential, CredentialDisplayMetadata, CredentialError, CredentialFilter, CredentialFormat,
+    CredentialStatus, CredentialSummary,
 };
 use crate::domain::ports::CredentialRepo;
 use crate::outbound::cipher::{self, Cipher};
@@ -256,8 +257,13 @@ impl CredentialRecord {
 
 #[async_trait::async_trait]
 impl CredentialRepo for SqlCredentialRepo {
-    async fn upsert(&self, mut credential: Credential) -> Result<Uuid> {
+    async fn upsert(
+        &self,
+        mut credential: Credential,
+        display: Option<CredentialDisplayMetadata>,
+    ) -> Result<Uuid> {
         let credential_id = credential.id;
+        let tenant_id = credential.tenant_id;
         let mut raw_credential = std::mem::take(&mut credential.raw_credential).into_bytes();
         let payload_encrypted = self
             .maybe_encrypt(&credential.id, &mut raw_credential)
@@ -268,6 +274,20 @@ impl CredentialRepo for SqlCredentialRepo {
         // Begin and commit transaction
         let mut tx = self.pool.begin().await?;
         self.upsert_inner(&mut tx, &record).await?;
+
+        // Atomically insert display metadata in the same transaction
+        if let Some(metadata) = display {
+            let display_json = serde_json::to_vec(&metadata.display)?;
+            sqlx::query(INSERT_DISPLAY_METADATA.for_driver(&self.driver))
+                .bind(credential_id.to_string())
+                .bind(tenant_id.to_string())
+                .bind(display_json)
+                .bind(&metadata.issuer_name)
+                .bind(&metadata.credential_type)
+                .execute(&mut *tx)
+                .await?;
+        }
+
         tx.commit().await?;
         Ok(credential_id)
     }
@@ -291,34 +311,33 @@ impl CredentialRepo for SqlCredentialRepo {
         row.into_credential_with_ids(parsed_id, parsed_tenant_id)
     }
 
-    async fn list(&self, filter: CredentialFilter) -> Result<Vec<Credential>> {
-        // Build SQL and collect bind values together.
-        let mut builder = FilterBuilder::new(&self.driver);
+    async fn list(&self, filter: CredentialFilter) -> Result<Vec<CredentialSummary>> {
+        let mut builder = FilterBuilder::for_summaries(&self.driver);
 
         if let Some(ref tenant_id) = filter.tenant_id {
-            builder.and("tenant_id", tenant_id.to_string());
+            builder.and("c.tenant_id", tenant_id.to_string());
         }
         if let Some(ref types) = filter.credential_types {
             builder.and_types_contain(types)?;
         }
         if let Some(ref status) = filter.status {
-            builder.and("status", status.as_str().to_owned());
+            builder.and("c.status", status.as_str().to_owned());
         }
         if let Some(ref format) = filter.format {
-            builder.and("format", format.as_str().to_owned());
+            builder.and("c.format", format.as_str().to_owned());
         }
         if let Some(ref issuer) = filter.issuer {
-            builder.and("issuer", issuer.clone());
+            builder.and("c.issuer", issuer.clone());
         }
         if let Some(ref subject) = filter.subject {
-            builder.and("subject", subject.clone());
+            builder.and("c.subject", subject.clone());
         }
         if filter.exclude_expired {
             builder.and_exclude_expired();
         }
 
         let (sql, values, expire_ts) = builder.build();
-        let mut query = sqlx::query_as::<_, CredentialRecord>(&sql);
+        let mut query = sqlx::query_as::<_, DisplayMetadataRecord>(&sql);
 
         for value in values {
             query = query.bind(value);
@@ -328,14 +347,7 @@ impl CredentialRepo for SqlCredentialRepo {
         }
 
         let rows = query.fetch_all(&self.pool).await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for mut row in rows {
-            let (id, tenant_id) = row.parse_ids()?;
-            self.maybe_decrypt(&id, &mut row.raw_credential, row.payload_encrypted != 0)
-                .await?;
-            out.push(row.into_credential_with_ids(id, tenant_id)?);
-        }
-        Ok(out)
+        rows.into_iter().map(CredentialSummary::try_from).collect()
     }
 
     async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<()> {
@@ -353,19 +365,29 @@ struct FilterBuilder<'d> {
     sql: String,
     values: Vec<String>,
     exclude_expired_ts: Option<i64>,
+    credential_types: &'static str,
+    valid_until: &'static str,
+    order_by: &'static str,
 }
 
 impl<'d> FilterBuilder<'d> {
-    fn new(driver: &'d Driver) -> Self {
-        let mut sql = String::with_capacity(256);
-        sql.push_str("SELECT ");
-        sql.push_str(SELECT_COLUMNS);
-        sql.push_str(" FROM credentials WHERE 1 = 1");
+    fn for_summaries(driver: &'d Driver) -> Self {
+        let sql = String::from(
+            "SELECT c.id AS credential_id, c.issued_at, \
+             d.display, d.issuer_name, d.credential_type \
+             FROM credentials c \
+             INNER JOIN credential_display_metadata d \
+             ON c.id = d.credential_id AND c.tenant_id = d.tenant_id \
+             WHERE 1 = 1",
+        );
         Self {
             driver,
             sql,
             values: vec![],
             exclude_expired_ts: None,
+            credential_types: "c.credential_types",
+            valid_until: "c.valid_until",
+            order_by: "c.issued_at DESC",
         }
     }
 
@@ -382,9 +404,9 @@ impl<'d> FilterBuilder<'d> {
     /// only rows whose `credential_types` JSON array contains **all** of the
     /// requested types, regardless of order or extra elements.
     ///
-    /// - **Postgres**: `AND credential_types::jsonb @> $N::jsonb` (one bind for the whole array)
-    /// - **MySQL**: one `AND JSON_CONTAINS(credential_types, ?, '$') = 1` per type
-    /// - **SQLite**: one `AND EXISTS (SELECT 1 FROM json_each(credential_types) WHERE value = ?)` per type
+    /// - **Postgres**: one `@>` clause with one bind for the whole array
+    /// - **MySQL**: one `JSON_CONTAINS` clause per type
+    /// - **SQLite**: one `json_each` membership clause per type
     fn and_types_contain(&mut self, types: &[String]) -> Result<()> {
         if types.is_empty() {
             return Ok(());
@@ -392,17 +414,20 @@ impl<'d> FilterBuilder<'d> {
         match self.driver {
             Driver::Postgres => {
                 let index = self.values.len() + 1;
-                self.sql.push_str(" AND credential_types::jsonb @> ");
+                self.sql.push_str(" AND ");
+                self.sql.push_str(self.credential_types);
+                self.sql.push_str("::jsonb @> ");
                 self.driver.write_placeholder(&mut self.sql, index);
                 self.sql.push_str("::jsonb");
-                // Vec<String> is always JSON-serializable.
                 let encoded = serde_json::to_string(types)?;
                 self.values.push(encoded);
             }
             Driver::MySql => {
                 for type_str in types {
                     let index = self.values.len() + 1;
-                    self.sql.push_str(" AND JSON_CONTAINS(credential_types, ");
+                    self.sql.push_str(" AND JSON_CONTAINS(");
+                    self.sql.push_str(self.credential_types);
+                    self.sql.push_str(", ");
                     self.driver.write_placeholder(&mut self.sql, index);
                     self.sql.push_str(", '$') = 1");
                     // MySQL JSON_CONTAINS expects a JSON-encoded search value,
@@ -414,9 +439,9 @@ impl<'d> FilterBuilder<'d> {
             Driver::Sqlite => {
                 for type_str in types {
                     let index = self.values.len() + 1;
-                    self.sql.push_str(
-                        " AND EXISTS (SELECT 1 FROM json_each(credential_types) WHERE value = ",
-                    );
+                    self.sql.push_str(" AND EXISTS (SELECT 1 FROM json_each(");
+                    self.sql.push_str(self.credential_types);
+                    self.sql.push_str(") WHERE value = ");
                     self.driver.write_placeholder(&mut self.sql, index);
                     self.sql.push(')');
                     // json_each yields decoded string values, so bind the plain string.
@@ -435,12 +460,16 @@ impl<'d> FilterBuilder<'d> {
     fn build(mut self) -> (String, Vec<String>, Option<i64>) {
         if self.exclude_expired_ts.is_some() {
             let index = self.values.len() + 1;
-            self.sql
-                .push_str(" AND (valid_until IS NULL OR valid_until > ");
+            self.sql.push_str(" AND (");
+            self.sql.push_str(self.valid_until);
+            self.sql.push_str(" IS NULL OR ");
+            self.sql.push_str(self.valid_until);
+            self.sql.push_str(" > ");
             self.driver.write_placeholder(&mut self.sql, index);
             self.sql.push(')');
         }
-        self.sql.push_str(" ORDER BY issued_at DESC");
+        self.sql.push_str(" ORDER BY ");
+        self.sql.push_str(self.order_by);
         (self.sql, self.values, self.exclude_expired_ts)
     }
 }
@@ -498,10 +527,6 @@ async fn update_credential(
     Ok(result.rows_affected())
 }
 
-const SELECT_COLUMNS: &str = "id, tenant_id, issuer, subject, credential_types, format, external_id, \
-     status, issued_at, valid_until, is_revoked, status_location, status_index, raw_credential, \
-     payload_encrypted";
-
 static FIND_CREDENTIAL: Query = Query::new(
     "SELECT id, tenant_id, issuer, subject, credential_types, format, external_id, status, \
      issued_at, valid_until, is_revoked, status_location, status_index, raw_credential, \
@@ -528,6 +553,42 @@ static UPDATE_CREDENTIAL: Query = Query::new(
 static DELETE_CREDENTIAL: Query =
     Query::new("DELETE FROM credentials WHERE id = $1 AND tenant_id = $2");
 
+static INSERT_DISPLAY_METADATA: Query = Query::new(
+    "INSERT INTO credential_display_metadata \
+     (credential_id, tenant_id, display, issuer_name, credential_type) \
+     VALUES ($1, $2, $3, $4, $5)",
+);
+
+/// SQL row mapping for the summary join query.
+#[derive(FromRow)]
+struct DisplayMetadataRecord {
+    credential_id: String,
+    issued_at: i64,
+    display: Vec<u8>,
+    issuer_name: String,
+    credential_type: String,
+}
+
+impl TryFrom<DisplayMetadataRecord> for CredentialSummary {
+    type Error = CredentialError;
+
+    fn try_from(row: DisplayMetadataRecord) -> Result<Self> {
+        let id = Uuid::from_str(&row.credential_id)?;
+        let issued_at = UtcDateTime::from_unix_timestamp(row.issued_at)?;
+        let display = serde_json::from_slice(&row.display)?;
+
+        Ok(Self {
+            id,
+            display: CredentialDisplayMetadata {
+                display,
+                issuer_name: row.issuer_name,
+                credential_type: row.credential_type,
+            },
+            issued_at,
+        })
+    }
+}
+
 fn raw_credential_from_bytes(value: Vec<u8>) -> Result<String> {
     Ok(String::from_utf8(value)?)
 }
@@ -539,6 +600,7 @@ fn raw_credential_from_bytes(value: Vec<u8>) -> Result<String> {
 #[derive(Clone)]
 pub struct MemoryCredentialRepo {
     credentials: Arc<DashMap<(Uuid, Uuid), StoredCredential>>,
+    display_metadata: Arc<DashMap<(Uuid, Uuid), CredentialDisplayMetadata>>,
     cipher: Option<Arc<dyn Cipher>>,
 }
 
@@ -569,6 +631,7 @@ impl MemoryCredentialRepo {
     pub fn new() -> Self {
         Self {
             credentials: Arc::default(),
+            display_metadata: Arc::default(),
             cipher: None,
         }
     }
@@ -580,6 +643,7 @@ impl MemoryCredentialRepo {
     pub fn with_cipher<K: KmsProvider + Send + Sync + 'static>(provider: K) -> Self {
         Self {
             credentials: Arc::default(),
+            display_metadata: Arc::default(),
             cipher: Some(cipher::from_provider(provider)),
         }
     }
@@ -650,13 +714,18 @@ fn compact_plaintext_in_place(
 
 #[async_trait]
 impl CredentialRepo for MemoryCredentialRepo {
-    async fn upsert(&self, mut credential: Credential) -> Result<Uuid> {
+    async fn upsert(
+        &self,
+        mut credential: Credential,
+        display: Option<CredentialDisplayMetadata>,
+    ) -> Result<Uuid> {
         let credential_id = credential.id;
+        let tenant_id = credential.tenant_id;
         let mut raw_credential = std::mem::take(&mut credential.raw_credential).into_bytes();
         let payload_encrypted = self
             .maybe_encrypt(&credential.id, &mut raw_credential)
             .await?;
-        let key = (credential.tenant_id, credential.id);
+        let key = (tenant_id, credential_id);
         self.credentials.insert(
             key,
             StoredCredential {
@@ -665,6 +734,12 @@ impl CredentialRepo for MemoryCredentialRepo {
                 payload_encrypted,
             },
         );
+
+        // Atomically store display metadata alongside the credential
+        if let Some(metadata) = display {
+            self.display_metadata
+                .insert((credential_id, tenant_id), metadata);
+        }
         Ok(credential_id)
     }
 
@@ -676,26 +751,35 @@ impl CredentialRepo for MemoryCredentialRepo {
         self.maybe_decrypt(entry.value()).await
     }
 
-    async fn list(&self, filter: CredentialFilter) -> Result<Vec<Credential>> {
+    async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<()> {
+        self.credentials
+            .remove(&(tenant_id, id))
+            .ok_or(CredentialError::NotFound { id, tenant_id })?;
+        // Cascade: remove associated display metadata
+        self.display_metadata.remove(&(id, tenant_id));
+        Ok(())
+    }
+
+    async fn list(&self, filter: CredentialFilter) -> Result<Vec<CredentialSummary>> {
         let mut out = Vec::with_capacity(self.credentials.len());
 
         for entry in self.credentials.iter() {
             let stored = entry.value();
 
             if filter.matches(&stored.credential) {
-                out.push(self.maybe_decrypt(stored).await?);
+                let cred = &stored.credential;
+                // Only return summaries for credentials that have display metadata
+                if let Some(display_ref) = self.display_metadata.get(&(cred.id, cred.tenant_id)) {
+                    out.push(CredentialSummary {
+                        id: cred.id,
+                        display: display_ref.value().clone(),
+                        issued_at: cred.issued_at,
+                    });
+                }
             }
         }
-
-        out.sort_by_key(|b| std::cmp::Reverse(b.issued_at));
+        out.sort_by_key(|s| std::cmp::Reverse(s.issued_at));
         Ok(out)
-    }
-
-    async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<()> {
-        self.credentials
-            .remove(&(tenant_id, id))
-            .ok_or(CredentialError::NotFound { id, tenant_id })?;
-        Ok(())
     }
 }
 
@@ -756,14 +840,15 @@ impl From<cloud_wallet_kms::Error> for CredentialError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
 
     #[test]
     fn filter_builder_no_filters_produces_valid_sql() {
         let driver = Driver::Postgres;
-        let builder = FilterBuilder::new(&driver);
+        let builder = FilterBuilder::for_summaries(&driver);
         let (sql, values, exclude_expired_ts) = builder.build();
         assert!(sql.contains("WHERE 1 = 1"));
-        assert!(sql.ends_with("ORDER BY issued_at DESC"));
+        assert!(sql.ends_with("ORDER BY c.issued_at DESC"));
         assert!(values.is_empty());
         assert!(exclude_expired_ts.is_none());
     }
@@ -771,14 +856,14 @@ mod tests {
     #[test]
     fn filter_builder_postgres_uses_dollar_placeholders() {
         let driver = Driver::Postgres;
-        let mut builder = FilterBuilder::new(&driver);
-        builder.and("tenant_id", "abc".into());
-        builder.and("status", "active".into());
+        let mut builder = FilterBuilder::for_summaries(&driver);
+        builder.and("c.tenant_id", "abc".into());
+        builder.and("c.status", "active".into());
         builder.and_exclude_expired();
         let (sql, values, exclude_expired_ts) = builder.build();
-        assert!(sql.contains("tenant_id = $1"), "sql: {sql}");
-        assert!(sql.contains("status = $2"), "sql: {sql}");
-        assert!(sql.contains("valid_until > $3"), "sql: {sql}");
+        assert!(sql.contains("c.tenant_id = $1"), "sql: {sql}");
+        assert!(sql.contains("c.status = $2"), "sql: {sql}");
+        assert!(sql.contains("c.valid_until > $3"), "sql: {sql}");
         assert_eq!(values.len(), 2);
         assert!(exclude_expired_ts.is_some());
     }
@@ -786,8 +871,8 @@ mod tests {
     #[test]
     fn filter_builder_mysql_uses_question_marks() {
         let driver = Driver::MySql;
-        let mut builder = FilterBuilder::new(&driver);
-        builder.and("tenant_id", "abc".into());
+        let mut builder = FilterBuilder::for_summaries(&driver);
+        builder.and("c.tenant_id", "abc".into());
         builder.and_exclude_expired();
         let (sql, values, exclude_expired_ts) = builder.build();
         // MySQL/SQLite use ? for all placeholders
@@ -801,8 +886,8 @@ mod tests {
     #[test]
     fn filter_builder_postgres_types_contain_uses_jsonb_operator() {
         let driver = Driver::Postgres;
-        let mut builder = FilterBuilder::new(&driver);
-        builder.and("tenant_id", "abc".into());
+        let mut builder = FilterBuilder::for_summaries(&driver);
+        builder.and("c.tenant_id", "abc".into());
         builder
             .and_types_contain(&[
                 "VerifiableCredential".to_owned(),
@@ -828,7 +913,7 @@ mod tests {
     #[test]
     fn filter_builder_mysql_types_contain_uses_json_contains() {
         let driver = Driver::MySql;
-        let mut builder = FilterBuilder::new(&driver);
+        let mut builder = FilterBuilder::for_summaries(&driver);
         builder
             .and_types_contain(&[
                 "VerifiableCredential".to_owned(),
@@ -842,7 +927,7 @@ mod tests {
         let q_count = sql.chars().filter(|&c| c == '?').count();
         assert_eq!(q_count, 2, "expected one placeholder per type, sql: {sql}");
         assert!(
-            sql.contains("JSON_CONTAINS(credential_types,"),
+            sql.contains("JSON_CONTAINS(c.credential_types,"),
             "sql: {sql}"
         );
         // Each bind value is a JSON-encoded string (with surrounding quotes).
@@ -853,7 +938,7 @@ mod tests {
     #[test]
     fn filter_builder_sqlite_types_contain_uses_json_each() {
         let driver = Driver::Sqlite;
-        let mut builder = FilterBuilder::new(&driver);
+        let mut builder = FilterBuilder::for_summaries(&driver);
         builder
             .and_types_contain(&[
                 "VerifiableCredential".to_owned(),
@@ -865,7 +950,7 @@ mod tests {
         assert!(!sql.contains('$'), "sql: {sql}");
         let q_count = sql.chars().filter(|&c| c == '?').count();
         assert_eq!(q_count, 2, "expected one placeholder per type, sql: {sql}");
-        assert!(sql.contains("json_each(credential_types)"), "sql: {sql}");
+        assert!(sql.contains("json_each(c.credential_types)"), "sql: {sql}");
         // Each bind value is the plain string (json_each yields decoded values).
         assert_eq!(values[0], "VerifiableCredential");
         assert_eq!(values[1], "UniversityDegree");
@@ -874,7 +959,7 @@ mod tests {
     #[test]
     fn filter_builder_types_contain_empty_slice_adds_no_clause() {
         let driver = Driver::Postgres;
-        let mut builder = FilterBuilder::new(&driver);
+        let mut builder = FilterBuilder::for_summaries(&driver);
         builder.and_types_contain(&[]).unwrap();
         let (sql, values, _) = builder.build();
         // No extra WHERE clause should be appended for an empty filter.
@@ -942,13 +1027,29 @@ mod tests {
         }
     }
 
+    fn sample_display_metadata(credential: &Credential) -> CredentialDisplayMetadata {
+        CredentialDisplayMetadata {
+            display: CredentialDisplay {
+                name: credential.credential_types[0].clone(),
+                ..Default::default()
+            },
+            issuer_name: credential.issuer.clone(),
+            credential_type: credential.credential_types[0].clone(),
+        }
+    }
+
     #[tokio::test]
     async fn in_memory_crud_roundtrip() {
         let repo = MemoryCredentialRepo::with_cipher(PrefixCipher);
         let tenant_id = Uuid::new_v4();
         let credential = sample_credential(tenant_id);
 
-        repo.upsert(credential.clone()).await.unwrap();
+        repo.upsert(
+            credential.clone(),
+            Some(sample_display_metadata(&credential)),
+        )
+        .await
+        .unwrap();
 
         let found = repo.find_by_id(credential.id, tenant_id).await.unwrap();
         assert_eq!(found.id, credential.id);
@@ -974,7 +1075,7 @@ mod tests {
         let tenant_id = Uuid::new_v4();
         let credential = sample_credential(tenant_id);
 
-        repo.upsert(credential.clone()).await.unwrap();
+        repo.upsert(credential.clone(), None).await.unwrap();
         let found = repo.find_by_id(credential.id, tenant_id).await.unwrap();
 
         assert_eq!(found.raw_credential, credential.raw_credential);
