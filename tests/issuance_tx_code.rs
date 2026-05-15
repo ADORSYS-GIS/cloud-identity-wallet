@@ -20,9 +20,7 @@ use cloud_identity_wallet::{
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::Client;
-use time::OffsetDateTime;
 use url::Url;
 use uuid::Uuid;
 
@@ -88,7 +86,7 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
 
     tokio::spawn(server.run());
 
-    let auth_token = create_test_bearer_token(Uuid::new_v4());
+    let auth_token = utils::create_test_bearer_token(Uuid::new_v4());
 
     TxCodeTestApp {
         base_url: format!("http://{}:{port}", config.server.host),
@@ -96,45 +94,6 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
         pushed_tasks,
         auth_token,
     }
-}
-
-fn create_test_keypair() -> (String, jsonwebtoken::jwk::Jwk) {
-    let private_key_pem = "-----BEGIN PRIVATE KEY-----
-        MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgsJyilHyjhzXDVU2A
-        5ud6kfXPktY7wx5d8CQFe1nMzK2hRANCAAQ17IW//Yvrs4SmU1smlHTYgWKzj+UV
-        b0diaF8Xk6vqb3gB9qnvD4NxkNvLsQPPqjQKncEP831drigLydrC6WPT
-        -----END PRIVATE KEY-----
-    "
-    .to_string();
-
-    let public_key: jsonwebtoken::jwk::Jwk = serde_json::from_str(
-        r#"{
-            "kty": "EC",
-            "crv": "P-256",
-            "x": "NeyFv_2L67OEplNbJpR02IFis4_lFW9HYmhfF5Or6m8",
-            "y": "eAH2qe8Pg3GQ28uxA8-qNAqdwQ_zfV2uKAvJ2sLpY9M"
-        }"#,
-    )
-    .unwrap();
-
-    (private_key_pem, public_key)
-}
-
-fn create_test_bearer_token(tenant_id: Uuid) -> String {
-    let (private_pem, public_key) = create_test_keypair();
-    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
-
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let claims = serde_json::json!({
-        "sub": tenant_id,
-        "iat": now,
-        "exp": now + 3600,
-    });
-
-    let mut header = Header::new(Algorithm::ES256);
-    header.jwk = Some(public_key);
-
-    encode(&header, &claims, &encoding_key).unwrap()
 }
 
 fn mock_session(session_id: &str, state: IssuanceState) -> IssuanceSession {
