@@ -55,10 +55,9 @@ async fn start_issuance_session<S: SessionStore>(
         IssuanceFlow::PreAuthorizedCode { .. } => FlowType::PreAuthorizedCode,
     };
 
-    let session = IssuanceSession::new(tenant_id, context.clone(), flow_type);
-    let response = StartIssuanceResponse::from_context(&context, &session)?;
+    let session = IssuanceSession::new(tenant_id, context, flow_type);
+    let response = StartIssuanceResponse::from_context(&session.context, &session)?;
 
     session_store.upsert(session.id.clone(), &session).await?;
-
     Ok(response)
 }
