@@ -595,7 +595,7 @@ paths:
         - name: credential_types
           in: query
           description: |
-            Filter by one or more credential configuration IDs
+            Filter by one or more credential types
             (e.g. `eu.europa.ec.eudi.pid.1`). Repeat the parameter or pass a
             comma-separated list to filter by multiple types.
           required: false
