@@ -20,9 +20,7 @@ use cloud_identity_wallet::{
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
-use jsonwebtoken::{Algorithm, Header, encode};
 use reqwest::Client;
-use time::OffsetDateTime;
 use url::Url;
 use uuid::Uuid;
 
@@ -88,7 +86,7 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
 
     tokio::spawn(server.run());
 
-    let auth_token = create_test_bearer_token(Uuid::new_v4());
+    let auth_token = utils::create_test_bearer_token(Uuid::new_v4());
 
     TxCodeTestApp {
         base_url: format!("http://{}:{port}", config.server.host),
@@ -96,23 +94,6 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
         pushed_tasks,
         auth_token,
     }
-}
-
-fn create_test_bearer_token(tenant_id: Uuid) -> String {
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
-    let public_key: jsonwebtoken::jwk::Jwk = serde_json::from_value(public_jwk).unwrap();
-
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let claims = serde_json::json!({
-        "sub": tenant_id,
-        "iat": now,
-        "exp": now + 3600,
-    });
-
-    let mut header = Header::new(Algorithm::ES256);
-    header.jwk = Some(public_key);
-
-    encode(&header, &claims, &encoding_key).unwrap()
 }
 
 fn mock_session(session_id: &str, state: IssuanceState) -> IssuanceSession {
