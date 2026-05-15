@@ -1,7 +1,7 @@
 use core::str::FromStr;
 
 use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -30,7 +30,8 @@ pub enum CredentialError {
 /// Lifecycle status of an issued credential.
 ///
 /// Represents the current state of a credential in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CredentialStatus {
     /// The credential is valid and active.
     Active,
@@ -79,17 +80,22 @@ impl FromStr for CredentialStatus {
 /// Examples include `dc+sd-jwt` and `mso_mdoc`. Note that string parsing
 /// behaves differently than default debug formatting (e.g., `FromStr` uses standard
 /// OpenID4VCI format identifiers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CredentialFormat {
     /// SD-JWT based Verifiable Credential (`dc+sd-jwt`)
+    #[serde(rename = "dc+sd-jwt")]
     SdJwtVc,
     /// ISO 18013-5 mdoc (`mso_mdoc`)
+    #[serde(rename = "mso_mdoc")]
     Mdoc,
     /// JWT based Verifiable Credential (`jwt_vc_json`)
+    #[serde(rename = "jwt_vc_json")]
     JwtVcJson,
     /// JWT based Verifiable Credential with JSON-LD (`jwt_vc_json-ld`)
+    #[serde(rename = "jwt_vc_json-ld")]
     JwtVcJsonLd,
     /// Linked Data Proof Verifiable Credential (`ldp_vc`)
+    #[serde(rename = "ldp_vc")]
     LdpVc,
 }
 
@@ -205,15 +211,40 @@ where
 }
 
 /// Filter criteria for listing credentials.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CredentialFilter {
     pub tenant_id: Option<Uuid>,
+    #[serde(deserialize_with = "deserialize_credential_types")]
     pub credential_types: Option<Vec<String>>,
     pub status: Option<CredentialStatus>,
     pub format: Option<CredentialFormat>,
     pub issuer: Option<String>,
     pub subject: Option<String>,
     pub exclude_expired: bool,
+}
+
+fn deserialize_credential_types<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(values) = Option::<Vec<String>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let credential_types = values
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    Ok((!credential_types.is_empty()).then_some(credential_types))
 }
 
 impl CredentialFilter {
