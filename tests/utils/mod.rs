@@ -127,37 +127,3 @@ pub fn create_test_bearer_token(tenant_id: Uuid) -> String {
 
     encode(&header, &claims, &encoding_key).expect("failed to encode JWT")
 }
-
-/// Creates a test JWT bearer token using a pre-generated keypair.
-///
-/// This function creates a signed JWT token with the given tenant_id as the subject claim.
-/// The token is valid for 1 hour. Use this when you need to reuse the same keypair
-/// across multiple tokens or when you need access to the keypair for verification.
-///
-/// # Arguments
-/// * `tenant_id` - The UUID to use as the subject claim in the token
-/// * `encoding_key` - The ECDSA encoding key to sign the token with
-/// * `jwk` - The public JWK to embed in the token header (as serde_json::Value)
-///
-/// # Returns
-/// A signed JWT token string suitable for use in Authorization headers
-pub fn create_test_token_with_keypair(
-    tenant_id: Uuid,
-    encoding_key: &EncodingKey,
-    jwk: serde_json::Value,
-) -> String {
-    let public_key: jsonwebtoken::jwk::Jwk =
-        serde_json::from_value(jwk).expect("failed to parse public JWK");
-
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let claims = serde_json::json!({
-        "sub": tenant_id,
-        "iat": now,
-        "exp": now + 3600,
-    });
-
-    let mut header = Header::new(Algorithm::ES256);
-    header.jwk = Some(public_key);
-
-    encode(&header, &claims, encoding_key).expect("failed to encode JWT")
-}
