@@ -1,5 +1,7 @@
 use core::str::FromStr;
 
+use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
+use serde::{Deserialize, Serialize};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -163,6 +165,43 @@ pub struct Credential {
 
     /// The actual serialized credential string (e.g., the SD-JWT or base64 mdoc).
     pub raw_credential: String,
+}
+
+/// Display metadata captured from issuer metadata at credential issuance time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CredentialDisplayMetadata {
+    /// Display properties from the issuer's credential configuration metadata.
+    #[serde(flatten)]
+    pub display: CredentialDisplay,
+    /// Human-readable issuer name.
+    ///
+    /// Falls back to the issuer URL if the issuer display name is not available.
+    pub issuer_name: String,
+    /// Credential configuration ID (e.g., `"eu.europa.ec.eudi.pid.1"`).
+    pub credential_type: String,
+}
+
+/// Credential projection for list rendering.
+#[derive(Debug, Clone, Serialize)]
+pub struct CredentialSummary {
+    /// Unique identifier of the credential.
+    pub id: Uuid,
+    /// Display metadata for rendering the credential card.
+    pub display: CredentialDisplayMetadata,
+    /// The date and time when the credential was issued.
+    #[serde(serialize_with = "serialize_utc_datetime_rfc3339")]
+    pub issued_at: UtcDateTime,
+}
+
+fn serialize_utc_datetime_rfc3339<S>(value: &UtcDateTime, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::Error;
+    use time::format_description::well_known::Rfc3339;
+
+    let value = value.format(&Rfc3339).map_err(S::Error::custom)?;
+    serializer.serialize_str(&value)
 }
 
 /// Filter criteria for listing credentials.

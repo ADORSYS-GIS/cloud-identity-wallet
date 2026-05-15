@@ -17,6 +17,7 @@ pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 use std::{sync::Arc, time::Duration};
 
 use cloud_wallet_openid4vc::issuance::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
 use cloud_wallet_openid4vc::issuance::credential_response::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
@@ -25,7 +26,9 @@ use cloud_wallet_openid4vc::issuance::token_response::TokenResponse;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::domain::models::credential::{Credential, CredentialFormat, CredentialStatus};
+use crate::domain::models::credential::{
+    Credential, CredentialDisplayMetadata, CredentialFormat, CredentialStatus,
+};
 use crate::domain::models::tenants::SignAlgorithm;
 use crate::domain::ports::{
     CredentialRepo, IssuanceEventPublisher, IssuanceEventStream, IssuanceEventSubscriber,
@@ -476,6 +479,8 @@ impl IssuanceEngine {
     ) -> Result<Option<String>> {
         let notification_id = immediate.notification_id;
         let issuer = context.offer.credential_issuer.as_str();
+        let display_metadata = extract_display_metadata(context, config_id);
+
         for cred_obj in immediate.credentials {
             let raw = match cred_obj.credential {
                 serde_json::Value::String(s) => s,
@@ -486,7 +491,7 @@ impl IssuanceEngine {
                 }
             };
             let cred_id = self
-                .store_credential(tenant_id, issuer, config_id, raw)
+                .store_credential(tenant_id, issuer, config_id, raw, display_metadata.clone())
                 .await?;
 
             credential_ids.push(cred_id.to_string());
@@ -569,14 +574,15 @@ impl IssuanceEngine {
         Ok(signer)
     }
 
-    /// Store a raw credential string.
-    #[instrument(skip(self, raw_credential))]
+    /// Store a raw credential string and its associated display metadata.
+    #[instrument(skip(self, raw_credential, display_metadata))]
     async fn store_credential(
         &self,
         tenant_id: Uuid,
         issuer: &str,
         credential_config_id: &str,
         raw_credential: String,
+        display_metadata: CredentialDisplayMetadata,
     ) -> Result<Uuid> {
         // TODO : Parse the raw credential to extract the fields
         let credential = Credential {
@@ -596,7 +602,11 @@ impl IssuanceEngine {
             raw_credential,
         };
 
-        let id = self.credential_repo.upsert(credential).await?;
+        let id = self
+            .credential_repo
+            .upsert(credential, Some(display_metadata))
+            .await?;
+
         info!(credential_id = %id, "credential stored successfully");
         Ok(id)
     }
@@ -664,6 +674,64 @@ pub async fn transition_session<S: SessionStore>(
 
 fn default_worker_count() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
+/// Extracts display metadata from the resolved offer context for a given
+/// credential configuration ID.
+fn extract_display_metadata(
+    context: &ResolvedOfferContext,
+    credential_config_id: &str,
+) -> CredentialDisplayMetadata {
+    let issuer_name = context
+        .issuer_metadata
+        .display
+        .as_deref()
+        .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), &["en", "de"]))
+        .and_then(|d| d.name.clone())
+        .unwrap_or_else(|| context.offer.credential_issuer.to_string());
+
+    let cred_display = context
+        .issuer_metadata
+        .credential_configurations_supported
+        .get(credential_config_id)
+        .and_then(|config| config.credential_metadata.as_ref())
+        .and_then(|meta| meta.display.as_deref())
+        .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), &["en", "de"]));
+
+    let display = match cred_display {
+        Some(entry) => entry.clone(),
+        None => CredentialDisplay {
+            name: credential_config_id.to_owned(),
+            ..Default::default()
+        },
+    };
+
+    CredentialDisplayMetadata {
+        display,
+        issuer_name,
+        credential_type: credential_config_id.to_owned(),
+    }
+}
+
+/// Selects the preferred display entry from a locale-tagged list.
+fn select_preferred<'a, T, F>(items: &'a [T], locale_fn: F, preferred: &[&str]) -> Option<&'a T>
+where
+    F: Fn(&T) -> Option<&str>,
+{
+    if items.is_empty() {
+        return None;
+    }
+
+    for &prefix in preferred {
+        if let Some(entry) = items.iter().find(|item| {
+            locale_fn(item)
+                .map(|l| l.starts_with(prefix))
+                .unwrap_or(false)
+        }) {
+            return Some(entry);
+        }
+    }
+    items.first()
 }
 
 #[cfg(test)]
