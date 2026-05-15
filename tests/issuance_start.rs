@@ -58,9 +58,8 @@ async fn empty_offer_with_valid_auth_returns_400() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = utils::create_test_token_with_keypair(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_bearer_token(tenant_id);
 
     let response = client
         .post(format!("{}/api/v1/issuance/start", base_url))
@@ -81,9 +80,8 @@ async fn missing_offer_field_returns_422() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = utils::create_test_token_with_keypair(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_bearer_token(tenant_id);
 
     let response = client
         .post(format!("{}/api/v1/issuance/start", base_url))
@@ -101,9 +99,8 @@ async fn invalid_offer_uri_returns_internal_error() {
     let base_url = utils::spawn_server().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = utils::create_test_token_with_keypair(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_bearer_token(tenant_id);
 
     let response = client
         .post(format!("{}/api/v1/issuance/start", base_url))
