@@ -12,9 +12,8 @@ use crate::session::SessionStore;
 
 /// Deletes a credential owned by the authenticated tenant.
 ///
-/// Returns `404` when the credential does not exist **or** belongs to a
-/// different tenant, preventing information leakage about other tenants'
-/// credentials.
+/// Returns `204 No Content` on success. Returns `404 Not Found` if the
+/// credential does not exist or is not owned by the requesting tenant.
 pub async fn delete_credential<S: SessionStore>(
     State(state): State<AppState<S>>,
     Extension(tenant_id): Extension<Uuid>,
@@ -22,7 +21,9 @@ pub async fn delete_credential<S: SessionStore>(
 ) -> Result<impl IntoResponse, ApiError> {
     state
         .service
-        .delete_credential(credential_id, tenant_id)
+        .issuance_engine
+        .credential_repo
+        .delete(credential_id, tenant_id)
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
