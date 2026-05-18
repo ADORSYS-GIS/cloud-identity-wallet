@@ -1,6 +1,6 @@
 use core::str::FromStr;
 
-use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
+pub use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::UtcDateTime;
 use url::Url;

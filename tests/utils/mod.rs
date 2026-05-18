@@ -1,5 +1,11 @@
 #![allow(dead_code)]
 
+use cloud_wallet_crypto::ecdsa::{Curve, KeyPair};
+use cloud_wallet_crypto::jwk::Jwk;
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
 use cloud_identity_wallet::{
     config::Config,
     domain::{
@@ -17,13 +23,10 @@ use cloud_identity_wallet::{
     server::Server,
     session::MemorySession,
 };
-use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
 use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use sqlx::{AnyPool, ConnectOptions};
-use time::{OffsetDateTime, UtcDateTime};
+use time::UtcDateTime;
 use url::Url;
-use uuid::Uuid;
 
 /// Test server which holds the base URL and other necessary components for testing
 pub struct TestServer<R>
@@ -67,7 +70,6 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
     );
     let service = Service::new(session_store, tenant_repo, engine);
     let server = Server::new(&config, service).await.unwrap();
-
     let port = server.port();
     tokio::spawn(server.run());
 
@@ -77,16 +79,34 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
     }
 }
 
-/// Spawn a test server and return `(base_url, credential_repo)`.
+/// Build a `Config` suitable for integration tests.
 ///
-/// The returned `MemoryCredentialRepo` shares storage with the running server,
-/// allowing tests to pre-populate credentials via `upsert` before making HTTP
-/// requests.
-pub async fn spawn_server_with_repo() -> (String, MemoryCredentialRepo) {
-    let server = spawn_server().await;
-    (server.base_url, server.credential_repo)
+/// Binds to port 0 (OS-assigned) and disables the system proxy so tests are
+/// fully self-contained.
+pub fn make_config() -> Config {
+    let mut config = Config::load().unwrap();
+    config.server.host = "localhost".to_string();
+    config.server.port = 0;
+    config.oid4vci.use_system_proxy = false;
+    config
 }
 
+/// Generates a fresh P-256 key pair at runtime.
+///
+/// Returns an [`EncodingKey`] for signing JWTs and the matching public JWK
+/// value for embedding in the JWT header (so the auth middleware can verify).
+pub fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
+    let key_pair = KeyPair::generate(Curve::P256).expect("P-256 key generation should not fail");
+
+    let encoding_key = EncodingKey::from_ec_der(key_pair.to_pkcs8_der());
+
+    let crypto_jwk = Jwk::try_from(&key_pair).expect("P-256 key pair should convert to JWK");
+    let jwk = serde_json::to_value(&crypto_jwk).expect("JWK should serialize to JSON");
+
+    (encoding_key, jwk)
+}
+
+#[allow(dead_code)]
 pub fn sample_credential(tenant_id: Uuid) -> Credential {
     Credential {
         id: Uuid::new_v4(),
@@ -109,6 +129,7 @@ pub fn sample_credential(tenant_id: Uuid) -> Credential {
     }
 }
 
+#[allow(dead_code)]
 pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
     let url = pool.connect_options().to_url_lossy();
     let is_postgres =
@@ -160,23 +181,4 @@ pub fn create_test_bearer_token(tenant_id: Uuid) -> String {
     header.jwk = Some(public_key);
 
     encode(&header, &claims, &encoding_key).expect("failed to encode JWT")
-}
-
-/// Creates a fresh P-256 keypair for testing purposes.
-/// Returns (EncodingKey, public JWK as serde_json::Value).
-///
-/// This function generates a new random keypair each time it is called,
-/// ensuring tests exercise real key generation logic.
-fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
-    use cloud_wallet_crypto::jwk::Jwk;
-
-    let keypair = EcdsaKeyPair::generate(Curve::P256).expect("failed to generate P-256 keypair");
-    let der = keypair.to_pkcs8_der();
-    let encoding_key = EncodingKey::from_ec_der(der);
-
-    // Convert to JWK using the cloud_wallet_crypto library
-    let jwk: Jwk = Jwk::try_from(&keypair).expect("failed to convert to JWK");
-    let public_jwk = serde_json::to_value(jwk).expect("failed to serialize JWK");
-
-    (encoding_key, public_jwk)
 }
