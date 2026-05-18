@@ -3,7 +3,6 @@
 use cloud_wallet_crypto::ecdsa::{Curve, KeyPair};
 use cloud_wallet_crypto::jwk::Jwk;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use serde_json::json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -15,10 +14,8 @@ use cloud_identity_wallet::{
     session::MemorySession,
     setup,
 };
-use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use sqlx::{AnyPool, ConnectOptions};
-use time::{OffsetDateTime, UtcDateTime};
+use time::UtcDateTime;
 use url::Url;
 
 pub fn make_config() -> Config {
@@ -56,17 +53,6 @@ pub fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
     let jwk = serde_json::to_value(&crypto_jwk).expect("JWK should serialize to JSON");
 
     (encoding_key, jwk)
-}
-
-/// Mints a test JWT for the given tenant, signed with `encoding_key` and
-/// carrying `jwk` in the header for self-contained verification.
-#[allow(dead_code)]
-pub fn create_token(tenant_id: Uuid, encoding_key: &EncodingKey, jwk: serde_json::Value) -> String {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let claims = json!({ "sub": tenant_id, "iat": now, "exp": now + 3600 });
-    let mut header = Header::new(Algorithm::ES256);
-    header.jwk = Some(serde_json::from_value(jwk).expect("JWK value must be valid"));
-    encode(&header, &claims, encoding_key).expect("JWT signing should not fail")
 }
 
 #[allow(dead_code)]
@@ -116,25 +102,6 @@ pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
         .execute(pool)
         .await
         .unwrap();
-}
-
-/// Creates a fresh P-256 keypair for testing purposes.
-/// Returns (EncodingKey, public JWK as serde_json::Value).
-///
-/// This function generates a new random keypair each time it is called,
-/// ensuring tests exercise real key generation logic.
-pub fn create_test_keypair() -> (EncodingKey, serde_json::Value) {
-    use cloud_wallet_crypto::jwk::Jwk;
-
-    let keypair = EcdsaKeyPair::generate(Curve::P256).expect("failed to generate P-256 keypair");
-    let der = keypair.to_pkcs8_der();
-    let encoding_key = EncodingKey::from_ec_der(der);
-
-    // Convert to JWK using the cloud_wallet_crypto library
-    let jwk: Jwk = Jwk::try_from(&keypair).expect("failed to convert to JWK");
-    let public_jwk = serde_json::to_value(jwk).expect("failed to serialize JWK");
-
-    (encoding_key, public_jwk)
 }
 
 /// Creates a test JWT bearer token for authentication in integration tests.

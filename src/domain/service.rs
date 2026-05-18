@@ -1,8 +1,5 @@
 use std::sync::Arc;
 
-use uuid::Uuid;
-
-use crate::domain::models::credential::CredentialError;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::ports::TenantRepo;
 use crate::session::SessionStore;
@@ -21,24 +18,6 @@ impl<S: SessionStore + Clone> Service<S> {
             tenant_repo: Arc::new(tenant_repo),
             issuance_engine,
         }
-    }
-}
-
-impl<S: SessionStore> Service<S> {
-    /// Deletes a credential owned by the authenticated tenant.
-    ///
-    /// Returns [`CredentialError::NotFound`] when no credential with the given
-    /// `credential_id` exists for `tenant_id`, ensuring one tenant can never
-    /// observe or remove another tenant's credential.
-    pub async fn delete_credential(
-        &self,
-        credential_id: Uuid,
-        tenant_id: Uuid,
-    ) -> Result<(), CredentialError> {
-        self.issuance_engine
-            .credential_repo
-            .delete(credential_id, tenant_id)
-            .await
     }
 }
 

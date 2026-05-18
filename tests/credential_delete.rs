@@ -8,11 +8,8 @@ use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
 use cloud_identity_wallet::{
-    domain::ports::CredentialRepo,
-    server::Server,
-    session::MemorySession,
-    outbound::MemoryTenantRepo,
-    setup,
+    domain::ports::CredentialRepo, outbound::MemoryTenantRepo, server::Server,
+    session::MemorySession, setup,
 };
 
 /// Aborts the server task when dropped, preventing socket/fd leaks between tests.
@@ -69,9 +66,8 @@ async fn delete_owned_credential_returns_204() {
     let (base_url, repo, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = utils::create_token(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_bearer_token(tenant_id);
 
     let credential = utils::sample_credential(tenant_id);
     let credential_id = credential.id;
@@ -97,9 +93,8 @@ async fn delete_is_idempotent_second_call_returns_404() {
     let (base_url, repo, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = utils::create_token(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_bearer_token(tenant_id);
 
     let credential = utils::sample_credential(tenant_id);
     let credential_id = credential.id;
@@ -136,7 +131,6 @@ async fn delete_another_tenants_credential_returns_404() {
     let (base_url, repo, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_a = Uuid::new_v4();
     let tenant_b = Uuid::new_v4();
 
@@ -148,7 +142,7 @@ async fn delete_another_tenants_credential_returns_404() {
         .expect("Failed to seed credential");
 
     // Authenticate as tenant B
-    let token_b = utils::create_token(tenant_b, &encoding_key, public_jwk);
+    let token_b = utils::create_test_bearer_token(tenant_b);
 
     // Act — tenant B tries to delete tenant A's credential
     let response = client
@@ -177,9 +171,8 @@ async fn delete_nonexistent_credential_returns_404() {
     let (base_url, _, _handle) = spawn_server_with_repo().await;
     let client = Client::new();
 
-    let (encoding_key, public_jwk) = utils::create_test_keypair();
     let tenant_id = Uuid::new_v4();
-    let token = utils::create_token(tenant_id, &encoding_key, public_jwk);
+    let token = utils::create_test_bearer_token(tenant_id);
 
     let nonexistent_id = Uuid::new_v4();
 
