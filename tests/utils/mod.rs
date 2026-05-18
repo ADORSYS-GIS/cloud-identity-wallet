@@ -3,10 +3,16 @@
 use cloud_identity_wallet::{
     config::Config,
     domain::{
-        models::{credential::{Credential, CredentialFormat, CredentialStatus}, issuance::IssuanceEngine},
+        models::{
+            credential::{Credential, CredentialFormat, CredentialStatus},
+            issuance::IssuanceEngine,
+        },
         service::Service,
     },
-    outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue, MemoryTenantRepo},
+    outbound::{
+        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
+        MemoryTenantRepo,
+    },
     server::Server,
     session::MemorySession,
 };
