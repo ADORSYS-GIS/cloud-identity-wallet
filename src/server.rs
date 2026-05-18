@@ -17,7 +17,7 @@ use crate::session::SessionStore;
 use axum::http::Method;
 use axum::{
     Router, middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use color_eyre::eyre::{Context, Result};
 use tokio::net::TcpListener;
@@ -110,10 +110,8 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route("/credentials", get(list_credentials))
-        .route(
-            "/credentials/{id}",
-            get(get_credential).delete(delete_credential),
-        )
+        .route("/credentials/{id}", get(get_credential))
+        .route("/credentials/{id}", delete(delete_credential))
         .route_layer(middleware::from_fn(auth::auth));
 
     Router::new()
