@@ -13,7 +13,6 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     config: &Config,
     tenant_repo: impl TenantRepo,
     session_store: &S,
-    credential_repo: MemoryCredentialRepo,
 ) -> color_eyre::Result<IssuanceEngine> {
     let client_config = Oid4vciClientConfig::new(
         config.oid4vci.client_id.clone(),
@@ -28,6 +27,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
+    let credential_repo = MemoryCredentialRepo::new();
 
     let engine = IssuanceEngine::new(
         client,
@@ -47,12 +47,6 @@ pub fn build_service<S: SessionStore + Clone>(
     tenant_repo: impl TenantRepo + Clone,
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
-    let credential_repo = MemoryCredentialRepo::new();
-    let engine = build_issuance_engine(
-        config,
-        tenant_repo.clone(),
-        &session_store,
-        credential_repo.clone(),
-    )?;
+    let engine = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
     Ok(Service::new(session_store, tenant_repo, engine))
 }
