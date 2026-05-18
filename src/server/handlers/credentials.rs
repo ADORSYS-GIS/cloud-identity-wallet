@@ -1,22 +1,19 @@
 use axum::{
-    extract::{Extension, RawQuery, State},
+    extract::{Extension, Path, RawQuery, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use serde::Serialize;
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
-use crate::domain::models::credential::{CredentialFilter, CredentialSummary};
+use crate::domain::models::credential::{
+    Credential, CredentialFilter, CredentialListResponse, CredentialRecord,
+};
 use crate::server::error::ApiError;
 use crate::server::{AppState, responses::ResponseBody};
 use crate::session::SessionStore;
-
-#[derive(Debug, Serialize)]
-struct CredentialListResponse {
-    pub credentials: Vec<CredentialSummary>,
-}
 
 /// List credential summaries for the authenticated tenant.
 ///
@@ -41,6 +38,23 @@ pub async fn list_credentials<S: SessionStore + Clone>(
     Ok(ResponseBody::new(StatusCode::OK, response))
 }
 
+/// `GET /api/v1/credentials/:id` — retrieve a single credential by wallet ID.
+pub async fn get_credential<S: SessionStore>(
+    State(state): State<AppState<S>>,
+    Extension(tenant_id): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let credential = state
+        .service
+        .issuance_engine
+        .credential_repo
+        .find_by_id(id, tenant_id)
+        .await?;
+
+    let record = to_record(credential)?;
+    Ok(ResponseBody::new(StatusCode::OK, record))
+}
+
 fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError> {
     let Some(query) = query else {
         return Ok(CredentialFilter::default());
@@ -58,6 +72,34 @@ fn query_config() -> &'static Config {
             .use_form_encoding(true)
             .duplicate_key_behavior(DuplicateKeyBehavior::Error)
     })
+}
+
+/// Map a domain `Credential` to its HTTP response shape.
+fn to_record(c: Credential) -> Result<CredentialRecord, ApiError> {
+    let credential_configuration_id = c
+        .credential_types
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("credential has no credential_types"))?;
+    Ok(CredentialRecord {
+        id: c.id,
+        credential_configuration_id,
+        format: c.format.as_str().to_string(),
+        issuer: c.issuer,
+        status: c.status.as_str().to_string(),
+        issued_at: format_utc(c.issued_at).map_err(ApiError::internal)?,
+        expires_at: c
+            .valid_until
+            .map(format_utc)
+            .transpose()
+            .map_err(ApiError::internal)?,
+        claims: serde_json::Value::Null,
+    })
+}
+
+/// Format a `UtcDateTime` as an RFC 3339 string.
+fn format_utc(dt: time::UtcDateTime) -> Result<String, time::error::Format> {
+    dt.format(&Rfc3339)
 }
 
 fn invalid_query(description: impl Into<String>) -> ApiError {

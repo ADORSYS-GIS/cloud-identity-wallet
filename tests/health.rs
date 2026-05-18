@@ -4,7 +4,7 @@ use reqwest::Client;
 
 #[tokio::test]
 async fn test_health_check_works() {
-    let addr = utils::spawn_server().await;
+    let addr = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client

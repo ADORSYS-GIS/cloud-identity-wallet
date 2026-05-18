@@ -6,7 +6,7 @@ use reqwest::Client;
 
 #[tokio::test]
 async fn valid_name_returns_201() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
@@ -29,7 +29,7 @@ async fn valid_name_returns_201() {
 
 #[tokio::test]
 async fn empty_name_returns_400() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
@@ -47,7 +47,7 @@ async fn empty_name_returns_400() {
 
 #[tokio::test]
 async fn whitespace_only_name_returns_400() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
@@ -65,7 +65,7 @@ async fn whitespace_only_name_returns_400() {
 
 #[tokio::test]
 async fn name_256_chars_returns_400() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let long_name = "a".repeat(256);
@@ -85,7 +85,7 @@ async fn name_256_chars_returns_400() {
 
 #[tokio::test]
 async fn name_255_chars_returns_201() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let max_name = "a".repeat(255);
@@ -105,7 +105,7 @@ async fn name_255_chars_returns_201() {
 
 #[tokio::test]
 async fn duplicate_names_produce_distinct_ids() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let name = "Same Name Inc.";
@@ -138,7 +138,7 @@ async fn duplicate_names_produce_distinct_ids() {
 
 #[tokio::test]
 async fn name_is_trimmed_in_response() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
