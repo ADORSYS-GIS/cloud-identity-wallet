@@ -6,6 +6,7 @@ use axum::{
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
 use time::format_description::well_known::Rfc3339;
+use url::Url;
 use uuid::Uuid;
 
 use crate::domain::models::credential::{
@@ -55,14 +56,42 @@ pub async fn get_credential<S: SessionStore>(
     Ok(ResponseBody::new(StatusCode::OK, record))
 }
 
+/// Deletes a credential owned by the authenticated tenant.
+///
+/// Returns `204 No Content` on success. Returns `404 Not Found` if the
+/// credential does not exist or is not owned by the requesting tenant.
+pub async fn delete_credential<S: SessionStore>(
+    State(state): State<AppState<S>>,
+    Extension(tenant_id): Extension<Uuid>,
+    Path(credential_id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    state
+        .service
+        .issuance_engine
+        .credential_repo
+        .delete(credential_id, tenant_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError> {
     let Some(query) = query else {
         return Ok(CredentialFilter::default());
     };
 
-    (*query_config())
+    let filter: CredentialFilter = (*query_config())
         .deserialize_str(query)
-        .map_err(|error| invalid_query(format!("invalid credentials filter query: {error}")))
+        .map_err(|error| invalid_query(format!("invalid credentials filter query: {error}")))?;
+
+    // Validate issuer is a valid URI if provided
+    if let Some(ref issuer) = filter.issuer
+        && Url::parse(issuer).is_err()
+    {
+        return Err(invalid_query("issuer must be a valid URI"));
+    }
+
+    Ok(filter)
 }
 
 fn query_config() -> &'static Config {
