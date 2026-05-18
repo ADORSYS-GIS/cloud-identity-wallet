@@ -3,13 +3,12 @@
 use cloud_identity_wallet::{
     config::Config,
     domain::{
-        models::credential::{Credential, CredentialFormat, CredentialStatus},
+        models::{credential::{Credential, CredentialFormat, CredentialStatus}, issuance::IssuanceEngine},
         service::Service,
     },
-    outbound::{MemoryCredentialRepo, MemoryTenantRepo},
+    outbound::{MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue, MemoryTenantRepo},
     server::Server,
     session::MemorySession,
-    setup,
 };
 use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -76,13 +75,25 @@ async fn spawn_server_internal() -> (String, MemoryCredentialRepo) {
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
     let credential_repo = MemoryCredentialRepo::new();
-    let engine = setup::build_issuance_engine(
-        &config,
+    let client_config = Oid4vciClientConfig::new(
+        config.oid4vci.client_id.clone(),
+        config.oid4vci.redirect_uri.clone(),
+    )
+    .use_system_proxy(config.oid4vci.use_system_proxy)
+    .accept_untrusted_hosts(true);
+    let client = Oid4vciClient::new(client_config).unwrap();
+    let task_queue = MemoryTaskQueue::new();
+    let publisher = MemoryEventPublisher::new(128);
+    let subscriber = MemoryEventSubscriber::new(&publisher);
+    let engine = IssuanceEngine::new(
+        client,
+        task_queue,
+        publisher,
+        subscriber,
+        credential_repo.clone(),
         tenant_repo.clone(),
         &session_store,
-        credential_repo.clone(),
-    )
-    .unwrap();
+    );
     let service = Service::new(session_store, tenant_repo, engine);
     let server = Server::new(&config, service).await.unwrap();
 

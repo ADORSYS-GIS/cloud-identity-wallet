@@ -292,20 +292,14 @@ impl CredentialRepo for SqlCredentialRepo {
     }
 
     async fn list(&self, filter: CredentialFilter) -> Result<Vec<Credential>> {
-        let encoded_types = filter
-            .credential_types
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
-
         // Build SQL and collect bind values together.
         let mut builder = FilterBuilder::new(&self.driver);
 
         if let Some(ref tenant_id) = filter.tenant_id {
             builder.and("tenant_id", tenant_id.to_string());
         }
-        if let Some(ref types) = encoded_types {
-            builder.and("credential_types", types.clone());
+        if let Some(ref types) = filter.credential_types {
+            builder.and_types_contain(types)?;
         }
         if let Some(ref status) = filter.status {
             builder.and("status", status.as_str().to_owned());
@@ -391,7 +385,6 @@ impl<'d> FilterBuilder<'d> {
     /// - **Postgres**: `AND credential_types::jsonb @> $N::jsonb` (one bind for the whole array)
     /// - **MySQL**: one `AND JSON_CONTAINS(credential_types, ?, '$') = 1` per type
     /// - **SQLite**: one `AND EXISTS (SELECT 1 FROM json_each(credential_types) WHERE value = ?)` per type
-    #[cfg(test)]
     fn and_types_contain(&mut self, types: &[String]) -> Result<()> {
         if types.is_empty() {
             return Ok(());
