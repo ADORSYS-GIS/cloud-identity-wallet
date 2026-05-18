@@ -8,16 +8,79 @@ use uuid::Uuid;
 
 use cloud_identity_wallet::{
     config::Config,
-    domain::models::credential::{Credential, CredentialFormat, CredentialStatus},
-    outbound::MemoryTenantRepo,
+    domain::{
+        models::{
+            credential::{Credential, CredentialFormat, CredentialStatus},
+            issuance::IssuanceEngine,
+        },
+        service::Service,
+    },
+    outbound::{
+        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
+        MemoryTenantRepo,
+    },
     server::Server,
     session::MemorySession,
-    setup,
 };
+use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
 
+/// Create a signed Bearer token whose `sub` claim is `tenant_id`.
+///
+/// Uses a freshly generated P-256 keypair so the live server can verify
+/// the token without any additional setup.
+pub fn create_bearer_token(tenant_id: &Uuid) -> String {
+    create_test_bearer_token(*tenant_id)
+}
+
+/// Internal helper to spawn a server and return `(base_url, credential_repo)`.
+async fn spawn_server_internal() -> (String, MemoryCredentialRepo) {
+    let config = {
+        let mut config = Config::load().unwrap();
+        config.server.host = "localhost".to_string();
+        config.server.port = 0;
+        config.oid4vci.use_system_proxy = false;
+        config
+    };
+    let session_store = MemorySession::default();
+    let tenant_repo = MemoryTenantRepo::new();
+    let credential_repo = MemoryCredentialRepo::new();
+    let client_config = Oid4vciClientConfig::new(
+        config.oid4vci.client_id.clone(),
+        config.oid4vci.redirect_uri.clone(),
+    )
+    .use_system_proxy(config.oid4vci.use_system_proxy)
+    .accept_untrusted_hosts(true);
+    let client = Oid4vciClient::new(client_config).unwrap();
+    let task_queue = MemoryTaskQueue::new();
+    let publisher = MemoryEventPublisher::new(128);
+    let subscriber = MemoryEventSubscriber::new(&publisher);
+    let engine = IssuanceEngine::new(
+        client,
+        task_queue,
+        publisher,
+        subscriber,
+        credential_repo.clone(),
+        tenant_repo.clone(),
+        &session_store,
+    );
+    let service = Service::new(session_store, tenant_repo, engine);
+    let server = Server::new(&config, service).await.unwrap();
+    let port = server.port();
+    tokio::spawn(server.run());
+
+    (
+        format!("http://{}:{}", config.server.host, port),
+        credential_repo,
+    )
+}
+
+/// Build a `Config` suitable for integration tests.
+///
+/// Binds to port 0 (OS-assigned) and disables the system proxy so tests are
+/// fully self-contained.
 pub fn make_config() -> Config {
     let mut config = Config::load().unwrap();
     config.server.host = "localhost".to_string();
@@ -26,18 +89,18 @@ pub fn make_config() -> Config {
     config
 }
 
-/// Spawns a test server and returns its base URL.
-///
-/// The server task runs until the test process exits (fire-and-forget).
+/// Spawn a test server and return its base URL.
 pub async fn spawn_server() -> String {
-    let config = make_config();
-    let session_store = MemorySession::default();
-    let tenant_repo = MemoryTenantRepo::new();
-    let service = setup::build_service(session_store, tenant_repo, &config).unwrap();
-    let server = Server::new(&config, service).await.unwrap();
-    let port = server.port();
-    tokio::spawn(server.run());
-    format!("http://{}:{}", config.server.host, port)
+    spawn_server_internal().await.0
+}
+
+/// Spawn a test server and return `(base_url, credential_repo)`.
+///
+/// The returned `MemoryCredentialRepo` shares storage with the running server,
+/// allowing tests to pre-populate credentials via `upsert` before making HTTP
+/// requests.
+pub async fn spawn_server_with_repo() -> (String, MemoryCredentialRepo) {
+    spawn_server_internal().await
 }
 
 /// Generates a fresh P-256 key pair at runtime.
