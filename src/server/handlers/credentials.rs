@@ -90,7 +90,6 @@ fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError>
     {
         return Err(invalid_query("issuer must be a valid URI"));
     }
-
     Ok(filter)
 }
 
