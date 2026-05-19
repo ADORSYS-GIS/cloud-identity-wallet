@@ -236,7 +236,7 @@ pub struct CredentialRecord {
 }
 
 /// Filter criteria for listing credentials.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CredentialFilter {
     pub tenant_id: Option<Uuid>,
