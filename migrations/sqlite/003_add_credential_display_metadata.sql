@@ -9,4 +9,4 @@ CREATE TABLE IF NOT EXISTS credential_display_metadata (
     PRIMARY KEY (credential_id)
 );
 
-CREATE INDEX idx_cred_display_tenant_id ON credential_display_metadata(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cred_display_tenant_id ON credential_display_metadata(tenant_id);
