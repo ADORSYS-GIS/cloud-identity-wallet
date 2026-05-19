@@ -210,6 +210,44 @@ async fn test_display_metadata<R: CredentialRepo>(repository: &R, tenant_a: Uuid
         Some(expected_issued_at.as_str())
     );
 
+    // Upserting the same credential with new display metadata should update the
+    // metadata row instead of failing on the credential_id primary key.
+    let updated_display = CredentialDisplayMetadata {
+        display: CredentialDisplay {
+            name: "Updated EU Personal ID".to_string(),
+            description: Some("Updated credential display metadata".to_string()),
+            locale: Some("fr-FR".to_string()),
+            ..Default::default()
+        },
+        issuer_name: "Updated EU Authority".to_string(),
+        credential_type: "eu.europa.ec.eudi.pid.updated".to_string(),
+    };
+    repository
+        .upsert(credential_a.clone(), Some(updated_display))
+        .await
+        .unwrap();
+    let updated_summaries = repository
+        .list(CredentialFilter {
+            tenant_id: Some(tenant_a),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated_summaries.len(), 1);
+    assert_eq!(updated_summaries[0].id, credential_a.id);
+    assert_eq!(
+        updated_summaries[0].display.display.name,
+        "Updated EU Personal ID"
+    );
+    assert_eq!(
+        updated_summaries[0].display.issuer_name,
+        "Updated EU Authority"
+    );
+    assert_eq!(
+        updated_summaries[0].display.credential_type,
+        "eu.europa.ec.eudi.pid.updated"
+    );
+
     // list for tenant_b (no display metadata) should return empty
     // (INNER JOIN semantics: only credentials with display metadata)
     let summaries_b = repository
