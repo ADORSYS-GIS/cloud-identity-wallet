@@ -26,7 +26,8 @@ use crate::utils::{Driver, Query};
 type Result<T> = std::result::Result<T, TenantError>;
 
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
-static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql_sqlite");
+static MYSQL_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql");
+static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// Algorithm used for tenant key generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,7 +77,8 @@ impl SqlTenantRepo {
     pub async fn init_schema(&self) -> Result<()> {
         match self.driver {
             Driver::Postgres => POSTGRES_MIGRATOR.run(&self.pool).await?,
-            _ => MYSQL_SQLITE_MIGRATOR.run(&self.pool).await?,
+            Driver::MySql => MYSQL_MIGRATOR.run(&self.pool).await?,
+            Driver::Sqlite => SQLITE_MIGRATOR.run(&self.pool).await?,
         }
         Ok(())
     }
