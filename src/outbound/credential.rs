@@ -20,7 +20,8 @@ use crate::utils::{Driver, Query};
 type Result<T> = std::result::Result<T, CredentialError>;
 
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
-static MYSQL_SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql_sqlite");
+static MYSQL_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql");
+static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// Persistent relational database backend for credentials.
 ///
@@ -94,7 +95,8 @@ impl SqlCredentialRepo {
     pub async fn init_schema(&self) -> Result<()> {
         match self.driver {
             Driver::Postgres => POSTGRES_MIGRATOR.run(&self.pool).await?,
-            _ => MYSQL_SQLITE_MIGRATOR.run(&self.pool).await?,
+            Driver::MySql => MYSQL_MIGRATOR.run(&self.pool).await?,
+            Driver::Sqlite => SQLITE_MIGRATOR.run(&self.pool).await?,
         }
         Ok(())
     }
@@ -275,16 +277,9 @@ impl CredentialRepo for SqlCredentialRepo {
         let mut tx = self.pool.begin().await?;
         self.upsert_inner(&mut tx, &record).await?;
 
-        // Atomically insert display metadata in the same transaction
+        // Atomically upsert display metadata in the same transaction
         if let Some(metadata) = display {
-            let display_json = serde_json::to_vec(&metadata.display)?;
-            sqlx::query(INSERT_DISPLAY_METADATA.for_driver(&self.driver))
-                .bind(credential_id.to_string())
-                .bind(tenant_id.to_string())
-                .bind(display_json)
-                .bind(&metadata.issuer_name)
-                .bind(&metadata.credential_type)
-                .execute(&mut *tx)
+            upsert_display_metadata(&self.driver, &mut tx, credential_id, tenant_id, &metadata)
                 .await?;
         }
 
@@ -527,6 +522,32 @@ async fn update_credential(
     Ok(result.rows_affected())
 }
 
+async fn upsert_display_metadata(
+    driver: &Driver,
+    tx: &mut Transaction<'_, sqlx::Any>,
+    credential_id: Uuid,
+    tenant_id: Uuid,
+    metadata: &CredentialDisplayMetadata,
+) -> Result<()> {
+    let display_json = serde_json::to_vec(&metadata.display)?;
+    sqlx::query(upsert_display_metadata_sql(driver))
+        .bind(credential_id.to_string())
+        .bind(tenant_id.to_string())
+        .bind(display_json)
+        .bind(&metadata.issuer_name)
+        .bind(&metadata.credential_type)
+        .execute(tx.as_mut())
+        .await?;
+    Ok(())
+}
+
+fn upsert_display_metadata_sql(driver: &Driver) -> &str {
+    match driver {
+        Driver::MySql => UPSERT_DISPLAY_METADATA_MYSQL.for_driver(driver),
+        Driver::Postgres | Driver::Sqlite => UPSERT_DISPLAY_METADATA_ON_CONFLICT.for_driver(driver),
+    }
+}
+
 static FIND_CREDENTIAL: Query = Query::new(
     "SELECT id, tenant_id, issuer, subject, credential_types, format, external_id, status, \
      issued_at, valid_until, is_revoked, status_location, status_index, raw_credential, \
@@ -553,13 +574,35 @@ static UPDATE_CREDENTIAL: Query = Query::new(
 static DELETE_CREDENTIAL: Query =
     Query::new("DELETE FROM credentials WHERE id = $1 AND tenant_id = $2");
 
-static INSERT_DISPLAY_METADATA: Query = Query::new(
+// Display metadata is one-to-one with credentials. `tenant_id` is stored for
+// tenant-scoped joins/cascade behavior, while uniqueness follows the globally
+// unique `credentials.id`, so the conflict target is `credential_id`.
+static UPSERT_DISPLAY_METADATA_ON_CONFLICT: Query = Query::new(
     "INSERT INTO credential_display_metadata \
      (credential_id, tenant_id, display, issuer_name, credential_type) \
-     VALUES ($1, $2, $3, $4, $5)",
+     VALUES ($1, $2, $3, $4, $5) \
+     ON CONFLICT (credential_id) DO UPDATE SET \
+     tenant_id = EXCLUDED.tenant_id, display = EXCLUDED.display, \
+     issuer_name = EXCLUDED.issuer_name, credential_type = EXCLUDED.credential_type",
+);
+
+static UPSERT_DISPLAY_METADATA_MYSQL: Query = Query::new(
+    "INSERT INTO credential_display_metadata \
+     (credential_id, tenant_id, display, issuer_name, credential_type) \
+     VALUES ($1, $2, $3, $4, $5) \
+     ON DUPLICATE KEY UPDATE \
+     tenant_id = VALUES(tenant_id), display = VALUES(display), \
+     issuer_name = VALUES(issuer_name), credential_type = VALUES(credential_type)",
 );
 
 /// SQL row mapping for the summary join query.
+///
+/// `tenant_id` is not projected here because the query joins display metadata
+/// through both credential ID and tenant ID before mapping the result.
+///
+/// One display metadata row belongs to exactly one wallet credential.
+/// Credential IDs are globally unique in `credentials`, so `tenant_id` is
+/// retained for tenant-scoped joins and cascade behavior.
 #[derive(FromRow)]
 struct DisplayMetadataRecord {
     credential_id: String,
@@ -738,7 +781,7 @@ impl CredentialRepo for MemoryCredentialRepo {
         // Atomically store display metadata alongside the credential
         if let Some(metadata) = display {
             self.display_metadata
-                .insert((credential_id, tenant_id), metadata);
+                .insert((tenant_id, credential_id), metadata);
         }
         Ok(credential_id)
     }
@@ -756,7 +799,7 @@ impl CredentialRepo for MemoryCredentialRepo {
             .remove(&(tenant_id, id))
             .ok_or(CredentialError::NotFound { id, tenant_id })?;
         // Cascade: remove associated display metadata
-        self.display_metadata.remove(&(id, tenant_id));
+        self.display_metadata.remove(&(tenant_id, id));
         Ok(())
     }
 
@@ -769,7 +812,7 @@ impl CredentialRepo for MemoryCredentialRepo {
             if filter.matches(&stored.credential) {
                 let cred = &stored.credential;
                 // Only return summaries for credentials that have display metadata
-                if let Some(display_ref) = self.display_metadata.get(&(cred.id, cred.tenant_id)) {
+                if let Some(display_ref) = self.display_metadata.get(&(cred.tenant_id, cred.id)) {
                     out.push(CredentialSummary {
                         id: cred.id,
                         display: display_ref.value().clone(),
