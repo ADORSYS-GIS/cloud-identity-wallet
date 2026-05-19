@@ -44,6 +44,10 @@ const MAX_DEFERRED_RETRIES: u32 = 60;
 const DEFAULT_WORKER_IDLE_SLEEP: Duration = Duration::from_millis(250);
 const DEFAULT_WORKER_ERROR_SLEEP: Duration = Duration::from_secs(1);
 
+/// Locale prefixes tried in order when selecting a display entry.
+/// TODO: make this configurable
+const PREFERRED_DISPLAY_LOCALES: &[&str] = &["en", "de"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowType {
@@ -686,7 +690,9 @@ fn extract_display_metadata(
         .issuer_metadata
         .display
         .as_deref()
-        .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), &["en", "de"]))
+        .and_then(|displays| {
+            select_preferred(displays, |d| d.locale.as_deref(), PREFERRED_DISPLAY_LOCALES)
+        })
         .and_then(|d| d.name.clone())
         .unwrap_or_else(|| context.offer.credential_issuer.to_string());
 
@@ -696,7 +702,9 @@ fn extract_display_metadata(
         .get(credential_config_id)
         .and_then(|config| config.credential_metadata.as_ref())
         .and_then(|meta| meta.display.as_deref())
-        .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), &["en", "de"]));
+        .and_then(|displays| {
+            select_preferred(displays, |d| d.locale.as_deref(), PREFERRED_DISPLAY_LOCALES)
+        });
 
     let display = match cred_display {
         Some(entry) => entry.clone(),
