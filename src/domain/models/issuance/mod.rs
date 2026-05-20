@@ -18,12 +18,12 @@ pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
-use cloud_wallet_openid4vc::issuance::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
-use cloud_wallet_openid4vc::issuance::credential_response::{
+use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::credential_response::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
-use cloud_wallet_openid4vc::issuance::notification::{NotificationEvent, NotificationRequest};
-use cloud_wallet_openid4vc::issuance::token_response::TokenResponse;
+use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
+use cloud_wallet_openid4vc::oid4vci::token_response::TokenResponse;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -675,7 +675,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cloud_wallet_openid4vc::issuance::client::Config as Oid4vciClientConfig;
+    use cloud_wallet_openid4vc::oid4vci::client::Config as Oid4vciClientConfig;
     use url::Url;
 
     use super::*;

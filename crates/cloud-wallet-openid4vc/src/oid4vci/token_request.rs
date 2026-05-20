@@ -10,7 +10,7 @@ use serde_with::skip_serializing_none;
 use url::Url;
 
 use super::authz_details::AuthorizationDetails;
-use crate::issuance::utils::{deserialize_json_string, serialize_json_string};
+use crate::utils::{deserialize_json_string, serialize_json_string};
 
 /// Token Request as defined in OpenID4VCI §6.1.
 ///

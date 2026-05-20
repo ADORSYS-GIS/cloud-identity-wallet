@@ -20,32 +20,32 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
 use url::Url;
 
-use crate::issuance::authz_details::AuthorizationDetails;
-use crate::issuance::authz_request::{
+use crate::oid4vci::authz_details::AuthorizationDetails;
+use crate::oid4vci::authz_request::{
     AuthorizationRequest, CodeChallengeMethod, PushedAuthorizationRequest,
 };
-use crate::issuance::authz_response::{AuthorizationResponse, PushedAuthorizationResponse};
-use crate::issuance::authz_server_metadata::AuthorizationServerMetadata;
-use crate::issuance::credential_configuration::{AlgorithmIdentifier, ProofType};
-use crate::issuance::credential_offer::{
+use crate::oid4vci::authz_response::{AuthorizationResponse, PushedAuthorizationResponse};
+use crate::oid4vci::authz_server_metadata::AuthorizationServerMetadata;
+use crate::oid4vci::credential_configuration::{AlgorithmIdentifier, ProofType};
+use crate::oid4vci::credential_offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
 };
-use crate::issuance::credential_request::{
+use crate::oid4vci::credential_request::{
     CredIdOrCredConfigId, CredentialRequest, DeferredCredentialRequest, Proofs,
 };
-use crate::issuance::credential_response::{CredentialResponse, DeferredCredentialResult};
-use crate::issuance::error::{
+use crate::oid4vci::credential_response::{CredentialResponse, DeferredCredentialResult};
+use crate::oid4vci::error::{
     AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse,
     NotificationErrorResponse, Oid4vciError, TokenErrorResponse,
 };
-use crate::issuance::issuer_metadata::CredentialIssuerMetadata;
-use crate::issuance::notification::NotificationRequest;
-use crate::issuance::query_params::QueryParams;
-use crate::issuance::token_request::{
+use crate::oid4vci::issuer_metadata::CredentialIssuerMetadata;
+use crate::oid4vci::notification::NotificationRequest;
+use crate::oid4vci::query_params::QueryParams;
+use crate::oid4vci::token_request::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest,
 };
-use crate::issuance::token_response::TokenResponse;
-use crate::issuance::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier};
+use crate::oid4vci::token_response::TokenResponse;
+use crate::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier};
 
 type Result<T> = std::result::Result<T, ClientError>;
 

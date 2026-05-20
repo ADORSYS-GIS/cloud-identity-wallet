@@ -4,7 +4,7 @@ use std::time::Duration;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::issuance::credential_offer::{Grants, PreAuthorizedCodeGrant};
+use crate::oid4vci::credential_offer::{Grants, PreAuthorizedCodeGrant};
 
 // Basic test server setup
 async fn setup_mock_server() -> MockServer {

@@ -43,7 +43,7 @@ mod tests {
 
     #[test]
     fn spec_rar_response_with_credential_identifiers() {
-        use crate::issuance::authz_details::AuthorizationDetailType;
+        use crate::oid4vci::authz_details::AuthorizationDetailType;
 
         let json = r#"{
             "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp..sHQ",
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn token_response_roundtrip() {
-        use crate::issuance::authz_details::AuthorizationDetailType;
+        use crate::oid4vci::authz_details::AuthorizationDetailType;
 
         let resp = TokenResponse {
             access_token: "my-access-token".to_string(),
