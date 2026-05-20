@@ -7,10 +7,11 @@ use serde_json::json;
 use std::time::Duration;
 
 fn create_test_session(flow: FlowType) -> IssuanceSession {
-    use cloud_wallet_openid4vc::oid4vci::authz_server_metadata::AuthorizationServerMetadata;
     use cloud_wallet_openid4vc::oid4vci::client::IssuanceFlow;
     use cloud_wallet_openid4vc::oid4vci::credential_offer::CredentialOffer;
-    use cloud_wallet_openid4vc::oid4vci::issuer_metadata::CredentialIssuerMetadata;
+    use cloud_wallet_openid4vc::oid4vci::metadata::{
+        AuthorizationServerMetadata, CredentialIssuerMetadata,
+    };
 
     let offer: CredentialOffer = serde_json::from_value(json!({
         "credential_issuer": "https://issuer.example.com",
