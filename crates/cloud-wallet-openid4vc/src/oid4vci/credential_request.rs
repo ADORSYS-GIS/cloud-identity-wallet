@@ -1,80 +1,12 @@
 //! Credential Request models for OpenID4VCI §8.2.
 
-use serde::{Deserialize, Deserializer, Serialize, de};
+use crate::utils::{
+    deserialize_non_empty_object_vec, deserialize_non_empty_string,
+    deserialize_non_empty_string_vec, deserialize_single_attestation,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, ErrorKind};
-
-fn invalid_credential_request(message: impl Into<String>) -> Error {
-    Error::message(ErrorKind::InvalidCredentialRequest, message.into())
-}
-
-fn deserialize_non_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-
-    if value.is_empty() {
-        return Err(de::Error::custom("value must not be empty"));
-    }
-
-    Ok(value)
-}
-
-fn deserialize_non_empty_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let values = Vec::<String>::deserialize(deserializer)?;
-
-    if values.is_empty() {
-        return Err(de::Error::custom(
-            "proof arrays must contain at least one entry",
-        ));
-    }
-
-    if values.iter().any(String::is_empty) {
-        return Err(de::Error::custom(
-            "proof arrays must not contain empty entries",
-        ));
-    }
-
-    Ok(values)
-}
-
-fn deserialize_non_empty_object_vec<'de, D>(
-    deserializer: D,
-) -> Result<Vec<serde_json::Value>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
-
-    if values.is_empty() {
-        return Err(de::Error::custom(
-            "proof arrays must contain at least one entry",
-        ));
-    }
-
-    if values.iter().any(|value| !value.is_object()) {
-        return Err(de::Error::custom("di_vp proofs must contain JSON objects"));
-    }
-
-    Ok(values)
-}
-
-fn deserialize_single_attestation<'de, D>(deserializer: D) -> Result<[String; 1], D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let attestation = <[String; 1]>::deserialize(deserializer)?;
-
-    if attestation[0].is_empty() {
-        return Err(de::Error::custom("attestation proof must not be empty"));
-    }
-
-    Ok(attestation)
-}
 
 /// The `proofs` object defined by OpenID4VCI §8.2.1.1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,6 +404,10 @@ impl CredentialRequest {
 pub struct DeferredCredentialRequest {
     pub transaction_id: String,
     pub credential_response_encryption: Option<CredentialResponseEncryption>,
+}
+
+fn invalid_credential_request(message: impl Into<String>) -> Error {
+    Error::message(ErrorKind::InvalidCredentialRequest, message.into())
 }
 
 #[cfg(test)]
