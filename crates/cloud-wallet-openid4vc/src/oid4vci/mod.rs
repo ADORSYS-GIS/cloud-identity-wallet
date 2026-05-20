@@ -16,5 +16,3 @@ pub mod metadata;
 pub mod notification;
 pub mod proofs;
 pub mod token;
-pub mod token_request;
-pub mod token_response;
