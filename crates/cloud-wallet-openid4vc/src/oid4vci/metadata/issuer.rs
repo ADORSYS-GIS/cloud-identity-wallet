@@ -14,7 +14,7 @@ use validator::Validate;
 
 use crate::errors::{Error, ErrorKind};
 
-use super::credential_configuration::{CredentialConfiguration, Logo};
+use super::configuration::{CredentialConfiguration, Logo};
 
 /// Per-language display properties for the Credential Issuer.
 #[skip_serializing_none]
@@ -140,13 +140,11 @@ impl CredentialIssuerMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oid4vci::{
-        credential_configuration::ProofType,
-        credential_formats::{
-            CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
-            MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
-        },
+    use crate::oid4vci::credential_formats::{
+        CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
+        MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
     };
+    use crate::oid4vci::metadata::ProofType;
     use serde_json::json;
 
     /// Minimal valid metadata — one SD-JWT VC config (only required fields).
@@ -165,7 +163,7 @@ mod tests {
 
     /// Full issuer metadata from Keycloak OID4VCI deployment.
     /// Source: ngrok tunnel to Keycloak realm with OID4VCI enabled.
-    const KEYCLOAK_METADATA: &str = include_str!("../../test_data/issuer_metadata.json");
+    const KEYCLOAK_METADATA: &str = include_str!("../../../test_data/issuer_metadata.json");
 
     // ── Format model deserialization ──────────────────────────────────────────
 
