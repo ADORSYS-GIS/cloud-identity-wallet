@@ -9,7 +9,7 @@ use serde_with::skip_serializing_none;
 
 use super::claim_path_pointer::ClaimPathPointer;
 use super::credential_formats::CredentialFormatDetails;
-use super::css_color::CssColor;
+use crate::utils::CssColor;
 
 /// Algorithm identifier that can be either a string or integer value.
 ///
