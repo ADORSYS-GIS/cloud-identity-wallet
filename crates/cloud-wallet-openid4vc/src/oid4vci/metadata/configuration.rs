@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::oid4vci::claim_path_pointer::ClaimPathPointer;
+use crate::core::claim_path_pointer::ClaimPathPointer;
 use crate::oid4vci::credential_formats::CredentialFormatDetails;
 use crate::utils::CssColor;
 

@@ -1,7 +1,6 @@
 //! OpenID4VCI protocol data models.
 
 pub mod authorization;
-pub mod claim_path_pointer;
 pub mod client;
 pub mod credential;
 pub mod credential_formats;

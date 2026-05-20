@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::oid4vci::claim_path_pointer::ClaimPathPointer;
+use crate::core::claim_path_pointer::ClaimPathPointer;
 
 /// The type of authorization detail.
 ///
