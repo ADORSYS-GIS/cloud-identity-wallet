@@ -4,9 +4,7 @@ pub mod pkce;
 pub use css_color::*;
 
 use percent_encoding::percent_decode_str;
-use serde::Deserialize;
-use serde::Serialize;
-use serde::Serializer;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use crate::errors::{Error, ErrorKind};
 
@@ -27,7 +25,75 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    serde_json::from_str(&s).map_err(serde::de::Error::custom)
+    serde_json::from_str(&s).map_err(de::Error::custom)
+}
+
+pub fn deserialize_non_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+
+    if value.is_empty() {
+        return Err(de::Error::custom("value must not be empty"));
+    }
+
+    Ok(value)
+}
+
+pub fn deserialize_non_empty_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+
+    if values.is_empty() {
+        return Err(de::Error::custom(
+            "proof arrays must contain at least one entry",
+        ));
+    }
+
+    if values.iter().any(String::is_empty) {
+        return Err(de::Error::custom(
+            "proof arrays must not contain empty entries",
+        ));
+    }
+
+    Ok(values)
+}
+
+pub fn deserialize_non_empty_object_vec<'de, D>(
+    deserializer: D,
+) -> Result<Vec<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+
+    if values.is_empty() {
+        return Err(serde::de::Error::custom(
+            "proof arrays must contain at least one entry",
+        ));
+    }
+
+    if values.iter().any(|value| !value.is_object()) {
+        return Err(de::Error::custom("di_vp proofs must contain JSON objects"));
+    }
+
+    Ok(values)
+}
+
+pub fn deserialize_single_attestation<'de, D>(deserializer: D) -> Result<[String; 1], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let attestation = <[String; 1]>::deserialize(deserializer)?;
+
+    if attestation[0].is_empty() {
+        return Err(de::Error::custom("attestation proof must not be empty"));
+    }
+
+    Ok(attestation)
 }
 
 /// A parsed, duplicate-free set of query parameters.
