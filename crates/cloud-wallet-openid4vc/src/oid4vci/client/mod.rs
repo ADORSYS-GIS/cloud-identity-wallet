@@ -24,13 +24,13 @@ use crate::oid4vci::authorization::{
     AuthorizationDetails, AuthorizationRequest, AuthorizationResponse, CodeChallengeMethod,
     PushedAuthorizationRequest, PushedAuthorizationResponse,
 };
-use crate::oid4vci::credential_offer::{
+use crate::oid4vci::credential::offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
 };
-use crate::oid4vci::credential_request::{
-    CredIdOrCredConfigId, CredentialRequest, DeferredCredentialRequest,
+use crate::oid4vci::credential::{
+    CredIdOrCredConfigId, CredentialRequest, CredentialResponse, DeferredCredentialRequest,
+    DeferredCredentialResult,
 };
-use crate::oid4vci::credential_response::{CredentialResponse, DeferredCredentialResult};
 use crate::oid4vci::error::{
     AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse,
     NotificationErrorResponse, Oid4vciError, TokenErrorResponse,
