@@ -14,5 +14,6 @@ pub mod credential_response;
 pub mod error;
 pub mod issuer_metadata;
 pub mod notification;
+pub mod proofs;
 pub mod token_request;
 pub mod token_response;

@@ -31,7 +31,7 @@ use crate::oid4vci::credential_offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
 };
 use crate::oid4vci::credential_request::{
-    CredIdOrCredConfigId, CredentialRequest, DeferredCredentialRequest, Proofs,
+    CredIdOrCredConfigId, CredentialRequest, DeferredCredentialRequest,
 };
 use crate::oid4vci::credential_response::{CredentialResponse, DeferredCredentialResult};
 use crate::oid4vci::error::{
@@ -40,6 +40,7 @@ use crate::oid4vci::error::{
 };
 use crate::oid4vci::issuer_metadata::CredentialIssuerMetadata;
 use crate::oid4vci::notification::NotificationRequest;
+use crate::oid4vci::proofs::Proofs;
 use crate::oid4vci::token_request::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest,
 };
