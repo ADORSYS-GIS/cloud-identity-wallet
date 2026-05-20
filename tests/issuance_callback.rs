@@ -21,7 +21,8 @@ use cloud_identity_wallet::{
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
-use cloud_wallet_openid4vc::oid4vci::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
+use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 use futures::StreamExt;
 use reqwest::Client;
 use url::Url;
@@ -73,7 +74,7 @@ async fn spawn_callback_test_app(session_store: MemorySession) -> CallbackTestAp
     .timeout(Duration::from_secs(60))
     .accept_untrusted_hosts(true);
 
-    let client = Oid4vciClient::new(client_config).unwrap();
+    let client = Oid4vciClient::new(OidClient::new(client_config).unwrap());
     let engine = IssuanceEngine::new(
         client,
         queue,

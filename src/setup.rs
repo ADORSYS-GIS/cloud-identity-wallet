@@ -1,4 +1,5 @@
-use cloud_wallet_openid4vc::oid4vci::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
+use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 
 use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
@@ -21,7 +22,8 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     .use_system_proxy(config.oid4vci.use_system_proxy)
     // TODO : remove this later on - only for local testing
     .accept_untrusted_hosts(true);
-    let client = Oid4vciClient::new(client_config)?;
+
+    let client = Oid4vciClient::new(OidClient::new(client_config)?);
 
     // TODO: Replace with production adapters (Redis, SQL)
     let task_queue = MemoryTaskQueue::new();
