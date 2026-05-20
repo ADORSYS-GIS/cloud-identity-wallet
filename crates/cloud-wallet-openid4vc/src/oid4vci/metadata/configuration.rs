@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::core::claim_path_pointer::ClaimPathPointer;
-use crate::oid4vci::credential_formats::CredentialFormatDetails;
+use crate::oid4vci::credential::formats::CredentialFormatDetails;
 use crate::utils::CssColor;
 
 /// Algorithm identifier that can be either a string or integer value.

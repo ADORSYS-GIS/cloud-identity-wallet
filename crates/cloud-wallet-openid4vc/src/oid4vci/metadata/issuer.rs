@@ -140,7 +140,7 @@ impl CredentialIssuerMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oid4vci::credential_formats::{
+    use crate::oid4vci::credential::formats::{
         CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
         MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
     };

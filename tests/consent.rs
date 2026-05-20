@@ -8,7 +8,7 @@ use std::time::Duration;
 
 fn create_test_session(flow: FlowType) -> IssuanceSession {
     use cloud_wallet_openid4vc::oid4vci::client::IssuanceFlow;
-    use cloud_wallet_openid4vc::oid4vci::credential_offer::CredentialOffer;
+    use cloud_wallet_openid4vc::oid4vci::credential::offer::CredentialOffer;
     use cloud_wallet_openid4vc::oid4vci::metadata::{
         AuthorizationServerMetadata, CredentialIssuerMetadata,
     };

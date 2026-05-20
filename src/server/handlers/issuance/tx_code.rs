@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use cloud_wallet_openid4vc::oid4vci::{client::IssuanceFlow, credential_offer::TxCode};
+use cloud_wallet_openid4vc::oid4vci::{client::IssuanceFlow, credential::offer::TxCode};
 use tracing::{info, instrument};
 
 use crate::domain::models::issuance::{

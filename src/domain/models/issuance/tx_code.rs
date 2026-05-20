@@ -1,4 +1,4 @@
-use cloud_wallet_openid4vc::oid4vci::credential_offer::{InputMode, TxCode};
+use cloud_wallet_openid4vc::oid4vci::credential::offer::{InputMode, TxCode};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{IssuanceState, SessionError};

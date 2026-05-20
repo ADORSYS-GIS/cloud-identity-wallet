@@ -19,7 +19,7 @@ pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 use std::{sync::Arc, time::Duration};
 
 use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
-use cloud_wallet_openid4vc::oid4vci::credential_response::{
+use cloud_wallet_openid4vc::oid4vci::credential::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
 use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
