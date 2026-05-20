@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::errors::{Error, ErrorKind};
-use crate::issuance::error::{
+use crate::oid4vci::error::{
     AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse,
     NotificationErrorResponse, Oid4vciError, TokenErrorResponse,
 };

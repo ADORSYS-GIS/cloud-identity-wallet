@@ -22,7 +22,7 @@ use cloud_identity_wallet::{
     server::Server,
     session::MemorySession,
 };
-use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::oid4vci::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;

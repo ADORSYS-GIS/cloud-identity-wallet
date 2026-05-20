@@ -21,7 +21,7 @@ use cloud_identity_wallet::{
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
-use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::oid4vci::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 use futures::StreamExt;
 use reqwest::Client;
 use url::Url;

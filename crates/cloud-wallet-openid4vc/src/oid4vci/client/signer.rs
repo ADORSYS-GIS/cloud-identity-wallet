@@ -5,7 +5,7 @@ use cloud_wallet_crypto::{ecdsa, ed25519, error::ErrorKind, jwk::Jwk, rsa};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::issuance::client::{ClientError, Result};
+use crate::oid4vci::client::{ClientError, Result};
 
 const OPENID4VCI_PROOF_JWT_TYP: &str = "openid4vci-proof+jwt";
 

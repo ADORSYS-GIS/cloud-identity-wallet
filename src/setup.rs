@@ -1,4 +1,4 @@
-use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::oid4vci::client::{Config as Oid4vciClientConfig, Oid4vciClient};
 
 use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;

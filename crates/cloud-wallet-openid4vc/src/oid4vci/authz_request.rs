@@ -12,9 +12,9 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::issuance::authz_details::AuthorizationDetails;
-pub use crate::issuance::authz_details::{AuthorizationDetailType, AuthzDetailsClaim};
-use crate::issuance::utils::serialize_json_string;
+use crate::oid4vci::authz_details::AuthorizationDetails;
+pub use crate::oid4vci::authz_details::{AuthorizationDetailType, AuthzDetailsClaim};
+use crate::utils::serialize_json_string;
 
 /// PKCE code challenge method.
 ///
