@@ -23,7 +23,7 @@ use cloud_wallet_openid4vc::oid4vci::credential_response::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
 use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
-use cloud_wallet_openid4vc::oid4vci::token_response::TokenResponse;
+use cloud_wallet_openid4vc::oid4vci::token::TokenResponse;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
