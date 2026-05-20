@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::errors::{Error, ErrorKind};
-use crate::oid4vci::query_params::QueryParams;
+use crate::utils::QueryParams;
 
 /// Recognized query parameters in an authorization response.
 const RECOGNIZED_PARAMS: &[&str] = &["code", "state"];
