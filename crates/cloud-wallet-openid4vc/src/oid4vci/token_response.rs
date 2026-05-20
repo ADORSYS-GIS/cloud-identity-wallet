@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use super::authz_details::AuthorizationDetails;
+use crate::oid4vci::authorization::AuthorizationDetails;
 
 /// A successful Token Response (HTTP 200 OK) per OpenID4VCI §6.2 and RFC 6749 §5.1.
 #[skip_serializing_none]
@@ -25,6 +25,7 @@ pub struct TokenResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oid4vci::authorization::AuthorizationDetailType;
 
     #[test]
     fn spec_successful_bearer_response() {
@@ -43,8 +44,6 @@ mod tests {
 
     #[test]
     fn spec_rar_response_with_credential_identifiers() {
-        use crate::oid4vci::authz_details::AuthorizationDetailType;
-
         let json = r#"{
             "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp..sHQ",
             "token_type": "Bearer",
@@ -85,8 +84,6 @@ mod tests {
 
     #[test]
     fn token_response_roundtrip() {
-        use crate::oid4vci::authz_details::AuthorizationDetailType;
-
         let resp = TokenResponse {
             access_token: "my-access-token".to_string(),
             token_type: "Bearer".to_string(),
