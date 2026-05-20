@@ -1,9 +1,14 @@
 use super::*;
 use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
+use reqwest_middleware::ClientBuilder;
+use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
+use std::sync::Arc;
 use std::time::Duration;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use crate::core::client::Config;
 use crate::oid4vci::credential::offer::{Grants, PreAuthorizedCodeGrant};
 
 // Basic test server setup
@@ -24,10 +29,11 @@ fn create_client() -> Oid4vciClient {
     let http_client = ClientBuilder::new(inner_client)
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build();
-    Oid4vciClient {
+    let inner_client = OidClient {
         config: Arc::new(config),
         http_client,
-    }
+    };
+    Oid4vciClient::new(inner_client)
 }
 
 #[test]

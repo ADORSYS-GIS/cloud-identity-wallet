@@ -22,7 +22,8 @@ use cloud_identity_wallet::{
     server::Server,
     session::MemorySession,
 };
-use cloud_wallet_openid4vc::oid4vci::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
+use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
@@ -53,7 +54,7 @@ async fn spawn_server_internal() -> (String, MemoryCredentialRepo) {
     )
     .use_system_proxy(config.oid4vci.use_system_proxy)
     .accept_untrusted_hosts(true);
-    let client = Oid4vciClient::new(client_config).unwrap();
+    let client = Oid4vciClient::new(OidClient::new(client_config).unwrap());
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);

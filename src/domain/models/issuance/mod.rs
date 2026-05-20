@@ -675,7 +675,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cloud_wallet_openid4vc::oid4vci::client::Config as Oid4vciClientConfig;
+    use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
     use url::Url;
 
     use super::*;
@@ -731,11 +731,12 @@ mod tests {
     }
 
     fn make_engine(queue: RecordingTaskQueue) -> IssuanceEngine {
-        let client = Oid4vciClient::new(Oid4vciClientConfig::new(
+        let inner_client = OidClient::new(Oid4vciClientConfig::new(
             "test-client",
             Url::parse("https://wallet.example.com/callback").unwrap(),
         ))
         .unwrap();
+        let client = Oid4vciClient::new(inner_client);
 
         let sessions = MemorySession::default();
         let publisher = MemoryEventPublisher::new(16);
