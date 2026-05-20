@@ -20,11 +20,10 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
 use url::Url;
 
-use crate::oid4vci::authz_details::AuthorizationDetails;
-use crate::oid4vci::authz_request::{
-    AuthorizationRequest, CodeChallengeMethod, PushedAuthorizationRequest,
+use crate::oid4vci::authorization::{
+    AuthorizationDetails, AuthorizationRequest, AuthorizationResponse, CodeChallengeMethod,
+    PushedAuthorizationRequest, PushedAuthorizationResponse,
 };
-use crate::oid4vci::authz_response::{AuthorizationResponse, PushedAuthorizationResponse};
 use crate::oid4vci::authz_server_metadata::AuthorizationServerMetadata;
 use crate::oid4vci::credential_configuration::{AlgorithmIdentifier, ProofType};
 use crate::oid4vci::credential_offer::{
