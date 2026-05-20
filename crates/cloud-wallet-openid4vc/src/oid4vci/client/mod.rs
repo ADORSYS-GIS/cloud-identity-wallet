@@ -24,8 +24,6 @@ use crate::oid4vci::authorization::{
     AuthorizationDetails, AuthorizationRequest, AuthorizationResponse, CodeChallengeMethod,
     PushedAuthorizationRequest, PushedAuthorizationResponse,
 };
-use crate::oid4vci::authz_server_metadata::AuthorizationServerMetadata;
-use crate::oid4vci::credential_configuration::{AlgorithmIdentifier, ProofType};
 use crate::oid4vci::credential_offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
 };
@@ -37,7 +35,9 @@ use crate::oid4vci::error::{
     AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse,
     NotificationErrorResponse, Oid4vciError, TokenErrorResponse,
 };
-use crate::oid4vci::issuer_metadata::CredentialIssuerMetadata;
+use crate::oid4vci::metadata::{
+    AlgorithmIdentifier, AuthorizationServerMetadata, CredentialIssuerMetadata, ProofType,
+};
 use crate::oid4vci::notification::NotificationRequest;
 use crate::oid4vci::proofs::Proofs;
 use crate::oid4vci::token::{
