@@ -1,4 +1,4 @@
-use cloud_wallet_openid4vc::issuance::client::ResolvedOfferContext;
+use cloud_wallet_openid4vc::oid4vci::client::ResolvedOfferContext;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

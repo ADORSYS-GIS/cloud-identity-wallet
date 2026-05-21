@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, Oid4vciClient};
+use cloud_wallet_openid4vc::oid4vci::client::{IssuanceFlow, Oid4vciClient};
 use tracing::debug;
 use uuid::Uuid;
 

@@ -1,7 +1,6 @@
-use cloud_wallet_openid4vc::issuance::client::{IssuanceFlow, ResolvedOfferContext};
-use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
-use cloud_wallet_openid4vc::issuance::credential_offer::TxCode;
-use cloud_wallet_openid4vc::issuance::issuer_metadata::IssuerDisplay;
+use cloud_wallet_openid4vc::oid4vci::client::{IssuanceFlow, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::credential::offer::TxCode;
+use cloud_wallet_openid4vc::oid4vci::metadata::{CredentialDisplay, IssuerDisplay};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
