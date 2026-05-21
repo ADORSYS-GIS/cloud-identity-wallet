@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fmt, time::Duration};
 
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use redis::{
@@ -6,7 +6,10 @@ use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
 };
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Serialize,
+    de::{SeqAccess, Visitor},
+};
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
@@ -39,6 +42,45 @@ pub struct Oid4vciConfig {
     pub client_id: String,
     pub redirect_uri: Url,
     pub use_system_proxy: bool,
+    /// Locale prefixes tried in order when selecting a credential display entry.
+    /// Configurable via `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES=en,fr,de`.
+    #[serde(deserialize_with = "deserialize_string_or_seq")]
+    pub preferred_display_locales: Vec<String>,
+}
+
+/// Deserialize a `Vec<String>` from either a JSON array or a comma-separated
+/// string (e.g. the value of an environment variable like `en,fr,de`).
+fn deserialize_string_or_seq<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrSeq;
+
+    impl<'de> Visitor<'de> for StringOrSeq {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a sequence or a comma-separated string")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Vec<String>, E> {
+            Ok(v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect())
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+            let mut items = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                items.push(s);
+            }
+            Ok(items)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrSeq)
 }
 
 impl RedisConfig {
@@ -107,7 +149,8 @@ impl Config {
                 "oid4vci.redirect_uri",
                 "http://localhost:3000/api/v1/issuance/callback",
             )?
-            .set_default("oid4vci.use_system_proxy", true)
+            .set_default("oid4vci.use_system_proxy", true)?
+            .set_default("oid4vci.preferred_display_locales", vec!["en"])
     }
 }
 
@@ -125,6 +168,23 @@ mod tests {
         assert_eq!(
             config.redis.uri.expose_secret(),
             "redis://127.0.0.1:6379?protocol=resp3"
+        );
+        assert_eq!(config.oid4vci.preferred_display_locales, vec!["en"]);
+    }
+
+    #[test]
+    fn test_preferred_display_locales_csv_string_override() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert(
+            "oid4vci.preferred_display_locales".to_string(),
+            "fr,de,en".to_string(),
+        );
+
+        let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
+
+        assert_eq!(
+            config.oid4vci.preferred_display_locales,
+            vec!["fr", "de", "en"]
         );
     }
 
