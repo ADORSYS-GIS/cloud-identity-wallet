@@ -2,44 +2,21 @@
 
 pub mod utils;
 
-use std::sync::Arc;
-
 use reqwest::{Client, StatusCode};
 use uuid::Uuid;
 
-use cloud_identity_wallet::{
-    domain::ports::CredentialRepo, outbound::MemoryTenantRepo, server::Server,
-    session::MemorySession, setup,
-};
-
-/// Spawns a test server and returns the base URL and the shared credential
-/// repository for direct seeding. The server task runs until the runtime
-/// shuts down at the end of each test.
-async fn spawn_server_with_repo() -> (String, Arc<dyn CredentialRepo>) {
-    let config = utils::make_config();
-    let session_store = MemorySession::default();
-    let tenant_repo = MemoryTenantRepo::new();
-    let service = setup::build_service(session_store, tenant_repo, &config).unwrap();
-    let credential_repo = Arc::clone(&service.issuance_engine.credential_repo);
-    let server = Server::new(&config, service).await.unwrap();
-    let port = server.port();
-    tokio::spawn(server.run());
-    (
-        format!("http://{}:{}", config.server.host, port),
-        credential_repo,
-    )
-}
+use cloud_identity_wallet::domain::ports::CredentialRepo;
 
 #[tokio::test]
 async fn delete_missing_auth_returns_401() {
     // Arrange
-    let (base_url, _) = spawn_server_with_repo().await;
+    let server = utils::spawn_server().await;
     let client = Client::new();
     let id = Uuid::new_v4();
 
     // Act
     let response = client
-        .delete(format!("{base_url}/api/v1/credentials/{id}"))
+        .delete(format!("{}/api/v1/credentials/{id}", server.base_url))
         .send()
         .await
         .expect("Failed to send request");
@@ -51,7 +28,7 @@ async fn delete_missing_auth_returns_401() {
 #[tokio::test]
 async fn delete_owned_credential_returns_204() {
     // Arrange
-    let (base_url, repo) = spawn_server_with_repo().await;
+    let server = utils::spawn_server().await;
     let client = Client::new();
 
     let tenant_id = Uuid::new_v4();
@@ -59,14 +36,19 @@ async fn delete_owned_credential_returns_204() {
 
     let credential = utils::sample_credential(tenant_id);
     let credential_id = credential.id;
-    repo.upsert(credential)
+    server
+        .credential_repo
+        .upsert(credential, None)
         .await
         .expect("Failed to seed credential");
 
     // Act
     let response = client
-        .delete(format!("{base_url}/api/v1/credentials/{credential_id}"))
-        .header("Authorization", format!("Bearer {token}"))
+        .delete(format!(
+            "{}/api/v1/credentials/{credential_id}",
+            server.base_url
+        ))
+        .bearer_auth(token)
         .send()
         .await
         .expect("Failed to send request");
@@ -78,7 +60,7 @@ async fn delete_owned_credential_returns_204() {
 #[tokio::test]
 async fn delete_is_idempotent_second_call_returns_404() {
     // Arrange
-    let (base_url, repo) = spawn_server_with_repo().await;
+    let server = utils::spawn_server().await;
     let client = Client::new();
 
     let tenant_id = Uuid::new_v4();
@@ -86,14 +68,17 @@ async fn delete_is_idempotent_second_call_returns_404() {
 
     let credential = utils::sample_credential(tenant_id);
     let credential_id = credential.id;
-    repo.upsert(credential)
+    server
+        .credential_repo
+        .upsert(credential, None)
         .await
         .expect("Failed to seed credential");
 
+    let base_url = server.base_url;
     // Act — first delete succeeds
     let first = client
         .delete(format!("{base_url}/api/v1/credentials/{credential_id}"))
-        .header("Authorization", format!("Bearer {token}"))
+        .bearer_auth(&token)
         .send()
         .await
         .expect("Failed to send first request");
@@ -102,7 +87,7 @@ async fn delete_is_idempotent_second_call_returns_404() {
     // Act — second delete on same credential returns 404
     let second = client
         .delete(format!("{base_url}/api/v1/credentials/{credential_id}"))
-        .header("Authorization", format!("Bearer {token}"))
+        .bearer_auth(token)
         .send()
         .await
         .expect("Failed to send second request");
@@ -116,7 +101,7 @@ async fn delete_is_idempotent_second_call_returns_404() {
 #[tokio::test]
 async fn delete_another_tenants_credential_returns_404() {
     // Arrange — two tenants share the same server instance
-    let (base_url, repo) = spawn_server_with_repo().await;
+    let server = utils::spawn_server().await;
     let client = Client::new();
 
     let tenant_a = Uuid::new_v4();
@@ -125,7 +110,8 @@ async fn delete_another_tenants_credential_returns_404() {
     // Seed a credential owned by tenant A
     let credential_a = utils::sample_credential(tenant_a);
     let credential_id = credential_a.id;
-    repo.upsert(credential_a)
+    let repo = server.credential_repo;
+    repo.upsert(credential_a, None)
         .await
         .expect("Failed to seed credential");
 
@@ -134,8 +120,11 @@ async fn delete_another_tenants_credential_returns_404() {
 
     // Act — tenant B tries to delete tenant A's credential
     let response = client
-        .delete(format!("{base_url}/api/v1/credentials/{credential_id}"))
-        .header("Authorization", format!("Bearer {token_b}"))
+        .delete(format!(
+            "{}/api/v1/credentials/{credential_id}",
+            server.base_url
+        ))
+        .bearer_auth(token_b)
         .send()
         .await
         .expect("Failed to send request");
@@ -156,7 +145,7 @@ async fn delete_another_tenants_credential_returns_404() {
 #[tokio::test]
 async fn delete_nonexistent_credential_returns_404() {
     // Arrange
-    let (base_url, _) = spawn_server_with_repo().await;
+    let server = utils::spawn_server().await;
     let client = Client::new();
 
     let tenant_id = Uuid::new_v4();
@@ -166,8 +155,11 @@ async fn delete_nonexistent_credential_returns_404() {
 
     // Act
     let response = client
-        .delete(format!("{base_url}/api/v1/credentials/{nonexistent_id}"))
-        .header("Authorization", format!("Bearer {token}"))
+        .delete(format!(
+            "{}/api/v1/credentials/{nonexistent_id}",
+            server.base_url
+        ))
+        .bearer_auth(token)
         .send()
         .await
         .expect("Failed to send request");

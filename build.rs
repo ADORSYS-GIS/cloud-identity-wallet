@@ -2,5 +2,6 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=migrations/postgres");
-    println!("cargo:rerun-if-changed=migrations/mysql_sqlite");
+    println!("cargo:rerun-if-changed=migrations/mysql");
+    println!("cargo:rerun-if-changed=migrations/sqlite");
 }

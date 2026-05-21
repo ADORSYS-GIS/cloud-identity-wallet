@@ -103,10 +103,12 @@ impl IntoApiError for CredentialError {
             CredentialError::NotFound { .. } => ApiError {
                 status: StatusCode::NOT_FOUND,
                 error: Cow::Borrowed("credential_not_found"),
-                error_description: Some("Credential not found.".into()),
+                error_description: Some(
+                    "No credential with that ID exists for this tenant.".into(),
+                ),
             },
-            CredentialError::Backend(src) => ApiError::internal(src),
             CredentialError::InvalidData(msg) => ApiError::internal(msg),
+            CredentialError::Backend(src) => ApiError::internal(src),
             CredentialError::Encryption(src) => ApiError::internal(src),
             CredentialError::Other(msg) => ApiError::internal(msg),
         }

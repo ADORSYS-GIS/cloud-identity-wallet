@@ -1,5 +1,7 @@
 use core::str::FromStr;
 
+pub use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
+use serde::{Deserialize, Deserializer, Serialize};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -28,7 +30,8 @@ pub enum CredentialError {
 /// Lifecycle status of an issued credential.
 ///
 /// Represents the current state of a credential in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CredentialStatus {
     /// The credential is valid and active.
     Active,
@@ -77,17 +80,22 @@ impl FromStr for CredentialStatus {
 /// Examples include `dc+sd-jwt` and `mso_mdoc`. Note that string parsing
 /// behaves differently than default debug formatting (e.g., `FromStr` uses standard
 /// OpenID4VCI format identifiers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CredentialFormat {
     /// SD-JWT based Verifiable Credential (`dc+sd-jwt`)
+    #[serde(rename = "dc+sd-jwt")]
     SdJwtVc,
     /// ISO 18013-5 mdoc (`mso_mdoc`)
+    #[serde(rename = "mso_mdoc")]
     Mdoc,
     /// JWT based Verifiable Credential (`jwt_vc_json`)
+    #[serde(rename = "jwt_vc_json")]
     JwtVcJson,
     /// JWT based Verifiable Credential with JSON-LD (`jwt_vc_json-ld`)
+    #[serde(rename = "jwt_vc_json-ld")]
     JwtVcJsonLd,
     /// Linked Data Proof Verifiable Credential (`ldp_vc`)
+    #[serde(rename = "ldp_vc")]
     LdpVc,
 }
 
@@ -165,16 +173,103 @@ pub struct Credential {
     pub raw_credential: String,
 }
 
+/// Display metadata captured from issuer metadata at credential issuance time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CredentialDisplayMetadata {
+    /// Display properties from the issuer's credential configuration metadata.
+    #[serde(flatten)]
+    pub display: CredentialDisplay,
+    /// Human-readable issuer name.
+    ///
+    /// Falls back to the issuer URL if the issuer display name is not available.
+    pub issuer_name: String,
+    /// Credential configuration ID (e.g., `"eu.europa.ec.eudi.pid.1"`).
+    pub credential_type: String,
+}
+
+/// Credential projection for list rendering.
+#[derive(Debug, Clone, Serialize)]
+pub struct CredentialSummary {
+    /// Unique identifier of the credential.
+    pub id: Uuid,
+    /// Display metadata for rendering the credential card.
+    pub display: CredentialDisplayMetadata,
+    /// The date and time when the credential was issued.
+    #[serde(serialize_with = "serialize_utc_datetime_rfc3339")]
+    pub issued_at: UtcDateTime,
+}
+
+fn serialize_utc_datetime_rfc3339<S>(value: &UtcDateTime, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::Error;
+    use time::format_description::well_known::Rfc3339;
+
+    let value = value.format(&Rfc3339).map_err(S::Error::custom)?;
+    serializer.serialize_str(&value)
+}
+
+/// Response body for `GET /api/v1/credentials`.
+#[derive(Debug, Serialize)]
+pub struct CredentialListResponse {
+    pub credentials: Vec<CredentialSummary>,
+}
+
+/// Response body for a single verifiable credential stored in the wallet.
+///
+/// `claims` is always `null` in the current implementation; format-specific
+/// claim decoding will be added in a future iteration.
+#[derive(Debug, Serialize)]
+pub struct CredentialRecord {
+    pub id: Uuid,
+    pub credential_configuration_id: String,
+    pub format: String,
+    pub issuer: String,
+    pub status: String,
+    pub issued_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Decoded credential claims. Format-specific parsing is out of scope for
+    /// this implementation; field is always `null`.
+    pub claims: serde_json::Value,
+}
+
 /// Filter criteria for listing credentials.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct CredentialFilter {
     pub tenant_id: Option<Uuid>,
+    #[serde(deserialize_with = "deserialize_credential_types")]
     pub credential_types: Option<Vec<String>>,
     pub status: Option<CredentialStatus>,
     pub format: Option<CredentialFormat>,
     pub issuer: Option<String>,
     pub subject: Option<String>,
     pub exclude_expired: bool,
+}
+
+fn deserialize_credential_types<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(values) = Option::<Vec<String>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    let credential_types = values
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    Ok((!credential_types.is_empty()).then_some(credential_types))
 }
 
 impl CredentialFilter {

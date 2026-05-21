@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use futures::stream::Stream;
 use uuid::Uuid;
 
-use crate::domain::models::credential::{Credential, CredentialError, CredentialFilter};
+use crate::domain::models::credential::{
+    Credential, CredentialDisplayMetadata, CredentialError, CredentialFilter, CredentialSummary,
+};
 use crate::domain::models::issuance::{IssuanceError, IssuanceEvent, IssuanceTask};
 use crate::domain::models::tenants::{
     RegisterTenantRequest, TenantError, TenantKey, TenantResponse,
@@ -30,15 +32,28 @@ pub trait CredentialRepo: Send + Sync + 'static {
     ///
     /// If a Credential with the same ID and tenant ID already exists, it is updated;
     /// otherwise, a new Credential is inserted. Returns the UUID of the credential.
-    async fn upsert(&self, credential: Credential) -> Result<uuid::Uuid, CredentialError>;
+    ///
+    /// When `display` is [`Some`], the display metadata is persisted atomically
+    /// alongside the credential within the same transaction.
+    async fn upsert(
+        &self,
+        credential: Credential,
+        display: Option<CredentialDisplayMetadata>,
+    ) -> Result<uuid::Uuid, CredentialError>;
 
     /// Retrieves a Credential by its ID and tenant ID.
     ///
     /// Returns [`CredentialError::NotFound`] if the credential is not found.
     async fn find_by_id(&self, id: Uuid, tenant_id: Uuid) -> Result<Credential, CredentialError>;
 
-    /// Lists credentials that match the given filter criteria.
-    async fn list(&self, filter: CredentialFilter) -> Result<Vec<Credential>, CredentialError>;
+    /// Lists credential summaries that match the given filter criteria.
+    ///
+    /// This listing path returns only display metadata needed for list rendering
+    /// and does not load or decrypt the raw credential payload.
+    async fn list(
+        &self,
+        filter: CredentialFilter,
+    ) -> Result<Vec<CredentialSummary>, CredentialError>;
 
     /// Deletes a Credential by its ID and tenant ID.
     async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<(), CredentialError>;
