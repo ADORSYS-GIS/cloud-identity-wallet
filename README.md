@@ -74,6 +74,18 @@ cd cloud-identity-wallet
 cargo run
 ```
 
+### Configuration
+
+The application is configured via environment variables prefixed with `APP_`, using `__` as the section separator. Key variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `APP_SERVER__HOST` | `127.0.0.1` | Bind address |
+| `APP_SERVER__PORT` | `3000` | Listen port |
+| `APP_OID4VCI__CLIENT_ID` | `cloud-identity-wallet` | OAuth2 client identifier |
+| `APP_OID4VCI__REDIRECT_URI` | `http://localhost:3000/api/v1/issuance/callback` | OAuth2 redirect URI |
+| `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES` | `en` | Comma-separated locale prefixes tried in priority order when selecting credential display metadata (e.g. `en,fr,de`) |
+
 ### Testing
 
 You can run the full test suite with:

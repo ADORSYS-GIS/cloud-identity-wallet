@@ -68,6 +68,7 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
         credential_repo.clone(),
         tenant_repo.clone(),
         &session_store,
+        config.oid4vci.preferred_display_locales.clone(),
     );
     let service = Service::new(session_store, tenant_repo, engine);
     let server = Server::new(&config, service).await.unwrap();

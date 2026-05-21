@@ -44,10 +44,6 @@ const MAX_DEFERRED_RETRIES: u32 = 60;
 const DEFAULT_WORKER_IDLE_SLEEP: Duration = Duration::from_millis(250);
 const DEFAULT_WORKER_ERROR_SLEEP: Duration = Duration::from_secs(1);
 
-/// Locale prefixes tried in order when selecting a display entry.
-/// TODO: make this configurable
-const PREFERRED_DISPLAY_LOCALES: &[&str] = &["en", "de"];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowType {
@@ -68,6 +64,7 @@ pub struct IssuanceEngine {
     pub tenant_repo: Arc<dyn TenantRepo>,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     worker_notify: Arc<Notify>,
+    preferred_display_locales: Arc<Vec<String>>,
 }
 
 impl Clone for IssuanceEngine {
@@ -81,6 +78,7 @@ impl Clone for IssuanceEngine {
             tenant_repo: Arc::clone(&self.tenant_repo),
             workers: Arc::clone(&self.workers),
             worker_notify: Arc::clone(&self.worker_notify),
+            preferred_display_locales: Arc::clone(&self.preferred_display_locales),
         }
     }
 }
@@ -102,6 +100,7 @@ impl std::fmt::Debug for IssuanceEngine {
                 &std::any::type_name::<dyn IssuanceEventSubscriber>(),
             )
             .field("worker_count", &self.worker_count())
+            .field("preferred_display_locales", &self.preferred_display_locales)
             .finish()
     }
 }
@@ -110,6 +109,7 @@ impl IssuanceEngine {
     /// Create a new orchestrator with all required dependencies and default workers.
     ///
     /// The default worker count is the machine's available parallelism.
+    #[allow(clippy::too_many_arguments)]
     pub fn new<Q, P, B, C, T, S>(
         client: Oid4vciClient,
         task_queue: Q,
@@ -118,6 +118,7 @@ impl IssuanceEngine {
         credential_repo: C,
         tenant_repo: T,
         session_store: &S,
+        preferred_display_locales: Vec<String>,
     ) -> Self
     where
         Q: IssuanceTaskQueue,
@@ -135,6 +136,7 @@ impl IssuanceEngine {
             credential_repo,
             tenant_repo,
             session_store,
+            preferred_display_locales,
             default_worker_count(),
         )
     }
@@ -149,6 +151,7 @@ impl IssuanceEngine {
         credential_repo: C,
         tenant_repo: T,
         session_store: &S,
+        preferred_display_locales: Vec<String>,
         worker_count: usize,
     ) -> Self
     where
@@ -168,6 +171,7 @@ impl IssuanceEngine {
             tenant_repo: Arc::new(tenant_repo),
             workers: Arc::default(),
             worker_notify: Arc::new(Notify::new()),
+            preferred_display_locales: Arc::new(preferred_display_locales),
         };
 
         engine.start_worker_count(session_store.clone(), worker_count)
@@ -483,7 +487,8 @@ impl IssuanceEngine {
     ) -> Result<Option<String>> {
         let notification_id = immediate.notification_id;
         let issuer = context.offer.credential_issuer.as_str();
-        let display_metadata = extract_display_metadata(context, config_id);
+        let display_metadata =
+            extract_display_metadata(context, config_id, &self.preferred_display_locales);
 
         for cred_obj in immediate.credentials {
             let raw = match cred_obj.credential {
@@ -685,14 +690,13 @@ fn default_worker_count() -> usize {
 fn extract_display_metadata(
     context: &ResolvedOfferContext,
     credential_config_id: &str,
+    preferred: &[String],
 ) -> CredentialDisplayMetadata {
     let issuer_name = context
         .issuer_metadata
         .display
         .as_deref()
-        .and_then(|displays| {
-            select_preferred(displays, |d| d.locale.as_deref(), PREFERRED_DISPLAY_LOCALES)
-        })
+        .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), preferred))
         .and_then(|d| d.name.clone())
         .unwrap_or_else(|| context.offer.credential_issuer.to_string());
 
@@ -702,9 +706,7 @@ fn extract_display_metadata(
         .get(credential_config_id)
         .and_then(|config| config.credential_metadata.as_ref())
         .and_then(|meta| meta.display.as_deref())
-        .and_then(|displays| {
-            select_preferred(displays, |d| d.locale.as_deref(), PREFERRED_DISPLAY_LOCALES)
-        });
+        .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), preferred));
 
     let display = match cred_display {
         Some(entry) => entry.clone(),
@@ -722,18 +724,19 @@ fn extract_display_metadata(
 }
 
 /// Selects the preferred display entry from a locale-tagged list.
-fn select_preferred<'a, T, F>(items: &'a [T], locale_fn: F, preferred: &[&str]) -> Option<&'a T>
+fn select_preferred<'a, T, F, S>(items: &'a [T], locale_fn: F, preferred: &[S]) -> Option<&'a T>
 where
     F: Fn(&T) -> Option<&str>,
+    S: AsRef<str>,
 {
     if items.is_empty() {
         return None;
     }
 
-    for &prefix in preferred {
+    for prefix in preferred {
         if let Some(entry) = items.iter().find(|item| {
             locale_fn(item)
-                .map(|l| l.starts_with(prefix))
+                .map(|l| l.starts_with(prefix.as_ref()))
                 .unwrap_or(false)
         }) {
             return Some(entry);
@@ -749,7 +752,10 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
+    use cloud_wallet_openid4vc::{
+        core::client::{Config as Oid4vciClientConfig, OidClient},
+        oid4vci::metadata::CredentialDisplay,
+    };
     use url::Url;
 
     use super::*;
@@ -823,6 +829,7 @@ mod tests {
             MemoryCredentialRepo::new(),
             MemoryTenantRepo::new(),
             &sessions,
+            vec!["en".to_owned()],
             1,
         )
     }
@@ -878,5 +885,46 @@ mod tests {
         let processed = engine.process_next_task(&sessions).await.unwrap();
 
         assert!(!processed);
+    }
+
+    #[test]
+    fn select_preferred_chooses_locale_by_prefix() {
+        // Arrange: two display entries; French listed second.
+        let entries = vec![
+            CredentialDisplay {
+                name: "English".to_owned(),
+                locale: Some("en-US".to_owned()),
+                ..Default::default()
+            },
+            CredentialDisplay {
+                name: "French".to_owned(),
+                locale: Some("fr-FR".to_owned()),
+                ..Default::default()
+            },
+        ];
+        let preferred = vec!["fr".to_owned()];
+
+        // Act
+        let result = select_preferred(&entries, |d| d.locale.as_deref(), &preferred);
+
+        // Assert: the French entry is selected even though it is listed second.
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "French");
+    }
+
+    #[test]
+    fn select_preferred_falls_back_to_first_when_no_match() {
+        let entries = vec![CredentialDisplay {
+            name: "English".to_owned(),
+            locale: Some("en-US".to_owned()),
+            ..Default::default()
+        }];
+        let preferred = vec!["fr".to_owned()];
+
+        // Act: preferred locale not present — should fall back to first entry.
+        let result = select_preferred(&entries, |d| d.locale.as_deref(), &preferred);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "English");
     }
 }
