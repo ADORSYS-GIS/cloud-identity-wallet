@@ -11,14 +11,17 @@ use crate::storage::Storage;
 use sqlx::{AnyPool, ConnectOptions, Transaction};
 use time::UtcDateTime;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("src/storage/migrations");
+#[cfg(feature = "postgres")]
+static MIGRATOR_POSTGRES: sqlx::migrate::Migrator =
+    sqlx::migrate!("src/storage/migrations/postgres");
+#[cfg(feature = "sqlite")]
+static MIGRATOR_SQLITE: sqlx::migrate::Migrator = sqlx::migrate!("src/storage/migrations/sqlite");
+#[cfg(feature = "mysql")]
+static MIGRATOR_MYSQL: sqlx::migrate::Migrator = sqlx::migrate!("src/storage/migrations/mysql");
 
 /// Error that can occur when working with the database storage.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Error when decoding base64 data.
-    #[error("Base64 decode error: {0}")]
-    Base64(#[from] base64ct::Error),
     /// The algorithm is unknown.
     #[error("Unknown algorithm: {0}")]
     UnknownAlgorithm(String),
@@ -76,8 +79,14 @@ impl SqlxBackend {
     /// required for storing DEKs. It should be called once during application setup.
     #[inline]
     pub async fn init_schema(&self) -> Result<()> {
-        // Run database migrations
-        MIGRATOR.run(&self.pool).await?;
+        match &self.driver {
+            #[cfg(feature = "postgres")]
+            Driver::Postgres => MIGRATOR_POSTGRES.run(&self.pool).await?,
+            #[cfg(feature = "sqlite")]
+            Driver::Sqlite => MIGRATOR_SQLITE.run(&self.pool).await?,
+            #[cfg(feature = "mysql")]
+            Driver::MySql => MIGRATOR_MYSQL.run(&self.pool).await?,
+        }
         Ok(())
     }
 
@@ -157,7 +166,7 @@ impl Driver {
 struct DekRecord {
     pub id: String,
     pub master_id: String,
-    pub encrypted_key: String,
+    pub encrypted_key: Vec<u8>,
     pub algorithm: String,
     pub created_at: i64,
     pub last_accessed: Option<i64>,
@@ -165,12 +174,10 @@ struct DekRecord {
 
 impl From<&DataEncryptionKey> for DekRecord {
     fn from(dek: &DataEncryptionKey) -> Self {
-        use base64ct::{Base64Unpadded, Encoding};
-
         Self {
             id: dek.id.to_string(),
             master_id: dek.master_key_id.to_string(),
-            encrypted_key: Base64Unpadded::encode_string(&dek.encrypted_key),
+            encrypted_key: dek.encrypted_key.to_vec(),
             algorithm: dek.algorithm.to_string(),
             created_at: dek.created_at.unix_timestamp(),
             last_accessed: dek.last_accessed.map(|t| t.unix_timestamp()),
@@ -182,7 +189,6 @@ impl TryFrom<DekRecord> for DataEncryptionKey {
     type Error = Error;
 
     fn try_from(row: DekRecord) -> std::result::Result<Self, Self::Error> {
-        use base64ct::{Base64Unpadded as B64, Encoding};
         use std::str::FromStr;
         use time::UtcDateTime;
 
@@ -197,7 +203,7 @@ impl TryFrom<DekRecord> for DataEncryptionKey {
         Ok(Self {
             id: Id::from(row.id),
             master_key_id: MasterId::from(row.master_id),
-            encrypted_key: B64::decode_vec(&row.encrypted_key)?.into(),
+            encrypted_key: row.encrypted_key.into(),
             plaintext_key: None,
             algorithm,
             created_at,
