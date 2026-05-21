@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn missing_authorization_returns_401() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
@@ -23,7 +23,7 @@ async fn missing_authorization_returns_401() {
 
 #[tokio::test]
 async fn invalid_authorization_header_returns_401() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
@@ -39,7 +39,7 @@ async fn invalid_authorization_header_returns_401() {
 
 #[tokio::test]
 async fn malformed_bearer_token_returns_401() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let response = client
@@ -55,7 +55,7 @@ async fn malformed_bearer_token_returns_401() {
 
 #[tokio::test]
 async fn empty_offer_with_valid_auth_returns_400() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let tenant_id = Uuid::new_v4();
@@ -77,7 +77,7 @@ async fn empty_offer_with_valid_auth_returns_400() {
 
 #[tokio::test]
 async fn missing_offer_field_returns_422() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let tenant_id = Uuid::new_v4();
@@ -96,7 +96,7 @@ async fn missing_offer_field_returns_422() {
 
 #[tokio::test]
 async fn invalid_offer_uri_returns_internal_error() {
-    let base_url = utils::spawn_server().await;
+    let base_url = utils::spawn_server().await.base_url;
     let client = Client::new();
 
     let tenant_id = Uuid::new_v4();

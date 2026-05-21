@@ -23,9 +23,9 @@ CREATE TABLE IF NOT EXISTS credentials (
     UNIQUE (tenant_id, id)
 );
 
-CREATE INDEX idx_credentials_tenant_id ON credentials(tenant_id);
-CREATE INDEX idx_credentials_tenant_format ON credentials(tenant_id, format);
-CREATE INDEX idx_credentials_tenant_status ON credentials(tenant_id, status);
-CREATE INDEX idx_credentials_tenant_issuer ON credentials(tenant_id, issuer);
-CREATE INDEX idx_credentials_tenant_subject ON credentials(tenant_id, subject);
-CREATE INDEX idx_credentials_tenant_issued_at ON credentials(tenant_id, issued_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credentials_tenant_id ON credentials(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_credentials_tenant_format ON credentials(tenant_id, format);
+CREATE INDEX IF NOT EXISTS idx_credentials_tenant_status ON credentials(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_credentials_tenant_issuer ON credentials(tenant_id, issuer);
+CREATE INDEX IF NOT EXISTS idx_credentials_tenant_subject ON credentials(tenant_id, subject);
+CREATE INDEX IF NOT EXISTS idx_credentials_tenant_issued_at ON credentials(tenant_id, issued_at DESC);

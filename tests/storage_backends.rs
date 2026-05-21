@@ -4,13 +4,30 @@ pub mod utils;
 
 use cloud_identity_wallet::{
     domain::{
-        models::credential::{CredentialError, CredentialFilter, CredentialStatus},
+        models::credential::{
+            CredentialDisplayMetadata, CredentialError, CredentialFilter, CredentialStatus,
+        },
         ports::CredentialRepo,
     },
     outbound::{MemoryCredentialRepo, SqlCredentialRepo},
 };
+use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
 use sqlx::any::AnyPoolOptions;
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
+
+fn sample_display_metadata(name: &str, credential_type: &str) -> CredentialDisplayMetadata {
+    CredentialDisplayMetadata {
+        display: CredentialDisplay {
+            name: name.to_string(),
+            description: Some("Official credential display metadata".to_string()),
+            locale: Some("en-US".to_string()),
+            ..Default::default()
+        },
+        issuer_name: "Example Issuer".to_string(),
+        credential_type: credential_type.to_string(),
+    }
+}
 
 /// Generic CRUD suite that all repository backends must pass.
 async fn test_repository_backend<R: CredentialRepo>(
@@ -24,9 +41,27 @@ async fn test_repository_backend<R: CredentialRepo>(
     credential_b.external_id = Some("https://issuer.example/ext-456".to_string());
 
     // Inserts credentials
-    let inserted_id = repository.upsert(credential_a.clone()).await.unwrap();
+    let inserted_id = repository
+        .upsert(
+            credential_a.clone(),
+            Some(sample_display_metadata(
+                "Credential A",
+                &credential_a.credential_types[0],
+            )),
+        )
+        .await
+        .unwrap();
     assert_eq!(inserted_id, credential_a.id);
-    repository.upsert(credential_b.clone()).await.unwrap();
+    repository
+        .upsert(
+            credential_b.clone(),
+            Some(sample_display_metadata(
+                "Credential B",
+                &credential_b.credential_types[0],
+            )),
+        )
+        .await
+        .unwrap();
 
     // Finds credential for tenant A
     let found = repository
@@ -37,7 +72,7 @@ async fn test_repository_backend<R: CredentialRepo>(
     assert_eq!(found.raw_credential, credential_a.raw_credential);
     assert_eq!(found.credential_types, credential_a.credential_types);
 
-    // Lists credentials for tenant A
+    // Lists credential summaries for tenant A
     let listed = repository
         .list(CredentialFilter {
             tenant_id: Some(tenant_a),
@@ -52,7 +87,7 @@ async fn test_repository_backend<R: CredentialRepo>(
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, credential_a.id);
 
-    // Lists credentials with reversed types — containment is order-independent
+    // Lists credential summaries with reversed types — containment is order-independent
     let mut reversed_types = credential_a.credential_types.clone();
     reversed_types.reverse();
     let order_independent = repository
@@ -70,7 +105,7 @@ async fn test_repository_backend<R: CredentialRepo>(
     );
     assert_eq!(order_independent[0].id, credential_a.id);
 
-    // Lists credentials by a type subset — a credential with extra types must also match
+    // Lists credential summaries by a type subset — a credential with extra types must also match
     let subset_types = credential_a.credential_types[..1].to_vec();
     let superset_match = repository
         .list(CredentialFilter {
@@ -92,7 +127,7 @@ async fn test_repository_backend<R: CredentialRepo>(
     updated.status = CredentialStatus::Revoked;
     updated.is_revoked = true;
     updated.raw_credential = "updated.payload.value".to_string();
-    repository.upsert(updated.clone()).await.unwrap();
+    repository.upsert(updated.clone(), None).await.unwrap();
 
     // Reloads credential to verify update
     let reloaded = repository
@@ -127,6 +162,121 @@ async fn test_repository_backend<R: CredentialRepo>(
     assert_eq!(tenant_b_records[0].id, credential_b.id);
 }
 
+/// Display metadata and list test suite.
+async fn test_display_metadata<R: CredentialRepo>(repository: &R, tenant_a: Uuid, tenant_b: Uuid) {
+    let credential_a = utils::sample_credential(tenant_a);
+    let credential_b = utils::sample_credential(tenant_b);
+
+    // Build display metadata for credential_a
+    let display = CredentialDisplayMetadata {
+        display: CredentialDisplay {
+            name: "EU Personal ID".to_string(),
+            description: Some("Official EU personal identity document".to_string()),
+            locale: Some("en-US".to_string()),
+            ..Default::default()
+        },
+        issuer_name: "Example EU Authority".to_string(),
+        credential_type: "eu.europa.ec.eudi.pid.1".to_string(),
+    };
+
+    // Insert credential_a with display metadata (atomic)
+    repository
+        .upsert(credential_a.clone(), Some(display.clone()))
+        .await
+        .unwrap();
+    // Insert credential_b without display metadata
+    repository.upsert(credential_b.clone(), None).await.unwrap();
+
+    // list should return credential_a with display metadata
+    let summaries = repository
+        .list(CredentialFilter {
+            tenant_id: Some(tenant_a),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].id, credential_a.id);
+    assert_eq!(summaries[0].display.display.name, "EU Personal ID");
+    assert_eq!(summaries[0].display.issuer_name, "Example EU Authority");
+    assert_eq!(
+        summaries[0].display.credential_type,
+        "eu.europa.ec.eudi.pid.1"
+    );
+    let serialized_summary = serde_json::to_value(&summaries[0]).unwrap();
+    let expected_issued_at = summaries[0].issued_at.format(&Rfc3339).unwrap();
+    assert_eq!(
+        serialized_summary["issued_at"].as_str(),
+        Some(expected_issued_at.as_str())
+    );
+
+    // Upserting the same credential with new display metadata should update the
+    // metadata row instead of failing on the credential_id primary key.
+    let updated_display = CredentialDisplayMetadata {
+        display: CredentialDisplay {
+            name: "Updated EU Personal ID".to_string(),
+            description: Some("Updated credential display metadata".to_string()),
+            locale: Some("fr-FR".to_string()),
+            ..Default::default()
+        },
+        issuer_name: "Updated EU Authority".to_string(),
+        credential_type: "eu.europa.ec.eudi.pid.updated".to_string(),
+    };
+    repository
+        .upsert(credential_a.clone(), Some(updated_display))
+        .await
+        .unwrap();
+    let updated_summaries = repository
+        .list(CredentialFilter {
+            tenant_id: Some(tenant_a),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated_summaries.len(), 1);
+    assert_eq!(updated_summaries[0].id, credential_a.id);
+    assert_eq!(
+        updated_summaries[0].display.display.name,
+        "Updated EU Personal ID"
+    );
+    assert_eq!(
+        updated_summaries[0].display.issuer_name,
+        "Updated EU Authority"
+    );
+    assert_eq!(
+        updated_summaries[0].display.credential_type,
+        "eu.europa.ec.eudi.pid.updated"
+    );
+
+    // list for tenant_b (no display metadata) should return empty
+    // (INNER JOIN semantics: only credentials with display metadata)
+    let summaries_b = repository
+        .list(CredentialFilter {
+            tenant_id: Some(tenant_b),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        summaries_b.is_empty(),
+        "credentials without display metadata should not appear in summaries"
+    );
+
+    // Deleting credential_a should cascade-delete its display metadata
+    repository.delete(credential_a.id, tenant_a).await.unwrap();
+    let summaries_after = repository
+        .list(CredentialFilter {
+            tenant_id: Some(tenant_a),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(summaries_after.is_empty());
+
+    // Clean up
+    repository.delete(credential_b.id, tenant_b).await.unwrap();
+}
+
 #[tokio::test]
 async fn test_inmemory_storage_backend() {
     let repository = MemoryCredentialRepo::new();
@@ -134,6 +284,10 @@ async fn test_inmemory_storage_backend() {
     let tenant_b = Uuid::new_v4();
 
     test_repository_backend(&repository, tenant_a, tenant_b).await;
+
+    let tenant_c = Uuid::new_v4();
+    let tenant_d = Uuid::new_v4();
+    test_display_metadata(&repository, tenant_c, tenant_d).await;
 }
 
 #[tokio::test]
@@ -155,6 +309,12 @@ async fn test_sqlite_storage_backend() {
     utils::insert_tenant(&pool, tenant_b, "Tenant B").await;
 
     test_repository_backend(&repository, tenant_a, tenant_b).await;
+
+    let tenant_c = Uuid::new_v4();
+    let tenant_d = Uuid::new_v4();
+    utils::insert_tenant(&pool, tenant_c, "Tenant C").await;
+    utils::insert_tenant(&pool, tenant_d, "Tenant D").await;
+    test_display_metadata(&repository, tenant_c, tenant_d).await;
 }
 
 #[tokio::test]
@@ -190,6 +350,12 @@ async fn test_postgres_storage_backend() {
     utils::insert_tenant(&pool, tenant_b, "Tenant B").await;
 
     test_repository_backend(&repository, tenant_a, tenant_b).await;
+
+    let tenant_c = Uuid::new_v4();
+    let tenant_d = Uuid::new_v4();
+    utils::insert_tenant(&pool, tenant_c, "Tenant C").await;
+    utils::insert_tenant(&pool, tenant_d, "Tenant D").await;
+    test_display_metadata(&repository, tenant_c, tenant_d).await;
 }
 
 #[tokio::test]
@@ -225,4 +391,10 @@ async fn test_mysql_storage_backend() {
     utils::insert_tenant(&pool, tenant_b, "Tenant B").await;
 
     test_repository_backend(&repository, tenant_a, tenant_b).await;
+
+    let tenant_c = Uuid::new_v4();
+    let tenant_d = Uuid::new_v4();
+    utils::insert_tenant(&pool, tenant_c, "Tenant C").await;
+    utils::insert_tenant(&pool, tenant_d, "Tenant D").await;
+    test_display_metadata(&repository, tenant_c, tenant_d).await;
 }

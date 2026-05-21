@@ -129,7 +129,7 @@ pub struct CredentialMetadata {
 
 /// Per-language display properties for a credential.
 #[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CredentialDisplay {
     /// Human-readable name of the credential type.
     pub name: String,

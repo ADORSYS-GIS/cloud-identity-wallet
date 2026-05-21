@@ -13,6 +13,7 @@ use cloud_identity_wallet::{
             credential::{Credential, CredentialFormat, CredentialStatus},
             issuance::IssuanceEngine,
         },
+        ports::CredentialRepo,
         service::Service,
     },
     outbound::{
@@ -28,16 +29,17 @@ use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
 
-/// Create a signed Bearer token whose `sub` claim is `tenant_id`.
-///
-/// Uses a freshly generated P-256 keypair so the live server can verify
-/// the token without any additional setup.
-pub fn create_bearer_token(tenant_id: &Uuid) -> String {
-    create_test_bearer_token(*tenant_id)
+/// Test server which holds the base URL and other necessary components for testing
+pub struct TestServer<R>
+where
+    R: CredentialRepo,
+{
+    pub base_url: String,
+    pub credential_repo: R,
 }
 
-/// Internal helper to spawn a server and return `(base_url, credential_repo)`.
-async fn spawn_server_internal() -> (String, MemoryCredentialRepo) {
+/// Spawn a server and return the base URL and other necessary components
+pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
     let config = {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
@@ -72,10 +74,10 @@ async fn spawn_server_internal() -> (String, MemoryCredentialRepo) {
     let port = server.port();
     tokio::spawn(server.run());
 
-    (
-        format!("http://{}:{}", config.server.host, port),
+    TestServer {
+        base_url: format!("http://{}:{}", config.server.host, port),
         credential_repo,
-    )
+    }
 }
 
 /// Build a `Config` suitable for integration tests.
@@ -88,20 +90,6 @@ pub fn make_config() -> Config {
     config.server.port = 0;
     config.oid4vci.use_system_proxy = false;
     config
-}
-
-/// Spawn a test server and return its base URL.
-pub async fn spawn_server() -> String {
-    spawn_server_internal().await.0
-}
-
-/// Spawn a test server and return `(base_url, credential_repo)`.
-///
-/// The returned `MemoryCredentialRepo` shares storage with the running server,
-/// allowing tests to pre-populate credentials via `upsert` before making HTTP
-/// requests.
-pub async fn spawn_server_with_repo() -> (String, MemoryCredentialRepo) {
-    spawn_server_internal().await
 }
 
 /// Generates a fresh P-256 key pair at runtime.

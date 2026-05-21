@@ -582,18 +582,20 @@ paths:
   /credentials:
     get:
       operationId: listCredentials
-      summary: List all credentials for the authenticated tenant
+      summary: List credential summaries for the authenticated tenant
       description: |
-        Returns all credentials belonging to the authenticated tenant. Supports
-        optional query-parameter filters to narrow results by type, status,
-        format, or issuer.
+        Returns credential summaries belonging to the authenticated
+        tenant. The response contains display metadata for list rendering and
+        does not include decoded credential payloads or claims. Supports optional
+        query-parameter filters to narrow results by type, status, format, or
+        issuer.
       tags:
         - Credentials
       parameters:
         - name: credential_types
           in: query
           description: |
-            Filter by one or more credential configuration IDs
+            Filter by one or more credential types
             (e.g. `eu.europa.ec.eudi.pid.1`). Repeat the parameter or pass a
             comma-separated list to filter by multiple types.
           required: false
@@ -640,7 +642,7 @@ paths:
           example: https://issuer.example.eu
       responses:
         '200':
-          description: List of decoded credential payloads belonging to the tenant.
+          description: List of credential summaries belonging to the tenant.
           content:
             application/json:
               schema:
@@ -648,15 +650,18 @@ paths:
               example:
                 credentials:
                   - id: c3d4e5f6-7890-abcd-ef12-3456789abcde
-                    credential_configuration_id: eu.europa.ec.eudi.pid.1
-                    format: dc+sd-jwt
-                    issuer: https://issuer.example.eu
-                    status: active
+                    display:
+                      name: EU Personal ID
+                      description: Official EU personal identity document
+                      locale: en-US
+                      background_color: "#12107c"
+                      text_color: "#ffffff"
+                      logo:
+                        uri: https://issuer.example.eu/assets/pid-logo.svg
+                        alt_text: EU PID Logo
+                      issuer_name: Example EU Identity Authority
+                      credential_type: eu.europa.ec.eudi.pid.1
                     issued_at: "2026-04-08T14:35:00Z"
-                    expires_at: "2027-04-08T14:35:00Z"
-                    claims:
-                      given_name: Jane
-                      family_name: Doe
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -1064,11 +1069,20 @@ components:
           type: string
           description: Human-readable description of the credential.
           example: Official EU personal identity document
+        locale:
+          type: string
+          description: BCP47 language tag (e.g. "en-US").
+          example: en-US
         background_color:
           type: string
           description: Background color for the credential card (CSS hex color).
           pattern: "^#[0-9a-fA-F]{6}$"
           example: "#12107c"
+        background_image:
+          description: Background image metadata. `null` if no background image is available.
+          oneOf:
+            - $ref: "#/components/schemas/BackgroundImage"
+            - type: "null"
         text_color:
           type: string
           description: Text color for the credential card (CSS hex color).
@@ -1079,6 +1093,18 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Logo"
             - type: "null"
+
+    BackgroundImage:
+      type: object
+      required:
+        - uri
+      description: Background image information for display objects.
+      properties:
+        uri:
+          type: string
+          format: uri
+          description: URI where the background image can be obtained.
+          example: https://issuer.example.eu/assets/pid-bg.png
 
     TxCodeSpec:
       type: object
@@ -1433,6 +1459,44 @@ components:
             given_name: Jane
             family_name: Doe
 
+    CredentialSummary:
+      type: object
+      description: Lightweight credential projection for list rendering.
+      required:
+        - id
+        - display
+        - issued_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Internal wallet credential ID (UUID v4).
+          example: c3d4e5f6-7890-abcd-ef12-3456789abcde
+        display:
+          $ref: '#/components/schemas/CredentialSummaryDisplay'
+        issued_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the credential was issued.
+          example: "2026-04-08T14:35:00Z"
+
+    CredentialSummaryDisplay:
+      allOf:
+        - $ref: '#/components/schemas/CredentialDisplay'
+        - type: object
+          required:
+            - issuer_name
+            - credential_type
+          properties:
+            issuer_name:
+              type: string
+              description: Human-readable issuer name.
+              example: Example EU Identity Authority
+            credential_type:
+              type: string
+              description: Credential configuration identifier from the issuer's metadata.
+              example: eu.europa.ec.eudi.pid.1
+
     CredentialListResponse:
       type: object
       required:
@@ -1440,9 +1504,9 @@ components:
       properties:
         credentials:
           type: array
-          description: List of decoded credential payloads belonging to the tenant.
+          description: List of credential summaries belonging to the tenant.
           items:
-            $ref: '#/components/schemas/CredentialRecord'
+            $ref: '#/components/schemas/CredentialSummary'
 
 # ---------------------------------------------------------------------------
 # Tags
