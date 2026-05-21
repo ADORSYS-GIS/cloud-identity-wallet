@@ -165,7 +165,7 @@ impl Oid4vciClient {
             CredentialOfferSource::ByValue(offer) => Ok(offer),
             CredentialOfferSource::ByReference(url) => {
                 // For by-reference offers, we need to fetch them
-                resolve_by_reference(&url, &self.inner_client.http_client())
+                resolve_by_reference(&url, self.inner_client.http_client())
                     .await
                     .map_err(ClientError::from)
             }
