@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::fmt;
 
-use cloud_wallet_openid4vc::issuance::client::ClientError;
+use cloud_wallet_openid4vc::oid4vci::client::ClientError;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::models::credential::CredentialError;
@@ -312,7 +312,7 @@ impl From<tokio::task::JoinError> for IssuanceError {
 
 #[cfg(test)]
 mod tests {
-    use cloud_wallet_openid4vc::issuance::error::{AuthzErrorResponse, Oid4vciError};
+    use cloud_wallet_openid4vc::oid4vci::error::{AuthzErrorResponse, Oid4vciError};
 
     use super::*;
 

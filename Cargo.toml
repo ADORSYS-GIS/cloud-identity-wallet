@@ -9,12 +9,7 @@ exclude = ["/.github/*", "/assets/*", "/docs/*"]
 [workspace]
 resolver = "2"
 
-members = [
-  "cloud-wallet-crypto",
-  "cloud-wallet-events",
-  "cloud-wallet-kms",
-  "cloud-wallet-openid4vc"
-]
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -67,9 +62,9 @@ async-stream = "0.3"
 async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
 base64.workspace = true
-cloud-wallet-crypto = { path = "cloud-wallet-crypto", features = ["jwk"] }
-cloud-wallet-kms = { path = "cloud-wallet-kms", features = ["local-kms"] }
-cloud-wallet-openid4vc = { path = "cloud-wallet-openid4vc" }
+cloud-wallet-crypto = { path = "crates/cloud-wallet-crypto", features = ["jwk"] }
+cloud-wallet-kms = { path = "crates/cloud-wallet-kms", features = ["local-kms"] }
+cloud-wallet-openid4vc = { path = "crates/cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
 dashmap.workspace = true
