@@ -883,7 +883,7 @@ impl From<cloud_wallet_kms::Error> for CredentialError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
+    use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
 
     #[test]
     fn filter_builder_no_filters_produces_valid_sql() {
