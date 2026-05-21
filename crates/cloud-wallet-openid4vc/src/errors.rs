@@ -8,7 +8,7 @@ use thiserror::Error;
 
 /// Error returned when attempting to create an empty [`ClaimPathPointer`].
 ///
-/// [`ClaimPathPointer`]: crate::issuance::claim_path_pointer::ClaimPathPointer
+/// [`ClaimPathPointer`]: crate::core::claim_path_pointer::ClaimPathPointer
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Error)]
 #[error("claims path pointer must be non-empty")]
 pub struct EmptyClaimPathError;
