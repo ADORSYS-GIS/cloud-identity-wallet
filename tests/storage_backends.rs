@@ -11,7 +11,7 @@ use cloud_identity_wallet::{
     },
     outbound::{MemoryCredentialRepo, SqlCredentialRepo},
 };
-use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
+use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
 use sqlx::any::AnyPoolOptions;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
