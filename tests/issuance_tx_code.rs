@@ -19,7 +19,8 @@ use cloud_identity_wallet::{
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
 };
-use cloud_wallet_openid4vc::issuance::client::{Config as Oid4vciClientConfig, Oid4vciClient};
+use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
+use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 use reqwest::Client;
 use url::Url;
 use uuid::Uuid;
@@ -68,7 +69,7 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
     .timeout(Duration::from_secs(60))
     .accept_untrusted_hosts(true);
 
-    let client = Oid4vciClient::new(client_config).unwrap();
+    let client = Oid4vciClient::new(OidClient::new(client_config).unwrap());
     let event_publisher = MemoryEventPublisher::new(16);
     let event_subscriber = MemoryEventSubscriber::new(&event_publisher);
     let engine = IssuanceEngine::new(

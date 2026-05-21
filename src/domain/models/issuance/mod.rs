@@ -5,6 +5,7 @@ mod start;
 mod task;
 mod tx_code;
 
+use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
 pub use consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
@@ -16,13 +17,12 @@ pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
-use cloud_wallet_openid4vc::issuance::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
-use cloud_wallet_openid4vc::issuance::credential_configuration::CredentialDisplay;
-use cloud_wallet_openid4vc::issuance::credential_response::{
+use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::credential::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
-use cloud_wallet_openid4vc::issuance::notification::{NotificationEvent, NotificationRequest};
-use cloud_wallet_openid4vc::issuance::token_response::TokenResponse;
+use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
+use cloud_wallet_openid4vc::oid4vci::token::TokenResponse;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -749,7 +749,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cloud_wallet_openid4vc::issuance::client::Config as Oid4vciClientConfig;
+    use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
     use url::Url;
 
     use super::*;
@@ -805,11 +805,12 @@ mod tests {
     }
 
     fn make_engine(queue: RecordingTaskQueue) -> IssuanceEngine {
-        let client = Oid4vciClient::new(Oid4vciClientConfig::new(
+        let inner_client = OidClient::new(Oid4vciClientConfig::new(
             "test-client",
             Url::parse("https://wallet.example.com/callback").unwrap(),
         ))
         .unwrap();
+        let client = Oid4vciClient::new(inner_client);
 
         let sessions = MemorySession::default();
         let publisher = MemoryEventPublisher::new(16);

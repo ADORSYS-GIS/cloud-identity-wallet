@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use cloud_wallet_openid4vc::issuance::client::{AuthorizationCallback, ClientError, Oid4vciClient};
+use cloud_wallet_openid4vc::oid4vci::client::{AuthorizationCallback, ClientError, Oid4vciClient};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::domain::models::issuance::{
