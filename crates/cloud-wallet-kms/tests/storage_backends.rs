@@ -19,16 +19,22 @@ async fn test_storage_backend<S: Storage>(storage: S) {
     let dek = DataEncryptionKey {
         id: DekId::new("compat-test-001"),
         master_key_id: MasterId::new("compat-mk-001"),
-        encrypted_key: vec![1, 2, 3, 4, 5].into(),
+        encrypted_key: vec![0, 1, 2, 3, 4, 5, 128, 255].into(),
         plaintext_key: None,
         algorithm: AeadAlgorithm(Algorithm::AesGcm256),
-        created_at: UtcDateTime::now(),
+        created_at: UtcDateTime::from_unix_timestamp(1_714_182_400).unwrap(),
         last_accessed: None,
     };
 
     storage.upsert_dek(&dek).await.unwrap();
     let retrieved = storage.get_dek(&dek.id).await.unwrap().unwrap();
     assert_eq!(retrieved.id.as_str(), dek.id.as_str());
+    assert_eq!(retrieved.master_key_id.as_str(), dek.master_key_id.as_str());
+    assert_eq!(*retrieved.encrypted_key, *dek.encrypted_key);
+    assert!(retrieved.plaintext_key.is_none());
+    assert_eq!(retrieved.algorithm, dek.algorithm);
+    assert_eq!(retrieved.created_at, dek.created_at);
+    assert!(retrieved.last_accessed.is_some());
 
     // Update
     let mut updated = retrieved.clone();
