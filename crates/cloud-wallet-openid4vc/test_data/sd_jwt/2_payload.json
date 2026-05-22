@@ -1,0 +1,35 @@
+{
+  "iss": "https://pid-issuer.aendgard.example",
+  "vct": "urn:example:eudi:pid:aendgard:1",
+  "given_name": "Astrid",
+  "family_name": "Holmgren",
+  "birthdate": "1978-04-10",
+  "address": {
+    "street_address": "Sjøgata 12",
+    "locality": "Viken",
+    "postal_code": "12001",
+    "country": "Kingdom of Ændgard"
+  },
+  "nationalities": ["Ændgard"],
+  "sex": 2,
+  "birth_family_name": "Jensen",
+  "place_of_birth": {
+    "locality": "Ændholm",
+    "country": "Kingdom of Ændgard"
+  },
+  "age_equal_or_over": {
+    "12": true,
+    "14": true,
+    "16": true,
+    "18": true,
+    "21": true,
+    "65": false
+  },
+  "age_in_years": 47,
+  "age_birth_year": 1978,
+  "portrait": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAWAQMAAACSfKx9AAAAAXNSR0IB2cksfwAAAARnQU1BAACxjwv8YQUAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAAAZQTFRFAAAA////pdmf3QAAAFFJREFUCNdNylENgDAQA9ASBJyEWcDBLE0CTpDCpCDhPvexrBwlC/y8NG3RMunw9Ai5p6/pr/ZzlcAi4WiRN1nlXAesOgheBTSO8JDnND6Z3W+d90fCnTjjKQAAAABJRU5ErkJggg==",
+  "issuance_date": "2024-01-15",
+  "expiry_date": "2034-01-15",
+  "issuing_authority": "Kingdom of Ændgard, Ministry of Interior",
+  "issuing_country": "ÆG"
+}
