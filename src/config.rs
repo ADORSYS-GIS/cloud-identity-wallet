@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use redis::{
@@ -6,10 +6,8 @@ use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
 };
 use secrecy::{ExposeSecret, SecretString};
-use serde::{
-    Deserialize, Serialize,
-    de::{SeqAccess, Visitor},
-};
+use serde::{Deserialize, Serialize};
+use serde_with::{PickFirst, StringWithSeparator, formats::CommaSeparator, serde_as};
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
@@ -37,6 +35,7 @@ pub struct DatabaseConfig {
     pub url: SecretString,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Oid4vciConfig {
     pub client_id: String,
@@ -44,43 +43,8 @@ pub struct Oid4vciConfig {
     pub use_system_proxy: bool,
     /// Locale prefixes tried in order when selecting a credential display entry.
     /// Configurable via `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES=en,fr,de`.
-    #[serde(deserialize_with = "deserialize_string_or_seq")]
+    #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
     pub preferred_display_locales: Vec<String>,
-}
-
-/// Deserialize a `Vec<String>` from either a JSON array or a comma-separated
-/// string (e.g. the value of an environment variable like `en,fr,de`).
-fn deserialize_string_or_seq<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct StringOrSeq;
-
-    impl<'de> Visitor<'de> for StringOrSeq {
-        type Value = Vec<String>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a sequence or a comma-separated string")
-        }
-
-        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Vec<String>, E> {
-            Ok(v.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect())
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
-            let mut items = Vec::new();
-            while let Some(s) = seq.next_element::<String>()? {
-                items.push(s);
-            }
-            Ok(items)
-        }
-    }
-
-    deserializer.deserialize_any(StringOrSeq)
 }
 
 impl RedisConfig {
