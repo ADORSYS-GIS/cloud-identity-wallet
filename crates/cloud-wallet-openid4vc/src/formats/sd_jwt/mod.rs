@@ -1,12 +1,15 @@
+mod decode;
 mod disclosure;
 mod error;
+mod hash;
 mod jwt;
 mod kb_jwt;
 #[cfg(test)]
 mod tests;
 
 pub use disclosure::Disclosure;
-pub use error::Error;
+pub use error::{DisclosureError, Error, ProcessingError};
+pub use hash::IanaHashAlgorithm;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
 
@@ -108,6 +111,11 @@ impl<'a> SdJwt<'a> {
     /// Returns true when the combined serialization includes a key binding JWT.
     pub fn has_key_binding(&self) -> bool {
         self.key_binding.is_some()
+    }
+
+    /// Returns the disclosed payload after processing and verifying SD-JWT Disclosures.
+    pub fn to_disclosed_payload(&self) -> Result<Value, Error> {
+        decode::process_disclosures(self)
     }
 }
 
