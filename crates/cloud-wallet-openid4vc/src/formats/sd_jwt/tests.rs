@@ -4,7 +4,7 @@ use cloud_wallet_crypto::ecdsa::{Curve as EcdsaCurve, KeyPair as EcdsaKeyPair};
 use cloud_wallet_crypto::jwk::{
     Algorithm as JwkAlgorithm, Jwk, JwkSet, KeyUse, Signing as JwkSigning,
 };
-use jsonwebtoken::{Algorithm as JwtAlgorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm as JwtAlgorithm, EncodingKey, Header, get_current_timestamp};
 use serde_json::{Value, json};
 
 use crate::formats::sd_jwt::verification::{verify_with_jwks, verify_with_x5c};
@@ -42,6 +42,14 @@ fn compact_jwt(header: Value, claims: Value) -> String {
 }
 
 fn signed_sd_jwt() -> (String, JwkSet) {
+    signed_sd_jwt_with_claims(json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "given_name": "Ada"
+    }))
+}
+
+fn signed_sd_jwt_with_claims(claims: Value) -> (String, JwkSet) {
     let key_pair = EcdsaKeyPair::generate(EcdsaCurve::P256).expect("key generation should work");
     let mut jwk = Jwk::try_from(&key_pair).expect("JWK conversion should work");
     jwk.prm.kid = Some("issuer-key-1".to_string());
@@ -52,11 +60,6 @@ fn signed_sd_jwt() -> (String, JwkSet) {
     header.typ = Some("dc+sd-jwt".to_string());
     header.kid = Some("issuer-key-1".to_string());
 
-    let claims = json!({
-        "iss": "https://issuer.example.com",
-        "vct": "https://credentials.example.com/identity",
-        "given_name": "Ada"
-    });
     let token = jsonwebtoken::encode(
         &header,
         &claims,
@@ -662,6 +665,36 @@ fn rejects_tampered_issuer_signature() {
         verify_with_jwks(&sd_jwt, &jwks),
         Err(VerificationError::Signature { .. })
     ));
+}
+
+#[test]
+fn rejects_expired_jwt_claims() {
+    let now = get_current_timestamp();
+    let (raw, jwks) = signed_sd_jwt_with_claims(json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "exp": now.saturating_sub(120),
+    }));
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    let result = verify_with_jwks(&sd_jwt, &jwks);
+    // Expired JWT should fail signature verification
+    assert!(matches!(result, Err(VerificationError::Signature(_))));
+}
+
+#[test]
+fn rejects_not_yet_valid_jwt_claims() {
+    let now = get_current_timestamp();
+    let (raw, jwks) = signed_sd_jwt_with_claims(json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "nbf": now + 120,
+    }));
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    let result = verify_with_jwks(&sd_jwt, &jwks);
+    // Future nbf (Not Before) should fail signature verification
+    assert!(matches!(result, Err(VerificationError::Signature(_))));
 }
 
 #[test]
