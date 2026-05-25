@@ -125,8 +125,9 @@ fn verify_signature(
 ) -> Result<SdJwtClaims> {
     let mut validation = Validation::new(algorithm);
     validation.required_spec_claims.clear();
-    validation.validate_exp = false;
-    validation.validate_nbf = false;
+    validation.validate_exp = sd_jwt.jwt().claims().rfc7519.exp.is_some();
+    validation.validate_nbf = sd_jwt.jwt().claims().rfc7519.nbf.is_some();
+
     validation.validate_aud = false;
 
     decode_jwt::<SdJwtClaims>(sd_jwt.jwt().raw(), decoding_key, &validation)
