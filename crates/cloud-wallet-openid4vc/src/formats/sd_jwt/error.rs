@@ -5,6 +5,10 @@ pub enum Error {
     #[error("SD-JWT must contain at least one '~' separator")]
     MissingSdJwtSeparator,
 
+    /// The issued SD-JWT serialization is missing the trailing `~`.
+    #[error("issued SD-JWT without key binding must end with '~'")]
+    MissingSdJwtTrailingSeparator,
+
     /// The issuer-signed JWT component is missing.
     #[error("SD-JWT issuer-signed JWT is missing")]
     MissingIssuerJwt,

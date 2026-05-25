@@ -7,6 +7,7 @@ use redis::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use serde_with::{PickFirst, StringWithSeparator, formats::CommaSeparator, serde_as};
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
@@ -34,11 +35,16 @@ pub struct DatabaseConfig {
     pub url: SecretString,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Oid4vciConfig {
     pub client_id: String,
     pub redirect_uri: Url,
     pub use_system_proxy: bool,
+    /// Locale prefixes tried in order when selecting a credential display entry.
+    /// Configurable via `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES=en,fr,de`.
+    #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
+    pub preferred_display_locales: Vec<String>,
 }
 
 impl RedisConfig {
@@ -107,7 +113,8 @@ impl Config {
                 "oid4vci.redirect_uri",
                 "http://localhost:3000/api/v1/issuance/callback",
             )?
-            .set_default("oid4vci.use_system_proxy", true)
+            .set_default("oid4vci.use_system_proxy", true)?
+            .set_default("oid4vci.preferred_display_locales", vec!["en"])
     }
 }
 
@@ -125,6 +132,23 @@ mod tests {
         assert_eq!(
             config.redis.uri.expose_secret(),
             "redis://127.0.0.1:6379?protocol=resp3"
+        );
+        assert_eq!(config.oid4vci.preferred_display_locales, vec!["en"]);
+    }
+
+    #[test]
+    fn test_preferred_display_locales_csv_string_override() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert(
+            "oid4vci.preferred_display_locales".to_string(),
+            "fr,de,en".to_string(),
+        );
+
+        let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
+
+        assert_eq!(
+            config.oid4vci.preferred_display_locales,
+            vec!["fr", "de", "en"]
         );
     }
 
