@@ -101,7 +101,7 @@ fn process_object(
         .transpose()?
         .unwrap_or_default();
     let mut insertions = vec![];
-    let mut inserted_claim_names = HashSet::new();
+    let mut inserted_claim_names = object.keys().map(String::as_str).collect::<HashSet<_>>();
 
     for digest in embedded_digests {
         encounter_digest(&digest, state)?;
@@ -116,11 +116,6 @@ fn process_object(
         };
         if claim_name == SD_CLAIM || claim_name == ARRAY_DIGEST_CLAIM {
             return Err(decode_error(ProcessingError::ReservedClaimName(
-                claim_name.to_owned(),
-            )));
-        }
-        if object.contains_key(claim_name) {
-            return Err(decode_error(ProcessingError::DuplicateClaimName(
                 claim_name.to_owned(),
             )));
         }
