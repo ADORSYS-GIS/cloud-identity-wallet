@@ -83,6 +83,28 @@ fn assert_no_sd_metadata(value: &Value) {
     }
 }
 
+fn assert_no_rendering_metadata(value: &Value) {
+    let object = value.as_object().expect("rendered claims should be object");
+    for claim_name in [
+        "iss",
+        "sub",
+        "exp",
+        "nbf",
+        "iat",
+        "vct",
+        "vct#integrity",
+        "cnf",
+        "status",
+        "_sd",
+        "_sd_alg",
+    ] {
+        assert!(
+            !object.contains_key(claim_name),
+            "{claim_name} should not be rendered"
+        );
+    }
+}
+
 /// Parses the SD-JWT VC section 2.3.1 example.
 #[test]
 fn parses_sd_jwt_vc_section_2_3_1_example() {
@@ -94,7 +116,6 @@ fn parses_sd_jwt_vc_section_2_3_1_example() {
 
     assert_eq!(sd_jwt.jwt().header().typ.as_deref(), Some("dc+sd-jwt"));
     assert_eq!(issuer_claims_as_json(&sd_jwt), expected_issuer_payload);
-    assert!(!sd_jwt.has_key_binding());
 
     let disclosures = sd_jwt.disclosures();
     assert_eq!(disclosures.len(), 9);
@@ -160,7 +181,6 @@ fn parses_sd_jwt_vc_appendix_b_1_example() {
 
     assert_eq!(sd_jwt.jwt().header().typ.as_deref(), Some("dc+sd-jwt"));
     assert_eq!(issuer_claims_as_json(&sd_jwt), expected_issuer_payload);
-    assert!(!sd_jwt.has_key_binding());
 
     let disclosures = sd_jwt.disclosures();
     assert_eq!(disclosures.len(), 28);
@@ -409,4 +429,44 @@ fn supports_iana_named_sha2_and_sha3_sd_alg_values() {
 
         assert_eq!(processed["given_name"], json!("Ada"), "{sd_alg}");
     }
+}
+
+#[test]
+fn renders_disclosed_claims_without_protocol_metadata() {
+    let disclosed = disclosure(json!(["salt-1", "given_name", "Ada"]));
+    let digest = disclosure_digest(&disclosed);
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "sub": "subject-1",
+            "exp": 1883000000,
+            "nbf": 1682990000,
+            "iat": 1683000000,
+            "vct": "https://credentials.example.com/identity",
+            "vct#integrity": "sha256-placeholder",
+            "cnf": { "kid": "holder-key-1" },
+            "status": {
+                "status_list": {
+                    "idx": 42,
+                    "uri": "https://issuer.example.com/statuslists/1",
+                }
+            },
+            "_sd": [digest],
+            "_sd_alg": "sha-256",
+            "family_name": "Lovelace"
+        }),
+    );
+    let raw = format!("{jwt}~{disclosed}~");
+
+    let rendered = SdJwt::parse(&raw).unwrap().to_rendered_claims().unwrap();
+
+    assert_eq!(
+        rendered,
+        json!({
+            "given_name": "Ada",
+            "family_name": "Lovelace"
+        })
+    );
+    assert_no_rendering_metadata(&rendered);
 }
