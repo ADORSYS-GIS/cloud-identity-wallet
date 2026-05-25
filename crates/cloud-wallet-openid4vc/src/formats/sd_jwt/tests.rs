@@ -170,6 +170,129 @@ fn processes_sd_jwt_vc_disclosures_1() {
     assert_no_sd_metadata(&processed);
 }
 
+#[test]
+fn parses_sd_jwt_with_no_disclosures() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity",
+            "given_name": "Ada"
+        }),
+    );
+    let raw = format!("{jwt}~");
+
+    let sd_jwt = SdJwt::parse(&raw).expect("SD-JWT without disclosures should parse");
+
+    assert!(sd_jwt.disclosures().is_empty());
+    assert_eq!(sd_jwt.jwt().claims().properties["given_name"], json!("Ada"));
+}
+
+#[test]
+fn rejects_missing_issuer_jwt() {
+    let disclosed = disclosure(json!(["salt-1", "given_name", "Ada"]));
+    let raw = format!("~{disclosed}~");
+
+    assert!(matches!(SdJwt::parse(&raw), Err(Error::MissingIssuerJwt)));
+}
+
+#[test]
+fn rejects_empty_disclosure_part() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let disclosed = disclosure(json!(["salt-1", "given_name", "Ada"]));
+    let raw = format!("{jwt}~~{disclosed}~");
+
+    assert!(matches!(
+        SdJwt::parse(&raw),
+        Err(Error::InvalidDisclosure { index: 0, .. })
+    ));
+}
+
+#[test]
+fn rejects_invalid_disclosure_base64() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let raw = format!("{jwt}~***~");
+
+    assert!(matches!(
+        SdJwt::parse(&raw),
+        Err(Error::InvalidDisclosure { index: 0, .. })
+    ));
+}
+
+#[test]
+fn rejects_disclosure_with_invalid_json() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let invalid_json = URL_SAFE_NO_PAD.encode(b"not json");
+    let raw = format!("{jwt}~{invalid_json}~");
+
+    assert!(matches!(
+        SdJwt::parse(&raw),
+        Err(Error::InvalidDisclosure { index: 0, .. })
+    ));
+}
+
+#[test]
+fn rejects_disclosure_with_wrong_array_length() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+
+    for disclosed in [
+        disclosure(json!(["salt-1"])),
+        disclosure(json!(["salt-1", "given_name", "Ada", "extra"])),
+    ] {
+        let raw = format!("{jwt}~{disclosed}~");
+
+        assert!(matches!(
+            SdJwt::parse(&raw),
+            Err(Error::InvalidDisclosure {
+                index: 0,
+                source: DisclosureError::InvalidShape
+            })
+        ));
+    }
+}
+
+#[test]
+fn rejects_issued_sd_jwt_without_trailing_separator() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let disclosed = disclosure(json!(["salt-1", "given_name", "Ada"]));
+    let raw = format!("{jwt}~{disclosed}");
+
+    assert!(matches!(
+        SdJwt::parse(&raw),
+        Err(Error::MissingSdJwtTrailingSeparator)
+    ));
+}
+
 /// Parses the SD-JWT VC appendix B.1 example.
 #[test]
 fn parses_sd_jwt_vc_appendix_b_1_example() {

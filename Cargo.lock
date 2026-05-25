@@ -902,6 +902,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_qs",
+ "serde_with",
  "sqlx",
  "testcontainers-modules",
  "thiserror 2.0.18",
