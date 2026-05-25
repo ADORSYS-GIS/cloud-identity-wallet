@@ -30,6 +30,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
     let credential_repo = MemoryCredentialRepo::new();
+    let preferred_display_locales = config.oid4vci.preferred_display_locales.clone();
 
     let engine = IssuanceEngine::new(
         client,
@@ -39,6 +40,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         credential_repo,
         tenant_repo,
         session_store,
+        preferred_display_locales,
     );
     Ok(engine)
 }

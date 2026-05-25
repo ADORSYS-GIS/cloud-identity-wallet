@@ -1054,6 +1054,63 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/CredentialDisplay"
+        claims:
+          type: array
+          description: |
+            Claims metadata describing the claims that will be issued for this
+            credential configuration. Sourced from the issuer's
+            `credential_configurations_supported[id].credential_metadata.claims`.
+            `null` when the issuer does not provide claim metadata.
+          items:
+            $ref: "#/components/schemas/ClaimDescription"
+
+    ClaimDescription:
+      type: object
+      required:
+        - path
+      description: |
+        Description of a claim in an issued credential per OpenID4VCI Appendix B.2.
+        Describes the claim path, whether it is mandatory, and display metadata.
+      properties:
+        path:
+          type: array
+          description: |
+            Claims path pointer per OpenID4VCI Appendix C. Non-empty array of
+            path elements (strings, integers for array indices, or `null` to
+            select all array elements).
+          minItems: 1
+          items:
+            oneOf:
+              - type: string
+              - type: integer
+                minimum: 0
+              - type: "null"
+          example: ["credentialSubject", "given_name"]
+        mandatory:
+          type: boolean
+          description: |
+            `true` if the claim is always included in the issued credential.
+            Defaults to `false` when omitted.
+          default: false
+          example: true
+        display:
+          type: array
+          description: Per-language display properties for this claim.
+          items:
+            $ref: "#/components/schemas/ClaimDisplay"
+
+    ClaimDisplay:
+      type: object
+      description: Per-language display properties for a claim.
+      properties:
+        name:
+          type: string
+          description: Human-readable display name for the claim.
+          example: Given Name
+        locale:
+          type: string
+          description: BCP47 language tag (e.g. "en-US").
+          example: en-US
 
     CredentialDisplay:
       type: object
