@@ -1,7 +1,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 
-use super::Error;
+use super::{DisclosureError, Error};
 
 /// A single SD-JWT disclosure decoded from the combined SD-JWT serialization.
 ///
@@ -26,18 +26,18 @@ impl<'a> Disclosure<'a> {
     /// Parses an unpadded base64url-encoded disclosure.
     pub fn parse(raw: &'a str, index: usize) -> Result<Self, Error> {
         if raw.is_empty() {
-            return Err(Error::EmptyDisclosure { index });
+            return Err(invalid(index, DisclosureError::Empty));
         }
 
         let decoded = URL_SAFE_NO_PAD
             .decode(raw)
-            .map_err(|source| Error::DisclosureBase64 { index, source })?;
+            .map_err(|source| invalid(index, DisclosureError::Base64(source)))?;
         let value = serde_json::from_slice::<Value>(&decoded)
-            .map_err(|source| Error::DisclosureJson { index, source })?;
+            .map_err(|source| invalid(index, DisclosureError::Json(source)))?;
 
         let array = match value {
             Value::Array(array) => array,
-            _ => return Err(Error::InvalidDisclosureShape { index }),
+            _ => return Err(invalid(index, DisclosureError::InvalidShape)),
         };
 
         match array.as_slice() {
@@ -53,7 +53,7 @@ impl<'a> Disclosure<'a> {
                 claim_value: claim_value.clone(),
                 raw,
             }),
-            _ => Err(Error::InvalidDisclosureShape { index }),
+            _ => Err(invalid(index, DisclosureError::InvalidShape)),
         }
     }
 
@@ -76,6 +76,10 @@ impl<'a> Disclosure<'a> {
 fn string_field(value: Value, index: usize, field: &'static str) -> Result<String, Error> {
     match value {
         Value::String(s) => Ok(s),
-        _ => Err(Error::InvalidDisclosureField { index, field }),
+        _ => Err(invalid(index, DisclosureError::InvalidField { field })),
     }
+}
+
+fn invalid(index: usize, source: DisclosureError) -> Error {
+    Error::InvalidDisclosure { index, source }
 }

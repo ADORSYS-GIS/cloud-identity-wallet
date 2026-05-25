@@ -16,21 +16,21 @@ pub enum Error {
     /// A compact JWT component did not contain exactly three non-empty JWS parts.
     #[error("{component} must be a compact JWS with three non-empty parts")]
     InvalidJwtCompact {
-        /// Human-readable component name for diagnostics.
+        /// Human-readable component name.
         component: &'static str,
     },
 
     /// The JOSE header uses the unsecured `none` algorithm.
     #[error("{component} uses the unsecured 'none' algorithm")]
     UnsecuredJwt {
-        /// Human-readable component name for diagnostics.
+        /// Human-readable component name.
         component: &'static str,
     },
 
     /// JWT header or claim decoding failed.
     #[error("failed to decode {component}")]
     JwtDecoding {
-        /// Human-readable component name for diagnostics.
+        /// Human-readable component name.
         component: &'static str,
         /// Underlying JWT decoding error.
         #[source]
@@ -40,52 +40,97 @@ pub enum Error {
     /// A JWT component failed SD-JWT VC profile validation.
     #[error("invalid {component}: {reason}")]
     InvalidJwtProfile {
-        /// Human-readable component name for diagnostics.
+        /// Human-readable component name.
         component: &'static str,
         /// Profile validation failure.
         reason: &'static str,
     },
 
-    /// A disclosure component was empty.
-    #[error("disclosure at index {index} is empty")]
-    EmptyDisclosure {
+    /// A disclosure could not be parsed.
+    #[error("invalid disclosure at index {index}: {source}")]
+    InvalidDisclosure {
         /// Zero-based disclosure index inside the SD-JWT.
         index: usize,
-    },
-
-    /// A disclosure was not valid unpadded base64url.
-    #[error("disclosure at index {index} is not valid base64url")]
-    DisclosureBase64 {
-        /// Zero-based disclosure index inside the SD-JWT.
-        index: usize,
-        /// Underlying base64 decode error.
+        /// Underlying disclosure parse failure.
         #[source]
-        source: base64::DecodeError,
+        source: DisclosureError,
     },
 
-    /// A disclosure decoded to invalid JSON.
-    #[error("disclosure at index {index} is not valid JSON")]
-    DisclosureJson {
-        /// Zero-based disclosure index inside the SD-JWT.
-        index: usize,
-        /// Underlying JSON decode error.
-        #[source]
-        source: serde_json::Error,
+    /// The SD-JWT disclosure processing rules failed.
+    #[error("disclosure processing failed: {reason}")]
+    DisclosureProcessing {
+        /// Processing failure reason.
+        reason: ProcessingError,
     },
+}
 
-    /// A disclosure JSON value was not the expected two- or three-element array.
-    #[error("disclosure at index {index} must be a two- or three-element array")]
-    InvalidDisclosureShape {
-        /// Zero-based disclosure index inside the SD-JWT.
-        index: usize,
-    },
+/// Failures that can occur while parsing an individual Disclosure.
+#[derive(Debug, thiserror::Error)]
+pub enum DisclosureError {
+    /// The disclosure component is empty.
+    #[error("empty disclosure")]
+    Empty,
+
+    /// The disclosure is not valid unpadded base64url.
+    #[error("not valid base64url")]
+    Base64(#[source] base64::DecodeError),
+
+    /// The disclosure decoded to invalid JSON.
+    #[error("not valid JSON")]
+    Json(#[source] serde_json::Error),
+
+    /// The disclosure JSON value was not the expected two- or three-element array.
+    #[error("must be a two- or three-element array")]
+    InvalidShape,
 
     /// A disclosure salt or claim name had the wrong JSON type.
-    #[error("disclosure at index {index} has invalid {field}")]
-    InvalidDisclosureField {
-        /// Zero-based disclosure index inside the SD-JWT.
-        index: usize,
-        /// Field name used in the diagnostic.
+    #[error("invalid {field}")]
+    InvalidField {
+        /// Field name.
         field: &'static str,
     },
+}
+
+/// Failure reason for RFC 9901 disclosure processing.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ProcessingError {
+    /// The `_sd_alg` claim names a hash algorithm this crate does not support.
+    #[error("unsupported _sd_alg '{0}'")]
+    UnsupportedHashAlgorithm(String),
+
+    /// A disclosure digest appeared more than once in the input disclosure list.
+    #[error("duplicate disclosure digest '{0}'")]
+    DuplicateDigest(String),
+
+    /// An `_sd` claim was present but was not an array of strings.
+    #[error("_sd must be an array of strings")]
+    InvalidSdClaim,
+
+    /// The SD-JWT payload is not valid JSON.
+    #[error("not valid JSON")]
+    Json(String),
+
+    /// A digest value was encountered more than once in the payload tree.
+    #[error("digest '{0}' is embedded more than once")]
+    DuplicateEmbeddedDigest(String),
+
+    /// A digest in an object `_sd` array referenced an array-element disclosure.
+    #[error("object disclosure expected for digest '{0}'")]
+    ExpectedObjectDisclosure(String),
+
+    /// A digest in an array element referenced an object-property disclosure.
+    #[error("array-element disclosure expected for digest '{0}'")]
+    ExpectedArrayDisclosure(String),
+
+    /// An object disclosure attempted to disclose a reserved claim name.
+    #[error("reserved disclosed claim name '{0}'")]
+    ReservedClaimName(String),
+
+    /// An object disclosure attempted to overwrite an existing claim.
+    #[error("disclosed claim '{0}' already exists")]
+    DuplicateClaimName(String),
+
+    /// A supplied Disclosure was not referenced by the payload tree.
+    #[error("disclosure digest '{0}' was not referenced")]
+    UnreferencedDisclosure(String),
 }
