@@ -1,6 +1,13 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_wallet_crypto::digest::HashAlg;
+use cloud_wallet_crypto::ecdsa::{Curve as EcdsaCurve, KeyPair as EcdsaKeyPair};
+use cloud_wallet_crypto::jwk::{
+    Algorithm as JwkAlgorithm, Jwk, JwkSet, KeyUse, Signing as JwkSigning,
+};
+use jsonwebtoken::{Algorithm as JwtAlgorithm, EncodingKey, Header};
 use serde_json::{Value, json};
+
+use crate::formats::sd_jwt::verification::{verify_with_jwks, verify_with_x5c};
 
 use super::*;
 
@@ -32,6 +39,32 @@ fn b64(value: Value) -> String {
 // Create a compact JWT from header and claims
 fn compact_jwt(header: Value, claims: Value) -> String {
     format!("{}.{}.sig", b64(header), b64(claims))
+}
+
+fn signed_sd_jwt() -> (String, JwkSet) {
+    let key_pair = EcdsaKeyPair::generate(EcdsaCurve::P256).expect("key generation should work");
+    let mut jwk = Jwk::try_from(&key_pair).expect("JWK conversion should work");
+    jwk.prm.kid = Some("issuer-key-1".to_string());
+    jwk.prm.alg = Some(JwkAlgorithm::Signing(JwkSigning::Es256));
+    jwk.prm.key_use = Some(KeyUse::Signing);
+
+    let mut header = Header::new(JwtAlgorithm::ES256);
+    header.typ = Some("dc+sd-jwt".to_string());
+    header.kid = Some("issuer-key-1".to_string());
+
+    let claims = json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "given_name": "Ada"
+    });
+    let token = jsonwebtoken::encode(
+        &header,
+        &claims,
+        &EncodingKey::from_ec_der(key_pair.to_pkcs8_der()),
+    )
+    .expect("test JWT should sign");
+
+    (format!("{token}~"), JwkSet { keys: vec![jwk] })
 }
 
 // Create a disclosure from a value
@@ -592,4 +625,63 @@ fn renders_disclosed_claims_without_protocol_metadata() {
         })
     );
     assert_no_rendering_metadata(&rendered);
+}
+
+#[test]
+fn verifies_issuer_signature_with_trusted_jwks() {
+    let (raw, jwks) = signed_sd_jwt();
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    let algorithm = verify_with_jwks(&sd_jwt, &jwks).expect("signature should verify");
+
+    assert_eq!(algorithm, JwtAlgorithm::ES256);
+}
+
+#[test]
+fn rejects_issuer_signature_when_trusted_jwk_algorithm_differs() {
+    let (raw, mut jwks) = signed_sd_jwt();
+    jwks.keys[0].prm.alg = Some(JwkAlgorithm::Signing(JwkSigning::Rs256));
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    assert!(matches!(
+        verify_with_jwks(&sd_jwt, &jwks),
+        Err(VerificationError::InvalidKey { .. })
+    ));
+}
+
+#[test]
+fn rejects_tampered_issuer_signature() {
+    let (raw, jwks) = signed_sd_jwt();
+    let token = raw.strip_suffix('~').expect("issued SD-JWT has trailing ~");
+    let mut parts = token.split('.').collect::<Vec<_>>();
+    parts[2] = "AA";
+    let raw = format!("{}.{}.{}~", parts[0], parts[1], parts[2]);
+    let sd_jwt = SdJwt::parse(&raw).expect("tampered SD-JWT should still parse");
+
+    assert!(matches!(
+        verify_with_jwks(&sd_jwt, &jwks),
+        Err(VerificationError::Signature { .. })
+    ));
+}
+
+#[test]
+fn rejects_invalid_x5c_certificate_chain_before_signature_verification() {
+    let jwt = compact_jwt(
+        json!({
+            "alg": "ES256",
+            "typ": "dc+sd-jwt",
+            "x5c": ["not-base64!"]
+        }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let raw = format!("{jwt}~");
+    let sd_jwt = SdJwt::parse(&raw).expect("SD-JWT with x5c header should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt),
+        Err(VerificationError::X5c { .. })
+    ));
 }
