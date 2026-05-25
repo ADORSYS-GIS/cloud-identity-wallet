@@ -1,0 +1,33 @@
+{
+  "_sd": [
+    "2r009dzvHuVrWrRXT5kJMmHnqEHHnWe0MLVZw8PATB8",
+    "3NdDJYRwBqaEIyXCHcn4a5YKJagPgIP0Wkg9AorgAKg",
+    "5fn6IiXjUPmGQ4mYHxDdt6EjvBQ7gRvGcdEnSCEN8Ek",
+    "6BzMBk7FGivogbldO75f3NLwjFliCqb7nn1GhgCokrQ",
+    "90CT8AaBPbn5X8nRXkesju1i0BqhWqZ3wqD4jF-qDGk",
+    "9nEwUrdeZ6kcRbEj52QH3nOR-oie0_p9tMNIAEuFvMU",
+    "HTh6Zr2J8aiqpa963cLkuKeQDf9O00FzOHhyjGpVfTg",
+    "JCp2K2NhH-LE5L0j7ME0LNx-T-px9QFtamSsxmCUCxU",
+    "LoMGrhlDm_bUWUX1gdhRxTsy4d4zywGzlSVocRSY01M",
+    "UgUjq5whzQewO59fVNj0f0mqyV8YPXU54sp4kLecwQk",
+    "Y0H-E3hzKEUnAyri_x9tT9k-j4i65ao9hkeEHNexosI",
+    "ezCAmaTwI2nPj_1IiB3KZfiEORLeRwhZsMMDMZIJ8kA",
+    "i0H_-WAHwfEjt8tqQH74uOCWvquY3FwuX-kx4e2RJH8",
+    "r1GrH46yDV62sezImEjxa6cJSZMT212jrOSHiec9ytM",
+    "rVj3RLs7K8zdNy7zXz1Cr39Y6rog8ulNozk4F7NCuC0",
+    "t5kp0HfxMS1eHNCGRzrK9Gi5oTZreg5Ue9lLQIuLvB4"
+  ],
+  "iss": "https://pid-issuer.aendgard.example",
+  "iat": 1683000000,
+  "exp": 1883000000,
+  "vct": "urn:example:eudi:pid:aendgard:1",
+  "_sd_alg": "sha-256",
+  "cnf": {
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "TCAER19Zvu3OHF4j4W4vfSVoHIP1ILilDls7vCeGemc",
+      "y": "ZxjiWWbZMQGHVWKVQ4hbSIirsVfuecCE6t4jT9F2HZQ"
+    }
+  }
+}
