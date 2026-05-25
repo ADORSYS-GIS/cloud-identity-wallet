@@ -2,6 +2,7 @@ mod disclosure;
 mod error;
 mod jwt;
 mod kb_jwt;
+mod metadata;
 #[cfg(test)]
 mod tests;
 
@@ -9,6 +10,7 @@ pub use disclosure::Disclosure;
 pub use error::Error;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
+pub use metadata::IssuerMetadataError;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
