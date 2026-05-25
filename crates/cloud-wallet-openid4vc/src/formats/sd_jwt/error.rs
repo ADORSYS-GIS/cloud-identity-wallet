@@ -1,3 +1,5 @@
+use crate::formats::sd_jwt::verification::VerificationError;
+
 /// Errors returned while parsing an SD-JWT VC or one of its embedded parts.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -62,6 +64,10 @@ pub enum Error {
         /// Processing failure reason.
         reason: ProcessingError,
     },
+
+    /// SD-JWT verification failed.
+    #[error("verification failed: {0}")]
+    Verification(#[from] VerificationError),
 }
 
 /// Failures that can occur while parsing an individual Disclosure.

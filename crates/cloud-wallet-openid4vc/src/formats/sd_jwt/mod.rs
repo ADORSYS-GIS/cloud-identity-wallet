@@ -7,13 +7,16 @@ mod kb_jwt;
 mod metadata;
 #[cfg(test)]
 mod tests;
+mod verification;
 
 pub use disclosure::Disclosure;
 pub use error::{DisclosureError, Error, ProcessingError};
 pub use hash::IanaHashAlgorithm;
+use jsonwebtoken::Algorithm;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
 pub use metadata::IssuerMetadataError;
+pub use verification::VerificationError;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -131,6 +134,16 @@ impl<'a> SdJwt<'a> {
         let mut payload = self.to_disclosed_payload()?;
         remove_metadata(&mut payload);
         Ok(payload)
+    }
+
+    /// Establishes issuer trust and verifies the issuer-signed JWT signature.
+    ///
+    /// Returns the algorithm used for verification.
+    pub async fn verify_signature(
+        &self,
+        http_client: &reqwest_middleware::ClientWithMiddleware,
+    ) -> Result<Algorithm, VerificationError> {
+        verification::verify_issuer_signature(self, http_client).await
     }
 }
 
