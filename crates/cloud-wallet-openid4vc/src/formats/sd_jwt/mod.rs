@@ -7,13 +7,16 @@ mod kb_jwt;
 mod metadata;
 #[cfg(test)]
 mod tests;
+mod verification;
 
 pub use disclosure::Disclosure;
 pub use error::{DisclosureError, Error, ProcessingError};
 pub use hash::IanaHashAlgorithm;
+use jsonwebtoken::Algorithm;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
 pub use metadata::IssuerMetadataError;
+pub use verification::VerificationError;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,6 +24,7 @@ use serde_with::skip_serializing_none;
 use url::Url;
 
 use crate::core::rfc7519::RFC7519Claims;
+use crate::formats::sd_jwt::jwt::validate_compact_jws;
 
 type Object = serde_json::Map<String, Value>;
 
@@ -79,6 +83,8 @@ impl<'a> SdJwt<'a> {
         let (disclosure_parts, key_binding) = match parts.last().copied() {
             Some("") => (&parts[1..parts.len() - 1], None),
             Some(kb_jwt) => {
+                validate_compact_jws(kb_jwt, KEY_BINDING_JWT_COMPONENT)
+                    .map_err(|_| Error::MissingSdJwtTrailingSeparator)?;
                 let key_binding = KeyBindingJwt::decode_unverified(kb_jwt)?;
                 (&parts[1..parts.len() - 1], Some(key_binding))
             }
@@ -128,6 +134,16 @@ impl<'a> SdJwt<'a> {
         let mut payload = self.to_disclosed_payload()?;
         remove_metadata(&mut payload);
         Ok(payload)
+    }
+
+    /// Establishes issuer trust and verifies the issuer-signed JWT signature.
+    ///
+    /// Returns the algorithm used for verification.
+    pub async fn verify_signature(
+        &self,
+        http_client: &reqwest_middleware::ClientWithMiddleware,
+    ) -> Result<Algorithm, VerificationError> {
+        verification::verify_issuer_signature(self, http_client).await
     }
 }
 
@@ -186,6 +202,10 @@ pub enum CnfClaim {
         kid: String,
     },
     /// Additional confirmation methods not yet modelled.
+    ///
+    /// This is intentionally permissive for forward compatibility with new
+    /// confirmation methods. Callers that require holder binding must match one
+    /// of the concrete variants they support.
     #[serde(untagged)]
     Custom(Value),
 }
