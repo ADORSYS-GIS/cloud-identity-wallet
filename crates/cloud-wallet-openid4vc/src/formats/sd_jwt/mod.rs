@@ -4,6 +4,7 @@ mod error;
 mod hash;
 mod jwt;
 mod kb_jwt;
+mod metadata;
 #[cfg(test)]
 mod tests;
 
@@ -12,6 +13,7 @@ pub use error::{DisclosureError, Error, ProcessingError};
 pub use hash::IanaHashAlgorithm;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
+pub use metadata::IssuerMetadataError;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
