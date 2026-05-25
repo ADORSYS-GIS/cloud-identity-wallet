@@ -1,9 +1,15 @@
+use crate::formats::sd_jwt::verification::VerificationError;
+
 /// Errors returned while parsing an SD-JWT VC or one of its embedded parts.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The compact SD-JWT string did not contain the expected `~` separator.
     #[error("SD-JWT must contain at least one '~' separator")]
     MissingSdJwtSeparator,
+
+    /// The issued SD-JWT serialization is missing the trailing `~`.
+    #[error("issued SD-JWT without key binding must end with '~'")]
+    MissingSdJwtTrailingSeparator,
 
     /// The issuer-signed JWT component is missing.
     #[error("SD-JWT issuer-signed JWT is missing")]
@@ -58,6 +64,10 @@ pub enum Error {
         /// Processing failure reason.
         reason: ProcessingError,
     },
+
+    /// SD-JWT verification failed.
+    #[error("verification failed: {0}")]
+    Verification(#[from] VerificationError),
 }
 
 /// Failures that can occur while parsing an individual Disclosure.
