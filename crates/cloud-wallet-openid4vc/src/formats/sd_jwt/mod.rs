@@ -26,6 +26,19 @@ const ISSUER_JWT_COMPONENT: &str = "Issuer-Signed JWT";
 const KEY_BINDING_JWT_COMPONENT: &str = "Key Binding JWT";
 const SD_JWT_VC_TYP: &str = "dc+sd-jwt";
 const TRANSITIONAL_SD_JWT_VC_TYP: &str = "vc+sd-jwt";
+const METADATA_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "exp",
+    "nbf",
+    "iat",
+    "vct",
+    "vct#integrity",
+    "cnf",
+    "status",
+    "_sd",
+    "_sd_alg",
+];
 
 /// Parsed SD-JWT VC in combined serialization form.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,19 +116,16 @@ impl<'a> SdJwt<'a> {
         self.disclosures
     }
 
-    /// Returns the optional key binding JWT.
-    pub fn key_binding(&self) -> Option<&KeyBindingJwt<'a>> {
-        self.key_binding.as_ref()
-    }
-
-    /// Returns true when the combined serialization includes a key binding JWT.
-    pub fn has_key_binding(&self) -> bool {
-        self.key_binding.is_some()
-    }
-
     /// Returns the disclosed payload after processing and verifying SD-JWT Disclosures.
     pub fn to_disclosed_payload(&self) -> Result<Value, Error> {
         decode::process_disclosures(self)
+    }
+
+    /// Returns disclosed credential claims without top-level JWT and SD-JWT protocol metadata.
+    pub fn to_rendered_claims(&self) -> Result<Value, Error> {
+        let mut payload = self.to_disclosed_payload()?;
+        remove_metadata(&mut payload);
+        Ok(payload)
     }
 }
 
@@ -215,4 +225,14 @@ fn validate_sd_jwt_vc_profile(jwt: &Jwt<'_, SdJwtClaims>) -> Result<(), Error> {
         });
     }
     Ok(())
+}
+
+fn remove_metadata(payload: &mut Value) {
+    let Value::Object(object) = payload else {
+        return;
+    };
+
+    for claim_name in METADATA_CLAIMS {
+        object.remove(*claim_name);
+    }
 }

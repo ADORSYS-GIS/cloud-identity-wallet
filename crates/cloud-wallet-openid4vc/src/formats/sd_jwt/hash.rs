@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::formats::sd_jwt::{Error, ProcessingError};
 
-/// IANA Named Information Hash Algorithm Registry.
+/// Supported IANA Named Information Hash Algorithm Registry.
 /// See [Hash Algorithm Registry](https://www.iana.org/assignments/named-information/named-information.xhtml#hash-algorithm).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

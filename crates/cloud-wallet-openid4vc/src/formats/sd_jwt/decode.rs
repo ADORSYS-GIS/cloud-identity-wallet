@@ -229,7 +229,7 @@ fn disclosure_hash_algorithm(sd_alg: Option<&str>) -> Result<HashAlg, Error> {
     sd_alg
         .map(IanaHashAlgorithm::from_str)
         .unwrap_or(Ok(IanaHashAlgorithm::Sha256))
-        .map(|alg| alg.into())
+        .map(Into::into)
 }
 
 /// Computes the digest of a raw disclosure string using the specified hash algorithm.

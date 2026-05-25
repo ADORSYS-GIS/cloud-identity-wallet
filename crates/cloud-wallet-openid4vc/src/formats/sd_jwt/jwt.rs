@@ -26,7 +26,6 @@ where
     /// Decodes a compact JWT without verifying its signature.
     pub fn decode_unverified(raw: &'a str, component: &'static str) -> Result<Self, Error> {
         reject_none_alg(raw, component)?;
-        validate_compact_jws(raw, component)?;
 
         let token_data =
             insecure_decode::<T>(raw).map_err(|source| Error::JwtDecoding { component, source })?;
@@ -58,22 +57,6 @@ impl<'a, T> Jwt<'a, T> {
     /// Returns the original compact JWT string.
     pub fn raw(&self) -> &'a str {
         self.raw
-    }
-}
-
-pub(crate) fn validate_compact_jws(raw: &str, component: &'static str) -> Result<(), Error> {
-    let mut segments = raw.split('.');
-    let header = segments.next();
-    let claims = segments.next();
-    let signature = segments.next();
-
-    match (header, claims, signature, segments.next()) {
-        (Some(header), Some(claims), Some(signature), None)
-            if !header.is_empty() && !claims.is_empty() && !signature.is_empty() =>
-        {
-            Ok(())
-        }
-        _ => Err(Error::InvalidJwtCompact { component }),
     }
 }
 
