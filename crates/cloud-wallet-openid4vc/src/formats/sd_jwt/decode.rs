@@ -10,6 +10,7 @@ use crate::formats::sd_jwt::{Disclosure, Error, IanaHashAlgorithm, ProcessingErr
 const SD_CLAIM: &str = "_sd";
 const SD_ALG_CLAIM: &str = "_sd_alg";
 const ARRAY_DIGEST_CLAIM: &str = "...";
+const MAX_JSON_NESTING_DEPTH: usize = 64;
 
 /// Processes the disclosures in the SD-JWT and returns the processed payload.
 ///
@@ -24,7 +25,7 @@ pub(super) fn process_disclosures(sd_jwt: &SdJwt<'_>) -> Result<Value, Error> {
         .map_err(|e| decode_error(ProcessingError::Json(e.to_string())))?;
     let mut state = ProcessingState::default();
 
-    process_value(&mut payload, &mut disclosures, &mut state)?;
+    process_value(&mut payload, &mut disclosures, &mut state, 0, true)?;
 
     if let Some(digest) = disclosures.first_unreferenced_digest() {
         return Err(decode_error(ProcessingError::UnreferencedDisclosure(
@@ -81,10 +82,18 @@ fn process_value(
     value: &mut Value,
     disclosures: &mut DigestIndex<'_>,
     state: &mut ProcessingState,
+    depth: usize,
+    is_root: bool,
 ) -> Result<(), Error> {
+    if depth > MAX_JSON_NESTING_DEPTH {
+        return Err(decode_error(ProcessingError::MaxDepthExceeded(
+            MAX_JSON_NESTING_DEPTH,
+        )));
+    }
+
     match value {
-        Value::Object(object) => process_object(object, disclosures, state),
-        Value::Array(array) => process_array(array, disclosures, state),
+        Value::Object(object) => process_object(object, disclosures, state, depth, is_root),
+        Value::Array(array) => process_array(array, disclosures, state, depth),
         // Primitive values (string, number, boolean, null) are left unchanged
         _ => Ok(()),
     }
@@ -94,6 +103,8 @@ fn process_object(
     object: &mut Map<String, Value>,
     disclosures: &mut DigestIndex<'_>,
     state: &mut ProcessingState,
+    depth: usize,
+    is_root: bool,
 ) -> Result<(), Error> {
     let embedded_digests = object
         .remove(SD_CLAIM)
@@ -127,14 +138,16 @@ fn process_object(
         insertions.push((claim_name, &disclosure.claim_value));
     }
 
-    object.remove(SD_ALG_CLAIM);
-
     for (claim_name, claim_value) in insertions {
         object.insert(claim_name.to_owned(), claim_value.clone());
     }
 
+    if is_root {
+        object.remove(SD_ALG_CLAIM);
+    }
+
     for value in object.values_mut() {
-        process_value(value, disclosures, state)?;
+        process_value(value, disclosures, state, depth + 1, false)?;
     }
     Ok(())
 }
@@ -143,6 +156,7 @@ fn process_array(
     array: &mut Vec<Value>,
     disclosures: &mut DigestIndex<'_>,
     state: &mut ProcessingState,
+    depth: usize,
 ) -> Result<(), Error> {
     let mut processed = Vec::with_capacity(array.len());
 
@@ -164,7 +178,7 @@ fn process_array(
             ArrayElement::Value(element) => element,
         };
 
-        process_value(&mut element, disclosures, state)?;
+        process_value(&mut element, disclosures, state, depth + 1, false)?;
         processed.push(element);
     }
 
