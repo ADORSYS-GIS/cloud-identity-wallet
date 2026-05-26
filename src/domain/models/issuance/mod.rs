@@ -5,24 +5,27 @@ mod start;
 mod task;
 mod tx_code;
 
-use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
+use cloud_wallet_openid4vc::oid4vci::metadata::{CredentialConfiguration, CredentialDisplay};
 pub use consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 pub use start::{CredentialTypeDisplay, StartIssuanceRequest, StartIssuanceResponse};
 pub use task::{IssuanceTask, TaskResult};
 pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
+use cloud_wallet_openid4vc::formats::sd_jwt::{SdJwt, SdJwtClaims, StatusClaim, X5cTrustAnchors};
 use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::credential::formats::CredentialFormatDetails;
 use cloud_wallet_openid4vc::oid4vci::credential::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
 use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
 use cloud_wallet_openid4vc::oid4vci::token::TokenResponse;
+use jsonwebtoken::Algorithm as JwtAlgorithm;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -486,7 +489,6 @@ impl IssuanceEngine {
         credential_types: &mut Vec<String>,
     ) -> Result<Option<String>> {
         let notification_id = immediate.notification_id;
-        let issuer = context.offer.credential_issuer.as_str();
         let display_metadata =
             extract_display_metadata(context, config_id, &self.preferred_display_locales);
 
@@ -500,7 +502,7 @@ impl IssuanceEngine {
                 }
             };
             let cred_id = self
-                .store_credential(tenant_id, issuer, config_id, raw, display_metadata.clone())
+                .store_credential(tenant_id, context, config_id, raw, display_metadata.clone())
                 .await?;
 
             credential_ids.push(cred_id.to_string());
@@ -588,36 +590,68 @@ impl IssuanceEngine {
     async fn store_credential(
         &self,
         tenant_id: Uuid,
-        issuer: &str,
+        context: &ResolvedOfferContext,
         credential_config_id: &str,
         raw_credential: String,
         display_metadata: CredentialDisplayMetadata,
     ) -> Result<Uuid> {
-        // TODO : Parse the raw credential to extract the fields
-        let credential = Credential {
-            id: Uuid::new_v4(),
-            tenant_id,
-            issuer: issuer.to_owned(),
-            subject: None,
-            credential_types: vec![credential_config_id.to_owned()],
-            format: CredentialFormat::SdJwtVc,
-            external_id: None,
-            status: CredentialStatus::Active,
-            issued_at: time::UtcDateTime::now(),
-            valid_until: None,
-            is_revoked: false,
-            status_location: None,
-            status_index: None,
-            raw_credential,
-        };
+        let config = context
+            .issuer_metadata
+            .credential_configurations_supported
+            .get(credential_config_id)
+            .ok_or_else(|| {
+                IssuanceError::credential_request(format!(
+                    "unknown credential configuration '{credential_config_id}'"
+                ))
+            })?;
+
+        let receipt_time = time::UtcDateTime::now();
+        let issuer = context.offer.credential_issuer.as_str();
+        let credential = self
+            .build_credential(tenant_id, issuer, config, raw_credential, receipt_time)
+            .await?;
 
         let id = self
             .credential_repo
             .upsert(credential, Some(display_metadata))
             .await?;
 
-        info!(credential_id = %id, "credential stored successfully");
+        info!(credential_id = %id, tenant_id = %tenant_id, "credential stored successfully");
         Ok(id)
+    }
+
+    async fn build_credential(
+        &self,
+        tenant_id: Uuid,
+        issuer: &str,
+        config: &CredentialConfiguration,
+        raw_credential: String,
+        receipt_time: time::UtcDateTime,
+    ) -> Result<Credential> {
+        match &config.format_details {
+            CredentialFormatDetails::DcSdJwt(sd_config) => {
+                let sd_jwt = SdJwt::parse(&raw_credential)?;
+                sd_jwt.to_disclosed_payload()?;
+
+                let algorithm = sd_jwt
+                    .verify_signature(self.client.http_client(), X5cTrustAnchors::default())
+                    .await?;
+                validate_credential_signing_alg(config, algorithm)?;
+
+                let claims = sd_jwt.into_jwt().into_claims();
+                if claims.vct != sd_config.vct {
+                    return Err(IssuanceError::credential_request(format!(
+                        "SD-JWT VC vct '{}' does not match credential configuration vct '{}'",
+                        claims.vct, sd_config.vct
+                    )));
+                }
+                credential_from_sd_jwt(tenant_id, issuer, claims, raw_credential, receipt_time)
+            }
+            other => Err(IssuanceError::credential_request(format!(
+                "unsupported credential format '{}'",
+                other.format_str()
+            ))),
+        }
     }
 
     /// Emit a processing SSE event (best-effort, non-fatal on failure).
@@ -683,6 +717,81 @@ pub async fn transition_session<S: SessionStore>(
 
 fn default_worker_count() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
+fn credential_from_sd_jwt(
+    tenant_id: Uuid,
+    issuer: &str,
+    claims: SdJwtClaims,
+    raw_credential: String,
+    receipt_time: time::UtcDateTime,
+) -> Result<Credential> {
+    let issuer = claims.rfc7519.iss.unwrap_or_else(|| issuer.to_owned());
+    let issued_at = claims
+        .rfc7519
+        .iat
+        .map(utc_from_numeric_date)
+        .transpose()?
+        .unwrap_or(receipt_time);
+    let valid_until = claims.rfc7519.exp.map(utc_from_numeric_date).transpose()?;
+    let (status_location, status_index) = status_list_metadata(claims.status)?;
+
+    Ok(Credential {
+        id: Uuid::new_v4(),
+        tenant_id,
+        issuer,
+        subject: claims.rfc7519.sub,
+        credential_types: vec![claims.vct],
+        format: CredentialFormat::SdJwtVc,
+        external_id: claims.rfc7519.jti,
+        status: CredentialStatus::Active,
+        issued_at,
+        valid_until,
+        is_revoked: false,
+        status_location,
+        status_index,
+        raw_credential,
+    })
+}
+
+fn validate_credential_signing_alg(
+    config: &CredentialConfiguration,
+    alg: JwtAlgorithm,
+) -> Result<()> {
+    let Some(supported) = config.credential_signing_alg_values_supported.as_ref() else {
+        return Ok(());
+    };
+
+    if supported
+        .iter()
+        .any(|candidate| candidate.as_str() == Some(&format!("{alg:?}")))
+    {
+        Ok(())
+    } else {
+        Err(IssuanceError::credential_request(format!(
+            "SD-JWT VC signing alg '{alg:?}' is not supported by credential configuration"
+        )))
+    }
+}
+
+fn utc_from_numeric_date(value: i64) -> Result<time::UtcDateTime> {
+    time::UtcDateTime::from_unix_timestamp(value).map_err(|err| {
+        IssuanceError::credential_request(format!("invalid JWT NumericDate '{value}': {err}"))
+    })
+}
+
+fn status_list_metadata(status: Option<StatusClaim>) -> Result<(Option<url::Url>, Option<i64>)> {
+    let Some(status_list) = status.and_then(|status| status.status_list) else {
+        return Ok((None, None));
+    };
+
+    let index = i64::try_from(status_list.idx).map_err(|_| {
+        IssuanceError::credential_request(format!(
+            "status_list.idx '{}' exceeds supported range",
+            status_list.idx
+        ))
+    })?;
+    Ok((Some(status_list.uri), Some(index)))
 }
 
 /// Extracts display metadata from the resolved offer context for a given
@@ -752,10 +861,16 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use cloud_wallet_crypto::ecdsa::{Curve as EcdsaCurve, KeyPair as EcdsaKeyPair};
     use cloud_wallet_openid4vc::{
         core::client::{Config as Oid4vciClientConfig, OidClient},
+        oid4vci::credential::formats::{
+            MsoMdocCredentialConfiguration, SdJwtVcCredentialConfiguration,
+        },
+        oid4vci::metadata::CredentialConfiguration,
         oid4vci::metadata::CredentialDisplay,
     };
+    use jsonwebtoken::{Algorithm as JwtAlgorithm, EncodingKey, Header};
     use url::Url;
 
     use super::*;
@@ -847,6 +962,34 @@ mod tests {
         }
     }
 
+    fn sd_jwt_config(vct: &str) -> CredentialConfiguration {
+        CredentialConfiguration {
+            id: None,
+            format_details: CredentialFormatDetails::DcSdJwt(SdJwtVcCredentialConfiguration {
+                vct: vct.to_owned(),
+            }),
+            scope: None,
+            cryptographic_binding_methods_supported: None,
+            credential_signing_alg_values_supported: None,
+            proof_types_supported: None,
+            credential_metadata: None,
+        }
+    }
+
+    fn signed_sd_jwt(claims: serde_json::Value) -> String {
+        let key_pair = EcdsaKeyPair::generate(EcdsaCurve::P256).expect("key generation works");
+        let mut header = Header::new(JwtAlgorithm::ES256);
+        header.typ = Some("dc+sd-jwt".to_owned());
+
+        let token = jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_der(key_pair.to_pkcs8_der()),
+        )
+        .expect("test JWT should sign");
+        format!("{token}~")
+    }
+
     #[tokio::test]
     async fn enqueue_persists_work_without_acknowledging_it() {
         let queue = RecordingTaskQueue::default();
@@ -885,6 +1028,137 @@ mod tests {
         let processed = engine.process_next_task(&sessions).await.unwrap();
 
         assert!(!processed);
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_metadata_is_persisted_and_retrieved() {
+        let tenant_id = Uuid::new_v4();
+        let issued_at = time::UtcDateTime::now().unix_timestamp();
+        let valid_until = issued_at + 3600;
+        let raw = signed_sd_jwt(serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": "did:example:alice",
+            "iat": issued_at,
+            "exp": valid_until,
+            "vct": "https://credentials.example.com/test",
+            "status": {
+                "status_list": {
+                    "idx": 42,
+                    "uri": "https://issuer.example.com/status/1"
+                }
+            }
+        }));
+        let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+        let credential = credential_from_sd_jwt(
+            tenant_id,
+            "https://fallback-issuer.example.com",
+            sd_jwt.into_jwt().into_claims(),
+            raw.clone(),
+            time::UtcDateTime::from_unix_timestamp(issued_at).unwrap(),
+        )
+        .unwrap();
+        let repo = MemoryCredentialRepo::new();
+        let id = repo.upsert(credential, None).await.unwrap();
+
+        let stored = repo.find_by_id(id, tenant_id).await.unwrap();
+
+        assert_eq!(stored.issuer, "https://issuer.example.com");
+        assert_eq!(stored.subject.as_deref(), Some("did:example:alice"));
+        assert_eq!(
+            stored.credential_types,
+            vec![
+                "test_id".to_owned(),
+                "https://credentials.example.com/test".to_owned()
+            ]
+        );
+        assert_eq!(stored.format, CredentialFormat::SdJwtVc);
+        assert_eq!(
+            stored.issued_at,
+            time::UtcDateTime::from_unix_timestamp(issued_at).unwrap()
+        );
+        assert_eq!(
+            stored.valid_until,
+            Some(time::UtcDateTime::from_unix_timestamp(valid_until).unwrap())
+        );
+        assert_eq!(
+            stored.status_location.as_ref().map(Url::as_str),
+            Some("https://issuer.example.com/status/1")
+        );
+        assert_eq!(stored.status_index, Some(42));
+        assert_eq!(stored.external_id.as_deref(), Some("credential-123"));
+    }
+
+    #[tokio::test]
+    async fn unsupported_credential_format_is_rejected_during_storage_mapping() {
+        let engine = make_engine(RecordingTaskQueue::default());
+        let config = CredentialConfiguration {
+            id: None,
+            format_details: CredentialFormatDetails::MsoMdoc(MsoMdocCredentialConfiguration {
+                doctype: "org.iso.18013.5.1.mDL".to_owned(),
+            }),
+            scope: None,
+            cryptographic_binding_methods_supported: None,
+            credential_signing_alg_values_supported: None,
+            proof_types_supported: None,
+            credential_metadata: None,
+        };
+
+        let result = engine
+            .build_credential(
+                Uuid::new_v4(),
+                "https://issuer.example.com",
+                &config,
+                "raw-mdoc".to_owned(),
+                time::UtcDateTime::now(),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only 'dc+sd-jwt' is supported")
+        );
+    }
+
+    #[test]
+    fn sd_jwt_alg_allow_list_is_enforced_when_present() {
+        let mut config = sd_jwt_config("https://credentials.example.com/test");
+        config.credential_signing_alg_values_supported = Some(vec![
+            cloud_wallet_openid4vc::oid4vci::metadata::AlgorithmIdentifier::from("ES256"),
+        ]);
+
+        validate_credential_signing_alg(&config, JwtAlgorithm::ES256).unwrap();
+        assert!(validate_credential_signing_alg(&config, JwtAlgorithm::RS256).is_err());
+    }
+
+    #[test]
+    fn sd_jwt_vct_mismatch_is_rejected_before_mapping() {
+        let config = sd_jwt_config("https://credentials.example.com/expected");
+        let raw = signed_sd_jwt(serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/actual"
+        }));
+        let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+        let CredentialFormatDetails::DcSdJwt(sd_config) = &config.format_details else {
+            panic!("test config should be SD-JWT VC");
+        };
+
+        let result = if sd_jwt.jwt().claims().vct != sd_config.vct {
+            Err(IssuanceError::credential_request("vct mismatch"))
+        } else {
+            credential_from_sd_jwt(
+                Uuid::new_v4(),
+                "https://fallback-issuer.example.com",
+                sd_jwt.into_jwt().into_claims(),
+                raw.clone(),
+                time::UtcDateTime::now(),
+            )
+            .map(|_| ())
+        };
+        assert!(result.is_err());
     }
 
     #[test]
