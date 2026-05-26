@@ -7,7 +7,7 @@ pub type Result<T> = std::result::Result<T, MdocError>;
 
 /// Errors that can occur while parsing an [`IssuerSigned`] mDoc document.
 ///
-/// [`IssuerSigned`]: crate::mdoc::parse_issuer_signed
+/// [`IssuerSigned`]: crate::formats::mdoc::parse_issuer_signed
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum MdocError {

@@ -17,9 +17,6 @@ pub mod error;
 #[cfg_attr(docsrs, doc(cfg(feature = "jwk")))]
 #[cfg(feature = "jwk")]
 pub mod jwk;
-#[cfg_attr(docsrs, doc(cfg(feature = "mdoc")))]
-#[cfg(feature = "mdoc")]
-pub mod mdoc;
 pub mod rand;
 pub mod rsa;
 pub mod secret;
