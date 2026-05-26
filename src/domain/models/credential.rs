@@ -1,7 +1,7 @@
 use core::str::FromStr;
 
 pub use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use time::UtcDateTime;
 use url::Url;
 use uuid::Uuid;
@@ -216,60 +216,17 @@ pub struct CredentialListResponse {
     pub credentials: Vec<CredentialSummary>,
 }
 
-/// Response body for a single verifiable credential stored in the wallet.
-///
-/// `claims` is always `null` in the current implementation; format-specific
-/// claim decoding will be added in a future iteration.
-#[derive(Debug, Serialize)]
-pub struct CredentialRecord {
-    pub id: Uuid,
-    pub credential_configuration_id: String,
-    pub format: String,
-    pub issuer: String,
-    pub status: String,
-    pub issued_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<String>,
-    /// Decoded credential claims. Format-specific parsing is out of scope for
-    /// this implementation; field is always `null`.
-    pub claims: serde_json::Value,
-}
-
 /// Filter criteria for listing credentials.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CredentialFilter {
     pub tenant_id: Option<Uuid>,
-    #[serde(deserialize_with = "deserialize_credential_types")]
     pub credential_types: Option<Vec<String>>,
     pub status: Option<CredentialStatus>,
     pub format: Option<CredentialFormat>,
     pub issuer: Option<String>,
     pub subject: Option<String>,
     pub exclude_expired: bool,
-}
-
-fn deserialize_credential_types<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let Some(values) = Option::<Vec<String>>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
-
-    let credential_types = values
-        .into_iter()
-        .flat_map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    Ok((!credential_types.is_empty()).then_some(credential_types))
 }
 
 impl CredentialFilter {

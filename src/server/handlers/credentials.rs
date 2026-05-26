@@ -3,14 +3,14 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use cloud_wallet_openid4vc::formats::sd_jwt::SdJwt;
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
-use time::format_description::well_known::Rfc3339;
 use url::Url;
 use uuid::Uuid;
 
 use crate::domain::models::credential::{
-    Credential, CredentialFilter, CredentialListResponse, CredentialRecord,
+    Credential, CredentialFilter, CredentialFormat, CredentialListResponse,
 };
 use crate::server::error::ApiError;
 use crate::server::{AppState, responses::ResponseBody};
@@ -52,8 +52,8 @@ pub async fn get_credential<S: SessionStore>(
         .find_by_id(id, tenant_id)
         .await?;
 
-    let record = to_record(credential)?;
-    Ok(ResponseBody::new(StatusCode::OK, record))
+    let claims = render_claims(&credential)?;
+    Ok(ResponseBody::new(StatusCode::OK, claims))
 }
 
 /// Deletes a credential owned by the authenticated tenant.
@@ -102,32 +102,15 @@ fn query_config() -> &'static Config {
     })
 }
 
-/// Map a domain `Credential` to its HTTP response shape.
-fn to_record(c: Credential) -> Result<CredentialRecord, ApiError> {
-    let credential_configuration_id = c
-        .credential_types
-        .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::internal("credential has no credential_types"))?;
-    Ok(CredentialRecord {
-        id: c.id,
-        credential_configuration_id,
-        format: c.format.as_str().to_string(),
-        issuer: c.issuer,
-        status: c.status.as_str().to_string(),
-        issued_at: format_utc(c.issued_at).map_err(ApiError::internal)?,
-        expires_at: c
-            .valid_until
-            .map(format_utc)
-            .transpose()
-            .map_err(ApiError::internal)?,
-        claims: serde_json::Value::Null,
-    })
-}
-
-/// Format a `UtcDateTime` as an RFC 3339 string.
-fn format_utc(dt: time::UtcDateTime) -> Result<String, time::error::Format> {
-    dt.format(&Rfc3339)
+fn render_claims(c: &Credential) -> Result<serde_json::Value, ApiError> {
+    match c.format {
+        CredentialFormat::SdJwtVc => SdJwt::parse(&c.raw_credential)
+            .and_then(|sd_jwt| sd_jwt.to_rendered_claims())
+            .map_err(|error| {
+                ApiError::internal(format!("failed to parse stored SD-JWT VC claims: {error}"))
+            }),
+        _ => Ok(serde_json::Value::Null),
+    }
 }
 
 fn invalid_query(description: impl Into<String>) -> ApiError {
@@ -142,6 +125,53 @@ fn invalid_query(description: impl Into<String>) -> ApiError {
 mod tests {
     use super::*;
     use crate::domain::models::credential::{CredentialFormat, CredentialStatus};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    fn b64(value: serde_json::Value) -> String {
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("test JSON should serialize"))
+    }
+
+    fn compact_jwt(header: serde_json::Value, claims: serde_json::Value) -> String {
+        format!("{}.{}.sig", b64(header), b64(claims))
+    }
+
+    fn raw_sd_jwt() -> String {
+        let jwt = compact_jwt(
+            serde_json::json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+            serde_json::json!({
+                "iss": "https://issuer.example.com",
+                "sub": "did:example:subject",
+                "iat": 1_683_000_000,
+                "exp": 1_883_000_000,
+                "vct": "eu.europa.ec.eudi.pid.1",
+                "given_name": "Ada",
+                "family_name": "Lovelace",
+                "address": {
+                    "locality": "London"
+                }
+            }),
+        );
+        format!("{jwt}~")
+    }
+
+    fn credential(raw_credential: String) -> Credential {
+        Credential {
+            id: Uuid::new_v4(),
+            tenant_id: Uuid::new_v4(),
+            issuer: "https://issuer.example.com".to_string(),
+            subject: Some("did:example:subject".to_string()),
+            credential_types: vec!["eu.europa.ec.eudi.pid.1".to_string()],
+            format: CredentialFormat::SdJwtVc,
+            external_id: None,
+            status: CredentialStatus::Active,
+            issued_at: time::UtcDateTime::now(),
+            valid_until: None,
+            is_revoked: false,
+            status_location: None,
+            status_index: None,
+            raw_credential,
+        }
+    }
 
     #[test]
     fn parses_credential_filters() {
@@ -199,5 +229,19 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.error, "invalid_request");
         assert!(error.error_description.is_some());
+    }
+
+    #[test]
+    fn renders_sd_jwt_claims_without_reverification() {
+        let claims = render_claims(&credential(raw_sd_jwt())).expect("claims should render");
+
+        assert_eq!(claims["given_name"], "Ada");
+        assert_eq!(claims["family_name"], "Lovelace");
+        assert_eq!(claims["address"]["locality"], "London");
+        assert!(claims.get("iss").is_none());
+        assert!(claims.get("sub").is_none());
+        assert!(claims.get("iat").is_none());
+        assert!(claims.get("exp").is_none());
+        assert!(claims.get("vct").is_none());
     }
 }
