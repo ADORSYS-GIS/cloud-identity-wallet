@@ -23,18 +23,13 @@ const ED25519_OID: &str = "1.3.101.112";
 /// Trust anchors used to validate an issuer-signed JWT `x5c` certificate path.
 ///
 /// Call `X5cTrustAnchors::default()` to use Mozilla's public WebPKI root certificate set.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum X5cTrustAnchors<'a> {
     /// Mozilla's public WebPKI root certificate set.
+    #[default]
     Mozilla,
     /// Caller-provided trust anchors.
     Custom(&'a [TrustAnchor<'a>]),
-}
-
-impl Default for X5cTrustAnchors<'_> {
-    fn default() -> Self {
-        Self::Mozilla
-    }
 }
 
 /// Errors returned while establishing issuer trust or verifying the issuer signature.
