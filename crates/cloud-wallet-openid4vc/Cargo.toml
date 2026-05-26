@@ -30,5 +30,6 @@ webpki = { package = "rustls-webpki", version = "0.103", features = ["aws-lc-rs"
 x509-parser = "0.18"
 
 [dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
