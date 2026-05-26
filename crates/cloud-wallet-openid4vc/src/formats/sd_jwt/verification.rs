@@ -9,7 +9,7 @@ use jsonwebtoken::{
     errors::Error as JwtError, jwk::Jwk as JwtJwk,
 };
 use reqwest_middleware::ClientWithMiddleware;
-use rustls_pki_types::{CertificateDer, UnixTime};
+use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use serde_json::Error as JsonError;
 use webpki::{EndEntityCert, Error as WebPkiError, KeyUsage};
 use x509_parser::{extensions::ParsedExtension, parse_x509_certificate, public_key::PublicKey};
@@ -19,6 +19,23 @@ use super::{SdJwt, SdJwtClaims, metadata};
 type Result<T> = std::result::Result<T, VerificationError>;
 
 const ED25519_OID: &str = "1.3.101.112";
+
+/// Trust anchors used to validate an issuer-signed JWT `x5c` certificate path.
+///
+/// Call `X5cTrustAnchors::default()` to use Mozilla's public WebPKI root certificate set.
+#[derive(Debug, Clone, Copy)]
+pub enum X5cTrustAnchors<'a> {
+    /// Mozilla's public WebPKI root certificate set.
+    Mozilla,
+    /// Caller-provided trust anchors.
+    Custom(&'a [TrustAnchor<'a>]),
+}
+
+impl Default for X5cTrustAnchors<'_> {
+    fn default() -> Self {
+        Self::Mozilla
+    }
+}
 
 /// Errors returned while establishing issuer trust or verifying the issuer signature.
 #[derive(Debug, thiserror::Error)]
@@ -55,14 +72,15 @@ pub enum VerificationError {
 /// Establishes issuer trust and verifies the issuer-signed JWT signature.
 ///
 /// If the JWT header contains `x5c`, the certificate chain is validated first
-/// against Mozilla's WebPKI trust anchors. Otherwise, the issuer's trusted JWKS
-/// is resolved from JWT VC Issuer Metadata before selecting a verification key.
+/// against the supplied trust anchors. Otherwise, the issuer's trusted JWKS is
+/// resolved from JWT VC Issuer Metadata before selecting a verification key.
 pub async fn verify_issuer_signature(
     sd_jwt: &SdJwt<'_>,
     http_client: &ClientWithMiddleware,
+    trust_anchors: X5cTrustAnchors<'_>,
 ) -> Result<JwtAlgorithm> {
     if sd_jwt.jwt().header().x5c.is_some() {
-        return verify_with_x5c(sd_jwt);
+        return verify_with_x5c(sd_jwt, trust_anchors);
     }
 
     let jwks = metadata::resolve(sd_jwt, http_client).await?;
@@ -83,7 +101,10 @@ pub(super) fn verify_with_jwks(sd_jwt: &SdJwt<'_>, jwks: &JwkSet) -> Result<JwtA
 ///
 /// The leaf certificate is only used for signature verification after the
 /// supplied certificate chain validates against a trust anchor.
-pub(super) fn verify_with_x5c(sd_jwt: &SdJwt<'_>) -> Result<JwtAlgorithm> {
+pub(super) fn verify_with_x5c(
+    sd_jwt: &SdJwt<'_>,
+    trust_anchors: X5cTrustAnchors<'_>,
+) -> Result<JwtAlgorithm> {
     let algorithm = supported_public_algorithm(sd_jwt.jwt().header().alg)?;
     let x5c = sd_jwt
         .jwt()
@@ -96,7 +117,7 @@ pub(super) fn verify_with_x5c(sd_jwt: &SdJwt<'_>) -> Result<JwtAlgorithm> {
         })?;
 
     let chain = decode_x5c_chain(x5c)?;
-    validate_x5c_chain(&chain)?;
+    validate_x5c_chain(&chain, trust_anchors)?;
     let spki = leaf_spki_for_algorithm(&chain[0], algorithm)?;
 
     let decoding_key = match algorithm {
@@ -263,7 +284,16 @@ fn decode_x5c_chain(x5c: &[String]) -> Result<Vec<Vec<u8>>> {
         .collect()
 }
 
-fn validate_x5c_chain(chain: &[Vec<u8>]) -> Result<()> {
+fn validate_x5c_chain(chain: &[Vec<u8>], trust_anchors: X5cTrustAnchors<'_>) -> Result<()> {
+    match trust_anchors {
+        X5cTrustAnchors::Mozilla => {
+            validate_with_trust_anchors(chain, webpki_roots::TLS_SERVER_ROOTS)
+        }
+        X5cTrustAnchors::Custom(trust_anchors) => validate_with_trust_anchors(chain, trust_anchors),
+    }
+}
+
+fn validate_with_trust_anchors(chain: &[Vec<u8>], trust_anchors: &[TrustAnchor<'_>]) -> Result<()> {
     let leaf = CertificateDer::from(chain[0].as_slice());
     let intermediates = chain[1..]
         .iter()
@@ -275,7 +305,7 @@ fn validate_x5c_chain(chain: &[Vec<u8>]) -> Result<()> {
     end_entity
         .verify_for_usage(
             webpki::ALL_VERIFICATION_ALGS,
-            webpki_roots::TLS_SERVER_ROOTS,
+            trust_anchors,
             &intermediates,
             UnixTime::now(),
             KeyUsage::server_auth(),
