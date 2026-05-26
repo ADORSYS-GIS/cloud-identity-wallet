@@ -94,6 +94,10 @@ pub fn key_by_id<'a>(jwks: &'a JwkSet, kid: &str) -> Option<&'a Jwk> {
 }
 
 /// Resolves JWT VC issuer signing JWK Set.
+///
+/// Callers should pass the HTTP client from [`crate::core::client::OidClient`]
+/// so metadata requests use the wallet's standard timeout, HTTPS-only, proxy,
+/// and retry configuration.
 pub(super) async fn resolve(
     sd_jwt: &SdJwt<'_>,
     http_client: &ClientWithMiddleware,
@@ -326,6 +330,14 @@ mod tests {
         ));
         assert!(matches!(
             validate_issuer_url("https://example.com?x=1"),
+            Err(IssuerMetadataError::InvalidIssuer { .. })
+        ));
+        assert!(matches!(
+            validate_issuer_url("https://example.com#fragment"),
+            Err(IssuerMetadataError::InvalidIssuer { .. })
+        ));
+        assert!(matches!(
+            validate_issuer_url("ftp://example.com"),
             Err(IssuerMetadataError::InvalidIssuer { .. })
         ));
     }
