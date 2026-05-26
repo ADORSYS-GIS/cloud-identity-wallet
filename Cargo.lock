@@ -950,9 +950,7 @@ version = "0.1.0"
 dependencies = [
  "aws-lc-rs",
  "base64ct",
- "ciborium",
  "color-eyre",
- "coset",
  "hex-literal",
  "num-bigint",
  "pkcs8",
@@ -962,7 +960,6 @@ dependencies = [
  "simple_asn1",
  "subtle",
  "thiserror 2.0.18",
- "time",
  "url",
  "zeroize",
 ]
@@ -996,8 +993,11 @@ name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "base64ct",
+ "ciborium",
  "cloud-wallet-crypto",
  "color-eyre",
+ "coset",
  "csscolorparser",
  "futures",
  "jsonwebtoken",

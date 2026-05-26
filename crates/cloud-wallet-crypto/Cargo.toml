@@ -13,9 +13,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 aws-lc-rs = "1.15"
 base64ct = { workspace = true, features = ["alloc"], optional = true }
-ciborium = { workspace = true, optional = true }
 color-eyre.workspace = true
-coset = { workspace = true, optional = true }
 num-bigint = { version = "0.4", optional = true }
 pkcs8 = { version = "0.10", features = ["std"] }
 serde = { workspace = true, features = ["derive"], optional = true }
@@ -23,7 +21,6 @@ serde_with = { version = "3", optional = true }
 simple_asn1 = { version = "0.6", optional = true }
 subtle = "2.6"
 thiserror.workspace = true
-time = { workspace = true, features = ["std", "parsing"], optional = true }
 url = { workspace = true, features = ["serde"], optional = true }
 zeroize.workspace = true
 
@@ -34,7 +31,6 @@ serde_json = "1.0"
 [features]
 fips = ["aws-lc-rs/fips"]
 jwk = ["base64ct", "num-bigint", "serde", "serde_with", "simple_asn1", "url"]
-mdoc = ["base64ct", "ciborium", "coset", "time"]
 
 [lints]
 workspace = true
