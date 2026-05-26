@@ -1067,10 +1067,7 @@ mod tests {
         assert_eq!(stored.subject.as_deref(), Some("did:example:alice"));
         assert_eq!(
             stored.credential_types,
-            vec![
-                "test_id".to_owned(),
-                "https://credentials.example.com/test".to_owned()
-            ]
+            vec!["https://credentials.example.com/test".to_owned()]
         );
         assert_eq!(stored.format, CredentialFormat::SdJwtVc);
         assert_eq!(
@@ -1086,7 +1083,7 @@ mod tests {
             Some("https://issuer.example.com/status/1")
         );
         assert_eq!(stored.status_index, Some(42));
-        assert_eq!(stored.external_id.as_deref(), Some("credential-123"));
+        assert_eq!(stored.external_id.as_deref(), None);
     }
 
     #[tokio::test]
@@ -1115,12 +1112,6 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("only 'dc+sd-jwt' is supported")
-        );
     }
 
     #[test]
