@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_sd_jwt_claims_without_reverification() {
+    fn renders_sd_jwt_claims() {
         let claims = render_claims(&credential(raw_sd_jwt())).expect("claims should render");
 
         assert_eq!(claims["given_name"], "Ada");
