@@ -203,7 +203,6 @@ impl ParsedMdoc {
             signed_at,
             valid_from,
             valid_until,
-
             value_digests,
             device_key,
             name_spaces,

@@ -1009,6 +1009,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "serde_with",
+ "subtle",
  "thiserror 2.0.18",
  "time",
  "tokio",

@@ -23,6 +23,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_urlencoded = "0.7"
 serde_with.workspace = true
+subtle = "2"
 thiserror.workspace = true
 time = { workspace = true, features = ["std", "parsing"] }
 url = { workspace = true, features = ["serde"] }
