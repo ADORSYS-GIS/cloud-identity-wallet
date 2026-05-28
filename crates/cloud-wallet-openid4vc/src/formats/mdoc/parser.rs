@@ -180,6 +180,13 @@ fn into_map(val: Value, field: &'static str) -> Result<Vec<(Value, Value)>> {
 }
 
 fn take_entry(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<Value> {
+    let count = map
+        .iter()
+        .filter(|(k, _)| matches!(k, Value::Text(s) if s == key))
+        .count();
+    if count > 1 {
+        return Err(MdocError::DuplicateMapKey(key));
+    }
     let pos = map
         .iter()
         .position(|(k, _)| matches!(k, Value::Text(s) if s == key))
@@ -199,14 +206,12 @@ fn take_tdate(
     map: &mut Vec<(Value, Value)>,
     key: &'static str,
 ) -> Result<(String, OffsetDateTime)> {
-    // ISO 18013-5 tdate = Tag(0, Text(rfc3339))
+    // ISO 18013-5 §8.3.3: tdate = #6.0(tstr) — Tag 0 wrapping an RFC 3339 text string.
     let date_str = match take_entry(map, key)? {
         Value::Tag(0, inner) => match *inner {
             Value::Text(s) => s,
             _ => return Err(MdocError::UnexpectedCborType { field: key }),
         },
-        // Accept bare text strings as a lenient fallback for test vectors.
-        Value::Text(s) => s,
         _ => return Err(MdocError::UnexpectedCborType { field: key }),
     };
 
