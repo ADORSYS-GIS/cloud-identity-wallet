@@ -39,10 +39,11 @@ pub enum MdocError {
     },
 
     /// The `issuerAuth` value could not be decoded as a COSE_Sign1 structure.
-    #[error("failed to parse COSE_Sign1 structure: {reason}")]
+    #[error("failed to parse COSE_Sign1 structure")]
     InvalidCoseSign1 {
-        /// Human-readable description of the failure.
-        reason: String,
+        /// Underlying coset decode error.
+        #[source]
+        source: coset::CoseError,
     },
 
     /// The COSE_Sign1 has a detached payload; an inline payload is required for mDoc.

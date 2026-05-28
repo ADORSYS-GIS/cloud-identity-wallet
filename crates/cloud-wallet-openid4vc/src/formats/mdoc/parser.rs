@@ -10,13 +10,11 @@ use time::format_description::well_known::Rfc3339;
 
 use super::error::{MdocError, Result};
 
-/// A successfully parsed and temporally-valid mDoc `IssuerSigned` structure.
+/// A parsed mDoc `IssuerSigned` structure.
 ///
-/// Callers that cache this value must re-check [`valid_from`]/[`valid_until`]
-/// against the current clock before each use.
-///
-/// [`valid_from`]: ParsedMdoc::valid_from
-/// [`valid_until`]: ParsedMdoc::valid_until
+/// Structural parsing is complete but temporal validity has **not** been checked.
+/// Call [`ParsedMdoc::check_temporal_validity`] with the current time before
+/// trusting any credential field, and re-check on cached instances.
 #[derive(Debug)]
 pub struct ParsedMdoc {
     /// `docType` field from the Mobile Security Object (e.g. `"org.iso.18013.5.1.mDL"`).
@@ -28,8 +26,7 @@ pub struct ParsedMdoc {
     /// `validityInfo.validFrom` timestamp from the MSO.
     pub valid_from: OffsetDateTime,
 
-    /// `validityInfo.validUntil` from the MSO. Checked at parse time (ISO 18013-5 §9.3.1);
-    /// cached instances must re-validate.
+    /// `validityInfo.validUntil` from the MSO.
     pub valid_until: OffsetDateTime,
 
     /// Per-namespace digest map: `namespace → (digestID → SHA-256 digest bytes)`.
@@ -72,97 +69,155 @@ pub struct IssuerSignedItem {
     pub raw_tag24_bytes: Vec<u8>,
 }
 
-/// Parses a base64url-encoded CBOR `IssuerSigned` structure.
-///
-/// Validates the `validityInfo` window (ISO 18013-5 §9.3.1); returns
-/// [`MdocError::ExpiredCredential`] or [`MdocError::NotYetValid`] if outside the window.
-///
-/// # Errors
-///
-/// Returns [`MdocError`] on: invalid base64url, malformed CBOR, missing required
-/// fields, out-of-range validity window, or detached COSE_Sign1 payload.
-pub fn parse_issuer_signed(base64url: &str) -> Result<ParsedMdoc> {
-    let raw = Base64UrlUnpadded::decode_vec(base64url)
-        .map_err(|source| MdocError::InvalidBase64 { source })?;
+impl ParsedMdoc {
+    /// Parses a base64url-encoded CBOR `IssuerSigned` structure.
+    ///
+    /// Decodes and validates the structure but does **not** check temporal validity.
+    /// Call [`ParsedMdoc::check_temporal_validity`] with the current time before
+    /// using the returned credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MdocError`] on: invalid base64url, malformed CBOR, missing required
+    /// fields, or detached COSE_Sign1 payload.
+    pub fn parse(base64url: &str) -> Result<Self> {
+        let raw = Base64UrlUnpadded::decode_vec(base64url)
+            .map_err(|source| MdocError::InvalidBase64 { source })?;
 
-    let issuer_signed_val: Value = ciborium::de::from_reader(raw.as_slice())
-        .map_err(|source| MdocError::CborDecode { source })?;
+        let issuer_signed_val: Value = ciborium::de::from_reader(raw.as_slice())
+            .map_err(|source| MdocError::CborDecode { source })?;
 
-    let mut issuer_signed_map = into_map(issuer_signed_val, "IssuerSigned")?;
+        let mut issuer_signed_map = into_map(issuer_signed_val, "IssuerSigned")?;
 
-    let name_spaces_val = take_entry(&mut issuer_signed_map, "nameSpaces")?;
-    let issuer_auth_val = take_entry(&mut issuer_signed_map, "issuerAuth")?;
+        let name_spaces_val = take_entry(&mut issuer_signed_map, "nameSpaces")?;
+        let issuer_auth_val = take_entry(&mut issuer_signed_map, "issuerAuth")?;
 
-    // coset::CoseSign1::from_slice expects the bare array, not the CBOR tag 18 wrapper
-    // (coset v0.3.x strips the tag when embedded in a containing structure — RFC 9052 §4.2).
-    let cose_payload_val = match issuer_auth_val {
-        Value::Tag(18, inner) => *inner,
-        other => other,
-    };
+        // coset::CoseSign1::from_slice expects the bare array, not the CBOR tag 18 wrapper
+        // (coset v0.3.x strips the tag when embedded in a containing structure — RFC 9052 §4.2).
+        let cose_payload_val = match issuer_auth_val {
+            Value::Tag(18, inner) => *inner,
+            other => other,
+        };
 
-    let issuer_auth_cbor =
-        encode_value(&cose_payload_val).map_err(|reason| MdocError::CborEncode { reason })?;
+        let issuer_auth_cbor =
+            encode_value(&cose_payload_val).map_err(|reason| MdocError::CborEncode { reason })?;
 
-    let cose_sign1 = coset::CoseSign1::from_slice(&issuer_auth_cbor).map_err(|e| {
-        MdocError::InvalidCoseSign1 {
-            reason: e.to_string(),
+        let cose_sign1 = coset::CoseSign1::from_slice(&issuer_auth_cbor)
+            .map_err(|source| MdocError::InvalidCoseSign1 { source })?;
+
+        let mso_payload_bytes = cose_sign1
+            .payload
+            .clone()
+            .ok_or(MdocError::MissingCosePayload)?;
+
+        // ISO 18013-5 §9.1.2: the COSE_Sign1 payload is
+        // MobileSecurityObjectBytes = #6.24(bstr .cbor MobileSecurityObject).
+        // Decode the outer Tag(24, Bytes(mso_cbor)) wrapper first, then decode the
+        // inner bytes as the MSO map.
+        let mso_cbor = match ciborium::de::from_reader::<Value, _>(mso_payload_bytes.as_slice())
+            .map_err(|source| MdocError::CborDecode { source })?
+        {
+            Value::Tag(24, inner) => match *inner {
+                Value::Bytes(b) => b,
+                _ => {
+                    return Err(MdocError::UnexpectedCborType {
+                        field: "MobileSecurityObjectBytes",
+                    });
+                }
+            },
+            _ => {
+                return Err(MdocError::UnexpectedCborType {
+                    field: "MobileSecurityObjectBytes",
+                });
+            }
+        };
+
+        let mso_val: Value = ciborium::de::from_reader(mso_cbor.as_slice())
+            .map_err(|source| MdocError::CborDecode { source })?;
+
+        let mut mso_map = into_map(mso_val, "MobileSecurityObject")?;
+
+        let doc_type = take_text(&mut mso_map, "docType")?;
+
+        let validity_val = take_entry(&mut mso_map, "validityInfo")?;
+        let mut validity_map = into_map(validity_val, "validityInfo")?;
+
+        let signed_at = take_tdate(&mut validity_map, "signed")?;
+        let valid_from = take_tdate(&mut validity_map, "validFrom")?;
+        let valid_until = take_tdate(&mut validity_map, "validUntil")?;
+
+        let value_digests_val = take_entry(&mut mso_map, "valueDigests")?;
+        let value_digests = parse_value_digests(value_digests_val)?;
+
+        let device_key_info_val = take_entry(&mut mso_map, "deviceKeyInfo")?;
+        let mut device_key_info_map = into_map(device_key_info_val, "deviceKeyInfo")?;
+        let device_key_val = take_entry(&mut device_key_info_map, "deviceKey")?;
+        let device_key =
+            encode_value(&device_key_val).map_err(|reason| MdocError::CborEncode { reason })?;
+
+        let name_spaces = parse_name_spaces(name_spaces_val)?;
+
+        Ok(Self {
+            doc_type,
+            signed_at,
+            valid_from,
+            valid_until,
+            value_digests,
+            device_key,
+            name_spaces,
+            cose_sign1,
+            raw_issuer_signed_bytes: raw,
+        })
+    }
+
+    /// Parses and immediately validates temporal validity in one step.
+    ///
+    /// Equivalent to calling [`ParsedMdoc::parse`] followed by
+    /// [`ParsedMdoc::check_temporal_validity`]. Use this as the default call site
+    /// for normal credential consumption; it is impossible to forget the validity
+    /// check when using this constructor.
+    ///
+    /// Pass `OffsetDateTime::now_utc()` in production code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MdocError`] on any parse failure, or [`MdocError::NotYetValid`] /
+    /// [`MdocError::ExpiredCredential`] if `now` falls outside the validity window.
+    pub fn parse_and_validate(base64url: &str, now: OffsetDateTime) -> Result<Self> {
+        let mdoc = Self::parse(base64url)?;
+        mdoc.check_temporal_validity(now)?;
+        Ok(mdoc)
+    }
+
+    /// Checks that `now` falls within the `[valid_from, valid_until]` validity window
+    /// (ISO 18013-5 §9.3.1).
+    ///
+    /// Pass `OffsetDateTime::now_utc()` for live validation. Pass a fixed timestamp
+    /// in tests to cover exact boundary conditions deterministically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MdocError::NotYetValid`] if `now < valid_from`, or
+    /// [`MdocError::ExpiredCredential`] if `now > valid_until`.
+    pub fn check_temporal_validity(&self, now: OffsetDateTime) -> Result<()> {
+        if now < self.valid_from {
+            return Err(MdocError::NotYetValid {
+                valid_from: self
+                    .valid_from
+                    .format(&Rfc3339)
+                    .expect("OffsetDateTime always formats to RFC3339"),
+            });
         }
-    })?;
-
-    let mso_bytes = cose_sign1
-        .payload
-        .clone()
-        .ok_or(MdocError::MissingCosePayload)?;
-
-    let mso_val: Value = ciborium::de::from_reader(mso_bytes.as_slice())
-        .map_err(|source| MdocError::CborDecode { source })?;
-
-    let mut mso_map = into_map(mso_val, "MobileSecurityObject")?;
-
-    let doc_type = take_text(&mut mso_map, "docType")?;
-
-    let validity_val = take_entry(&mut mso_map, "validityInfo")?;
-    let mut validity_map = into_map(validity_val, "validityInfo")?;
-
-    let (_, signed_at) = take_tdate(&mut validity_map, "signed")?;
-    let (valid_from_str, valid_from) = take_tdate(&mut validity_map, "validFrom")?;
-    let (valid_until_str, valid_until) = take_tdate(&mut validity_map, "validUntil")?;
-
-    // validity check (ISO 18013-5 §9.3.1)
-    let now = OffsetDateTime::now_utc();
-    if now < valid_from {
-        return Err(MdocError::NotYetValid {
-            valid_from: valid_from_str,
-        });
+        if now > self.valid_until {
+            return Err(MdocError::ExpiredCredential {
+                valid_until: self
+                    .valid_until
+                    .format(&Rfc3339)
+                    .expect("OffsetDateTime always formats to RFC3339"),
+            });
+        }
+        Ok(())
     }
-    if now > valid_until {
-        return Err(MdocError::ExpiredCredential {
-            valid_until: valid_until_str,
-        });
-    }
-
-    let value_digests_val = take_entry(&mut mso_map, "valueDigests")?;
-    let value_digests = parse_value_digests(value_digests_val)?;
-
-    let device_key_info_val = take_entry(&mut mso_map, "deviceKeyInfo")?;
-    let mut device_key_info_map = into_map(device_key_info_val, "deviceKeyInfo")?;
-    let device_key_val = take_entry(&mut device_key_info_map, "deviceKey")?;
-    let device_key =
-        encode_value(&device_key_val).map_err(|reason| MdocError::CborEncode { reason })?;
-
-    let name_spaces = parse_name_spaces(name_spaces_val)?;
-
-    Ok(ParsedMdoc {
-        doc_type,
-        signed_at,
-        valid_from,
-        valid_until,
-        value_digests,
-        device_key,
-        name_spaces,
-        cose_sign1,
-        raw_issuer_signed_bytes: raw,
-    })
 }
 
 /// Serialises a `ciborium::Value` to CBOR bytes.
@@ -201,11 +256,8 @@ fn take_text(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<String>
     }
 }
 
-/// Returns `(raw_rfc3339_str, parsed_datetime)` — raw string is used in error messages.
-fn take_tdate(
-    map: &mut Vec<(Value, Value)>,
-    key: &'static str,
-) -> Result<(String, OffsetDateTime)> {
+/// Decodes an ISO 18013-5 `tdate` field: `#6.0(tstr)` → `OffsetDateTime`.
+fn take_tdate(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<OffsetDateTime> {
     // ISO 18013-5 §8.3.3: tdate = #6.0(tstr) — Tag 0 wrapping an RFC 3339 text string.
     let date_str = match take_entry(map, key)? {
         Value::Tag(0, inner) => match *inner {
@@ -215,10 +267,8 @@ fn take_tdate(
         _ => return Err(MdocError::UnexpectedCborType { field: key }),
     };
 
-    let dt = OffsetDateTime::parse(&date_str, &Rfc3339)
-        .map_err(|_| MdocError::UnexpectedCborType { field: key })?;
-
-    Ok((date_str, dt))
+    OffsetDateTime::parse(&date_str, &Rfc3339)
+        .map_err(|_| MdocError::UnexpectedCborType { field: key })
 }
 
 fn parse_value_digests(val: Value) -> Result<HashMap<String, HashMap<u64, Vec<u8>>>> {
@@ -289,6 +339,13 @@ fn parse_name_spaces(val: Value) -> Result<HashMap<String, Vec<IssuerSignedItem>
 
 /// Parses one `IssuerSignedItemBytes` entry (`#6.24(bstr .cbor IssuerSignedItem)`).
 fn parse_issuer_signed_item(val: Value) -> Result<IssuerSignedItem> {
+    // Encode the original #6.24(bstr) before consuming val.
+    // ISO 18013-5 §9.3.1: digest_i = SHA-256(#6.24(bstr .cbor IssuerSignedItem_i)).
+    // Encoding directly from val avoids reconstructing the tag after destructuring,
+    // which would introduce a superfluous encode step. Correctness relies on
+    // deterministic CBOR (RFC 8949 §4.2), which ISO 18013-5 §8.1 mandates.
+    let raw_tag24_bytes = encode_value(&val).map_err(|reason| MdocError::CborEncode { reason })?;
+
     let inner_bytes = match val {
         Value::Tag(24, inner) => match *inner {
             Value::Bytes(b) => b,
@@ -304,12 +361,6 @@ fn parse_issuer_signed_item(val: Value) -> Result<IssuerSignedItem> {
             });
         }
     };
-
-    // Preserve #6.24(bstr) bytes for Phase 2 digest check (ISO 18013-5 §9.3.1):
-    // digest_i = SHA-256(bstr(#6.24(bstr .cbor IssuerSignedItem_i)))
-    let tag24_val = Value::Tag(24, Box::new(Value::Bytes(inner_bytes.clone())));
-    let raw_tag24_bytes =
-        encode_value(&tag24_val).map_err(|reason| MdocError::CborEncode { reason })?;
 
     let item_val: Value = ciborium::de::from_reader(inner_bytes.as_slice())
         .map_err(|source| MdocError::CborDecode { source })?;

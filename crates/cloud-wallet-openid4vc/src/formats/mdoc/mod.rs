@@ -1,9 +1,9 @@
 //! mDoc (ISO 18013-5) parsing support.
 //!
 //! This module provides foundational CBOR parsing for `mso_mdoc` credentials
-//! returned by OpenID4VCI issuers. The single entry point is
-//! [`parse_issuer_signed`], which decodes a base64url-encoded `IssuerSigned`
-//! structure into a typed [`ParsedMdoc`].
+//! returned by OpenID4VCI issuers. The entry point is [`ParsedMdoc::parse`],
+//! which decodes a base64url-encoded `IssuerSigned` structure into a typed
+//! [`ParsedMdoc`].
 //!
 //! # References
 //!
@@ -17,4 +17,4 @@ mod parser;
 mod tests;
 
 pub use error::{MdocError, Result};
-pub use parser::{IssuerSignedItem, ParsedMdoc, parse_issuer_signed};
+pub use parser::{IssuerSignedItem, ParsedMdoc};
