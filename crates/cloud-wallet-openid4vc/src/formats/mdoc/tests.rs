@@ -1,8 +1,9 @@
-﻿use base64ct::{Base64UrlUnpadded, Encoding as _};
+use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::DigestAlgorithm;
 use super::error::MdocError;
 use super::parser::ParsedMdoc;
 
@@ -158,8 +159,8 @@ fn parses_valid_mdoc() {
     // Assert: top-level fields
     assert_eq!(mdoc.doc_type, "org.iso.18013.5.1.mDL");
 
-    // Assert: digest_algorithm is stored verbatim from the MSO
-    assert_eq!(mdoc.digest_algorithm, "SHA-256");
+    // Assert: digest_algorithm is the validated enum variant
+    assert_eq!(mdoc.digest_algorithm, DigestAlgorithm::Sha256);
 
     // Assert: namespace contains the single item we inserted
     let items = mdoc
@@ -291,8 +292,8 @@ fn rejects_duplicate_map_key() {
     let err = ParsedMdoc::parse(&raw).expect_err("duplicate map key should be rejected");
 
     assert!(
-        matches!(err, MdocError::DuplicateMapKey("nameSpaces")),
-        "expected DuplicateMapKey(\"nameSpaces\"), got: {err:?}"
+        matches!(err, MdocError::DuplicateMapKey { key: "nameSpaces" }),
+        "expected DuplicateMapKey {{ key: \"nameSpaces\" }}, got: {err:?}"
     );
 }
 
@@ -342,7 +343,7 @@ fn accepts_sha512_digest_algorithm() {
     );
 
     let mdoc = ParsedMdoc::parse(&raw).expect("SHA-512 should be accepted");
-    assert_eq!(mdoc.digest_algorithm, "SHA-512");
+    assert_eq!(mdoc.digest_algorithm, DigestAlgorithm::Sha512);
 }
 
 #[test]
@@ -398,8 +399,8 @@ fn rejects_duplicate_digest_id() {
 
     // Assert
     assert!(
-        matches!(err, MdocError::DuplicateMapKey("digestID")),
-        "expected DuplicateMapKey(\"digestID\"), got: {err:?}"
+        matches!(err, MdocError::DuplicateMapKey { key: "digestID" }),
+        "expected DuplicateMapKey {{ key: \"digestID\" }}, got: {err:?}"
     );
 }
 
@@ -441,7 +442,6 @@ fn rejects_duplicate_namespace_in_value_digests() {
         "expected DuplicateMapKey {{ key: \"namespace\" }}, got: {err:?}"
     );
 }
-
 
 #[test]
 fn rejects_wrong_digest_length() {
