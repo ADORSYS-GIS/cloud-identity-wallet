@@ -6,26 +6,13 @@ use url::Url;
 use crate::errors::{Error, ErrorKind, Result};
 
 /// The `response_type` parameter for OpenID4VP Authorization Requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResponseType {
     #[serde(rename = "vp_token")]
     VpToken,
 
     #[serde(rename = "vp_token id_token")]
     VpTokenIdToken,
-}
-
-impl<'de> Deserialize<'de> for ResponseType {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        match s.trim() {
-            "vp_token" => Ok(Self::VpToken),
-            "vp_token id_token" | "id_token vp_token" => Ok(Self::VpTokenIdToken),
-            other => Err(serde::de::Error::custom(format!(
-                "unsupported response_type '{other}'; expected 'vp_token' or 'vp_token id_token'"
-            ))),
-        }
-    }
 }
 
 impl std::fmt::Display for ResponseType {
