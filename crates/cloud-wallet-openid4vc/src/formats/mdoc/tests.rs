@@ -23,6 +23,33 @@ fn cbor(val: &Value) -> Vec<u8> {
 /// into `validityInfo`.  Using extreme values (`"2000-01-01T00:00:00Z"` for the
 /// past, `"9998-01-01T00:00:00Z"` for the future) keeps tests deterministic.
 fn build_issuer_signed(valid_from_str: &str, valid_until_str: &str) -> String {
+    let default_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![(
+            Value::Integer(0u64.into()),
+            Value::Bytes(vec![0u8; 32]),
+        )]),
+    )]);
+    build_issuer_signed_full(
+        valid_from_str,
+        valid_until_str,
+        "SHA-256",
+        default_digests,
+        "1.0",
+    )
+}
+
+/// Full fixture builder used by parameterised tests.
+///
+/// - `digest_algorithm` is placed verbatim in the MSO `digestAlgorithm` field.
+/// - `value_digests` is the complete `ciborium::Value` placed in `valueDigests`.
+fn build_issuer_signed_full(
+    valid_from_str: &str,
+    valid_until_str: &str,
+    digest_algorithm: &str,
+    value_digests: Value,
+    mso_version: &str,
+) -> String {
     // IssuerSignedItem
     let item = Value::Map(vec![
         (Value::Text("digestID".into()), Value::Integer(0u64.into())),
@@ -50,21 +77,15 @@ fn build_issuer_signed(valid_from_str: &str, valid_until_str: &str) -> String {
     ]);
 
     let mso = Value::Map(vec![
-        (Value::Text("version".into()), Value::Text("1.0".into())),
+        (
+            Value::Text("version".into()),
+            Value::Text(mso_version.into()),
+        ),
         (
             Value::Text("digestAlgorithm".into()),
-            Value::Text("SHA-256".into()),
+            Value::Text(digest_algorithm.into()),
         ),
-        (
-            Value::Text("valueDigests".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Map(vec![(
-                    Value::Integer(0u64.into()),
-                    Value::Bytes(vec![0u8; 32]),
-                )]),
-            )]),
-        ),
+        (Value::Text("valueDigests".into()), value_digests),
         (
             Value::Text("deviceKeyInfo".into()),
             Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
@@ -136,6 +157,9 @@ fn parses_valid_mdoc() {
 
     // Assert: top-level fields
     assert_eq!(mdoc.doc_type, "org.iso.18013.5.1.mDL");
+
+    // Assert: digest_algorithm is stored verbatim from the MSO
+    assert_eq!(mdoc.digest_algorithm, "SHA-256");
 
     // Assert: namespace contains the single item we inserted
     let items = mdoc
@@ -269,5 +293,151 @@ fn rejects_duplicate_map_key() {
     assert!(
         matches!(err, MdocError::DuplicateMapKey("nameSpaces")),
         "expected DuplicateMapKey(\"nameSpaces\"), got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_unsupported_digest_algorithm() {
+    // Arrange: mDoc with "SHA-1" in the MSO digestAlgorithm field.
+    // ISO 18013-5 §9.1.2.5 permits only SHA-256, SHA-384, and SHA-512.
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-1",
+        Value::Map(vec![(
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(vec![0u8; 20]),
+            )]),
+        )]),
+        "1.0",
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("unsupported digest algorithm should be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedDigestAlgorithm { ref algorithm } if algorithm == "SHA-1"),
+        "expected UnsupportedDigestAlgorithm(\"SHA-1\"), got: {err:?}"
+    );
+}
+
+#[test]
+fn accepts_sha512_digest_algorithm() {
+    // SHA-512 is permitted per ISO 18013-5 §9.1.2.5; must not be rejected.
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-512",
+        Value::Map(vec![(
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(vec![0u8; 64]),
+            )]),
+        )]),
+        "1.0",
+    );
+
+    let mdoc = ParsedMdoc::parse(&raw).expect("SHA-512 should be accepted");
+    assert_eq!(mdoc.digest_algorithm, "SHA-512");
+}
+
+#[test]
+fn rejects_unsupported_mso_version() {
+    // Arrange: MSO with major version "2"; §8.1 requires rejecting unknown major versions.
+    let default_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![(
+            Value::Integer(0u64.into()),
+            Value::Bytes(vec![0u8; 32]),
+        )]),
+    )]);
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        default_digests,
+        "2.0",
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("version 2.0 should be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedMsoVersion { ref version } if version == "2.0"),
+        "expected UnsupportedMsoVersion(\"2.0\"), got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_duplicate_digest_id() {
+    // Arrange: valueDigests map where digestID 0 appears twice for the same namespace.
+    // RFC 8949 §5.6 and OWASP A03 require rejecting duplicate map keys in
+    // security-sensitive structures; silent overwrite would allow digest substitution.
+    let duplicate_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![
+            (Value::Integer(0u64.into()), Value::Bytes(vec![0u8; 32])),
+            (Value::Integer(0u64.into()), Value::Bytes(vec![1u8; 32])), // duplicate
+        ]),
+    )]);
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        duplicate_digests,
+        "1.0",
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("duplicate digestID should be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DuplicateMapKey("digestID")),
+        "expected DuplicateMapKey(\"digestID\"), got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_duplicate_namespace_in_value_digests() {
+    // Arrange: valueDigests map with the same namespace key appearing twice.
+    // The second entry would silently overwrite the first, hiding the first set
+    // of digests from subsequent verification.
+    let duplicate_ns = Value::Map(vec![
+        (
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(vec![0u8; 32]),
+            )]),
+        ),
+        (
+            Value::Text("org.iso.18013.5.1".into()), // duplicate namespace key
+            Value::Map(vec![(
+                Value::Integer(1u64.into()),
+                Value::Bytes(vec![1u8; 32]),
+            )]),
+        ),
+    ]);
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        duplicate_ns,
+        "1.0",
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("duplicate namespace key should be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DuplicateMapKey("namespace")),
+        "expected DuplicateMapKey(\"namespace\"), got: {err:?}"
     );
 }

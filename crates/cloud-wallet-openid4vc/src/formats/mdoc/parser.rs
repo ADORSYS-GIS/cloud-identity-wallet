@@ -29,9 +29,17 @@ pub struct ParsedMdoc {
     /// `validityInfo.validUntil` from the MSO.
     pub valid_until: OffsetDateTime,
 
-    /// Per-namespace digest map: `namespace → (digestID → SHA-256 digest bytes)`.
+    /// Hash algorithm named in the MSO `digestAlgorithm` field (e.g. `"SHA-256"`).
     ///
-    /// Phase 2 verifies by comparing against `SHA-256(`[`IssuerSignedItem::raw_tag24_bytes`]`)`.
+    /// Guaranteed to be one of `"SHA-256"`, `"SHA-384"`, or `"SHA-512"` per
+    /// ISO 18013-5 §9.1.2.5. Phase 2 uses this to select the hash function when
+    /// verifying [`ParsedMdoc::value_digests`].
+    pub digest_algorithm: String,
+
+    /// Per-namespace digest map: `namespace → (digestID → digest bytes)`.
+    ///
+    /// Phase 2 verifies by hashing each [`IssuerSignedItem::raw_tag24_bytes`] under
+    /// [`ParsedMdoc::digest_algorithm`] and comparing the result.
     pub value_digests: HashMap<String, HashMap<u64, Vec<u8>>>,
 
     /// CBOR-encoded `DeviceKey` COSE_Key from `deviceKeyInfo.deviceKey`.
@@ -139,6 +147,26 @@ impl ParsedMdoc {
 
         let doc_type = take_text(&mut mso_map, "docType")?;
 
+        // ISO 18013-5 §9.1.2.4: `version` is a required field. Per §8.1, reject
+        // an unknown major version but accept any minor version bump.
+        let version = take_text(&mut mso_map, "version")?;
+        let major = version.split('.').next().unwrap_or("0");
+        if major != "1" {
+            return Err(MdocError::UnsupportedMsoVersion { version });
+        }
+
+        // ISO 18013-5 §9.1.2.5: only SHA-256, SHA-384, and SHA-512 are valid.
+        // Reject anything else at parse time so Phase 2 never sees an unknown hash.
+        let digest_algorithm = take_text(&mut mso_map, "digestAlgorithm")?;
+        match digest_algorithm.as_str() {
+            "SHA-256" | "SHA-384" | "SHA-512" => {}
+            _ => {
+                return Err(MdocError::UnsupportedDigestAlgorithm {
+                    algorithm: digest_algorithm,
+                });
+            }
+        }
+
         let validity_val = take_entry(&mut mso_map, "validityInfo")?;
         let mut validity_map = into_map(validity_val, "validityInfo")?;
 
@@ -159,6 +187,7 @@ impl ParsedMdoc {
 
         Ok(Self {
             doc_type,
+            digest_algorithm,
             signed_at,
             valid_from,
             valid_until,
@@ -294,10 +323,17 @@ fn parse_value_digests(val: Value) -> Result<HashMap<String, HashMap<u64, Vec<u8
                 Value::Bytes(b) => b,
                 _ => return Err(MdocError::UnexpectedCborType { field: "Digest" }),
             };
-            ids.insert(digest_id, bytes);
+            // RFC 8949 §5.6: duplicate keys in security-sensitive CBOR maps must
+            // be rejected — a second value behind the same digestID would be silently
+            // discarded by HashMap::insert, enabling digest-substitution attacks.
+            if ids.insert(digest_id, bytes).is_some() {
+                return Err(MdocError::DuplicateMapKey("digestID"));
+            }
         }
 
-        out.insert(namespace, ids);
+        if out.insert(namespace, ids).is_some() {
+            return Err(MdocError::DuplicateMapKey("namespace"));
+        }
     }
 
     Ok(out)
