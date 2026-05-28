@@ -53,14 +53,6 @@ impl VpToken {
 
         Ok(())
     }
-
-    #[allow(dead_code)]
-    fn into_form_value(self) -> Result<String, serde_json::Error> {
-        match self {
-            Self::Single(value) => Ok(value),
-            Self::Multiple(entries) => serde_json::to_string(&entries),
-        }
-    }
 }
 
 impl Serialize for VpToken {
@@ -158,11 +150,6 @@ mod tests {
     fn serializes_single_vp_token_to_json_string() {
         let token = VpToken::Single("eyJhbGciOiJFUzI1NiJ9...".to_string());
 
-        assert_eq!(
-            token.clone().into_form_value().expect("form value"),
-            "eyJhbGciOiJFUzI1NiJ9..."
-        );
-
         let json = serde_json::to_value(&token).expect("serialize");
 
         assert_eq!(json, json!("eyJhbGciOiJFUzI1NiJ9..."));
@@ -188,8 +175,6 @@ mod tests {
         );
 
         let token = VpToken::Multiple(entries);
-
-        assert!(token.clone().into_form_value().is_ok());
 
         let json = serde_json::to_value(&token).expect("serialize");
 
