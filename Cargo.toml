@@ -38,8 +38,6 @@ serde_with = "3"
 # Logging and metrics
 tracing = "0.1"
 
-
-
 # Other utilities
 base64 = "0.22"
 dashmap = "6"
