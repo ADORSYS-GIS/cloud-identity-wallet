@@ -139,4 +139,8 @@ pub enum ProcessingError {
     /// A supplied Disclosure was not referenced by the payload tree.
     #[error("disclosure digest '{0}' was not referenced")]
     UnreferencedDisclosure(String),
+
+    /// The payload nesting is too deep to process safely.
+    #[error("payload nesting exceeds maximum supported depth of {0}")]
+    MaxDepthExceeded(usize),
 }
