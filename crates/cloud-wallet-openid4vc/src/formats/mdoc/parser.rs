@@ -175,7 +175,7 @@ impl ParsedMdoc {
         let valid_until = take_tdate(&mut validity_map, "validUntil")?;
 
         let value_digests_val = take_entry(&mut mso_map, "valueDigests")?;
-        let value_digests = parse_value_digests(value_digests_val)?;
+        let value_digests = parse_value_digests(value_digests_val, &digest_algorithm)?;
 
         let device_key_info_val = take_entry(&mut mso_map, "deviceKeyInfo")?;
         let mut device_key_info_map = into_map(device_key_info_val, "deviceKeyInfo")?;
@@ -300,7 +300,19 @@ fn take_tdate(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<Offset
         .map_err(|_| MdocError::UnexpectedCborType { field: key })
 }
 
-fn parse_value_digests(val: Value) -> Result<HashMap<String, HashMap<u64, Vec<u8>>>> {
+fn parse_value_digests(
+    val: Value,
+    digest_algorithm: &str,
+) -> Result<HashMap<String, HashMap<u64, Vec<u8>>>> {
+    // Expected digest byte length for each permitted algorithm (ISO 18013-5 §9.1.2.5).
+    let expected_len: usize = match digest_algorithm {
+        "SHA-256" => 32,
+        "SHA-384" => 48,
+        "SHA-512" => 64,
+        // Already validated by the caller; unreachable in practice.
+        _ => unreachable!("digest_algorithm was validated before calling parse_value_digests"),
+    };
+
     let ns_map = into_map(val, "valueDigests")?;
     let mut out: HashMap<String, HashMap<u64, Vec<u8>>> = HashMap::new();
 
@@ -323,6 +335,15 @@ fn parse_value_digests(val: Value) -> Result<HashMap<String, HashMap<u64, Vec<u8
                 Value::Bytes(b) => b,
                 _ => return Err(MdocError::UnexpectedCborType { field: "Digest" }),
             };
+            if bytes.len() != expected_len {
+                return Err(MdocError::InvalidDigestLength {
+                    namespace: namespace.clone(),
+                    digest_id,
+                    algorithm: digest_algorithm.to_owned(),
+                    expected: expected_len,
+                    actual: bytes.len(),
+                });
+            }
             // RFC 8949 §5.6: duplicate keys in security-sensitive CBOR maps must
             // be rejected — a second value behind the same digestID would be silently
             // discarded by HashMap::insert, enabling digest-substitution attacks.
