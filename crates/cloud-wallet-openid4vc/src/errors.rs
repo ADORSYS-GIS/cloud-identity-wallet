@@ -228,6 +228,14 @@ pub enum ErrorKind {
     #[error("Invalid notification id")]
     InvalidNotificationId,
 
+    /// A presentation request (OID4VP Authorization Request) failed validation
+    /// or parsing (e.g. missing required `nonce`, invalid `response_type`,
+    /// conflicting parameters like both `client_metadata` and `client_metadata_uri`).
+    ///
+    /// Defined by [OpenID4VP §5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-authorization-request).
+    #[error("Invalid presentation request")]
+    InvalidPresentationRequest,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
