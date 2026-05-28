@@ -120,13 +120,13 @@ impl DcqlQuery {
 
         for (i, cred) in self.credentials.iter().enumerate() {
             if cred.id.trim().is_empty() {
-                return Err(invalid_request(&format!(
+                return Err(invalid_request(format!(
                     "'dcql_query.credentials[{}].id' must not be empty",
                     i
                 )));
             }
             if cred.format.trim().is_empty() {
-                return Err(invalid_request(&format!(
+                return Err(invalid_request(format!(
                     "'dcql_query.credentials[{}].format' must not be empty",
                     i
                 )));
