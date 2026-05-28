@@ -39,7 +39,7 @@ pub struct ParsedMdoc {
 
     /// Per-namespace digest map: `namespace → (digestID → digest bytes)`.
     ///
-    /// [`verify_digests`](crate::formats::mdoc::verifier::verify_digests) checks every
+    /// `verify_digests` checks every
     /// `IssuerSignedItem` by hashing [`IssuerSignedItem::raw_tag24_bytes`] and comparing
     /// the result against the corresponding entry here.
     pub value_digests: HashMap<String, HashMap<u64, Vec<u8>>>,
@@ -61,7 +61,7 @@ pub struct ParsedMdoc {
 
 /// A single signed data element from an mDoc namespace.
 ///
-/// [`verify_digests`](crate::formats::mdoc::verifier::verify_digests) checks integrity:
+/// `verify_digests` checks integrity:
 /// `hash(raw_tag24_bytes)` (using [`ParsedMdoc::digest_algorithm`]) must match the
 /// corresponding entry in [`ParsedMdoc::value_digests`].
 #[derive(Debug)]
@@ -76,7 +76,7 @@ pub struct IssuerSignedItem {
     pub element_value: Vec<u8>,
 
     /// `#6.24(bstr)` encoding of the item as received — digest input for
-    /// [`verify_digests`](crate::formats::mdoc::verifier::verify_digests):
+    /// `verify_digests`:
     /// `digest_algorithm(raw_tag24_bytes)` must equal the [`ParsedMdoc::value_digests`] entry.
     pub raw_tag24_bytes: Vec<u8>,
 }
@@ -381,7 +381,9 @@ fn parse_name_spaces(val: Value) -> Result<HashMap<String, Vec<IssuerSignedItem>
             parsed_items.push(parse_issuer_signed_item(item_val)?);
         }
 
-        out.insert(namespace, parsed_items);
+        if out.insert(namespace, parsed_items).is_some() {
+            return Err(MdocError::DuplicateMapKey { key: "namespace" });
+        }
     }
 
     Ok(out)
