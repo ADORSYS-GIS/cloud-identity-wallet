@@ -1,8 +1,10 @@
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::Value;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::error::MdocError;
-use super::parser::parse_issuer_signed;
+use super::parser::ParsedMdoc;
 
 // CBOR construction helpers
 
@@ -99,11 +101,15 @@ fn build_issuer_signed(valid_from_str: &str, valid_until_str: &str) -> String {
     //   a1 = map(1), 01 = uint(1), 26 = nint(-7) [0x20 + (7-1) = 0x26]
     let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
 
+    // ISO 18013-5 §9.1.2: COSE payload must be MobileSecurityObjectBytes
+    // = #6.24(bstr .cbor MobileSecurityObject), not bare MSO bytes.
+    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
+
     let cose_sign1 = Value::Array(vec![
         Value::Bytes(protected_header_bytes), // protected header bstr
         Value::Map(vec![]),                   // unprotected header {}
-        Value::Bytes(mso_bytes),              // payload bstr
-        Value::Bytes(vec![0u8; 64]),          // dummy 64-byte signature
+        Value::Bytes(mso_payload), // MobileSecurityObjectBytes = #6.24(bstr .cbor MobileSecurityObject)
+        Value::Bytes(vec![0u8; 64]), // dummy 64-byte signature
     ]);
 
     let issuer_signed = Value::Map(vec![
@@ -126,7 +132,7 @@ fn parses_valid_mdoc() {
     let raw = build_issuer_signed("2020-01-01T00:00:00Z", "9998-01-01T00:00:00Z");
 
     // Act
-    let mdoc = parse_issuer_signed(&raw).expect("valid mdoc should parse without error");
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc should parse without error");
 
     // Assert: top-level fields
     assert_eq!(mdoc.doc_type, "org.iso.18013.5.1.mDL");
@@ -154,10 +160,16 @@ fn parses_valid_mdoc() {
 
 #[test]
 fn rejects_expired_mdoc() {
-    // Arrange: both timestamps in the distant past  always expired
+    // Arrange: validity window entirely in 2000; inject a "now" of 2000-01-03 — after expiry.
     let raw = build_issuer_signed("2000-01-01T00:00:00Z", "2000-01-02T00:00:00Z");
+    let now = OffsetDateTime::parse("2000-01-03T00:00:00Z", &Rfc3339)
+        .expect("fixed timestamp must parse");
 
-    let err = parse_issuer_signed(&raw).expect_err("expired mdoc should be rejected");
+    // Act
+    let mdoc = ParsedMdoc::parse(&raw).expect("parse must succeed regardless of validity window");
+    let err = mdoc
+        .check_temporal_validity(now)
+        .expect_err("expired mdoc should be rejected");
 
     assert!(
         matches!(err, MdocError::ExpiredCredential { .. }),
@@ -167,10 +179,16 @@ fn rejects_expired_mdoc() {
 
 #[test]
 fn rejects_not_yet_valid_mdoc() {
-    // Arrange: validity window far in the future — never valid yet
+    // Arrange: validity window starts 9997; inject a "now" of 2026 — before valid_from.
     let raw = build_issuer_signed("9997-01-01T00:00:00Z", "9998-01-01T00:00:00Z");
+    let now = OffsetDateTime::parse("2026-01-01T00:00:00Z", &Rfc3339)
+        .expect("fixed timestamp must parse");
 
-    let err = parse_issuer_signed(&raw).expect_err("not-yet-valid mdoc should be rejected");
+    // Act
+    let mdoc = ParsedMdoc::parse(&raw).expect("parse must succeed regardless of validity window");
+    let err = mdoc
+        .check_temporal_validity(now)
+        .expect_err("not-yet-valid mdoc should be rejected");
 
     assert!(
         matches!(err, MdocError::NotYetValid { .. }),
@@ -179,11 +197,41 @@ fn rejects_not_yet_valid_mdoc() {
 }
 
 #[test]
+fn parse_and_validate_accepts_valid_mdoc() {
+    // Arrange: validity window that brackets the injected "now".
+    let raw = build_issuer_signed("2020-01-01T00:00:00Z", "9998-01-01T00:00:00Z");
+    let now = OffsetDateTime::parse("2026-01-01T00:00:00Z", &Rfc3339)
+        .expect("fixed timestamp must parse");
+
+    // Act + Assert: must succeed and return a fully parsed mdoc.
+    let mdoc =
+        ParsedMdoc::parse_and_validate(&raw, now).expect("valid mdoc should pass validation");
+    assert_eq!(mdoc.doc_type, "org.iso.18013.5.1.mDL");
+}
+
+#[test]
+fn parse_and_validate_rejects_expired() {
+    // Arrange: validity window in the past; inject a "now" after expiry.
+    let raw = build_issuer_signed("2000-01-01T00:00:00Z", "2000-01-02T00:00:00Z");
+    let now = OffsetDateTime::parse("2000-01-03T00:00:00Z", &Rfc3339)
+        .expect("fixed timestamp must parse");
+
+    // Act
+    let err = ParsedMdoc::parse_and_validate(&raw, now)
+        .expect_err("expired mdoc should be rejected by parse_and_validate");
+
+    assert!(
+        matches!(err, MdocError::ExpiredCredential { .. }),
+        "expected ExpiredCredential, got: {err:?}"
+    );
+}
+
+#[test]
 fn rejects_invalid_base64() {
     // Arrange: contains characters illegal in base64url
     let raw = "not!!valid!!base64url";
 
-    let err = parse_issuer_signed(raw).expect_err("invalid base64 should be rejected");
+    let err = ParsedMdoc::parse(raw).expect_err("invalid base64 should be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidBase64 { .. }),
@@ -196,7 +244,7 @@ fn rejects_malformed_cbor() {
     // Arrange: valid base64url but the decoded bytes are empty — guaranteed CborDecode (EOF)
     let raw = Base64UrlUnpadded::encode_string(b"");
 
-    let err = parse_issuer_signed(&raw).expect_err("malformed CBOR should be rejected");
+    let err = ParsedMdoc::parse(&raw).expect_err("malformed CBOR should be rejected");
 
     assert!(
         matches!(err, MdocError::CborDecode { .. }),
@@ -216,7 +264,7 @@ fn rejects_duplicate_map_key() {
     ]);
     let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
 
-    let err = parse_issuer_signed(&raw).expect_err("duplicate map key should be rejected");
+    let err = ParsedMdoc::parse(&raw).expect_err("duplicate map key should be rejected");
 
     assert!(
         matches!(err, MdocError::DuplicateMapKey("nameSpaces")),

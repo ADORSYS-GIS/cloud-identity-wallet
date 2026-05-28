@@ -38,9 +38,7 @@ serde_with = "3"
 # Logging and metrics
 tracing = "0.1"
 
-# CBOR and COSE
-ciborium = "0.2"
-coset = "0.3"
+
 
 # Other utilities
 base64 = "0.22"
