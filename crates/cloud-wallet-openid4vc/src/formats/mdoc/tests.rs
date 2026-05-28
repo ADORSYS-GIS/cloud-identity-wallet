@@ -1,4 +1,4 @@
-use base64ct::{Base64UrlUnpadded, Encoding as _};
+﻿use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -437,10 +437,11 @@ fn rejects_duplicate_namespace_in_value_digests() {
 
     // Assert
     assert!(
-        matches!(err, MdocError::DuplicateMapKey("namespace")),
-        "expected DuplicateMapKey(\"namespace\"), got: {err:?}"
+        matches!(err, MdocError::DuplicateMapKey { key: "namespace" }),
+        "expected DuplicateMapKey {{ key: \"namespace\" }}, got: {err:?}"
     );
 }
+
 
 #[test]
 fn rejects_wrong_digest_length() {

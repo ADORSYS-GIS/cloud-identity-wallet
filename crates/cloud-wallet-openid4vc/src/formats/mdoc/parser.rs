@@ -8,6 +8,7 @@ use coset::CborSerializable as _;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::DigestAlgorithm;
 use super::error::{MdocError, Result};
 
 /// A parsed mDoc `IssuerSigned` structure.
@@ -29,17 +30,18 @@ pub struct ParsedMdoc {
     /// `validityInfo.validUntil` from the MSO.
     pub valid_until: OffsetDateTime,
 
-    /// Hash algorithm named in the MSO `digestAlgorithm` field (e.g. `"SHA-256"`).
+    /// The hash algorithm named in the MSO `digestAlgorithm` field.
     ///
-    /// Guaranteed to be one of `"SHA-256"`, `"SHA-384"`, or `"SHA-512"` per
-    /// ISO 18013-5 §9.1.2.5. Phase 2 uses this to select the hash function when
-    /// verifying [`ParsedMdoc::value_digests`].
-    pub digest_algorithm: String,
+    /// Validated at parse time; a [`DigestAlgorithm`] value guarantees the algorithm
+    /// has already been validated as one of the three permitted by ISO 18013-5 §9.1.2.5
+    /// (SHA-256, SHA-384, SHA-512).
+    pub digest_algorithm: DigestAlgorithm,
 
     /// Per-namespace digest map: `namespace → (digestID → digest bytes)`.
     ///
-    /// Phase 2 verifies by hashing each [`IssuerSignedItem::raw_tag24_bytes`] under
-    /// [`ParsedMdoc::digest_algorithm`] and comparing the result.
+    /// [`verify_digests`](crate::formats::mdoc::verifier::verify_digests) checks every
+    /// `IssuerSignedItem` by hashing [`IssuerSignedItem::raw_tag24_bytes`] and comparing
+    /// the result against the corresponding entry here.
     pub value_digests: HashMap<String, HashMap<u64, Vec<u8>>>,
 
     /// CBOR-encoded `DeviceKey` COSE_Key from `deviceKeyInfo.deviceKey`.
@@ -59,7 +61,8 @@ pub struct ParsedMdoc {
 
 /// A single signed data element from an mDoc namespace.
 ///
-/// Phase 2 verifies integrity: `SHA-256(raw_tag24_bytes)` must match the
+/// [`verify_digests`](crate::formats::mdoc::verifier::verify_digests) checks integrity:
+/// `hash(raw_tag24_bytes)` (using [`ParsedMdoc::digest_algorithm`]) must match the
 /// corresponding entry in [`ParsedMdoc::value_digests`].
 #[derive(Debug)]
 pub struct IssuerSignedItem {
@@ -72,8 +75,9 @@ pub struct IssuerSignedItem {
     /// Raw CBOR bytes of the element value.
     pub element_value: Vec<u8>,
 
-    /// `#6.24(bstr)` encoding of the item — Phase 2 digest input:
-    /// `SHA-256(raw_tag24_bytes)` must equal the [`ParsedMdoc::value_digests`] entry.
+    /// `#6.24(bstr)` encoding of the item as received — digest input for
+    /// [`verify_digests`](crate::formats::mdoc::verifier::verify_digests):
+    /// `digest_algorithm(raw_tag24_bytes)` must equal the [`ParsedMdoc::value_digests`] entry.
     pub raw_tag24_bytes: Vec<u8>,
 }
 
@@ -156,16 +160,10 @@ impl ParsedMdoc {
         }
 
         // ISO 18013-5 §9.1.2.5: only SHA-256, SHA-384, and SHA-512 are valid.
-        // Reject anything else at parse time so Phase 2 never sees an unknown hash.
-        let digest_algorithm = take_text(&mut mso_map, "digestAlgorithm")?;
-        match digest_algorithm.as_str() {
-            "SHA-256" | "SHA-384" | "SHA-512" => {}
-            _ => {
-                return Err(MdocError::UnsupportedDigestAlgorithm {
-                    algorithm: digest_algorithm,
-                });
-            }
-        }
+        // Reject anything else at parse time; `DigestAlgorithm` carries the type-level
+        // proof that the algorithm is supported so downstream code needs no re-validation.
+        let alg_str = take_text(&mut mso_map, "digestAlgorithm")?;
+        let digest_algorithm = DigestAlgorithm::try_from(alg_str.as_str())?;
 
         let validity_val = take_entry(&mut mso_map, "validityInfo")?;
         let mut validity_map = into_map(validity_val, "validityInfo")?;
@@ -175,7 +173,7 @@ impl ParsedMdoc {
         let valid_until = take_tdate(&mut validity_map, "validUntil")?;
 
         let value_digests_val = take_entry(&mut mso_map, "valueDigests")?;
-        let value_digests = parse_value_digests(value_digests_val, &digest_algorithm)?;
+        let value_digests = parse_value_digests(value_digests_val, digest_algorithm)?;
 
         let device_key_info_val = take_entry(&mut mso_map, "deviceKeyInfo")?;
         let mut device_key_info_map = into_map(device_key_info_val, "deviceKeyInfo")?;
@@ -191,6 +189,7 @@ impl ParsedMdoc {
             signed_at,
             valid_from,
             valid_until,
+
             value_digests,
             device_key,
             name_spaces,
@@ -269,12 +268,12 @@ fn take_entry(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<Value>
         .filter(|(k, _)| matches!(k, Value::Text(s) if s == key))
         .count();
     if count > 1 {
-        return Err(MdocError::DuplicateMapKey(key));
+        return Err(MdocError::DuplicateMapKey { key });
     }
     let pos = map
         .iter()
         .position(|(k, _)| matches!(k, Value::Text(s) if s == key))
-        .ok_or(MdocError::MissingField(key))?;
+        .ok_or(MdocError::MissingField { field: key })?;
     Ok(map.remove(pos).1)
 }
 
@@ -302,16 +301,10 @@ fn take_tdate(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<Offset
 
 fn parse_value_digests(
     val: Value,
-    digest_algorithm: &str,
+    digest_algorithm: DigestAlgorithm,
 ) -> Result<HashMap<String, HashMap<u64, Vec<u8>>>> {
-    // Expected digest byte length for each permitted algorithm (ISO 18013-5 §9.1.2.5).
-    let expected_len: usize = match digest_algorithm {
-        "SHA-256" => 32,
-        "SHA-384" => 48,
-        "SHA-512" => 64,
-        // Already validated by the caller; unreachable in practice.
-        _ => unreachable!("digest_algorithm was validated before calling parse_value_digests"),
-    };
+    // Expected digest byte length; derived from the type — no string matching needed.
+    let expected_len = digest_algorithm.digest_size();
 
     let ns_map = into_map(val, "valueDigests")?;
     let mut out: HashMap<String, HashMap<u64, Vec<u8>>> = HashMap::new();
@@ -339,7 +332,7 @@ fn parse_value_digests(
                 return Err(MdocError::InvalidDigestLength {
                     namespace: namespace.clone(),
                     digest_id,
-                    algorithm: digest_algorithm.to_owned(),
+                    algorithm: digest_algorithm.to_string(),
                     expected: expected_len,
                     actual: bytes.len(),
                 });
@@ -348,12 +341,12 @@ fn parse_value_digests(
             // be rejected — a second value behind the same digestID would be silently
             // discarded by HashMap::insert, enabling digest-substitution attacks.
             if ids.insert(digest_id, bytes).is_some() {
-                return Err(MdocError::DuplicateMapKey("digestID"));
+                return Err(MdocError::DuplicateMapKey { key: "digestID" });
             }
         }
 
         if out.insert(namespace, ids).is_some() {
-            return Err(MdocError::DuplicateMapKey("namespace"));
+            return Err(MdocError::DuplicateMapKey { key: "namespace" });
         }
     }
 
