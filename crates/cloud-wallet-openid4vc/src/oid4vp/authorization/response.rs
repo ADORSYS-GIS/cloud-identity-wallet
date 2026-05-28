@@ -54,6 +54,7 @@ impl VpToken {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn into_form_value(self) -> Result<String, serde_json::Error> {
         match self {
             Self::Single(value) => Ok(value),
