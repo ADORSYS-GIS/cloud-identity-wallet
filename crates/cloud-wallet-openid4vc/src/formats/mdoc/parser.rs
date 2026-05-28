@@ -10,7 +10,6 @@ use time::format_description::well_known::Rfc3339;
 
 use super::DigestAlgorithm;
 use super::error::{MdocError, Result};
-use super::DigestAlgorithm;
 
 /// A parsed mDoc `IssuerSigned` structure.
 ///
@@ -287,7 +286,7 @@ fn take_entry(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<Value>
     let pos = map
         .iter()
         .position(|(k, _)| matches!(k, Value::Text(s) if s == key))
-        .ok_or(MdocError::MissingField { field: key })?;;
+        .ok_or(MdocError::MissingField { field: key })?;
     Ok(map.remove(pos).1)
 }
 
