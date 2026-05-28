@@ -26,11 +26,10 @@ pub use parser::{IssuerSignedItem, ParsedMdoc};
 /// as one of the three supported variants — the parser rejects anything else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DigestAlgorithm {
-    /// SHA-256 (32-byte output).
     Sha256,
-    /// SHA-384 (48-byte output).
+
     Sha384,
-    /// SHA-512 (64-byte output).
+
     Sha512,
 }
 

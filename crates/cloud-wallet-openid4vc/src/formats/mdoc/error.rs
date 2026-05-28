@@ -28,8 +28,11 @@ pub enum MdocError {
     },
 
     /// A required field is absent from the CBOR map.
-    #[error("missing required CBOR field: '{0}'")]
-    MissingField(&'static str),
+    #[error("missing required CBOR field: '{field}'")]
+    MissingField {
+        /// Name of the missing field.
+        field: &'static str,
+    },
 
     /// A field is present but has an unexpected CBOR type.
     #[error("unexpected CBOR type for field '{field}'")]
@@ -83,8 +86,11 @@ pub enum MdocError {
     /// RFC 8949 §5.6 requires implementations to reject duplicate keys in
     /// security-sensitive contexts; duplicate keys can hide a second value
     /// behind a valid first one (e.g. `validUntil`, `digestID`).
-    #[error("duplicate CBOR map key: '{0}'")]
-    DuplicateMapKey(&'static str),
+    #[error("duplicate CBOR map key: '{key}'")]
+    DuplicateMapKey {
+        /// The duplicated key name.
+        key: &'static str,
+    },
 
     /// The MSO `digestAlgorithm` field names an algorithm this implementation
     /// does not support.
