@@ -172,6 +172,15 @@ impl ParsedMdoc {
         let valid_from = take_tdate(&mut validity_map, "validFrom")?;
         let valid_until = take_tdate(&mut validity_map, "validUntil")?;
 
+        // ISO 18013-5 §9.1.2.4: validFrom shall be equal or later than signed.
+        if valid_from < signed_at {
+            return Err(MdocError::InvalidValidityInfo);
+        }
+        // ISO 18013-5 §9.1.2.4: validUntil shall be later than validFrom.
+        if valid_until <= valid_from {
+            return Err(MdocError::InvalidValidityInfo);
+        }
+
         let value_digests_val = take_entry(&mut mso_map, "valueDigests")?;
         let value_digests = parse_value_digests(value_digests_val, digest_algorithm)?;
 
@@ -323,7 +332,7 @@ fn parse_value_digests(
         let mut ids: HashMap<u64, Vec<u8>> = HashMap::new();
 
         for (id_val, digest_val) in digest_map {
-            let digest_id = cbor_int_to_u64(id_val, "digestID")?;
+            let digest_id = parse_digest_id(id_val)?;
             let bytes = match digest_val {
                 Value::Bytes(b) => b,
                 _ => return Err(MdocError::UnexpectedCborType { field: "Digest" }),
@@ -381,6 +390,17 @@ fn parse_name_spaces(val: Value) -> Result<HashMap<String, Vec<IssuerSignedItem>
             parsed_items.push(parse_issuer_signed_item(item_val)?);
         }
 
+        // ISO 18013-5 §9.1.2.4: DigestID shall be unique within a namespace.
+        // Duplicate IDs in the presented items are a structural violation —
+        // reject at parse time so verify_digests never operates on an
+        // ambiguous item set.
+        let mut seen = std::collections::HashSet::new();
+        for item in &parsed_items {
+            if !seen.insert(item.digest_id) {
+                return Err(MdocError::DuplicateMapKey { key: "digestID" });
+            }
+        }
+
         if out.insert(namespace, parsed_items).is_some() {
             return Err(MdocError::DuplicateMapKey { key: "namespace" });
         }
@@ -420,7 +440,20 @@ fn parse_issuer_signed_item(val: Value) -> Result<IssuerSignedItem> {
     let mut item_map = into_map(item_val, "IssuerSignedItem")?;
 
     let digest_id_val = take_entry(&mut item_map, "digestID")?;
-    let digest_id = cbor_int_to_u64(digest_id_val, "digestID")?;
+    let digest_id = parse_digest_id(digest_id_val)?;
+
+    // ISO 18013-5 §9.1.2.5: random shall be present and have a minimum
+    // length of 16 bytes. Its purpose is to ensure the digest of this item
+    // reveals nothing about its contents.
+    let random_bytes = match take_entry(&mut item_map, "random")? {
+        Value::Bytes(b) => b,
+        _ => return Err(MdocError::UnexpectedCborType { field: "random" }),
+    };
+    if random_bytes.len() < 16 {
+        return Err(MdocError::InvalidRandomLength {
+            actual: random_bytes.len(),
+        });
+    }
 
     let element_identifier = take_text(&mut item_map, "elementIdentifier")?;
     let element_value_raw = take_entry(&mut item_map, "elementValue")?;
@@ -435,12 +468,18 @@ fn parse_issuer_signed_item(val: Value) -> Result<IssuerSignedItem> {
     })
 }
 
-fn cbor_int_to_u64(val: Value, field: &'static str) -> Result<u64> {
+fn parse_digest_id(val: Value) -> Result<u64> {
     match val {
         Value::Integer(i) => {
             let n: i128 = i.into();
-            u64::try_from(n).map_err(|_| MdocError::UnexpectedCborType { field })
+            let id = u64::try_from(n)
+                .map_err(|_| MdocError::UnexpectedCborType { field: "digestID" })?;
+            // ISO 18013-5 §9.1.2.4: DigestID value shall be smaller than 2^31.
+            if id >= (1u64 << 31) {
+                return Err(MdocError::DigestIdOutOfRange { digest_id: id });
+            }
+            Ok(id)
         }
-        _ => Err(MdocError::UnexpectedCborType { field }),
+        _ => Err(MdocError::UnexpectedCborType { field: "digestID" }),
     }
 }

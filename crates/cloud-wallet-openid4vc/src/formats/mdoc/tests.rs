@@ -37,6 +37,7 @@ fn build_issuer_signed(valid_from_str: &str, valid_until_str: &str) -> String {
         "SHA-256",
         default_digests,
         "1.0",
+        Some(vec![0u8; 16]),
     )
 }
 
@@ -50,20 +51,24 @@ fn build_issuer_signed_full(
     digest_algorithm: &str,
     value_digests: Value,
     mso_version: &str,
+    item_random: Option<Vec<u8>>,
 ) -> String {
     // IssuerSignedItem
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
+    let item = {
+        let mut fields = vec![(Value::Text("digestID".into()), Value::Integer(0u64.into()))];
+        if let Some(random_bytes) = item_random {
+            fields.push((Value::Text("random".into()), Value::Bytes(random_bytes)));
+        }
+        fields.push((
             Value::Text("elementIdentifier".into()),
             Value::Text("family_name".into()),
-        ),
-        (
+        ));
+        fields.push((
             Value::Text("elementValue".into()),
             Value::Text("Doe".into()),
-        ),
-    ]);
+        ));
+        Value::Map(fields)
+    };
     let item_bytes = cbor(&item);
     // #6.24(bstr) IssuerSignedItemBytes
     let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(item_bytes)));
@@ -313,6 +318,7 @@ fn rejects_unsupported_digest_algorithm() {
             )]),
         )]),
         "1.0",
+        Some(vec![0u8; 16]),
     );
 
     // Act
@@ -340,6 +346,7 @@ fn accepts_sha512_digest_algorithm() {
             )]),
         )]),
         "1.0",
+        Some(vec![0u8; 16]),
     );
 
     let mdoc = ParsedMdoc::parse(&raw).expect("SHA-512 should be accepted");
@@ -362,6 +369,7 @@ fn rejects_unsupported_mso_version() {
         "SHA-256",
         default_digests,
         "2.0",
+        Some(vec![0u8; 16]),
     );
 
     // Act
@@ -392,6 +400,7 @@ fn rejects_duplicate_digest_id() {
         "SHA-256",
         duplicate_digests,
         "1.0",
+        Some(vec![0u8; 16]),
     );
 
     // Act
@@ -431,6 +440,7 @@ fn rejects_duplicate_namespace_in_value_digests() {
         "SHA-256",
         duplicate_ns,
         "1.0",
+        Some(vec![0u8; 16]),
     );
 
     // Act
@@ -460,6 +470,7 @@ fn rejects_wrong_digest_length() {
         "SHA-256",
         bad_len_digests,
         "1.0",
+        Some(vec![0u8; 16]),
     );
 
     // Act
@@ -476,5 +487,127 @@ fn rejects_wrong_digest_length() {
             }
         ),
         "expected InvalidDigestLength {{ expected: 32, actual: 64 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_validity_info_valid_from_before_signed() {
+    // Arrange: validFrom (1998) is before the hardcoded signed timestamp (1999).
+    // ISO 18013-5 §9.1.2.4 requires validFrom >= signed.
+    let raw = build_issuer_signed("1998-01-01T00:00:00Z", "9998-01-01T00:00:00Z");
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("validFrom before signed must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidValidityInfo),
+        "expected InvalidValidityInfo, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_validity_info_valid_until_equal_to_valid_from() {
+    // Arrange: validUntil equals validFrom; ISO 18013-5 §9.1.2.4 requires validUntil > validFrom.
+    let raw = build_issuer_signed("2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z");
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("validUntil equal to validFrom must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidValidityInfo),
+        "expected InvalidValidityInfo, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_random_field_too_short() {
+    // Arrange: IssuerSignedItem with a 15-byte random; minimum is 16 (ISO 18013-5 §9.1.2.5).
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        Value::Map(vec![(
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(vec![0u8; 32]),
+            )]),
+        )]),
+        "1.0",
+        Some(vec![0u8; 15]),
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("15-byte random field must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidRandomLength { actual: 15 }),
+        "expected InvalidRandomLength {{ actual: 15 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_random_field_absent() {
+    // Arrange: IssuerSignedItem with no `random` field; ISO 18013-5 §9.1.2.5 requires it.
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        Value::Map(vec![(
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(vec![0u8; 32]),
+            )]),
+        )]),
+        "1.0",
+        None,
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("absent random field must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::MissingField { field: "random" }),
+        "expected MissingField {{ field: \"random\" }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_digest_id_out_of_range() {
+    // Arrange: valueDigests map with digestID = 2^31 = 2_147_483_648.
+    // ISO 18013-5 §9.1.2.4 requires digestID < 2^31; values at or above must be rejected.
+    let out_of_range_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![(
+            Value::Integer(2_147_483_648u64.into()),
+            Value::Bytes(vec![0u8; 32]),
+        )]),
+    )]);
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        out_of_range_digests,
+        "1.0",
+        Some(vec![0u8; 16]),
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("digestID >= 2^31 must be rejected");
+
+    // Assert
+    assert!(
+        matches!(
+            err,
+            MdocError::DigestIdOutOfRange {
+                digest_id: 2_147_483_648
+            }
+        ),
+        "expected DigestIdOutOfRange {{ digest_id: 2_147_483_648 }}, got: {err:?}"
     );
 }

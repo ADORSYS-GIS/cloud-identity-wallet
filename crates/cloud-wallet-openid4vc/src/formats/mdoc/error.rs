@@ -137,4 +137,50 @@ pub enum MdocError {
         /// Actual byte length found in the CBOR value.
         actual: usize,
     },
+
+    /// The computed hash of an `IssuerSignedItem` does not match the corresponding entry in
+    /// the MSO `valueDigests` map (ISO/IEC 18013-5 §9.1.2).
+    #[error("digest mismatch for namespace '{namespace}', digestID {digest_id}")]
+    DigestMismatch {
+        /// The mDoc namespace containing the offending item.
+        namespace: String,
+        /// The `digestID` of the offending item.
+        digest_id: u64,
+    },
+
+    /// The MSO `valueDigests` map has no entry for a presented `IssuerSignedItem`.
+    ///
+    /// Every presented item must have a corresponding digest in the MSO; absence is treated
+    /// as a verification failure (ISO/IEC 18013-5 §9.1.2).
+    #[error("missing digest for namespace '{namespace}', digestID {digest_id}")]
+    MissingDigest {
+        /// The mDoc namespace containing the unverifiable item.
+        namespace: String,
+        /// The `digestID` that has no corresponding entry in `valueDigests`.
+        digest_id: u64,
+    },
+
+    /// A `digestID` value exceeds the allowed range.
+    ///
+    /// ISO 18013-5 §9.1.2.4 requires that `digestID` values are smaller than 2^31.
+    /// Values at or above this threshold are rejected at parse time.
+    #[error("digestID {digest_id} out of range: must be less than 2^31")]
+    DigestIdOutOfRange {
+        /// The out-of-range value as parsed from the CBOR integer.
+        digest_id: u64,
+    },
+
+    /// The MSO `validityInfo` timestamps violate the ordering constraints
+    /// required by ISO 18013-5 §9.1.2.4:
+    /// `validFrom` must be >= `signed`, and `validUntil` must be > `validFrom`.
+    #[error("MSO validityInfo has invalid timestamp ordering")]
+    InvalidValidityInfo,
+
+    /// An `IssuerSignedItem` `random` field is shorter than the 16-byte minimum
+    /// required by ISO 18013-5 §9.1.2.5.
+    #[error("IssuerSignedItem random field is {actual} bytes; minimum is 16")]
+    InvalidRandomLength {
+        /// Actual byte length found.
+        actual: usize,
+    },
 }
