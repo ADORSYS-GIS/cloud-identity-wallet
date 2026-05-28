@@ -215,9 +215,11 @@ fn assert_no_rendering_metadata(value: &Value) {
     for claim_name in [
         "iss",
         "sub",
+        "aud",
         "exp",
         "nbf",
         "iat",
+        "jti",
         "vct",
         "vct#integrity",
         "cnf",
@@ -874,7 +876,7 @@ async fn rejects_x5c_signature_with_untrusted_trust_anchor() {
         sd_jwt
             .verify_signature(&http_client, X5cTrustAnchors::Custom(&trust_anchors))
             .await,
-        Err(VerificationError::X5c { .. })
+        Err(Error::Verification(VerificationError::X5c { .. }))
     ));
 }
 
