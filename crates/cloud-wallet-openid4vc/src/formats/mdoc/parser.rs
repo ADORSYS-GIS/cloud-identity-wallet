@@ -104,11 +104,16 @@ impl ParsedMdoc {
         let name_spaces_val = take_entry(&mut issuer_signed_map, "nameSpaces")?;
         let issuer_auth_val = take_entry(&mut issuer_signed_map, "issuerAuth")?;
 
-        // coset::CoseSign1::from_slice expects the bare array, not the CBOR tag 18 wrapper
-        // (coset v0.3.x strips the tag when embedded in a containing structure — RFC 9052 §4.2).
+        // RFC 9052 §4.2: COSE_Sign1 is encoded as CBOR tag 18.
+        // issuerAuth MUST be #6.18(COSE_Sign1); reject untagged arrays for
+        // strict ISO/COSE compliance.
         let cose_payload_val = match issuer_auth_val {
             Value::Tag(18, inner) => *inner,
-            other => other,
+            _ => {
+                return Err(MdocError::UnexpectedCborType {
+                    field: "issuerAuth",
+                });
+            }
         };
 
         let issuer_auth_cbor =
@@ -316,6 +321,13 @@ fn parse_value_digests(
     let expected_len = digest_algorithm.digest_size();
 
     let ns_map = into_map(val, "valueDigests")?;
+    // ISO 18013-5 CDDL: ValueDigests = { + NameSpace => DigestIDs }
+    // `+` means at least one entry is required.
+    if ns_map.is_empty() {
+        return Err(MdocError::UnexpectedCborType {
+            field: "valueDigests",
+        });
+    }
     let mut out: HashMap<String, HashMap<u64, Vec<u8>>> = HashMap::new();
 
     for (ns_key, digests_val) in ns_map {
@@ -329,6 +341,11 @@ fn parse_value_digests(
         };
 
         let digest_map = into_map(digests_val, "DigestIDs")?;
+        // ISO 18013-5 CDDL: DigestIDs = { + DigestID => Digest }
+        // Each namespace digest map must contain at least one entry.
+        if digest_map.is_empty() {
+            return Err(MdocError::UnexpectedCborType { field: "DigestIDs" });
+        }
         let mut ids: HashMap<u64, Vec<u8>> = HashMap::new();
 
         for (id_val, digest_val) in digest_map {
@@ -364,6 +381,13 @@ fn parse_value_digests(
 
 fn parse_name_spaces(val: Value) -> Result<HashMap<String, Vec<IssuerSignedItem>>> {
     let ns_map = into_map(val, "nameSpaces")?;
+    // ISO 18013-5 CDDL: IssuerNameSpaces = { + NameSpace => [ + IssuerSignedItemBytes ] }
+    // At least one namespace must be present.
+    if ns_map.is_empty() {
+        return Err(MdocError::UnexpectedCborType {
+            field: "nameSpaces",
+        });
+    }
     let mut out: HashMap<String, Vec<IssuerSignedItem>> = HashMap::new();
 
     for (ns_key, items_val) in ns_map {
@@ -384,6 +408,13 @@ fn parse_name_spaces(val: Value) -> Result<HashMap<String, Vec<IssuerSignedItem>
                 });
             }
         };
+        // ISO 18013-5 CDDL: [ + IssuerSignedItemBytes ]
+        // Each namespace array must contain at least one item.
+        if items_arr.is_empty() {
+            return Err(MdocError::UnexpectedCborType {
+                field: "IssuerNameSpaces",
+            });
+        }
 
         let mut parsed_items = Vec::with_capacity(items_arr.len());
         for item_val in items_arr {

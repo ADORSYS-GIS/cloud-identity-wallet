@@ -147,7 +147,10 @@ fn build_issuer_signed_full(
                 Value::Array(vec![item_tag24]),
             )]),
         ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
+        (
+            Value::Text("issuerAuth".into()),
+            Value::Tag(18, Box::new(cose_sign1)),
+        ),
     ]);
 
     Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
