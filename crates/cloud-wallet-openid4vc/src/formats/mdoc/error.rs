@@ -76,4 +76,12 @@ pub enum MdocError {
         /// The `validFrom` timestamp from the MSO, in RFC 3339 form.
         valid_from: String,
     },
+
+    /// A CBOR map contains the same text key more than once.
+    ///
+    /// RFC 8949 §5.6 requires implementations to reject duplicate keys in
+    /// security-sensitive contexts; duplicate keys can hide a second value
+    /// behind a valid first one (e.g. `validUntil`, `digestID`).
+    #[error("duplicate CBOR map key: '{0}'")]
+    DuplicateMapKey(&'static str),
 }

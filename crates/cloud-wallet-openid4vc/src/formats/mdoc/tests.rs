@@ -203,3 +203,23 @@ fn rejects_malformed_cbor() {
         "expected CborDecode, got: {err:?}"
     );
 }
+
+#[test]
+fn rejects_duplicate_map_key() {
+    // Arrange: top-level IssuerSigned map with "nameSpaces" appearing twice.
+    // The COSE_Sign1 is a placeholder — parsing must fail before it is decoded
+    // because the duplicate check runs on the first take_entry call.
+    let issuer_signed = Value::Map(vec![
+        (Value::Text("nameSpaces".into()), Value::Map(vec![])),
+        (Value::Text("nameSpaces".into()), Value::Map(vec![])),
+        (Value::Text("issuerAuth".into()), Value::Array(vec![])),
+    ]);
+    let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
+
+    let err = parse_issuer_signed(&raw).expect_err("duplicate map key should be rejected");
+
+    assert!(
+        matches!(err, MdocError::DuplicateMapKey("nameSpaces")),
+        "expected DuplicateMapKey(\"nameSpaces\"), got: {err:?}"
+    );
+}
