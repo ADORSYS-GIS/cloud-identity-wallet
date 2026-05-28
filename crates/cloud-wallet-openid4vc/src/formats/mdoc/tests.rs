@@ -505,8 +505,8 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
     let (item_tag24_bytes, digest_bytes) = item_tag24_and_digest(0, "family_name", "Doe", alg);
 
     // Reconstruct the #6.24 value for embedding in nameSpaces.
-    let item_tag24_val: Value = ciborium::de::from_reader(item_tag24_bytes.as_slice())
-        .expect("round-trip must succeed");
+    let item_tag24_val: Value =
+        ciborium::de::from_reader(item_tag24_bytes.as_slice()).expect("round-trip must succeed");
 
     let device_key = Value::Map(vec![
         (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
@@ -523,7 +523,13 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
         ),
         (
             Value::Text("valueDigests".into()),
-            Value::Map(vec![(Value::Text("org.iso.18013.5.1".into()), Value::Map(vec![(Value::Integer(0u64.into()), Value::Bytes(digest_bytes))]))]),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Map(vec![(
+                    Value::Integer(0u64.into()),
+                    Value::Bytes(digest_bytes),
+                )]),
+            )]),
         ),
         (
             Value::Text("deviceKeyInfo".into()),
@@ -566,7 +572,10 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
     let issuer_signed = Value::Map(vec![
         (
             Value::Text("nameSpaces".into()),
-            Value::Map(vec![(Value::Text("org.iso.18013.5.1".into()), Value::Array(vec![item_tag24_val]))]),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24_val]),
+            )]),
         ),
         (Value::Text("issuerAuth".into()), cose_sign1),
     ]);
@@ -637,7 +646,10 @@ fn verify_digests_rejects_tampered_item() {
         .get_mut("org.iso.18013.5.1")
         .expect("namespace must be present");
     // Flip the last byte of raw_tag24_bytes — the digest will no longer match.
-    let last = items[0].raw_tag24_bytes.last_mut().expect("bytes non-empty");
+    let last = items[0]
+        .raw_tag24_bytes
+        .last_mut()
+        .expect("bytes non-empty");
     *last ^= 0xFF;
 
     // Act

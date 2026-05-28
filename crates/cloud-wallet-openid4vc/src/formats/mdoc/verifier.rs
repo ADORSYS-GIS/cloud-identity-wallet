@@ -18,8 +18,8 @@ use subtle::ConstantTimeEq as _;
 
 use cloud_wallet_crypto::digest::HashAlg;
 
-use super::error::{MdocError, Result};
 use super::DigestAlgorithm;
+use super::error::{MdocError, Result};
 use super::parser::ParsedMdoc;
 
 impl From<DigestAlgorithm> for HashAlg {
