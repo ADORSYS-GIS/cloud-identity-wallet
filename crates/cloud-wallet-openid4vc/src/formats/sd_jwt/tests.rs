@@ -168,6 +168,14 @@ fn disclosure_digest_with(disclosure: &str, algorithm: HashAlg) -> String {
     URL_SAFE_NO_PAD.encode(algorithm.hash(disclosure.as_bytes()).as_ref())
 }
 
+fn nested_claim(depth: usize) -> Value {
+    let mut value = json!("leaf");
+    for _ in 0..depth {
+        value = json!({ "nested": value });
+    }
+    value
+}
+
 // Get the issuer claims as JSON
 fn issuer_claims_as_json(sd_jwt: &SdJwt<'_>) -> Value {
     serde_json::to_value(sd_jwt.jwt().claims()).expect("issuer claims should serialize")
@@ -207,9 +215,11 @@ fn assert_no_rendering_metadata(value: &Value) {
     for claim_name in [
         "iss",
         "sub",
+        "aud",
         "exp",
         "nbf",
         "iat",
+        "jti",
         "vct",
         "vct#integrity",
         "cnf",
@@ -528,6 +538,66 @@ fn processes_array_element_disclosures() {
 }
 
 #[test]
+fn removes_sd_alg_only_from_top_level_payload() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity",
+            "_sd_alg": "sha-256",
+            "address": {
+                "_sd_alg": "claim-value",
+                "street_address": "Main Street 1"
+            }
+        }),
+    );
+    let raw = format!("{jwt}~");
+
+    let processed = SdJwt::parse(&raw)
+        .expect("SD-JWT should parse")
+        .to_disclosed_payload()
+        .expect("payload should process");
+
+    assert!(!processed.as_object().unwrap().contains_key("_sd_alg"));
+    assert_eq!(processed["address"]["_sd_alg"], json!("claim-value"));
+    assert_eq!(
+        processed["address"]["street_address"],
+        json!("Main Street 1")
+    );
+}
+
+#[test]
+fn rejects_payloads_that_exceed_processing_depth_limit() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity",
+            "claim": nested_claim(80)
+        }),
+    );
+    let raw = format!("{jwt}~");
+
+    assert!(matches!(
+        SdJwt::parse(&raw).and_then(|sd_jwt| sd_jwt.to_disclosed_payload()),
+        Err(Error::DisclosureProcessing {
+            reason: ProcessingError::MaxDepthExceeded(64)
+        })
+    ));
+}
+
+#[test]
+fn disclosure_debug_redacts_salt_and_raw_value() {
+    let raw = disclosure(json!(["secret-salt", "given_name", "Ada"]));
+    let disclosure = Disclosure::parse(&raw, 0).expect("disclosure should parse");
+    let debug = format!("{disclosure:?}");
+
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("secret-salt"));
+    assert!(!debug.contains(&raw));
+}
+
+#[test]
 fn rejects_unreferenced_disclosures() {
     let unreferenced = disclosure(json!(["salt-1", "given_name", "Ada"]));
     let jwt = compact_jwt(
@@ -806,7 +876,7 @@ async fn rejects_x5c_signature_with_untrusted_trust_anchor() {
         sd_jwt
             .verify_signature(&http_client, X5cTrustAnchors::Custom(&trust_anchors))
             .await,
-        Err(VerificationError::X5c { .. })
+        Err(Error::Verification(VerificationError::X5c { .. }))
     ));
 }
 
