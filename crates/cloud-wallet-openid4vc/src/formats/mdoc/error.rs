@@ -85,4 +85,27 @@ pub enum MdocError {
     /// behind a valid first one (e.g. `validUntil`, `digestID`).
     #[error("duplicate CBOR map key: '{0}'")]
     DuplicateMapKey(&'static str),
+
+    /// The MSO `digestAlgorithm` field names an algorithm this implementation
+    /// does not support.
+    ///
+    /// ISO 18013-5 §9.1.2.5 permits `"SHA-256"`, `"SHA-384"`, and `"SHA-512"`;
+    /// any other value must be rejected at parse time.
+    #[error("unsupported digest algorithm: {algorithm}")]
+    UnsupportedDigestAlgorithm {
+        /// The algorithm name as it appeared in the MSO.
+        algorithm: String,
+    },
+
+    /// The MSO `version` field uses a major version this implementation does not
+    /// support.
+    ///
+    /// ISO 18013-5 §9.1.2.4 defines `"1.0"` as the current value. Per §8.1,
+    /// a reader shall not error on an unknown *minor* version but must reject
+    /// an unknown *major* version.
+    #[error("unsupported MSO version: {version}")]
+    UnsupportedMsoVersion {
+        /// The version string as it appeared in the MSO.
+        version: String,
+    },
 }
