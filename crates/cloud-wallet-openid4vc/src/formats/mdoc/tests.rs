@@ -441,3 +441,39 @@ fn rejects_duplicate_namespace_in_value_digests() {
         "expected DuplicateMapKey(\"namespace\"), got: {err:?}"
     );
 }
+
+#[test]
+fn rejects_wrong_digest_length() {
+    // Arrange: SHA-256 MSO but digest bytes are 64 bytes (SHA-512 size).
+    // ISO 18013-5 §9.1.2.5: digest length must match the declared algorithm.
+    let bad_len_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![(
+            Value::Integer(0u64.into()),
+            Value::Bytes(vec![0u8; 64]), // wrong: SHA-256 requires 32 bytes
+        )]),
+    )]);
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        bad_len_digests,
+        "1.0",
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("wrong digest length should be rejected");
+
+    // Assert
+    assert!(
+        matches!(
+            err,
+            MdocError::InvalidDigestLength {
+                expected: 32,
+                actual: 64,
+                ..
+            }
+        ),
+        "expected InvalidDigestLength {{ expected: 32, actual: 64 }}, got: {err:?}"
+    );
+}

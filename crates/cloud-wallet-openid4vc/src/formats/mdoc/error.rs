@@ -108,4 +108,27 @@ pub enum MdocError {
         /// The version string as it appeared in the MSO.
         version: String,
     },
+
+    /// A digest in `valueDigests` has the wrong byte length for the declared
+    /// `digestAlgorithm`.
+    ///
+    /// ISO 18013-5 §9.1.2.5: the length of each digest value must match the
+    /// output size of the named hash function (SHA-256 → 32, SHA-384 → 48,
+    /// SHA-512 → 64 bytes).
+    #[error(
+        "digest length mismatch in namespace '{namespace}' for digestID {digest_id}: \
+         expected {expected} bytes for {algorithm}, got {actual}"
+    )]
+    InvalidDigestLength {
+        /// Namespace containing the offending entry.
+        namespace: String,
+        /// The digest identifier that has the wrong length.
+        digest_id: u64,
+        /// The declared hash algorithm.
+        algorithm: String,
+        /// Expected byte length for that algorithm.
+        expected: usize,
+        /// Actual byte length found in the CBOR value.
+        actual: usize,
+    },
 }
