@@ -231,4 +231,22 @@ pub enum ErrorKind {
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
+
+    /// A DCQL query failed validation.
+    #[error("Invalid DCQL query")]
+    InvalidDcqlQuery,
+}
+
+/// Error returned when DCQL validation fails.
+///
+/// This provides specific details about what aspect of the DCQL query
+/// failed validation.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+pub enum DcqlValidationError {
+    /// The values list for a claim query is empty.
+    #[error("values list for claim '{claim_id}' must not be empty")]
+    EmptyValuesList {
+        /// The ID of the claim with the empty values list.
+        claim_id: String,
+    },
 }
