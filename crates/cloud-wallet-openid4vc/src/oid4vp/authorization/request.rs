@@ -158,6 +158,7 @@ pub struct AuthorizationRequest {
     pub state: Option<String>,
 
     /// REQUIRED. A fresh, unique nonce binding the VP Token to this request.
+    /// Must contain only URL-safe ASCII characters (A-Z, a-z, 0-9, -, _).
     pub nonce: String,
 
     /// REQUIRED. How the Wallet delivers the Authorization Response.
@@ -171,6 +172,7 @@ pub struct AuthorizationRequest {
     pub request_uri: Option<Url>,
 
     /// OPTIONAL. Controls whether the Wallet fetches `request_uri` via GET or POST.
+    /// Only meaningful when `request_uri` is present; ignored otherwise per Section 5.1.
     pub request_uri_method: Option<RequestUriMethod>,
 
     /// CONDITIONAL. A DCQL query describing the credentials the Verifier requests.
@@ -183,8 +185,14 @@ pub struct AuthorizationRequest {
     /// OPTIONAL. URI from which the Wallet can fetch the Verifier's metadata.
     pub client_metadata_uri: Option<Url>,
 
-    /// OPTIONAL. Identifies the Client Identifier scheme in use.
-    pub client_id_scheme: Option<String>,
+    /// OPTIONAL. The Request Object passed by value (JAR).
+    pub request: Option<String>,
+
+    /// OPTIONAL. Transaction data for external authorization.
+    pub transaction_data: Option<Value>,
+
+    /// OPTIONAL. Verifier information for trust establishment.
+    pub verifier_info: Option<Value>,
 }
 
 impl AuthorizationRequest {
@@ -195,9 +203,22 @@ impl AuthorizationRequest {
             return Err(invalid_request("'response_type' must be 'vp_token'"));
         }
 
+        // client_id MUST be present and non-empty (Section 5.2)
+        if self.client_id.trim().is_empty() {
+            return Err(invalid_request("'client_id' must not be empty"));
+        }
+
         // nonce MUST be present and non-empty (Section 5.1)
         if self.nonce.trim().is_empty() {
             return Err(invalid_request("'nonce' must not be empty"));
+        }
+
+        // nonce MUST contain only URL-safe ASCII characters (Section 5.2)
+        // URL-safe range: A-Z, a-z, 0-9, -, _
+        if !is_url_safe_ascii(&self.nonce) {
+            return Err(invalid_request(
+                "'nonce' must contain only URL-safe ASCII characters (A-Z, a-z, 0-9, -, _)",
+            ));
         }
 
         // XOR validation: exactly one of scope or dcql_query must be present (Section 5.1)
@@ -257,6 +278,13 @@ impl AuthorizationRequest {
     }
 }
 
+/// Checks if a string contains only URL-safe ASCII characters.
+/// URL-safe characters per Section 5.2: A-Z, a-z, 0-9, -, _
+fn is_url_safe_ascii(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Deserializes an [`AuthorizationRequest`] and immediately validates it.
 impl<'de> Deserialize<'de> for AuthorizationRequest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -275,10 +303,19 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
             dcql_query: Option<DcqlQuery>,
             client_metadata: Option<Value>,
             client_metadata_uri: Option<Url>,
-            client_id_scheme: Option<String>,
+            request: Option<String>,
+            transaction_data: Option<Value>,
+            verifier_info: Option<Value>,
         }
 
         let raw = Raw::deserialize(deserializer)?;
+
+        // Per Section 5.1: request_uri_method is ignored if request_uri is not present
+        let request_uri_method = if raw.request_uri.is_some() {
+            raw.request_uri_method
+        } else {
+            None
+        };
 
         let request = Self {
             response_type: raw.response_type,
@@ -290,11 +327,13 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
             response_mode: raw.response_mode,
             response_uri: raw.response_uri,
             request_uri: raw.request_uri,
-            request_uri_method: raw.request_uri_method,
+            request_uri_method,
             dcql_query: raw.dcql_query,
             client_metadata: raw.client_metadata,
             client_metadata_uri: raw.client_metadata_uri,
-            client_id_scheme: raw.client_id_scheme,
+            request: raw.request,
+            transaction_data: raw.transaction_data,
+            verifier_info: raw.verifier_info,
         };
 
         request.validate().map_err(serde::de::Error::custom)?;
@@ -373,13 +412,26 @@ mod tests {
     fn parses_request_with_optional_fields() {
         let mut v = minimal_valid_dcql();
         v["state"] = json!("xyz-state");
-        v["client_id_scheme"] = json!("redirect_uri");
         v["request_uri_method"] = json!("post");
+        v["request_uri"] = json!("https://verifier.example.com/request");
 
         let req = parse(v).expect("should parse");
         assert_eq!(req.state.as_deref(), Some("xyz-state"));
-        assert_eq!(req.client_id_scheme.as_deref(), Some("redirect_uri"));
         assert_eq!(req.request_uri_method, Some(RequestUriMethod::Post));
+        assert!(req.request_uri.is_some());
+    }
+
+    #[test]
+    fn parses_request_with_new_spec_fields() {
+        let mut v = minimal_valid_dcql();
+        v["request"] = json!("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9");
+        v["transaction_data"] = json!({"transaction_id": "tx123"});
+        v["verifier_info"] = json!({"name": "Example Verifier"});
+
+        let req = parse(v).expect("should parse");
+        assert!(req.request.is_some());
+        assert!(req.transaction_data.is_some());
+        assert!(req.verifier_info.is_some());
     }
 
     #[test]
@@ -449,6 +501,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_client_id() {
+        let mut v = minimal_valid_dcql();
+        v["client_id"] = json!("");
+        let err = parse(v).unwrap_err();
+        assert!(
+            err.to_string().contains("client_id"),
+            "error should mention 'client_id': {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_whitespace_only_client_id() {
+        let mut v = minimal_valid_dcql();
+        v["client_id"] = json!("   ");
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("client_id"));
+    }
+
+    #[test]
     fn rejects_empty_nonce() {
         let mut v = minimal_valid_dcql();
         v["nonce"] = json!("");
@@ -465,6 +536,48 @@ mod tests {
         v["nonce"] = json!("   ");
         let err = parse(v).unwrap_err();
         assert!(err.to_string().contains("nonce"));
+    }
+
+    #[test]
+    fn rejects_nonce_with_non_ascii_chars() {
+        let mut v = minimal_valid_dcql();
+        v["nonce"] = json!("nön_ascii");
+        let err = parse(v).unwrap_err();
+        assert!(
+            err.to_string().contains("nonce") || err.to_string().contains("ASCII"),
+            "error should mention 'nonce' or 'ASCII': {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_nonce_with_special_chars() {
+        let mut v = minimal_valid_dcql();
+        v["nonce"] = json!("nonce with spaces");
+        let err = parse(v).unwrap_err();
+        assert!(
+            err.to_string().contains("nonce") || err.to_string().contains("ASCII"),
+            "error should mention 'nonce' or 'ASCII': {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_nonce_with_url_unsafe_chars() {
+        let mut v = minimal_valid_dcql();
+        v["nonce"] = json!("nonce+plus");
+        let err = parse(v).unwrap_err();
+        assert!(
+            err.to_string().contains("nonce") || err.to_string().contains("ASCII"),
+            "error should mention 'nonce' or 'ASCII': {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_valid_url_safe_nonce() {
+        let mut v = minimal_valid_dcql();
+        // Valid URL-safe characters: alphanumeric, -, _
+        v["nonce"] = json!("valid-nonce_123ABC");
+        let req = parse(v).expect("should parse with valid URL-safe nonce");
+        assert_eq!(req.nonce, "valid-nonce_123ABC");
     }
 
     #[test]
@@ -602,6 +715,30 @@ mod tests {
     }
 
     #[test]
+    fn request_uri_method_ignored_when_request_uri_absent() {
+        // Per Section 5.1, request_uri_method should be ignored when request_uri is not present
+        let mut v = minimal_valid_dcql();
+        v["request_uri_method"] = json!("post");
+        // No request_uri provided
+
+        let req = parse(v).expect("should parse");
+        // request_uri_method should be None since request_uri is not present
+        assert!(req.request_uri_method.is_none());
+        assert!(req.request_uri.is_none());
+    }
+
+    #[test]
+    fn request_uri_method_preserved_when_request_uri_present() {
+        let mut v = minimal_valid_dcql();
+        v["request_uri"] = json!("https://verifier.example.com/request");
+        v["request_uri_method"] = json!("post");
+
+        let req = parse(v).expect("should parse");
+        assert_eq!(req.request_uri_method, Some(RequestUriMethod::Post));
+        assert!(req.request_uri.is_some());
+    }
+
+    #[test]
     fn validate_succeeds_on_valid_constructed_request_with_dcql() {
         let req = AuthorizationRequest {
             response_type: ResponseType::VpToken,
@@ -625,7 +762,9 @@ mod tests {
             }),
             client_metadata: None,
             client_metadata_uri: None,
-            client_id_scheme: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
         };
         assert!(req.validate().is_ok());
     }
@@ -646,9 +785,77 @@ mod tests {
             dcql_query: None,
             client_metadata: None,
             client_metadata_uri: None,
-            client_id_scheme: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
         };
         assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_returns_error_for_empty_client_id_on_constructed_value() {
+        let req = AuthorizationRequest {
+            response_type: ResponseType::VpToken,
+            client_id: String::new(),
+            redirect_uri: None,
+            scope: None,
+            state: None,
+            nonce: "fresh-nonce".to_string(),
+            response_mode: ResponseMode::DirectPost,
+            response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
+            request_uri: None,
+            request_uri_method: None,
+            dcql_query: Some(DcqlQuery {
+                credentials: vec![CredentialQuery {
+                    id: "test-id".to_string(),
+                    format: "dc+sd-jwt".to_string(),
+                    meta: json!({}),
+                    claims: None,
+                }],
+                credential_sets: None,
+            }),
+            client_metadata: None,
+            client_metadata_uri: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
+        };
+        let err = req.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
+        assert!(err.to_string().contains("client_id"));
+    }
+
+    #[test]
+    fn validate_returns_error_for_invalid_nonce_chars_on_constructed_value() {
+        let req = AuthorizationRequest {
+            response_type: ResponseType::VpToken,
+            client_id: "https://verifier.example.com".to_string(),
+            redirect_uri: None,
+            scope: None,
+            state: None,
+            nonce: "invalid nonce!".to_string(),
+            response_mode: ResponseMode::DirectPost,
+            response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
+            request_uri: None,
+            request_uri_method: None,
+            dcql_query: Some(DcqlQuery {
+                credentials: vec![CredentialQuery {
+                    id: "test-id".to_string(),
+                    format: "dc+sd-jwt".to_string(),
+                    meta: json!({}),
+                    claims: None,
+                }],
+                credential_sets: None,
+            }),
+            client_metadata: None,
+            client_metadata_uri: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
+        };
+        let err = req.validate().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
+        assert!(err.to_string().contains("nonce"));
     }
 
     #[test]
@@ -675,7 +882,9 @@ mod tests {
             }),
             client_metadata: None,
             client_metadata_uri: None,
-            client_id_scheme: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
         };
         let err = req.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
