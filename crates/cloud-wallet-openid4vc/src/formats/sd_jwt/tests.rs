@@ -86,6 +86,18 @@ struct X5cSdJwt {
 }
 
 fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
+    sd_jwt_with_custom_x5c(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        true,
+    )
+}
+
+fn sd_jwt_with_custom_x5c(
+    jwt_algorithm: JwtAlgorithm,
+    leaf_key_usages: Vec<KeyUsagePurpose>,
+    sign_with_leaf_key: bool,
+) -> X5cSdJwt {
     let root_key = CertKeyPair::generate().expect("root key generation should work");
     let mut root_params = CertificateParams::default();
     root_params.distinguished_name = DistinguishedName::new();
@@ -114,7 +126,7 @@ fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
         .distinguished_name
         .push(DnType::CommonName, "issuer.example.com");
     leaf_params.is_ca = IsCa::NoCa;
-    leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    leaf_params.key_usages = leaf_key_usages;
     leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &root_issuer)
@@ -130,7 +142,7 @@ fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
         .expect("untrusted root certificate should become trust anchor")
         .to_owned();
 
-    let mut header = Header::new(JwtAlgorithm::ES256);
+    let mut header = Header::new(jwt_algorithm);
     header.typ = Some("dc+sd-jwt".to_owned());
     header.x5c = Some(vec![STANDARD.encode(leaf_cert.der().as_ref())]);
 
@@ -139,12 +151,19 @@ fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
         "vct": "https://credentials.example.com/identity",
         "given_name": "Ada"
     });
-    let token = jsonwebtoken::encode(
-        &header,
-        &claims,
-        &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
-    )
-    .expect("test JWT should sign with leaf key");
+    let token = if sign_with_leaf_key {
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
+        )
+        .expect("test JWT should sign with leaf key")
+    } else {
+        compact_jwt(
+            serde_json::to_value(header).expect("test header should serialize"),
+            claims,
+        )
+    };
 
     X5cSdJwt {
         raw: format!("{token}~"),
@@ -899,5 +918,59 @@ fn rejects_invalid_x5c_certificate_chain_before_signature_verification() {
     assert!(matches!(
         verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
         Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_empty_x5c_certificate_chain() {
+    let jwt = compact_jwt(
+        json!({
+            "alg": "ES256",
+            "typ": "dc+sd-jwt",
+            "x5c": []
+        }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let raw = format!("{jwt}~");
+    let sd_jwt = SdJwt::parse(&raw).expect("SD-JWT with x5c header should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
+        Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_x5c_leaf_without_digital_signature_key_usage() {
+    let fixture = sd_jwt_with_custom_x5c(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::KeyEncipherment],
+        true,
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::InvalidKey { .. })
+    ));
+}
+
+#[test]
+fn rejects_x5c_leaf_public_key_type_that_does_not_match_algorithm() {
+    let fixture = sd_jwt_with_custom_x5c(
+        JwtAlgorithm::RS256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        false,
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::InvalidKey { .. })
     ));
 }
