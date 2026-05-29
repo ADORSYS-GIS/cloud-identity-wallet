@@ -1,7 +1,19 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Serialize, Serializer};
+use serde_with::skip_serializing_none;
 use url::Url;
+
+/// A presentation value returned for one DCQL Credential Query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Presentation {
+    /// A compact presentation string, such as an SD-JWT VC presentation.
+    String(String),
+
+    /// A JSON object presentation, such as a JSON-based verifiable presentation.
+    Object(serde_json::Map<String, serde_json::Value>),
+}
 
 /// A VP token returned in an OpenID4VP authorization response.
 ///
@@ -9,17 +21,17 @@ use url::Url;
 /// where each entry contains one or more presentations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpToken {
-    entries: BTreeMap<String, Vec<serde_json::Value>>,
+    entries: BTreeMap<String, Vec<Presentation>>,
 }
 
 impl VpToken {
     /// Creates a new VP token from DCQL query entries.
-    pub fn new(entries: BTreeMap<String, Vec<serde_json::Value>>) -> Self {
+    pub fn new(entries: BTreeMap<String, Vec<Presentation>>) -> Self {
         Self { entries }
     }
 
     /// Returns the underlying DCQL entries.
-    pub fn entries(&self) -> &BTreeMap<String, Vec<serde_json::Value>> {
+    pub fn entries(&self) -> &BTreeMap<String, Vec<Presentation>> {
         &self.entries
     }
 
@@ -29,22 +41,16 @@ impl VpToken {
         }
 
         for (query_id, presentations) in &self.entries {
-            if query_id.trim().is_empty() {
-                return Err("vp_token contains an empty credential query id".to_string());
+            if !is_valid_dcql_query_id(query_id) {
+                return Err(format!(
+                    "vp_token entry '{query_id}' is not a valid DCQL credential query id"
+                ));
             }
 
             if presentations.is_empty() {
                 return Err(format!(
                     "vp_token entry '{query_id}' must contain at least one presentation"
                 ));
-            }
-
-            for presentation in presentations {
-                if !presentation.is_string() && !presentation.is_object() {
-                    return Err(format!(
-                        "vp_token entry '{query_id}' contains an invalid presentation value"
-                    ));
-                }
             }
         }
 
@@ -62,66 +68,84 @@ impl Serialize for VpToken {
     }
 }
 
-impl<'de> Deserialize<'de> for VpToken {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum RawVpToken {
-            String(String),
-            Object(BTreeMap<String, Vec<serde_json::Value>>),
-        }
-
-        let token = match RawVpToken::deserialize(deserializer)? {
-            RawVpToken::String(value) => {
-                if value.trim_start().starts_with('{') {
-                    let entries = serde_json::from_str::<BTreeMap<String, Vec<serde_json::Value>>>(
-                        value.trim(),
-                    )
-                    .map_err(de::Error::custom)?;
-                    VpToken::new(entries)
-                } else {
-                    return Err(de::Error::custom(
-                        "vp_token must be a JSON-encoded object of credential query entries",
-                    ));
-                }
-            }
-            RawVpToken::Object(entries) => VpToken::new(entries),
-        };
-
-        token.validate().map_err(de::Error::custom)?;
-        Ok(token)
-    }
+fn is_valid_dcql_query_id(query_id: &str) -> bool {
+    !query_id.is_empty()
+        && query_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 /// Authorization Response parameters for OpenID4VP.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthorizationResponse {
-    /// The VP token returned to the Verifier.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vp_token: Option<VpToken>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorizationResponse {
+    /// Successful Authorization Response parameters.
+    Success(AuthorizationSuccessResponse),
 
-    /// Optional ID Token returned when the response type includes `id_token`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id_token: Option<String>,
-
-    /// Optional authorization code returned when the response type includes `code`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-
-    /// Optional issuer identifier returned by response types that define it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iss: Option<String>,
-
-    /// Optional state value echoed from the authorization request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
+    /// Authorization Error Response parameters.
+    Error(AuthorizationErrorResponse),
 }
 
 impl AuthorizationResponse {
-    /// Creates a new authorization response.
+    /// Creates a new successful authorization response with a VP token.
+    pub fn new(vp_token: VpToken) -> Self {
+        Self::Success(AuthorizationSuccessResponse::new(vp_token))
+    }
+
+    /// Creates a new authorization error response.
+    pub fn error(error: AuthorizationErrorCode) -> Self {
+        Self::Error(AuthorizationErrorResponse::new(error))
+    }
+
+    /// Adds a state value to the response.
+    pub fn with_state(mut self, state: impl Into<String>) -> Self {
+        match &mut self {
+            Self::Success(response) => response.state = Some(state.into()),
+            Self::Error(response) => response.state = Some(state.into()),
+        }
+        self
+    }
+
+    /// Returns a helper that serializes `vp_token` as a JSON string for
+    /// `application/x-www-form-urlencoded` `direct_post`.
+    pub fn as_direct_post_form(&self) -> DirectPostAuthorizationResponse<'_> {
+        DirectPostAuthorizationResponse { response: self }
+    }
+}
+
+impl Serialize for AuthorizationResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Success(response) => response.serialize(serializer),
+            Self::Error(response) => response.serialize(serializer),
+        }
+    }
+}
+
+/// Successful Authorization Response parameters for OpenID4VP.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthorizationSuccessResponse {
+    /// The VP token returned to the Verifier.
+    vp_token: Option<VpToken>,
+
+    /// Optional ID Token returned when the response type includes `id_token`.
+    id_token: Option<String>,
+
+    /// Optional authorization code returned when the response type includes `code`.
+    code: Option<String>,
+
+    /// Optional issuer identifier returned by response types that define it.
+    iss: Option<String>,
+
+    /// Optional state value echoed from the authorization request.
+    state: Option<String>,
+}
+
+impl AuthorizationSuccessResponse {
+    /// Creates a successful response with a VP token.
     pub fn new(vp_token: VpToken) -> Self {
         Self {
             vp_token: Some(vp_token),
@@ -132,17 +156,105 @@ impl AuthorizationResponse {
         }
     }
 
+    /// Creates a successful response with an authorization code.
+    pub fn code(code: impl Into<String>) -> Self {
+        Self {
+            vp_token: None,
+            id_token: None,
+            code: Some(code.into()),
+            iss: None,
+            state: None,
+        }
+    }
+
+    /// Adds an ID Token to the response.
+    pub fn with_id_token(mut self, id_token: impl Into<String>) -> Self {
+        self.id_token = Some(id_token.into());
+        self
+    }
+
+    /// Adds an authorization code to the response.
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
+    }
+
+    /// Adds an issuer identifier to the response.
+    pub fn with_iss(mut self, iss: impl Into<String>) -> Self {
+        self.iss = Some(iss.into());
+        self
+    }
+
     /// Adds a state value to the response.
     pub fn with_state(mut self, state: impl Into<String>) -> Self {
         self.state = Some(state.into());
         self
     }
+}
 
-    /// Returns a helper that serializes `vp_token` as a JSON string for
-    /// `application/x-www-form-urlencoded` `direct_post`.
-    pub fn as_direct_post_form(&self) -> DirectPostAuthorizationResponse<'_> {
-        DirectPostAuthorizationResponse { response: self }
+/// Authorization Error Response parameters for OpenID4VP.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthorizationErrorResponse {
+    /// Error code describing why the request could not be completed.
+    error: AuthorizationErrorCode,
+
+    /// Optional human-readable error description.
+    error_description: Option<String>,
+
+    /// Optional URI with additional error information.
+    error_uri: Option<Url>,
+
+    /// Optional state value echoed from the authorization request.
+    state: Option<String>,
+}
+
+impl AuthorizationErrorResponse {
+    /// Creates an authorization error response.
+    pub fn new(error: AuthorizationErrorCode) -> Self {
+        Self {
+            error,
+            error_description: None,
+            error_uri: None,
+            state: None,
+        }
     }
+
+    /// Adds a human-readable error description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.error_description = Some(description.into());
+        self
+    }
+
+    /// Adds a URI with additional error information.
+    pub fn with_error_uri(mut self, error_uri: Url) -> Self {
+        self.error_uri = Some(error_uri);
+        self
+    }
+
+    /// Adds a state value to the response.
+    pub fn with_state(mut self, state: impl Into<String>) -> Self {
+        self.state = Some(state.into());
+        self
+    }
+}
+
+/// OAuth and OpenID4VP authorization error codes used by Section 8.5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorizationErrorCode {
+    InvalidRequest,
+    InvalidScope,
+    InvalidClient,
+    AccessDenied,
+    UnauthorizedClient,
+    UnsupportedResponseType,
+    ServerError,
+    TemporarilyUnavailable,
+    VpFormatsNotSupported,
+    InvalidRequestUriMethod,
+    InvalidTransactionData,
+    WalletUnavailable,
 }
 
 /// Form-encoding helper for `direct_post` authorization responses.
@@ -156,31 +268,35 @@ impl Serialize for DirectPostAuthorizationResponse<'_> {
     where
         S: Serializer,
     {
-        #[derive(Serialize)]
-        struct Form<'a> {
-            #[serde(
-                skip_serializing_if = "Option::is_none",
-                serialize_with = "serialize_optional_vp_token_as_json_string"
-            )]
-            vp_token: Option<&'a VpToken>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            id_token: Option<&'a str>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            code: Option<&'a str>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            iss: Option<&'a str>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            state: Option<&'a str>,
+        match self.response {
+            AuthorizationResponse::Success(response) => {
+                DirectPostAuthorizationSuccessResponse::new(response).serialize(serializer)
+            }
+            AuthorizationResponse::Error(response) => response.serialize(serializer),
         }
+    }
+}
 
-        Form {
-            vp_token: self.response.vp_token.as_ref(),
-            id_token: self.response.id_token.as_deref(),
-            code: self.response.code.as_deref(),
-            iss: self.response.iss.as_deref(),
-            state: self.response.state.as_deref(),
+#[skip_serializing_none]
+#[derive(Serialize)]
+struct DirectPostAuthorizationSuccessResponse<'a> {
+    #[serde(serialize_with = "serialize_optional_vp_token_as_json_string")]
+    vp_token: Option<&'a VpToken>,
+    id_token: Option<&'a str>,
+    code: Option<&'a str>,
+    iss: Option<&'a str>,
+    state: Option<&'a str>,
+}
+
+impl<'a> DirectPostAuthorizationSuccessResponse<'a> {
+    fn new(response: &'a AuthorizationSuccessResponse) -> Self {
+        Self {
+            vp_token: response.vp_token.as_ref(),
+            id_token: response.id_token.as_deref(),
+            code: response.code.as_deref(),
+            iss: response.iss.as_deref(),
+            state: response.state.as_deref(),
         }
-        .serialize(serializer)
     }
 }
 
@@ -202,11 +318,34 @@ where
     }
 }
 
+/// Form body for the `direct_post.jwt` response mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DirectPostJwtResponse {
+    response: String,
+}
+
+impl DirectPostJwtResponse {
+    /// Creates a `direct_post.jwt` response form body.
+    pub fn new(response: impl Into<String>) -> Result<Self, String> {
+        let response = response.into();
+        if response.trim().is_empty() {
+            return Err("direct_post.jwt response must not be empty".to_string());
+        }
+
+        Ok(Self { response })
+    }
+
+    /// Returns the encrypted JWT response.
+    pub fn response(&self) -> &str {
+        &self.response
+    }
+}
+
 /// Response to the verifier when the Wallet uses the `direct_post` response mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct DirectPostResponse {
     /// Optional redirect URI provided by the Verifier.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub redirect_uri: Option<Url>,
 }
 
@@ -215,16 +354,22 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn string_presentation(value: &str) -> Presentation {
+        Presentation::String(value.to_string())
+    }
+
+    fn vp_token(entries: BTreeMap<String, Vec<Presentation>>) -> VpToken {
+        VpToken::new(entries)
+    }
+
     #[test]
     fn serializes_vp_token_with_single_entry_to_json_object() {
         let mut entries = BTreeMap::new();
         entries.insert(
             "my_credential".to_string(),
-            vec![serde_json::Value::String(
-                "eyJhbGciOiJFUzI1NiJ9...".to_string(),
-            )],
+            vec![string_presentation("eyJhbGciOiJFUzI1NiJ9...")],
         );
-        let token = VpToken::new(entries);
+        let token = vp_token(entries);
 
         let json = serde_json::to_value(&token).expect("serialize");
 
@@ -237,31 +382,34 @@ mod tests {
     }
 
     #[test]
-    fn serializes_vp_token_to_json_object() {
+    fn serializes_vp_token_with_object_presentation() {
+        let mut presentation = serde_json::Map::new();
+        presentation.insert("format".to_string(), json!("ldp_vp"));
+
         let mut entries = BTreeMap::new();
         entries.insert(
             "my_credential".to_string(),
             vec![
-                serde_json::Value::String("eyJhbGciOiJFUzI1NiJ9...".to_string()),
-                json!({"format": "dc+sd-jwt"}),
+                string_presentation("eyJhbGciOiJFUzI1NiJ9..."),
+                Presentation::Object(presentation),
             ],
         );
 
-        let token = VpToken::new(entries);
+        let token = vp_token(entries);
 
         let json = serde_json::to_value(&token).expect("serialize");
 
         assert_eq!(
             json,
             json!({
-                "my_credential": ["eyJhbGciOiJFUzI1NiJ9...", {"format": "dc+sd-jwt"}]
+                "my_credential": ["eyJhbGciOiJFUzI1NiJ9...", {"format": "ldp_vp"}]
             })
         );
     }
 
     #[test]
     fn rejects_empty_vp_token_on_serialize() {
-        let token = VpToken::new(BTreeMap::new());
+        let token = vp_token(BTreeMap::new());
 
         let err = serde_json::to_string(&token).unwrap_err();
         assert!(
@@ -271,42 +419,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_presentation_value_on_serialize() {
+    fn rejects_invalid_dcql_query_id_on_serialize() {
         let mut entries = BTreeMap::new();
-        entries.insert("my_credential".to_string(), vec![serde_json::Value::Null]);
+        entries.insert(
+            "credential/1".to_string(),
+            vec![string_presentation("vp-token-value")],
+        );
 
-        let token = VpToken::new(entries);
-
-        let err = serde_json::to_string(&token).unwrap_err();
-        assert!(err.to_string().contains("invalid presentation value"));
+        let err = serde_json::to_string(&vp_token(entries)).unwrap_err();
+        assert!(err.to_string().contains("valid DCQL credential query id"));
     }
 
     #[test]
-    fn round_trips_vp_token_via_form_body() {
+    fn rejects_empty_presentation_list_on_serialize() {
         let mut entries = BTreeMap::new();
-        entries.insert(
-            "my_credential".to_string(),
-            vec![serde_json::Value::String("vp-token-value".to_string())],
-        );
+        entries.insert("my_credential".to_string(), Vec::new());
 
-        let response = AuthorizationResponse::new(VpToken::new(entries)).with_state("state-123");
-
-        let encoded =
-            serde_urlencoded::to_string(response.as_direct_post_form()).expect("serialize");
-        let decoded: AuthorizationResponse =
-            serde_urlencoded::from_str(&encoded).expect("deserialize");
-
-        assert_eq!(decoded, response);
-
-        let params: BTreeMap<_, _> = url::form_urlencoded::parse(encoded.as_bytes())
-            .into_owned()
-            .collect();
-
-        assert_eq!(
-            params.get("vp_token"),
-            Some(&r#"{"my_credential":["vp-token-value"]}"#.to_string())
-        );
-        assert_eq!(params.get("state"), Some(&"state-123".to_string()));
+        let err = serde_json::to_string(&vp_token(entries)).unwrap_err();
+        assert!(err.to_string().contains("at least one presentation"));
     }
 
     #[test]
@@ -314,12 +444,10 @@ mod tests {
         let mut entries = BTreeMap::new();
         entries.insert(
             "my_credential".to_string(),
-            vec![serde_json::Value::String(
-                "eyJhbGciOiJFUzI1NiJ9...".to_string(),
-            )],
+            vec![string_presentation("eyJhbGciOiJFUzI1NiJ9...")],
         );
 
-        let response = AuthorizationResponse::new(VpToken::new(entries)).with_state("state-123");
+        let response = AuthorizationResponse::new(vp_token(entries)).with_state("state-123");
 
         let json = serde_json::to_value(&response).expect("serialize");
 
@@ -335,59 +463,110 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_vp_token_from_form_json_object_string() {
-        let encoded = "vp_token=%7B%22my_credential%22%3A%5B%22eyJhbGciOiJFUzI1NiJ9...%22%5D%7D";
+    fn serializes_success_response_with_code_without_vp_token() {
+        let response = AuthorizationResponse::Success(AuthorizationSuccessResponse::code("abc"))
+            .with_state("xyz");
 
-        let parsed: AuthorizationResponse =
-            serde_urlencoded::from_str(encoded).expect("deserialize");
+        let json = serde_json::to_value(&response).expect("serialize");
 
         assert_eq!(
-            parsed
-                .vp_token
-                .as_ref()
-                .unwrap()
-                .entries()
-                .get("my_credential")
-                .unwrap()
-                .len(),
-            1
+            json,
+            json!({
+                "code": "abc",
+                "state": "xyz"
+            })
         );
     }
 
     #[test]
-    fn deserializes_code_authorization_response_without_vp_token() {
-        let response: AuthorizationResponse =
-            serde_json::from_value(json!({"code": "abc", "state": "xyz"})).expect("deserialize");
+    fn serializes_error_response() {
+        let response = AuthorizationResponse::error(AuthorizationErrorCode::WalletUnavailable)
+            .with_state("state-123");
 
-        assert_eq!(response.code.as_deref(), Some("abc"));
-        assert_eq!(response.state.as_deref(), Some("xyz"));
-        assert!(response.vp_token.is_none());
-    }
+        let json = serde_json::to_value(&response).expect("serialize");
 
-    #[test]
-    fn ignores_unknown_authorization_response_parameters() {
-        let response: AuthorizationResponse =
-            serde_json::from_value(json!({"code": "abc", "extension": "value"}))
-                .expect("deserialize");
-
-        assert_eq!(response.code.as_deref(), Some("abc"));
-    }
-
-    #[test]
-    fn rejects_invalid_vp_token_on_deserialize() {
-        let err =
-            serde_urlencoded::from_str::<AuthorizationResponse>("vp_token=%20%20").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("vp_token must be a JSON-encoded object")
+        assert_eq!(
+            json,
+            json!({
+                "error": "wallet_unavailable",
+                "state": "state-123"
+            })
         );
     }
 
     #[test]
-    fn rejects_empty_presentation_list_on_deserialize() {
-        let encoded = "vp_token=%7B%22my_credential%22%3A%5B%5D%7D";
-        let err = serde_urlencoded::from_str::<AuthorizationResponse>(encoded).unwrap_err();
-        assert!(err.to_string().contains("at least one presentation"));
+    fn serializes_error_response_with_optional_fields() {
+        let response = AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequest)
+            .with_description("missing dcql_query")
+            .with_error_uri(Url::parse("https://verifier.example/errors/invalid-request").unwrap())
+            .with_state("state-123");
+
+        let json = serde_json::to_value(&response).expect("serialize");
+
+        assert_eq!(
+            json,
+            json!({
+                "error": "invalid_request",
+                "error_description": "missing dcql_query",
+                "error_uri": "https://verifier.example/errors/invalid-request",
+                "state": "state-123"
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_vp_token_via_direct_post_form_body() {
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "my_credential".to_string(),
+            vec![string_presentation("vp-token-value")],
+        );
+
+        let response = AuthorizationResponse::new(vp_token(entries)).with_state("state-123");
+
+        let encoded =
+            serde_urlencoded::to_string(response.as_direct_post_form()).expect("serialize");
+        let params: BTreeMap<_, _> = url::form_urlencoded::parse(encoded.as_bytes())
+            .into_owned()
+            .collect();
+
+        assert_eq!(
+            params.get("vp_token"),
+            Some(&r#"{"my_credential":["vp-token-value"]}"#.to_string())
+        );
+        assert_eq!(params.get("state"), Some(&"state-123".to_string()));
+    }
+
+    #[test]
+    fn serializes_error_response_via_direct_post_form_body() {
+        let response = AuthorizationResponse::error(AuthorizationErrorCode::AccessDenied)
+            .with_state("state-123");
+
+        let encoded =
+            serde_urlencoded::to_string(response.as_direct_post_form()).expect("serialize");
+        let params: BTreeMap<_, _> = url::form_urlencoded::parse(encoded.as_bytes())
+            .into_owned()
+            .collect();
+
+        assert_eq!(params.get("error"), Some(&"access_denied".to_string()));
+        assert_eq!(params.get("state"), Some(&"state-123".to_string()));
+    }
+
+    #[test]
+    fn serializes_direct_post_jwt_response() {
+        let response = DirectPostJwtResponse::new("encrypted.jwt.response").unwrap();
+
+        let encoded = serde_urlencoded::to_string(&response).expect("serialize");
+
+        assert_eq!(encoded, "response=encrypted.jwt.response");
+        assert_eq!(response.response(), "encrypted.jwt.response");
+    }
+
+    #[test]
+    fn rejects_empty_direct_post_jwt_response() {
+        let err = DirectPostJwtResponse::new("  ").unwrap_err();
+
+        assert!(err.contains("must not be empty"));
     }
 
     #[test]
