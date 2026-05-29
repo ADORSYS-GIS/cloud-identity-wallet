@@ -577,7 +577,7 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
                 Value::Array(vec![item_tag24_val]),
             )]),
         ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
+        (Value::Text("issuerAuth".into()), Value::Tag(18, Box::new(cose_sign1))),
     ]);
 
     Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
