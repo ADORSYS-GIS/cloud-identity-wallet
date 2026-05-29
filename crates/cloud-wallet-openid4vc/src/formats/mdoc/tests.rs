@@ -614,3 +614,218 @@ fn rejects_digest_id_out_of_range() {
         "expected DigestIdOutOfRange {{ digest_id: 2_147_483_648 }}, got: {err:?}"
     );
 }
+
+/// Builds a base64url-encoded `IssuerSigned` with a caller-controlled
+/// `nameSpaces` value.
+///
+/// The MSO (`version`, `digestAlgorithm`, `validityInfo`, `valueDigests`,
+/// `deviceKeyInfo`, `docType`) and the `COSE_Sign1` (`issuerAuth`) are
+/// constructed with minimal but structurally valid values, so that parsing
+/// reaches `parse_name_spaces` before encountering the injected error.
+fn build_issuer_signed_with_ns(name_spaces_val: Value) -> String {
+    let device_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())), // kty: EC2
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())), // crv: P-256
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])), // x
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])), // y
+    ]);
+
+    let mso = Value::Map(vec![
+        (Value::Text("version".into()), Value::Text("1.0".into())),
+        (
+            Value::Text("digestAlgorithm".into()),
+            Value::Text("SHA-256".into()),
+        ),
+        (
+            Value::Text("valueDigests".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Map(vec![(
+                    Value::Integer(0u64.into()),
+                    Value::Bytes(vec![0u8; 32]),
+                )]),
+            )]),
+        ),
+        (
+            Value::Text("deviceKeyInfo".into()),
+            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
+        ),
+        (
+            Value::Text("docType".into()),
+            Value::Text("org.iso.18013.5.1.mDL".into()),
+        ),
+        (
+            Value::Text("validityInfo".into()),
+            Value::Map(vec![
+                (
+                    Value::Text("signed".into()),
+                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
+                ),
+                (
+                    Value::Text("validFrom".into()),
+                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
+                ),
+                (
+                    Value::Text("validUntil".into()),
+                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
+                ),
+            ]),
+        ),
+    ]);
+
+    let mso_bytes = cbor(&mso);
+    // ISO 18013-5 §9.1.2: COSE payload = MobileSecurityObjectBytes = #6.24(bstr)
+    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
+    // {1: -7} = alg: ES256
+    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
+    let cose_sign1 = Value::Array(vec![
+        Value::Bytes(protected_header_bytes),
+        Value::Map(vec![]),
+        Value::Bytes(mso_payload),
+        Value::Bytes(vec![0u8; 64]),
+    ]);
+
+    let issuer_signed = Value::Map(vec![
+        (Value::Text("nameSpaces".into()), name_spaces_val),
+        (
+            Value::Text("issuerAuth".into()),
+            Value::Tag(18, Box::new(cose_sign1)),
+        ),
+    ]);
+
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+}
+
+#[test]
+fn rejects_untagged_issuer_auth() {
+    // Arrange: issuerAuth is a plain CBOR array — not wrapped in CBOR tag 18.
+    // RFC 9052 §4.2 and ISO 18013-5 §9.1.2 require issuerAuth = #6.18(COSE_Sign1).
+    // The tag check fires before any MSO decoding, so nameSpaces does not need
+    // to be structurally valid.
+    let issuer_signed = Value::Map(vec![
+        (Value::Text("nameSpaces".into()), Value::Map(vec![])),
+        // Raw COSE_Sign1 array — intentionally omits the required tag 18 wrapper.
+        (Value::Text("issuerAuth".into()), Value::Array(vec![])),
+    ]);
+    let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("untagged issuerAuth must be rejected");
+
+    // Assert
+    assert!(
+        matches!(
+            err,
+            MdocError::UnexpectedCborType {
+                field: "issuerAuth"
+            }
+        ),
+        "expected UnexpectedCborType {{ field: \"issuerAuth\" }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_empty_value_digests() {
+    // Arrange: MSO `valueDigests` is an empty map.
+    // ISO 18013-5 CDDL: ValueDigests = { + NameSpace => DigestIDs }
+    // The `+` operator requires at least one entry; an empty map is invalid.
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        Value::Map(vec![]), // empty valueDigests
+        "1.0",
+        Some(vec![0u8; 16]),
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("empty valueDigests must be rejected");
+
+    // Assert
+    assert!(
+        matches!(
+            err,
+            MdocError::UnexpectedCborType {
+                field: "valueDigests"
+            }
+        ),
+        "expected UnexpectedCborType {{ field: \"valueDigests\" }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_empty_digest_ids_per_namespace() {
+    // Arrange: `valueDigests` has a namespace entry, but the inner DigestIDs map is empty.
+    // ISO 18013-5 CDDL: DigestIDs = { + DigestID => Digest }
+    // The `+` operator requires at least one digest per namespace; an empty map is invalid.
+    let empty_digest_ids = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![]), // empty DigestIDs for this namespace
+    )]);
+    let raw = build_issuer_signed_full(
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+        "SHA-256",
+        empty_digest_ids,
+        "1.0",
+        Some(vec![0u8; 16]),
+    );
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("empty DigestIDs must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnexpectedCborType { field: "DigestIDs" }),
+        "expected UnexpectedCborType {{ field: \"DigestIDs\" }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_empty_name_spaces() {
+    // Arrange: `nameSpaces` map has no namespace entries at all.
+    // ISO 18013-5 CDDL: IssuerNameSpaces = { + NameSpace => [ + IssuerSignedItemBytes ] }
+    // The `+` operator requires at least one namespace.
+    let raw = build_issuer_signed_with_ns(Value::Map(vec![]));
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("empty nameSpaces must be rejected");
+
+    // Assert
+    assert!(
+        matches!(
+            err,
+            MdocError::UnexpectedCborType {
+                field: "nameSpaces"
+            }
+        ),
+        "expected UnexpectedCborType {{ field: \"nameSpaces\" }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn rejects_empty_namespace_item_array() {
+    // Arrange: `nameSpaces` has a namespace key but its item array is empty.
+    // ISO 18013-5 CDDL: [ + IssuerSignedItemBytes ] — at least one item is required
+    // per namespace; an empty array must be rejected to prevent a namespace with no
+    // verifiable elements from being silently accepted.
+    let empty_ns = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Array(vec![]), // namespace present but no items
+    )]);
+    let raw = build_issuer_signed_with_ns(empty_ns);
+
+    // Act
+    let err = ParsedMdoc::parse(&raw).expect_err("empty namespace item array must be rejected");
+
+    // Assert
+    assert!(
+        matches!(
+            err,
+            MdocError::UnexpectedCborType {
+                field: "IssuerNameSpaces"
+            }
+        ),
+        "expected UnexpectedCborType {{ field: \"IssuerNameSpaces\" }}, got: {err:?}"
+    );
+}
