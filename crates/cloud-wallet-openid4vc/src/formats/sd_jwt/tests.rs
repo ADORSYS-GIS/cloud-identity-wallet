@@ -1,6 +1,22 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use cloud_wallet_crypto::digest::HashAlg;
+use cloud_wallet_crypto::ecdsa::{Curve as EcdsaCurve, KeyPair as EcdsaKeyPair};
+use cloud_wallet_crypto::jwk::{
+    Algorithm as JwkAlgorithm, Jwk, JwkSet, KeyUse, Signing as JwkSigning,
+};
+use jsonwebtoken::{Algorithm as JwtAlgorithm, EncodingKey, Header, get_current_timestamp};
+use rcgen::{
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyPair as CertKeyPair, KeyUsagePurpose,
+};
+use rustls_pki_types::TrustAnchor;
 use serde_json::{Value, json};
+use webpki::anchor_from_trusted_cert;
+
+use crate::formats::sd_jwt::verification::{verify_with_jwks, verify_with_x5c};
 
 use super::*;
 
@@ -32,6 +48,128 @@ fn b64(value: Value) -> String {
 // Create a compact JWT from header and claims
 fn compact_jwt(header: Value, claims: Value) -> String {
     format!("{}.{}.sig", b64(header), b64(claims))
+}
+
+fn signed_sd_jwt() -> (String, JwkSet) {
+    signed_sd_jwt_with_claims(json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "given_name": "Ada"
+    }))
+}
+
+fn signed_sd_jwt_with_claims(claims: Value) -> (String, JwkSet) {
+    let key_pair = EcdsaKeyPair::generate(EcdsaCurve::P256).expect("key generation should work");
+    let mut jwk = Jwk::try_from(&key_pair).expect("JWK conversion should work");
+    jwk.prm.kid = Some("issuer-key-1".to_string());
+    jwk.prm.alg = Some(JwkAlgorithm::Signing(JwkSigning::Es256));
+    jwk.prm.key_use = Some(KeyUse::Signing);
+
+    let mut header = Header::new(JwtAlgorithm::ES256);
+    header.typ = Some("dc+sd-jwt".to_string());
+    header.kid = Some("issuer-key-1".to_string());
+
+    let token = jsonwebtoken::encode(
+        &header,
+        &claims,
+        &EncodingKey::from_ec_der(key_pair.to_pkcs8_der()),
+    )
+    .expect("test JWT should sign");
+
+    (format!("{token}~"), JwkSet { keys: vec![jwk] })
+}
+
+struct X5cSdJwt {
+    raw: String,
+    trust_anchor: TrustAnchor<'static>,
+    untrusted_anchor: TrustAnchor<'static>,
+}
+
+fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
+    sd_jwt_with_custom_x5c(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        true,
+    )
+}
+
+fn sd_jwt_with_custom_x5c(
+    jwt_algorithm: JwtAlgorithm,
+    leaf_key_usages: Vec<KeyUsagePurpose>,
+    sign_with_leaf_key: bool,
+) -> X5cSdJwt {
+    let root_key = CertKeyPair::generate().expect("root key generation should work");
+    let mut root_params = CertificateParams::default();
+    root_params.distinguished_name = DistinguishedName::new();
+    root_params
+        .distinguished_name
+        .push(DnType::CommonName, "Test Root CA");
+    root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    root_params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+        KeyUsagePurpose::DigitalSignature,
+    ];
+    let root_cert = root_params
+        .self_signed(&root_key)
+        .expect("root certificate should sign");
+    let root_anchor = anchor_from_trusted_cert(root_cert.der())
+        .expect("root certificate should become trust anchor")
+        .to_owned();
+    let root_issuer = Issuer::new(root_params, root_key);
+
+    let leaf_key = CertKeyPair::generate().expect("leaf key generation should work");
+    let mut leaf_params = CertificateParams::new(["issuer.example.com".to_owned()])
+        .expect("leaf params should build");
+    leaf_params.distinguished_name = DistinguishedName::new();
+    leaf_params
+        .distinguished_name
+        .push(DnType::CommonName, "issuer.example.com");
+    leaf_params.is_ca = IsCa::NoCa;
+    leaf_params.key_usages = leaf_key_usages;
+    leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let leaf_cert = leaf_params
+        .signed_by(&leaf_key, &root_issuer)
+        .expect("leaf certificate should sign");
+
+    let untrusted_key = CertKeyPair::generate().expect("untrusted root key should generate");
+    let mut untrusted_params = CertificateParams::default();
+    untrusted_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let untrusted_cert = untrusted_params
+        .self_signed(&untrusted_key)
+        .expect("untrusted root certificate should sign");
+    let untrusted_anchor = anchor_from_trusted_cert(untrusted_cert.der())
+        .expect("untrusted root certificate should become trust anchor")
+        .to_owned();
+
+    let mut header = Header::new(jwt_algorithm);
+    header.typ = Some("dc+sd-jwt".to_owned());
+    header.x5c = Some(vec![STANDARD.encode(leaf_cert.der().as_ref())]);
+
+    let claims = json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "given_name": "Ada"
+    });
+    let token = if sign_with_leaf_key {
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
+        )
+        .expect("test JWT should sign with leaf key")
+    } else {
+        compact_jwt(
+            serde_json::to_value(header).expect("test header should serialize"),
+            claims,
+        )
+    };
+
+    X5cSdJwt {
+        raw: format!("{token}~"),
+        trust_anchor: root_anchor,
+        untrusted_anchor,
+    }
 }
 
 // Create a disclosure from a value
@@ -96,9 +234,11 @@ fn assert_no_rendering_metadata(value: &Value) {
     for claim_name in [
         "iss",
         "sub",
+        "aud",
         "exp",
         "nbf",
         "iat",
+        "jti",
         "vct",
         "vct#integrity",
         "cnf",
@@ -660,4 +800,177 @@ fn renders_disclosed_claims_without_protocol_metadata() {
         })
     );
     assert_no_rendering_metadata(&rendered);
+}
+
+#[test]
+fn verifies_issuer_signature_with_trusted_jwks() {
+    let (raw, jwks) = signed_sd_jwt();
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    let algorithm = verify_with_jwks(&sd_jwt, &jwks).expect("signature should verify");
+
+    assert_eq!(algorithm, JwtAlgorithm::ES256);
+}
+
+#[test]
+fn rejects_issuer_signature_when_trusted_jwk_algorithm_differs() {
+    let (raw, mut jwks) = signed_sd_jwt();
+    jwks.keys[0].prm.alg = Some(JwkAlgorithm::Signing(JwkSigning::Rs256));
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    assert!(matches!(
+        verify_with_jwks(&sd_jwt, &jwks),
+        Err(VerificationError::InvalidKey { .. })
+    ));
+}
+
+#[test]
+fn rejects_tampered_issuer_signature() {
+    let (raw, jwks) = signed_sd_jwt();
+    let token = raw.strip_suffix('~').expect("issued SD-JWT has trailing ~");
+    let mut parts = token.split('.').collect::<Vec<_>>();
+    parts[2] = "AA";
+    let raw = format!("{}.{}.{}~", parts[0], parts[1], parts[2]);
+    let sd_jwt = SdJwt::parse(&raw).expect("tampered SD-JWT should still parse");
+
+    assert!(matches!(
+        verify_with_jwks(&sd_jwt, &jwks),
+        Err(VerificationError::Signature { .. })
+    ));
+}
+
+#[test]
+fn rejects_expired_jwt_claims() {
+    let now = get_current_timestamp();
+    let (raw, jwks) = signed_sd_jwt_with_claims(json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "exp": now.saturating_sub(120),
+    }));
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    let result = verify_with_jwks(&sd_jwt, &jwks);
+    // Expired JWT should fail signature verification
+    assert!(matches!(result, Err(VerificationError::Signature(_))));
+}
+
+#[test]
+fn rejects_not_yet_valid_jwt_claims() {
+    let now = get_current_timestamp();
+    let (raw, jwks) = signed_sd_jwt_with_claims(json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "nbf": now + 120,
+    }));
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    let result = verify_with_jwks(&sd_jwt, &jwks);
+    // Future nbf (Not Before) should fail signature verification
+    assert!(matches!(result, Err(VerificationError::Signature(_))));
+}
+
+#[tokio::test]
+async fn verifies_x5c_signature_with_custom_trust_anchor() {
+    let fixture = signed_sd_jwt_with_custom_x5c();
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+    let http_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+
+    let algorithm = sd_jwt
+        .verify_signature(&http_client, X5cTrustAnchors::Custom(&trust_anchors))
+        .await
+        .expect("x5c signature should verify with custom root");
+
+    assert_eq!(algorithm, JwtAlgorithm::ES256);
+}
+
+#[tokio::test]
+async fn rejects_x5c_signature_with_untrusted_trust_anchor() {
+    let fixture = signed_sd_jwt_with_custom_x5c();
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.untrusted_anchor];
+    let http_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build();
+
+    assert!(matches!(
+        sd_jwt
+            .verify_signature(&http_client, X5cTrustAnchors::Custom(&trust_anchors))
+            .await,
+        Err(Error::Verification(VerificationError::X5c { .. }))
+    ));
+}
+
+#[test]
+fn rejects_invalid_x5c_certificate_chain_before_signature_verification() {
+    let jwt = compact_jwt(
+        json!({
+            "alg": "ES256",
+            "typ": "dc+sd-jwt",
+            "x5c": ["not-base64!"]
+        }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let raw = format!("{jwt}~");
+    let sd_jwt = SdJwt::parse(&raw).expect("SD-JWT with x5c header should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
+        Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_empty_x5c_certificate_chain() {
+    let jwt = compact_jwt(
+        json!({
+            "alg": "ES256",
+            "typ": "dc+sd-jwt",
+            "x5c": []
+        }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let raw = format!("{jwt}~");
+    let sd_jwt = SdJwt::parse(&raw).expect("SD-JWT with x5c header should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
+        Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_x5c_leaf_without_digital_signature_key_usage() {
+    let fixture = sd_jwt_with_custom_x5c(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::KeyEncipherment],
+        true,
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::InvalidKey { .. })
+    ));
+}
+
+#[test]
+fn rejects_x5c_leaf_public_key_type_that_does_not_match_algorithm() {
+    let fixture = sd_jwt_with_custom_x5c(
+        JwtAlgorithm::RS256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        false,
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::InvalidKey { .. })
+    ));
 }
