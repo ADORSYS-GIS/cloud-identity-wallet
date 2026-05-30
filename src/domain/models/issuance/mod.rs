@@ -726,7 +726,7 @@ fn credential_from_sd_jwt(
     raw_credential: String,
     receipt_time: time::UtcDateTime,
 ) -> Result<Credential> {
-    let issuer = claims.rfc7519.iss.unwrap_or_else(|| issuer.to_owned());
+    let issuer = claims.rfc7519.iss.unwrap_or(issuer.to_owned());
     let issued_at = claims
         .rfc7519
         .iat
@@ -807,7 +807,7 @@ fn extract_display_metadata(
         .as_deref()
         .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), preferred))
         .and_then(|d| d.name.clone())
-        .unwrap_or_else(|| context.offer.credential_issuer.to_string());
+        .unwrap_or(context.offer.credential_issuer.to_string());
 
     let cred_display = context
         .issuer_metadata
