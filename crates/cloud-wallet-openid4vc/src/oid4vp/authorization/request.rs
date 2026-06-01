@@ -526,9 +526,7 @@ impl TransactionDataEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::dcql::{
-        CredentialFormat, CredentialMeta, CredentialQuery, DcSdJwtMeta,
-    };
+    use super::super::super::dcql::{CredentialFormat, CredentialMeta, CredentialQuery};
     use super::*;
     use serde_json::json;
 
@@ -680,9 +678,9 @@ mod tests {
                     id: "test-id".to_string(),
                     format: CredentialFormat::DcSdJwt,
                     multiple: None,
-                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
+                    meta: CredentialMeta::SdJwt {
                         vct_values: vec!["https://example.com".to_string()],
-                    }),
+                    },
                     claims: None,
                     claim_sets: None,
                     trusted_authorities: None,
