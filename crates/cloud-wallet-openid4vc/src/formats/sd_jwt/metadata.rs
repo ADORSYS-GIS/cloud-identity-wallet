@@ -1,6 +1,3 @@
-// TODO : Remove dead code allowance when metadata is used
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 
 use cloud_wallet_crypto::jwk::{Jwk, JwkSet};
