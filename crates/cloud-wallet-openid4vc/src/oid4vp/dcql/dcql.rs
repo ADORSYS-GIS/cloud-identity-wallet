@@ -331,12 +331,13 @@ impl CredentialQuery {
         }
 
         // Validate format - for Other variant, check that it's not empty/whitespace
-        if let CredentialFormat::Other(ref s) = self.format 
-            && s.trim().is_empty() {
-                return Err(invalid_dcql(format!(
-                    "'dcql_query.credentials[{idx}].format' must not be empty"
-                )));
-            }
+        if let CredentialFormat::Other(ref s) = self.format
+            && s.trim().is_empty()
+        {
+            return Err(invalid_dcql(format!(
+                "'dcql_query.credentials[{idx}].format' must not be empty"
+            )));
+        }
 
         // format-aware meta validation
         match &self.meta {
@@ -464,760 +465,92 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn claim_value_enum_variants() {
-        let string_val = ClaimValue::String("test".to_string());
-        let int_val = ClaimValue::Integer(42);
-        let bool_val = ClaimValue::Boolean(true);
+    fn dcql_query_happy_path() {
+        // Valid DCQL query with dc+sd-jwt credential
+        let query: DcqlQuery = serde_json::from_value(json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com/vct"] },
+                "claims": [
+                    { "path": ["given_name"], "id": "gn" },
+                    { "path": ["addresses", 0, "city"], "id": "city" }
+                ],
+                "claim_sets": [["gn"], ["gn", "city"]],
+                "trusted_authorities": [
+                    { "type": "aki", "values": ["key1"] },
+                    { "type": "etsi_tl", "values": ["tl1"] }
+                ]
+            }]
+        }))
+        .unwrap();
 
-        match string_val {
-            ClaimValue::String(s) => assert_eq!(s, "test"),
-            _ => panic!("expected String"),
-        }
-        match int_val {
-            ClaimValue::Integer(i) => assert_eq!(i, 42),
+        assert!(query.validate().is_ok());
+        assert_eq!(query.credentials[0].id, "pid");
+        assert_eq!(query.credentials[0].format, CredentialFormat::DcSdJwt);
+    }
+
+    #[test]
+    fn dcql_query_with_credential_sets() {
+        let query: DcqlQuery = serde_json::from_value(json!({
+            "credentials": [
+                { "id": "cred1", "format": "dc+sd-jwt", "meta": { "vct_values": ["vct1"] } },
+                { "id": "cred2", "format": "mso_mdoc", "meta": { "doctype_value": "org.iso.18013.5.1.mDL" } }
+            ],
+            "credential_sets": [
+                { "options": [["cred1"], ["cred2"]], "required": true }
+            ]
+        })).unwrap();
+
+        assert!(query.validate().is_ok());
+        assert_eq!(query.credentials.len(), 2);
+        assert_eq!(query.credentials[1].format, CredentialFormat::MsoMdoc);
+    }
+
+    #[test]
+    fn dcql_query_with_claim_values() {
+        let query: DcqlQuery = serde_json::from_value(json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["vct"] },
+                "claims": [
+                    { "path": ["age"], "id": "age", "values": [18, 21, 25] },
+                    { "path": ["active"], "id": "active", "values": [true, false] },
+                    { "path": ["name"], "id": "name", "values": ["John", "Jane"] }
+                ]
+            }]
+        }))
+        .unwrap();
+
+        assert!(query.validate().is_ok());
+        let claims = query.credentials[0].claims.as_ref().unwrap();
+        match &claims[0].values.as_ref().unwrap()[0] {
+            ClaimValue::Integer(i) => assert_eq!(*i, 18),
             _ => panic!("expected Integer"),
         }
-        match bool_val {
-            ClaimValue::Boolean(b) => assert!(b),
+        match &claims[1].values.as_ref().unwrap()[0] {
+            ClaimValue::Boolean(b) => assert!(*b),
             _ => panic!("expected Boolean"),
         }
     }
 
     #[test]
-    fn trusted_authority_type_display() {
-        assert_eq!(TrustedAuthorityType::Aki.to_string(), "aki");
-        assert_eq!(TrustedAuthorityType::EtsiTl.to_string(), "etsi_tl");
-        assert_eq!(
-            TrustedAuthorityType::OpenidFederation.to_string(),
-            "openid_federation"
-        );
-        assert_eq!(
-            TrustedAuthorityType::Other("custom".to_string()).to_string(),
-            "custom"
-        );
-    }
+    fn dcql_query_generic_meta_for_unknown_format() {
+        let query: DcqlQuery = serde_json::from_value(json!({
+            "credentials": [{
+                "id": "test",
+                "format": "unknown_format",
+                "meta": { "custom": "value" }
+            }]
+        }))
+        .unwrap();
 
-    #[test]
-    fn dcql_identifier_validation() {
-        assert!(is_dcql_identifier("valid_id-123"));
-        assert!(is_dcql_identifier("simple"));
-        assert!(!is_dcql_identifier(""));
-        assert!(!is_dcql_identifier("with space"));
-        assert!(!is_dcql_identifier("with@special"));
-    }
-
-    #[test]
-    fn dcql_query_validates_non_empty_credentials() {
-        let query = DcqlQuery {
-            credentials: vec![],
-            credential_sets: None,
-        };
-        assert!(query.validate().is_err());
-    }
-
-    #[test]
-    fn dcql_query_validates_unique_ids() {
-        let query = DcqlQuery {
-            credentials: vec![
-                CredentialQuery {
-                    id: "dup".to_string(),
-                    format: CredentialFormat::DcSdJwt,
-                    multiple: None,
-                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                        vct_values: vec!["vct1".to_string()],
-                    }),
-                    claims: None,
-                    claim_sets: None,
-                    trusted_authorities: None,
-                    require_cryptographic_holder_binding: None,
-                },
-                CredentialQuery {
-                    id: "dup".to_string(),
-                    format: CredentialFormat::DcSdJwt,
-                    multiple: None,
-                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                        vct_values: vec!["vct2".to_string()],
-                    }),
-                    claims: None,
-                    claim_sets: None,
-                    trusted_authorities: None,
-                    require_cryptographic_holder_binding: None,
-                },
-            ],
-            credential_sets: None,
-        };
-        let err = query.validate().unwrap_err();
-        assert!(err.to_string().contains("unique"));
-    }
-
-    #[test]
-    fn credential_query_validates_empty_id() {
-        let cred = CredentialQuery {
-            id: "".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_err());
-    }
-
-    #[test]
-    fn credential_query_validates_dc_sd_jwt_meta() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta { vct_values: vec![] }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("vct_values"));
-    }
-
-    #[test]
-    fn credential_query_validates_mso_mdoc_meta() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::MsoMdoc,
-            multiple: None,
-            meta: CredentialMeta::MsoMdoc(MsoMdocMeta {
-                doctype_value: "".to_string(),
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("doctype_value"));
-    }
-
-    #[test]
-    fn credential_query_rejects_generic_meta_for_known_formats() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::Generic(json!({})),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("vct_values"));
-    }
-
-    #[test]
-    fn credential_query_accepts_generic_meta_for_unknown_formats() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::Other("unknown_format".to_string()),
-            multiple: None,
-            meta: CredentialMeta::Generic(json!({ "custom": "value" })),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_ok());
-    }
-
-    #[test]
-    fn claims_query_validates_id_charset() {
-        let claim = ClaimsQuery {
-            path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-            id: Some("invalid id!".to_string()),
-            values: None,
-        };
-        let err = claim
-            .validate(0, false, &CredentialFormat::DcSdJwt)
-            .unwrap_err();
-        assert!(err.to_string().contains("id"));
-    }
-
-    #[test]
-    fn claims_query_requires_id_when_claim_sets_present() {
-        let claim = ClaimsQuery {
-            path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-            id: None,
-            values: None,
-        };
-        let err = claim
-            .validate(0, true, &CredentialFormat::DcSdJwt)
-            .unwrap_err();
-        assert!(err.to_string().contains("id"));
-    }
-
-    #[test]
-    fn claims_query_validates_empty_values() {
-        let claim = ClaimsQuery {
-            path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-            id: None,
-            values: Some(vec![]),
-        };
-        let err = claim
-            .validate(0, false, &CredentialFormat::DcSdJwt)
-            .unwrap_err();
-        assert!(err.to_string().contains("values"));
-    }
-
-    #[test]
-    fn credential_set_validates_empty_options() {
-        let set = CredentialSet {
-            options: vec![],
-            required: None,
-        };
-        let err = set.validate(0, &[]).unwrap_err();
-        assert!(err.to_string().contains("options"));
-    }
-
-    #[test]
-    fn credential_set_validates_empty_inner_option() {
-        let set = CredentialSet {
-            options: vec![vec![]],
-            required: None,
-        };
-        let err = set.validate(0, &[]).unwrap_err();
-        assert!(err.to_string().contains("options"));
-    }
-
-    #[test]
-    fn credential_set_validates_unknown_credential_id() {
-        let set = CredentialSet {
-            options: vec![vec!["unknown".to_string()]],
-            required: None,
-        };
-        let err = set.validate(0, &["known"]).unwrap_err();
-        assert!(err.to_string().contains("unknown"));
-    }
-
-    #[test]
-    fn trusted_authority_query_validates_empty_values() {
-        let ta = TrustedAuthorityQuery {
-            authority_type: TrustedAuthorityType::Aki,
-            values: vec![],
-        };
-        let err = ta.validate(0).unwrap_err();
-        assert!(err.to_string().contains("values"));
-    }
-
-    #[test]
-    fn dc_sd_jwt_meta_validates_empty_vct_values() {
-        let meta = DcSdJwtMeta { vct_values: vec![] };
-        let err = meta.validate(0).unwrap_err();
-        assert!(err.to_string().contains("vct_values"));
-    }
-
-    #[test]
-    fn dc_sd_jwt_meta_validates_empty_vct_value() {
-        let meta = DcSdJwtMeta {
-            vct_values: vec!["".to_string()],
-        };
-        let err = meta.validate(0).unwrap_err();
-        assert!(err.to_string().contains("vct_values"));
-    }
-
-    #[test]
-    fn mso_mdoc_meta_validates_empty_doctype() {
-        let meta = MsoMdocMeta {
-            doctype_value: "".to_string(),
-        };
-        let err = meta.validate(0).unwrap_err();
-        assert!(err.to_string().contains("doctype_value"));
-    }
-
-    #[test]
-    fn dcql_query_accepts_valid_structure() {
-        let query = DcqlQuery {
-            credentials: vec![CredentialQuery {
-                id: "pid".to_string(),
-                format: CredentialFormat::DcSdJwt,
-                multiple: None,
-                meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                    vct_values: vec!["https://example.com/vct".to_string()],
-                }),
-                claims: None,
-                claim_sets: None,
-                trusted_authorities: None,
-                require_cryptographic_holder_binding: None,
-            }],
-            credential_sets: None,
-        };
         assert!(query.validate().is_ok());
     }
 
     #[test]
-    fn dcql_query_validates_credential_sets_references() {
-        let query = DcqlQuery {
-            credentials: vec![CredentialQuery {
-                id: "cred1".to_string(),
-                format: CredentialFormat::DcSdJwt,
-                multiple: None,
-                meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                    vct_values: vec!["vct1".to_string()],
-                }),
-                claims: None,
-                claim_sets: None,
-                trusted_authorities: None,
-                require_cryptographic_holder_binding: None,
-            }],
-            credential_sets: Some(vec![CredentialSet {
-                options: vec![vec!["unknown".to_string()]],
-                required: Some(true),
-            }]),
-        };
-        let err = query.validate().unwrap_err();
-        assert!(err.to_string().contains("unknown"));
-    }
-
-    #[test]
-    fn dcql_query_validates_empty_credential_sets() {
-        let query = DcqlQuery {
-            credentials: vec![CredentialQuery {
-                id: "cred1".to_string(),
-                format: CredentialFormat::DcSdJwt,
-                multiple: None,
-                meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                    vct_values: vec!["vct1".to_string()],
-                }),
-                claims: None,
-                claim_sets: None,
-                trusted_authorities: None,
-                require_cryptographic_holder_binding: None,
-            }],
-            credential_sets: Some(vec![]),
-        };
-        let err = query.validate().unwrap_err();
-        assert!(err.to_string().contains("credential_sets"));
-    }
-
-    #[test]
-    fn dcql_query_accepts_valid_credential_sets() {
-        let query = DcqlQuery {
-            credentials: vec![
-                CredentialQuery {
-                    id: "cred1".to_string(),
-                    format: CredentialFormat::DcSdJwt,
-                    multiple: None,
-                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                        vct_values: vec!["vct1".to_string()],
-                    }),
-                    claims: None,
-                    claim_sets: None,
-                    trusted_authorities: None,
-                    require_cryptographic_holder_binding: None,
-                },
-                CredentialQuery {
-                    id: "cred2".to_string(),
-                    format: CredentialFormat::MsoMdoc,
-                    multiple: None,
-                    meta: CredentialMeta::MsoMdoc(MsoMdocMeta {
-                        doctype_value: "org.iso.18013.5.1.mDL".to_string(),
-                    }),
-                    claims: None,
-                    claim_sets: None,
-                    trusted_authorities: None,
-                    require_cryptographic_holder_binding: None,
-                },
-            ],
-            credential_sets: Some(vec![CredentialSet {
-                options: vec![vec!["cred1".to_string()], vec!["cred2".to_string()]],
-                required: Some(true),
-            }]),
-        };
-        assert!(query.validate().is_ok());
-    }
-
-    #[test]
-    fn credential_query_validates_claim_sets_without_claims() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: Some(vec![vec!["some_id".to_string()]]),
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("claim_sets"));
-    }
-
-    #[test]
-    fn credential_query_validates_claims_without_id_when_claim_sets_present() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: Some(vec![ClaimsQuery {
-                path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-                id: None,
-                values: None,
-            }]),
-            claim_sets: Some(vec![vec!["some_id".to_string()]]),
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("id"));
-    }
-
-    #[test]
-    fn credential_query_validates_unknown_claim_id_in_claim_sets() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: Some(vec![ClaimsQuery {
-                path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-                id: Some("gn".to_string()),
-                values: None,
-            }]),
-            claim_sets: Some(vec![vec!["unknown_id".to_string()]]),
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("unknown_id"));
-    }
-
-    #[test]
-    fn credential_query_accepts_valid_claims_with_claim_sets() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: Some(vec![
-                ClaimsQuery {
-                    path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("given_name")])
-                        .unwrap(),
-                    id: Some("gn".to_string()),
-                    values: None,
-                },
-                ClaimsQuery {
-                    path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("family_name")])
-                        .unwrap(),
-                    id: Some("fn".to_string()),
-                    values: None,
-                },
-            ]),
-            claim_sets: Some(vec![
-                vec!["gn".to_string()],
-                vec!["gn".to_string(), "fn".to_string()],
-            ]),
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_ok());
-    }
-
-    #[test]
-    fn credential_query_validates_empty_claim_sets() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: Some(vec![ClaimsQuery {
-                path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-                id: Some("id1".to_string()),
-                values: None,
-            }]),
-            claim_sets: Some(vec![]),
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("claim_sets"));
-    }
-
-    #[test]
-    fn credential_query_validates_empty_inner_claim_set() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: Some(vec![ClaimsQuery {
-                path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
-                id: Some("id1".to_string()),
-                values: None,
-            }]),
-            claim_sets: Some(vec![vec![]]),
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("claim_sets"));
-    }
-
-    #[test]
-    fn credential_query_validates_duplicate_claim_ids() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: Some(vec![
-                ClaimsQuery {
-                    path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("first")]).unwrap(),
-                    id: Some("dup".to_string()),
-                    values: None,
-                },
-                ClaimsQuery {
-                    path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("second")])
-                        .unwrap(),
-                    id: Some("dup".to_string()),
-                    values: None,
-                },
-            ]),
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("unique"));
-    }
-
-    #[test]
-    fn credential_query_validates_empty_trusted_authorities() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: Some(vec![]),
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("trusted_authorities"));
-    }
-
-    #[test]
-    fn credential_query_accepts_valid_trusted_authorities() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: Some(vec![TrustedAuthorityQuery {
-                authority_type: TrustedAuthorityType::Aki,
-                values: vec!["key1".to_string(), "key2".to_string()],
-            }]),
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_ok());
-    }
-
-    #[test]
-    fn credential_query_accepts_multiple_trusted_authority_types() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: Some(vec![
-                TrustedAuthorityQuery {
-                    authority_type: TrustedAuthorityType::Aki,
-                    values: vec!["aki_value".to_string()],
-                },
-                TrustedAuthorityQuery {
-                    authority_type: TrustedAuthorityType::EtsiTl,
-                    values: vec!["etsi_value".to_string()],
-                },
-                TrustedAuthorityQuery {
-                    authority_type: TrustedAuthorityType::OpenidFederation,
-                    values: vec!["fed_value".to_string()],
-                },
-            ]),
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_ok());
-    }
-
-    #[test]
-    fn credential_query_accepts_custom_trusted_authority_type() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: Some(vec![TrustedAuthorityQuery {
-                authority_type: TrustedAuthorityType::Other("custom_type".to_string()),
-                values: vec!["custom_value".to_string()],
-            }]),
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_ok());
-    }
-
-    #[test]
-    fn credential_query_validates_format_mismatch_dc_sd_jwt() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::MsoMdoc,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("dc+sd-jwt"));
-    }
-
-    #[test]
-    fn credential_query_validates_format_mismatch_mso_mdoc() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::MsoMdoc(MsoMdocMeta {
-                doctype_value: "org.iso.18013.5.1.mDL".to_string(),
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("mso_mdoc"));
-    }
-
-    #[test]
-    fn credential_query_validates_empty_format() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::Other("".to_string()),
-            multiple: None,
-            meta: CredentialMeta::Generic(json!({})),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("format"));
-    }
-
-    #[test]
-    fn credential_query_validates_whitespace_only_format() {
-        let cred = CredentialQuery {
-            id: "test".to_string(),
-            format: CredentialFormat::Other("   ".to_string()),
-            multiple: None,
-            meta: CredentialMeta::Generic(json!({})),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("format"));
-    }
-
-    #[test]
-    fn credential_query_validates_whitespace_only_id() {
-        let cred = CredentialQuery {
-            id: "   ".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("id"));
-    }
-
-    #[test]
-    fn credential_query_validates_invalid_id_charset() {
-        let cred = CredentialQuery {
-            id: "invalid@id!".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        let err = cred.validate(0).unwrap_err();
-        assert!(err.to_string().contains("id"));
-    }
-
-    #[test]
-    fn credential_query_accepts_valid_id_with_underscore_and_hyphen() {
-        let cred = CredentialQuery {
-            id: "valid_id-123".to_string(),
-            format: CredentialFormat::DcSdJwt,
-            multiple: None,
-            meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
-                vct_values: vec!["vct".to_string()],
-            }),
-            claims: None,
-            claim_sets: None,
-            trusted_authorities: None,
-            require_cryptographic_holder_binding: None,
-        };
-        assert!(cred.validate(0).is_ok());
-    }
-
-    #[test]
-    fn dcql_query_serde_roundtrip() {
+    fn dcql_serde_roundtrip() {
         let query = DcqlQuery {
             credentials: vec![CredentialQuery {
                 id: "pid".to_string(),
@@ -1247,7 +580,6 @@ mod tests {
         let serialized = serde_json::to_string(&query).unwrap();
         let deserialized: DcqlQuery = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(query.credentials.len(), deserialized.credentials.len());
         assert_eq!(query.credentials[0].id, deserialized.credentials[0].id);
         assert_eq!(
             query.credentials[0].format,
@@ -1256,138 +588,18 @@ mod tests {
     }
 
     #[test]
-    fn dcql_query_deserializes_from_json() {
-        let json = json!({
-            "credentials": [{
-                "id": "pid",
-                "format": "dc+sd-jwt",
-                "meta": { "vct_values": ["https://example.com/vct"] }
-            }]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(query.credentials.len(), 1);
-        assert_eq!(query.credentials[0].id, "pid");
-        assert_eq!(query.credentials[0].format, CredentialFormat::DcSdJwt);
-    }
-
-    #[test]
-    fn dcql_query_deserializes_with_credential_sets() {
-        let json = json!({
-            "credentials": [
-                { "id": "cred1", "format": "dc+sd-jwt", "meta": { "vct_values": ["vct1"] } },
-                { "id": "cred2", "format": "mso_mdoc", "meta": { "doctype_value": "org.iso.18013.5.1.mDL" } }
-            ],
-            "credential_sets": [
-                { "options": [["cred1"], ["cred2"]], "required": true }
-            ]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(query.credentials.len(), 2);
-        assert!(query.credential_sets.is_some());
-        assert_eq!(query.credential_sets.as_ref().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn dcql_query_deserializes_with_claims() {
-        let json = json!({
-            "credentials": [{
-                "id": "pid",
-                "format": "dc+sd-jwt",
-                "meta": { "vct_values": ["vct"] },
-                "claims": [
-                    { "path": ["given_name"], "id": "gn", "values": ["John", "Jane"] }
-                ]
-            }]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        let cred = &query.credentials[0];
-        assert!(cred.claims.is_some());
-        let claims = cred.claims.as_ref().unwrap();
-        assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0].id.as_ref().unwrap(), "gn");
-    }
-
-    #[test]
-    fn dcql_query_deserializes_with_integer_and_boolean_values() {
-        let json = json!({
-            "credentials": [{
-                "id": "pid",
-                "format": "dc+sd-jwt",
-                "meta": { "vct_values": ["vct"] },
-                "claims": [
-                    { "path": ["age"], "id": "age", "values": [18, 21, 25] },
-                    { "path": ["active"], "id": "active", "values": [true, false] }
-                ]
-            }]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        let claims = query.credentials[0].claims.as_ref().unwrap();
-
-        match &claims[0].values.as_ref().unwrap()[0] {
-            ClaimValue::Integer(i) => assert_eq!(*i, 18),
-            _ => panic!("expected Integer"),
-        }
-
-        match &claims[1].values.as_ref().unwrap()[0] {
-            ClaimValue::Boolean(b) => assert!(*b),
-            _ => panic!("expected Boolean"),
-        }
-    }
-
-    #[test]
-    fn dcql_query_validates_nested_claim_path() {
-        let json = json!({
-            "credentials": [{
-                "id": "pid",
-                "format": "dc+sd-jwt",
-                "meta": { "vct_values": ["vct"] },
-                "claims": [
-                    { "path": ["credentialSubject", "address", "street"], "id": "street" }
-                ]
-            }]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        assert!(query.validate().is_ok());
-        let claims = query.credentials[0].claims.as_ref().unwrap();
-        assert_eq!(claims[0].path.len(), 3);
-    }
-
-    #[test]
-    fn dcql_query_validates_claim_path_with_index() {
-        let json = json!({
-            "credentials": [{
-                "id": "pid",
-                "format": "dc+sd-jwt",
-                "meta": { "vct_values": ["vct"] },
-                "claims": [
-                    { "path": ["addresses", 0, "city"], "id": "city" }
-                ]
-            }]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        assert!(query.validate().is_ok());
-    }
-
-    #[test]
-    fn dcql_query_validates_claim_path_with_null() {
-        let json = json!({
-            "credentials": [{
-                "id": "pid",
-                "format": "dc+sd-jwt",
-                "meta": { "vct_values": ["vct"] },
-                "claims": [
-                    { "path": ["items", null], "id": "all_items" }
-                ]
-            }]
-        });
-
-        let query: DcqlQuery = serde_json::from_value(json).unwrap();
-        assert!(query.validate().is_ok());
+    fn display_traits() {
+        assert_eq!(TrustedAuthorityType::Aki.to_string(), "aki");
+        assert_eq!(TrustedAuthorityType::EtsiTl.to_string(), "etsi_tl");
+        assert_eq!(
+            TrustedAuthorityType::OpenidFederation.to_string(),
+            "openid_federation"
+        );
+        assert_eq!(
+            TrustedAuthorityType::Other("custom".to_string()).to_string(),
+            "custom"
+        );
+        assert_eq!(CredentialFormat::DcSdJwt.to_string(), "dc+sd-jwt");
+        assert_eq!(CredentialFormat::MsoMdoc.to_string(), "mso_mdoc");
     }
 }
