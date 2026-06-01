@@ -228,6 +228,70 @@ pub enum ErrorKind {
     #[error("Invalid notification id")]
     InvalidNotificationId,
 
+    // =========================================================================
+    // OID4VP Error Kinds
+    // =========================================================================
+
+    /// An Authorization Request for OID4VP failed validation or parsing.
+    ///
+    /// This encompasses:
+    /// - Missing required parameters
+    /// - Invalid request URI
+    /// - Malformed request object
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("Invalid presentation request")]
+    InvalidPresentationRequest,
+
+    /// The Presentation Definition URI could not be resolved or is invalid.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("Invalid presentation definition URI")]
+    InvalidPresentationDefinitionUri,
+
+    /// The Verifier's Client ID is invalid or untrusted.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("Invalid client ID")]
+    InvalidClientId,
+
+    /// The Verifier's Client Metadata is invalid or malformed.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("Invalid client metadata")]
+    InvalidClientMetadata,
+
+    /// The redirect URI is invalid or does not match the registered client.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("Invalid redirect URI")]
+    InvalidRedirectUri,
+
+    /// The Wallet does not possess credentials matching the Presentation Definition.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("No matching credentials")]
+    NoMatchingCredentials,
+
+    /// The user denied the presentation request.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("User denied")]
+    UserDenied,
+
+    /// The requested VP formats are not supported by the Wallet.
+    ///
+    /// Defined by [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5).
+    #[error("VP formats unsupported")]
+    VpFormatsUnsupported,
+
+    /// An Authorization Error Response failed to send to the Verifier.
+    ///
+    /// This indicates a network-level failure when delivering the error response
+    /// via `direct_post` or similar mechanism.
+    #[error("Failed to send authorization error response")]
+    AuthorizationErrorResponseSendFailed,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
