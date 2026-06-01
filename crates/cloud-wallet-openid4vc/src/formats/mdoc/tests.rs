@@ -577,7 +577,10 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
                 Value::Array(vec![item_tag24_val]),
             )]),
         ),
-        (Value::Text("issuerAuth".into()), Value::Tag(18, Box::new(cose_sign1))),
+        (
+            Value::Text("issuerAuth".into()),
+            Value::Tag(18, Box::new(cose_sign1)),
+        ),
     ]);
 
     Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
@@ -590,6 +593,199 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
 /// `elementValue = "Doe"`.
 fn build_issuer_signed_with_correct_digests() -> String {
     build_issuer_signed_with_correct_digests_for(HashAlg::Sha256, "SHA-256")
+}
+
+/// Builds an `IssuerSigned` with two items in one namespace, both with correct SHA-256
+/// digests.
+///
+/// Items: `digestID = 0` → `family_name = "Doe"`, `digestID = 1` → `given_name = "John"`.
+/// Both `raw_tag24_bytes` and `valueDigests` entries are consistent so that
+/// `verify_digests` passes without tampering.
+fn build_two_item_mdoc() -> String {
+    let alg = HashAlg::Sha256;
+    let (bytes0, digest0) = item_tag24_and_digest(0, "family_name", "Doe", alg);
+    let (bytes1, digest1) = item_tag24_and_digest(1, "given_name", "John", alg);
+
+    let val0: Value =
+        ciborium::de::from_reader(bytes0.as_slice()).expect("round-trip must succeed");
+    let val1: Value =
+        ciborium::de::from_reader(bytes1.as_slice()).expect("round-trip must succeed");
+
+    let device_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])),
+    ]);
+    let mso = Value::Map(vec![
+        (Value::Text("version".into()), Value::Text("1.0".into())),
+        (
+            Value::Text("digestAlgorithm".into()),
+            Value::Text("SHA-256".into()),
+        ),
+        (
+            Value::Text("valueDigests".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Map(vec![
+                    (Value::Integer(0u64.into()), Value::Bytes(digest0)),
+                    (Value::Integer(1u64.into()), Value::Bytes(digest1)),
+                ]),
+            )]),
+        ),
+        (
+            Value::Text("deviceKeyInfo".into()),
+            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
+        ),
+        (
+            Value::Text("docType".into()),
+            Value::Text("org.iso.18013.5.1.mDL".into()),
+        ),
+        (
+            Value::Text("validityInfo".into()),
+            Value::Map(vec![
+                (
+                    Value::Text("signed".into()),
+                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
+                ),
+                (
+                    Value::Text("validFrom".into()),
+                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
+                ),
+                (
+                    Value::Text("validUntil".into()),
+                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
+                ),
+            ]),
+        ),
+    ]);
+    let mso_bytes = cbor(&mso);
+    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
+    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
+    let cose_sign1 = Value::Array(vec![
+        Value::Bytes(protected_header_bytes),
+        Value::Map(vec![]),
+        Value::Bytes(mso_payload),
+        Value::Bytes(vec![0u8; 64]),
+    ]);
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![val0, val1]),
+            )]),
+        ),
+        (
+            Value::Text("issuerAuth".into()),
+            Value::Tag(18, Box::new(cose_sign1)),
+        ),
+    ]);
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+}
+
+/// Builds an `IssuerSigned` with one item in each of two namespaces, both with correct
+/// SHA-256 digests.
+///
+/// Namespaces:
+/// - `"org.iso.18013.5.1"` → `digestID = 0`, `family_name = "Doe"`
+/// - `"org.iso.18013.5.1.US"` → `digestID = 0`, `domestic_driving_privileges = "A"`
+fn build_two_namespace_mdoc() -> String {
+    let alg = HashAlg::Sha256;
+    let (bytes_ns1, digest_ns1) = item_tag24_and_digest(0, "family_name", "Doe", alg);
+    let (bytes_ns2, digest_ns2) = item_tag24_and_digest(0, "domestic_driving_privileges", "A", alg);
+
+    let val_ns1: Value =
+        ciborium::de::from_reader(bytes_ns1.as_slice()).expect("round-trip must succeed");
+    let val_ns2: Value =
+        ciborium::de::from_reader(bytes_ns2.as_slice()).expect("round-trip must succeed");
+
+    let device_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])),
+    ]);
+    let mso = Value::Map(vec![
+        (Value::Text("version".into()), Value::Text("1.0".into())),
+        (
+            Value::Text("digestAlgorithm".into()),
+            Value::Text("SHA-256".into()),
+        ),
+        (
+            Value::Text("valueDigests".into()),
+            Value::Map(vec![
+                (
+                    Value::Text("org.iso.18013.5.1".into()),
+                    Value::Map(vec![(
+                        Value::Integer(0u64.into()),
+                        Value::Bytes(digest_ns1),
+                    )]),
+                ),
+                (
+                    Value::Text("org.iso.18013.5.1.US".into()),
+                    Value::Map(vec![(
+                        Value::Integer(0u64.into()),
+                        Value::Bytes(digest_ns2),
+                    )]),
+                ),
+            ]),
+        ),
+        (
+            Value::Text("deviceKeyInfo".into()),
+            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
+        ),
+        (
+            Value::Text("docType".into()),
+            Value::Text("org.iso.18013.5.1.mDL".into()),
+        ),
+        (
+            Value::Text("validityInfo".into()),
+            Value::Map(vec![
+                (
+                    Value::Text("signed".into()),
+                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
+                ),
+                (
+                    Value::Text("validFrom".into()),
+                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
+                ),
+                (
+                    Value::Text("validUntil".into()),
+                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
+                ),
+            ]),
+        ),
+    ]);
+    let mso_bytes = cbor(&mso);
+    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
+    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
+    let cose_sign1 = Value::Array(vec![
+        Value::Bytes(protected_header_bytes),
+        Value::Map(vec![]),
+        Value::Bytes(mso_payload),
+        Value::Bytes(vec![0u8; 64]),
+    ]);
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![
+                (
+                    Value::Text("org.iso.18013.5.1".into()),
+                    Value::Array(vec![val_ns1]),
+                ),
+                (
+                    Value::Text("org.iso.18013.5.1.US".into()),
+                    Value::Array(vec![val_ns2]),
+                ),
+            ]),
+        ),
+        (
+            Value::Text("issuerAuth".into()),
+            Value::Tag(18, Box::new(cose_sign1)),
+        ),
+    ]);
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
 }
 
 // ── verify_digests tests ──────────────────────────────────────────────────────
@@ -1054,6 +1250,92 @@ fn verify_digests_rejects_missing_digest() {
     // Assert
     assert!(
         matches!(err, MdocError::MissingDigest { ref namespace, digest_id: 0 } if namespace == "org.iso.18013.5.1"),
+        "expected MissingDigest {{ namespace: org.iso.18013.5.1, digest_id: 0 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_digests_rejects_second_of_two_items_in_same_namespace() {
+    // Arrange: mdoc with two items in one namespace; confirm it passes clean first.
+    let raw = build_two_item_mdoc();
+    let mut mdoc = ParsedMdoc::parse(&raw).expect("two-item mdoc should parse");
+    assert!(
+        verify_digests(&mdoc).is_ok(),
+        "all digests should pass before tampering"
+    );
+
+    // Corrupt the second item (digestID 1) — exercises the inner item loop.
+    let items = mdoc
+        .name_spaces
+        .get_mut("org.iso.18013.5.1")
+        .expect("namespace must be present");
+    let item1 = items
+        .iter_mut()
+        .find(|i| i.digest_id == 1)
+        .expect("digestID 1 must be present");
+    *item1.raw_tag24_bytes.last_mut().expect("bytes non-empty") ^= 0xFF;
+
+    // Act
+    let err = verify_digests(&mdoc).expect_err("tampered second item must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DigestMismatch { ref namespace, digest_id: 1 }
+            if namespace == "org.iso.18013.5.1"),
+        "expected DigestMismatch {{ namespace: org.iso.18013.5.1, digest_id: 1 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_digests_rejects_item_in_second_namespace() {
+    // Arrange: mdoc with items across two namespaces; confirm it passes clean first.
+    let raw = build_two_namespace_mdoc();
+    let mut mdoc = ParsedMdoc::parse(&raw).expect("two-namespace mdoc should parse");
+    assert!(
+        verify_digests(&mdoc).is_ok(),
+        "all digests should pass before tampering"
+    );
+
+    // Corrupt the item in the second namespace — confirms both namespaces are checked.
+    let items = mdoc
+        .name_spaces
+        .get_mut("org.iso.18013.5.1.US")
+        .expect("second namespace must be present");
+    *items[0]
+        .raw_tag24_bytes
+        .last_mut()
+        .expect("bytes non-empty") ^= 0xFF;
+
+    // Act
+    let err =
+        verify_digests(&mdoc).expect_err("tampered item in second namespace must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DigestMismatch { ref namespace, digest_id: 0 }
+            if namespace == "org.iso.18013.5.1.US"),
+        "expected DigestMismatch {{ namespace: org.iso.18013.5.1.US, digest_id: 0 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_digests_rejects_namespace_absent_from_value_digests() {
+    // Arrange: valid mdoc; remove the entire namespace key from value_digests.
+    // This covers the `value_digests.get(namespace) → None` branch in verify_digests,
+    // which is distinct from removing only the digestID entry (covered by
+    // `verify_digests_rejects_missing_digest`).
+    let raw = build_issuer_signed_with_correct_digests();
+    let mut mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc should parse");
+    mdoc.value_digests.remove("org.iso.18013.5.1");
+
+    // Act
+    let err =
+        verify_digests(&mdoc).expect_err("namespace absent from value_digests must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::MissingDigest { ref namespace, digest_id: 0 }
+            if namespace == "org.iso.18013.5.1"),
         "expected MissingDigest {{ namespace: org.iso.18013.5.1, digest_id: 0 }}, got: {err:?}"
     );
 }

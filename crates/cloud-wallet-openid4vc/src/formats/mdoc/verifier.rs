@@ -18,19 +18,8 @@ use subtle::ConstantTimeEq as _;
 
 use cloud_wallet_crypto::digest::HashAlg;
 
-use super::DigestAlgorithm;
 use super::error::{MdocError, Result};
 use super::parser::ParsedMdoc;
-
-impl From<DigestAlgorithm> for HashAlg {
-    fn from(alg: DigestAlgorithm) -> Self {
-        match alg {
-            DigestAlgorithm::Sha256 => HashAlg::Sha256,
-            DigestAlgorithm::Sha384 => HashAlg::Sha384,
-            DigestAlgorithm::Sha512 => HashAlg::Sha512,
-        }
-    }
-}
 
 /// Verifies that every `IssuerSignedItem` in `parsed` hashes to its corresponding
 /// entry in the MSO `valueDigests` map (ISO/IEC 18013-5 §9.1.2).
@@ -69,9 +58,11 @@ pub fn verify_digests(parsed: &ParsedMdoc) -> Result<()> {
                 })?;
 
             // `parse_value_digests` enforces that every stored digest has exactly
-            // `digest_algorithm.digest_size()` bytes, matching `computed.as_ref()`.
-            // Both slices are therefore guaranteed equal-length — `ct_eq` is fully
-            // constant-time (not just constant-time-on-equal-length inputs).
+            // `digest_algorithm.digest_size()` bytes; `aws_lc_rs::digest` always
+            // produces the same fixed output length. Both slices are therefore
+            // guaranteed equal-length, so `ct_eq` runs in unconditional constant
+            // time over all N content bytes — `subtle` only provides constant-time
+            // behaviour when both slices have the same length.
             let digest_ok: bool = computed.as_ref().ct_eq(stored.as_slice()).into();
             if !digest_ok {
                 return Err(MdocError::DigestMismatch {

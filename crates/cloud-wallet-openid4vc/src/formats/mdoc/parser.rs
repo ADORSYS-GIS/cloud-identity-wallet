@@ -442,10 +442,18 @@ fn parse_name_spaces(val: Value) -> Result<HashMap<String, Vec<IssuerSignedItem>
 /// Parses one `IssuerSignedItemBytes` entry (`#6.24(bstr .cbor IssuerSignedItem)`).
 fn parse_issuer_signed_item(val: Value) -> Result<IssuerSignedItem> {
     // Encode the original #6.24(bstr) before consuming val.
-    // ISO 18013-5 §9.3.1: digest_i = SHA-256(#6.24(bstr .cbor IssuerSignedItem_i)).
+    // ISO 18013-5 §9.3.1: digest_i = digest_algorithm(#6.24(bstr .cbor IssuerSignedItem_i)).
     // Encoding directly from val avoids reconstructing the tag after destructuring,
     // which would introduce a superfluous encode step. Correctness relies on
     // deterministic CBOR (RFC 8949 §4.2), which ISO 18013-5 §8.1 mandates.
+    //
+    // Limitation: `encode_value` re-serialises via ciborium, which always uses
+    // minimal CBOR framing. If an issuer emits non-minimal framing on the outer
+    // `#6.24` wrapper (e.g. a two-byte tag-24 encoding rather than the canonical
+    // `0xD8 0x18` form), the re-encoded bytes will differ from the original wire
+    // bytes, causing `verify_digests` to return `DigestMismatch` for an otherwise
+    // valid credential. Only issuers that violate the mandatory deterministic-CBOR
+    // requirement of ISO 18013-5 §8.1 are affected.
     let raw_tag24_bytes = encode_value(&val).map_err(|reason| MdocError::CborEncode { reason })?;
 
     let inner_bytes = match val {
