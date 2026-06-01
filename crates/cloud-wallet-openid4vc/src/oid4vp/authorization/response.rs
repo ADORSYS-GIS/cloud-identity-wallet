@@ -215,10 +215,7 @@ pub struct AuthorizationErrorResponse {
 impl AuthorizationErrorResponse {
     /// Creates an authorization error response.
     pub fn new(error: AuthorizationErrorCode) -> Self {
-        Self {
-            error,
-            state: None,
-        }
+        Self { error, state: None }
     }
 
     /// Adds a state value to the response.
@@ -297,11 +294,9 @@ where
     S: Serializer,
 {
     match vp_token {
-        Some(vp_token) => {
-            serializer.serialize_str(
-                &serde_json::to_string(vp_token.entries()).map_err(serde::ser::Error::custom)?,
-            )
-        }
+        Some(vp_token) => serializer.serialize_str(
+            &serde_json::to_string(vp_token.entries()).map_err(serde::ser::Error::custom)?,
+        ),
         None => serializer.serialize_none(),
     }
 }
@@ -595,7 +590,10 @@ mod tests {
         let encoded = serde_urlencoded::to_string(&response).expect("serialize");
 
         assert_eq!(encoded, "response=HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG");
-        assert_eq!(response.response(), "HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG");
+        assert_eq!(
+            response.response(),
+            "HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG"
+        );
     }
 
     #[test]
