@@ -26,21 +26,19 @@ pub struct VpToken {
 
 impl VpToken {
     /// Creates a new VP token from DCQL query entries.
-    pub fn new(entries: BTreeMap<String, Vec<Presentation>>) -> Self {
-        Self { entries }
-    }
-
-    /// Returns the underlying DCQL entries.
-    pub fn entries(&self) -> &BTreeMap<String, Vec<Presentation>> {
-        &self.entries
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        if self.entries.is_empty() {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The entries map is empty
+    /// - Any query ID is not a valid DCQL credential query identifier
+    /// - Any presentation array is empty
+    pub fn new(entries: BTreeMap<String, Vec<Presentation>>) -> Result<Self, String> {
+        if entries.is_empty() {
             return Err("vp_token must contain at least one credential query entry".to_string());
         }
 
-        for (query_id, presentations) in &self.entries {
+        for (query_id, presentations) in &entries {
             if !is_valid_dcql_query_id(query_id) {
                 return Err(format!(
                     "vp_token entry '{query_id}' is not a valid DCQL credential query id"
@@ -54,7 +52,12 @@ impl VpToken {
             }
         }
 
-        Ok(())
+        Ok(Self { entries })
+    }
+
+    /// Returns the underlying DCQL entries.
+    pub fn entries(&self) -> &BTreeMap<String, Vec<Presentation>> {
+        &self.entries
     }
 }
 
@@ -63,7 +66,6 @@ impl Serialize for VpToken {
     where
         S: Serializer,
     {
-        self.validate().map_err(serde::ser::Error::custom)?;
         self.entries.serialize(serializer)
     }
 }
@@ -87,8 +89,12 @@ pub enum AuthorizationResponse {
 
 impl AuthorizationResponse {
     /// Creates a new successful authorization response with a VP token.
-    pub fn new(vp_token: VpToken) -> Self {
-        Self::Success(AuthorizationSuccessResponse::new(vp_token))
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the VP token fails validation.
+    pub fn new(vp_token: VpToken) -> Result<Self, String> {
+        Ok(Self::Success(AuthorizationSuccessResponse::new(vp_token)))
     }
 
     /// Creates a new authorization error response.
@@ -193,17 +199,14 @@ impl AuthorizationSuccessResponse {
 }
 
 /// Authorization Error Response parameters for OpenID4VP.
+///
+/// Per Section 8.5 of the OpenID4VP specification, error responses follow the
+/// OAuth 2.0 error response format.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthorizationErrorResponse {
     /// Error code describing why the request could not be completed.
     error: AuthorizationErrorCode,
-
-    /// Optional human-readable error description.
-    error_description: Option<String>,
-
-    /// Optional URI with additional error information.
-    error_uri: Option<Url>,
 
     /// Optional state value echoed from the authorization request.
     state: Option<String>,
@@ -214,22 +217,8 @@ impl AuthorizationErrorResponse {
     pub fn new(error: AuthorizationErrorCode) -> Self {
         Self {
             error,
-            error_description: None,
-            error_uri: None,
             state: None,
         }
-    }
-
-    /// Adds a human-readable error description.
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.error_description = Some(description.into());
-        self
-    }
-
-    /// Adds a URI with additional error information.
-    pub fn with_error_uri(mut self, error_uri: Url) -> Self {
-        self.error_uri = Some(error_uri);
-        self
     }
 
     /// Adds a state value to the response.
@@ -309,7 +298,6 @@ where
 {
     match vp_token {
         Some(vp_token) => {
-            vp_token.validate().map_err(serde::ser::Error::custom)?;
             serializer.serialize_str(
                 &serde_json::to_string(vp_token.entries()).map_err(serde::ser::Error::custom)?,
             )
@@ -318,26 +306,74 @@ where
     }
 }
 
+/// A compact JWE (JSON Web Encryption) string in the form `HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG`.
+///
+/// Per RFC 7516, a JWE consists of five non-empty parts separated by dots.
+/// This type validates the structural shape at construction time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompactJwe(String);
+
+impl CompactJwe {
+    /// Creates a new `CompactJwe` from a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The string is empty or contains only whitespace
+    /// - The string does not contain exactly 5 dot-separated parts
+    /// - Any part is empty
+    pub fn new(jwe: impl Into<String>) -> Result<Self, String> {
+        let jwe = jwe.into();
+        if jwe.trim().is_empty() {
+            return Err("JWE must not be empty".to_string());
+        }
+
+        let parts: Vec<&str> = jwe.split('.').collect();
+        if parts.len() != 5 {
+            return Err(format!(
+                "JWE must have 5 dot-separated parts, found {}",
+                parts.len()
+            ));
+        }
+
+        for (i, part) in parts.iter().enumerate() {
+            if part.is_empty() {
+                return Err(format!("JWE part {} is empty", i + 1));
+            }
+        }
+
+        Ok(Self(jwe))
+    }
+
+    /// Returns the underlying JWE string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Form body for the `direct_post.jwt` response mode.
+///
+/// Per OpenID4VP Section 8.3, the `response` parameter contains an unsigned encrypted JWT (JWE)
+/// carrying the Authorization Response payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DirectPostJwtResponse {
-    response: String,
+    response: CompactJwe,
 }
 
 impl DirectPostJwtResponse {
     /// Creates a `direct_post.jwt` response form body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the response is not a valid compact JWE.
     pub fn new(response: impl Into<String>) -> Result<Self, String> {
-        let response = response.into();
-        if response.trim().is_empty() {
-            return Err("direct_post.jwt response must not be empty".to_string());
-        }
-
-        Ok(Self { response })
+        let jwe = CompactJwe::new(response)?;
+        Ok(Self { response: jwe })
     }
 
     /// Returns the encrypted JWT response.
     pub fn response(&self) -> &str {
-        &self.response
+        self.response.as_str()
     }
 }
 
@@ -359,7 +395,7 @@ mod tests {
     }
 
     fn vp_token(entries: BTreeMap<String, Vec<Presentation>>) -> VpToken {
-        VpToken::new(entries)
+        VpToken::new(entries).expect("valid vp_token")
     }
 
     #[test]
@@ -408,10 +444,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_vp_token_on_serialize() {
-        let token = vp_token(BTreeMap::new());
-
-        let err = serde_json::to_string(&token).unwrap_err();
+    fn rejects_empty_vp_token_at_construction() {
+        let err = VpToken::new(BTreeMap::new()).unwrap_err();
         assert!(
             err.to_string()
                 .contains("at least one credential query entry")
@@ -419,23 +453,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_dcql_query_id_on_serialize() {
+    fn rejects_invalid_dcql_query_id_at_construction() {
         let mut entries = BTreeMap::new();
         entries.insert(
             "credential/1".to_string(),
             vec![string_presentation("vp-token-value")],
         );
 
-        let err = serde_json::to_string(&vp_token(entries)).unwrap_err();
+        let err = VpToken::new(entries).unwrap_err();
         assert!(err.to_string().contains("valid DCQL credential query id"));
     }
 
     #[test]
-    fn rejects_empty_presentation_list_on_serialize() {
+    fn rejects_empty_presentation_list_at_construction() {
         let mut entries = BTreeMap::new();
         entries.insert("my_credential".to_string(), Vec::new());
 
-        let err = serde_json::to_string(&vp_token(entries)).unwrap_err();
+        let err = VpToken::new(entries).unwrap_err();
         assert!(err.to_string().contains("at least one presentation"));
     }
 
@@ -447,7 +481,9 @@ mod tests {
             vec![string_presentation("eyJhbGciOiJFUzI1NiJ9...")],
         );
 
-        let response = AuthorizationResponse::new(vp_token(entries)).with_state("state-123");
+        let response = AuthorizationResponse::new(vp_token(entries))
+            .expect("valid response")
+            .with_state("state-123");
 
         let json = serde_json::to_value(&response).expect("serialize");
 
@@ -495,10 +531,8 @@ mod tests {
     }
 
     #[test]
-    fn serializes_error_response_with_optional_fields() {
+    fn serializes_error_response_with_state() {
         let response = AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequest)
-            .with_description("missing dcql_query")
-            .with_error_uri(Url::parse("https://verifier.example/errors/invalid-request").unwrap())
             .with_state("state-123");
 
         let json = serde_json::to_value(&response).expect("serialize");
@@ -507,8 +541,6 @@ mod tests {
             json,
             json!({
                 "error": "invalid_request",
-                "error_description": "missing dcql_query",
-                "error_uri": "https://verifier.example/errors/invalid-request",
                 "state": "state-123"
             })
         );
@@ -522,7 +554,9 @@ mod tests {
             vec![string_presentation("vp-token-value")],
         );
 
-        let response = AuthorizationResponse::new(vp_token(entries)).with_state("state-123");
+        let response = AuthorizationResponse::new(vp_token(entries))
+            .expect("valid response")
+            .with_state("state-123");
 
         let encoded =
             serde_urlencoded::to_string(response.as_direct_post_form()).expect("serialize");
@@ -554,19 +588,36 @@ mod tests {
 
     #[test]
     fn serializes_direct_post_jwt_response() {
-        let response = DirectPostJwtResponse::new("encrypted.jwt.response").unwrap();
+        // Valid JWE format: 5 dot-separated parts
+        let response =
+            DirectPostJwtResponse::new("HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG").unwrap();
 
         let encoded = serde_urlencoded::to_string(&response).expect("serialize");
 
-        assert_eq!(encoded, "response=encrypted.jwt.response");
-        assert_eq!(response.response(), "encrypted.jwt.response");
+        assert_eq!(encoded, "response=HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG");
+        assert_eq!(response.response(), "HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG");
     }
 
     #[test]
     fn rejects_empty_direct_post_jwt_response() {
         let err = DirectPostJwtResponse::new("  ").unwrap_err();
 
-        assert!(err.contains("must not be empty"));
+        assert!(err.contains("JWE must not be empty"));
+    }
+
+    #[test]
+    fn rejects_jwe_with_wrong_number_of_parts() {
+        // Only 3 parts
+        let err = DirectPostJwtResponse::new("part1.part2.part3").unwrap_err();
+        assert!(err.contains("JWE must have 5 dot-separated parts"));
+        assert!(err.contains("found 3"));
+    }
+
+    #[test]
+    fn rejects_jwe_with_empty_part() {
+        // 5 parts but one is empty
+        let err = DirectPostJwtResponse::new("part1..part3.part4.part5").unwrap_err();
+        assert!(err.contains("JWE part 2 is empty"));
     }
 
     #[test]
