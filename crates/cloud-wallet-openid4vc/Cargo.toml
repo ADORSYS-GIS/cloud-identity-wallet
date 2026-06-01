@@ -19,6 +19,7 @@ percent-encoding = "2"
 reqwest = { version = "0.13", features = ["form", "json", "rustls"] }
 reqwest-middleware = { version = "0.5", features = ["form", "json"] }
 reqwest-retry = "0.9"
+rustls-pki-types = "1.14"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_urlencoded = "0.7"
@@ -27,7 +28,11 @@ thiserror.workspace = true
 time = { workspace = true, features = ["std", "parsing"] }
 url = { workspace = true, features = ["serde"] }
 validator = { version = "0.20", features = ["derive"] }
+webpki-roots = "1"
+webpki = { package = "rustls-webpki", version = "0.103", features = ["aws-lc-rs"] }
+x509-parser = "0.18"
 
 [dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"

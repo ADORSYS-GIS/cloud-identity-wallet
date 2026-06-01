@@ -25,8 +25,8 @@ where
 {
     /// Decodes a compact JWT without verifying its signature.
     pub fn decode_unverified(raw: &'a str, component: &'static str) -> Result<Self, Error> {
-        reject_none_alg(raw, component)?;
         validate_compact_jws(raw, component)?;
+        reject_none_alg(raw, component)?;
 
         let token_data =
             insecure_decode::<T>(raw).map_err(|source| Error::JwtDecoding { component, source })?;
