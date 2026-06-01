@@ -4,559 +4,47 @@ use serde_json::Value;
 use serde_with::skip_serializing_none;
 use url::Url;
 
-use crate::core::claim_path_pointer::ClaimPathPointer;
 use crate::errors::{Error, ErrorKind, Result};
 
-/// The `response_type` parameter for OpenID4VP Authorization Requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResponseType {
-    #[serde(rename = "vp_token")]
-    VpToken,
-
-    #[serde(rename = "vp_token id_token")]
-    VpTokenIdToken,
-}
-
-impl std::fmt::Display for ResponseType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::VpToken => write!(f, "vp_token"),
-            Self::VpTokenIdToken => write!(f, "vp_token id_token"),
-        }
-    }
-}
-
-/// The `response_mode` parameter for OpenID4VP Authorization Requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResponseMode {
-    #[serde(rename = "direct_post")]
-    DirectPost,
-
-    #[serde(rename = "direct_post.jwt")]
-    DirectPostJwt,
-
-    /// W3C Digital Credentials API response mode (Appendix A).
-    #[serde(rename = "dc_api")]
-    DcApi,
-
-    /// W3C Digital Credentials API response mode with JWT-secured response (Appendix A).
-    #[serde(rename = "dc_api.jwt")]
-    DcApiJwt,
-}
-
-impl ResponseMode {
-    fn is_direct_post(self) -> bool {
-        matches!(self, Self::DirectPost | Self::DirectPostJwt)
-    }
-
-    fn is_dc_api(self) -> bool {
-        matches!(self, Self::DcApi | Self::DcApiJwt)
-    }
-}
-
-impl std::fmt::Display for ResponseMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DirectPost => write!(f, "direct_post"),
-            Self::DirectPostJwt => write!(f, "direct_post.jwt"),
-            Self::DcApi => write!(f, "dc_api"),
-            Self::DcApiJwt => write!(f, "dc_api.jwt"),
-        }
-    }
-}
-
-/// The `request_uri_method` parameter controlling how the Wallet fetches the
-/// Request Object when `request_uri` is present.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-pub enum RequestUriMethod {
-    #[default]
-    #[serde(rename = "get")]
-    Get,
-
-    #[serde(rename = "post")]
-    Post,
-}
-
-impl std::fmt::Display for RequestUriMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Get => write!(f, "get"),
-            Self::Post => write!(f, "post"),
-        }
-    }
-}
-
-/// A single acceptable claim value as defined in Section 6.3.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ClaimValue {
-    String(String),
-    Integer(i64),
-    Boolean(bool),
-}
-
-/// A single DCQL Claims Query object.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClaimsQuery {
-    pub path: ClaimPathPointer,
-    pub id: Option<String>,
-    pub values: Option<Vec<ClaimValue>>,
-}
-
-impl ClaimsQuery {
-    fn validate(&self, idx: usize, require_id: bool) -> Result<()> {
-        // ClaimPathPointer already validates non-empty on deserialization
-        if let Some(ref id) = self.id
-            && !is_dcql_identifier(id)
-        {
-            return Err(invalid_request(format!(
-                "'claims[{idx}].id' must consist only of alphanumeric characters, '_', or '-'"
-            )));
-        }
-
-        if require_id && self.id.is_none() {
-            return Err(invalid_request(format!(
-                "'claims[{idx}].id' is required when 'claim_sets' is present"
-            )));
-        }
-        if let Some(ref values) = self.values
-            && values.is_empty()
-        {
-            return Err(invalid_request(format!(
-                "'claims[{idx}].values' must be a non-empty array when present"
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// A single Credential Set option entry.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CredentialSet {
-    pub options: Vec<Vec<String>>,
-
-    pub required: Option<bool>,
-}
-
-impl CredentialSet {
-    fn validate(&self, idx: usize, valid_ids: &[&str]) -> Result<()> {
-        if self.options.is_empty() {
-            return Err(invalid_request(format!(
-                "'credential_sets[{idx}].options' must be a non-empty array"
-            )));
-        }
-        for (oi, option) in self.options.iter().enumerate() {
-            if option.is_empty() {
-                return Err(invalid_request(format!(
-                    "'credential_sets[{idx}].options[{oi}]' must be a non-empty array"
-                )));
-            }
-            for id_ref in option {
-                if !valid_ids.contains(&id_ref.as_str()) {
-                    return Err(invalid_request(format!(
-                        "'credential_sets[{idx}].options[{oi}]' references unknown credential id '{id_ref}'"
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// The type of trusted authority reference.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TrustedAuthorityType {
-    Aki,
-    EtsiTl,
-    OpenidFederation,
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl std::fmt::Display for TrustedAuthorityType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Aki => write!(f, "aki"),
-            Self::EtsiTl => write!(f, "etsi_tl"),
-            Self::OpenidFederation => write!(f, "openid_federation"),
-            Self::Other(s) => write!(f, "{s}"),
-        }
-    }
-}
-
-/// A Trusted Authority Query object within a Credential Query.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TrustedAuthorityQuery {
-    /// REQUIRED. The type of trusted authority reference.
-    #[serde(rename = "type")]
-    pub authority_type: TrustedAuthorityType,
-
-    /// REQUIRED. Non-empty array of type-specific authority value(s).
-    pub values: Vec<String>,
-}
-
-impl TrustedAuthorityQuery {
-    fn validate(&self, idx: usize) -> Result<()> {
-        if self.values.is_empty() {
-            return Err(invalid_request(format!(
-                "'trusted_authorities[{idx}].values' must be a non-empty array"
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Format-specific metadata for `dc+sd-jwt` credentials.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DcSdJwtMeta {
-    pub vct_values: Vec<String>,
-}
-
-impl DcSdJwtMeta {
-    fn validate(&self, idx: usize) -> Result<()> {
-        if self.vct_values.is_empty() {
-            return Err(invalid_request(format!(
-                "'dcql_query.credentials[{idx}].meta.vct_values' must be a non-empty array"
-            )));
-        }
-        for (vi, v) in self.vct_values.iter().enumerate() {
-            if v.trim().is_empty() {
-                return Err(invalid_request(format!(
-                    "'dcql_query.credentials[{idx}].meta.vct_values[{vi}]' must not be empty"
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Format-specific metadata for `mso_mdoc` credentials.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MsoMdocMeta {
-    pub doctype_value: String,
-}
-
-impl MsoMdocMeta {
-    fn validate(&self, idx: usize) -> Result<()> {
-        if self.doctype_value.trim().is_empty() {
-            return Err(invalid_request(format!(
-                "'dcql_query.credentials[{idx}].meta.doctype_value' must not be empty"
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Format-specific metadata for a credential query.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum CredentialMeta {
-    /// Metadata for `dc+sd-jwt` format (Section B.3.1).
-    DcSdJwt(DcSdJwtMeta),
-    /// Metadata for `mso_mdoc` format (Section B.3.2).
-    MsoMdoc(MsoMdocMeta),
-    /// Generic metadata for other formats (forward compatibility).
-    Generic(Value),
-}
-
-/// A credential query within a DCQL query.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CredentialQuery {
-    pub id: String,
-    #[serde(rename = "format")]
-    pub format: String,
-    pub multiple: Option<bool>,
-    #[serde(rename = "meta")]
-    pub meta: CredentialMeta,
-    pub claims: Option<Vec<ClaimsQuery>>,
-    pub claim_sets: Option<Vec<Vec<String>>>,
-    pub trusted_authorities: Option<Vec<TrustedAuthorityQuery>>,
-    pub require_cryptographic_holder_binding: Option<bool>,
-}
-
-impl CredentialQuery {
-    fn validate(&self, idx: usize) -> Result<()> {
-        // id must be non-empty and match DCQL identifier charset
-        if self.id.trim().is_empty() {
-            return Err(invalid_request(format!(
-                "'dcql_query.credentials[{idx}].id' must not be empty"
-            )));
-        }
-        if !is_dcql_identifier(&self.id) {
-            return Err(invalid_request(format!(
-                "'dcql_query.credentials[{idx}].id' must consist only of alphanumeric characters, '_', or '-'"
-            )));
-        }
-
-        // format must be non-empty
-        if self.format.trim().is_empty() {
-            return Err(invalid_request(format!(
-                "'dcql_query.credentials[{idx}].format' must not be empty"
-            )));
-        }
-
-        // format-aware meta validation
-        match &self.meta {
-            CredentialMeta::DcSdJwt(meta) => {
-                if self.format != "dc+sd-jwt" {
-                    return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure but format is '{}'",
-                        self.format
-                    )));
-                }
-                meta.validate(idx)?;
-            }
-            CredentialMeta::MsoMdoc(meta) => {
-                if self.format != "mso_mdoc" {
-                    return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure but format is '{}'",
-                        self.format
-                    )));
-                }
-                meta.validate(idx)?;
-            }
-            CredentialMeta::Generic(_) => {
-                // For known formats, Generic meta is not allowed - the meta must match the expected structure
-                if self.format == "dc+sd-jwt" {
-                    return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta' must be a valid dc+sd-jwt meta object with 'vct_values' for format 'dc+sd-jwt'"
-                    )));
-                }
-                if self.format == "mso_mdoc" {
-                    return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta' must be a valid mso_mdoc meta object with 'doctype_value' for format 'mso_mdoc'"
-                    )));
-                }
-                // For unknown formats, Generic meta is allowed for forward compatibility
-            }
-        }
-
-        // claim_sets MUST NOT be present when claims is absent
-        if self.claim_sets.is_some() && self.claims.is_none() {
-            return Err(invalid_request(format!(
-                "'dcql_query.credentials[{idx}].claim_sets' MUST NOT be present when 'claims' is absent"
-            )));
-        }
-
-        let has_claim_sets = self.claim_sets.is_some();
-
-        // validate claims entries
-        if let Some(ref claims) = self.claims {
-            let mut seen_ids: Vec<&str> = Vec::new();
-            for (ci, claim) in claims.iter().enumerate() {
-                claim.validate(ci, has_claim_sets)?;
-                if let Some(ref id) = claim.id {
-                    if seen_ids.contains(&id.as_str()) {
-                        return Err(invalid_request(format!(
-                            "'dcql_query.credentials[{idx}].claims[{ci}].id' '{id}' is not unique within the claims array"
-                        )));
-                    }
-                    seen_ids.push(id.as_str());
-                }
-            }
-        }
-
-        // validate claim_sets entries reference known claim IDs
-        if let Some(ref claim_sets) = self.claim_sets {
-            if claim_sets.is_empty() {
-                return Err(invalid_request(format!(
-                    "'dcql_query.credentials[{idx}].claim_sets' must be a non-empty array when present"
-                )));
-            }
-            // collect valid claim ids for reference checking
-            let valid_claim_ids: Vec<&str> = self
-                .claims
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(|c| c.id.as_deref())
-                .collect();
-
-            for (si, set) in claim_sets.iter().enumerate() {
-                if set.is_empty() {
-                    return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].claim_sets[{si}]' must be a non-empty array"
-                    )));
-                }
-                for id_ref in set {
-                    if !valid_claim_ids.contains(&id_ref.as_str()) {
-                        return Err(invalid_request(format!(
-                            "'dcql_query.credentials[{idx}].claim_sets[{si}]' references unknown claim id '{id_ref}'"
-                        )));
-                    }
-                }
-            }
-        }
-
-        // validate trusted_authorities
-        if let Some(ref authorities) = self.trusted_authorities {
-            if authorities.is_empty() {
-                return Err(invalid_request(format!(
-                    "'dcql_query.credentials[{idx}].trusted_authorities' must be a non-empty array when present"
-                )));
-            }
-            for (ai, authority) in authorities.iter().enumerate() {
-                authority.validate(ai)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-/// A Digital Credentials Query Language (DCQL) query.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DcqlQuery {
-    /// REQUIRED. Array of credential queries. Must contain at least one element.
-    pub credentials: Vec<CredentialQuery>,
-
-    /// OPTIONAL. Credential sets for combining multiple credential queries (Section 6.2).
-    pub credential_sets: Option<Vec<CredentialSet>>,
-}
-
-impl DcqlQuery {
-    /// Validates the DCQL query structure.
-    pub fn validate(&self) -> Result<()> {
-        if self.credentials.is_empty() {
-            return Err(invalid_request(
-                "'dcql_query.credentials' must contain at least one credential query",
-            ));
-        }
-
-        // validate each credential query and collect IDs for uniqueness + reference checks
-        let mut seen_ids: Vec<&str> = Vec::new();
-        for (i, cred) in self.credentials.iter().enumerate() {
-            cred.validate(i)?;
-            if seen_ids.contains(&cred.id.as_str()) {
-                return Err(invalid_request(format!(
-                    "'dcql_query.credentials[{i}].id' '{}' must be unique within the credentials array",
-                    cred.id
-                )));
-            }
-            seen_ids.push(cred.id.as_str());
-        }
-
-        // validate credential_sets, passing the set of valid credential IDs
-        if let Some(ref sets) = self.credential_sets {
-            // Section 6 says credential_sets, when present, must be a non-empty array
-            if sets.is_empty() {
-                return Err(invalid_request(
-                    "'dcql_query.credential_sets' must be a non-empty array when present",
-                ));
-            }
-            for (i, set) in sets.iter().enumerate() {
-                set.validate(i, &seen_ids)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-/// Validates that a string is a valid base64url-encoded value (no padding, URL-safe alphabet).
-fn is_base64url(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-/// A single Verifier Attestation object within `verifier_info`.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VerifierAttestation {
-    pub format: String,
-    pub data: Value,
-    pub credential_ids: Option<Vec<String>>,
-}
-
-impl VerifierAttestation {
-    fn validate(&self, idx: usize, valid_credential_ids: &[&str]) -> Result<()> {
-        if self.format.trim().is_empty() {
-            return Err(invalid_request(format!(
-                "'verifier_info[{idx}].format' must not be empty"
-            )));
-        }
-        if let Some(ref ids) = self.credential_ids {
-            if ids.is_empty() {
-                return Err(invalid_request(format!(
-                    "'verifier_info[{idx}].credential_ids' must be a non-empty array when present"
-                )));
-            }
-            for id_ref in ids {
-                if !valid_credential_ids.contains(&id_ref.as_str()) {
-                    return Err(invalid_request(format!(
-                        "'verifier_info[{idx}].credential_ids' references unknown credential id '{id_ref}'"
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Transaction data entry as decoded from base64url.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransactionDataEntry {
-    /// REQUIRED. The transaction data type.
-    #[serde(rename = "type")]
-    pub data_type: String,
-    pub credential_ids: Vec<String>,
-    #[serde(flatten)]
-    pub additional_fields: Value,
-}
-
-impl TransactionDataEntry {
-    fn validate(&self, idx: usize, valid_credential_ids: &[&str]) -> Result<()> {
-        if self.data_type.trim().is_empty() {
-            return Err(invalid_request(format!(
-                "'transaction_data[{idx}].type' must not be empty"
-            )));
-        }
-        if self.credential_ids.is_empty() {
-            return Err(invalid_request(format!(
-                "'transaction_data[{idx}].credential_ids' must be a non-empty array"
-            )));
-        }
-        for (ci, id_ref) in self.credential_ids.iter().enumerate() {
-            if !valid_credential_ids.contains(&id_ref.as_str()) {
-                return Err(invalid_request(format!(
-                    "'transaction_data[{idx}].credential_ids[{ci}]' references unknown credential id '{id_ref}'"
-                )));
-            }
-        }
-        Ok(())
-    }
-}
+// Re-export DCQL types from the dcql module
+pub use super::super::dcql::DcqlQuery;
 
 /// An OpenID4VP Authorization Request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorizationRequest {
     pub response_type: ResponseType,
+
     pub client_id: String,
+
     pub redirect_uri: Option<Url>,
+
     pub scope: Option<String>,
+
     pub state: Option<String>,
+
     pub nonce: String,
+
     pub response_mode: ResponseMode,
+
     pub response_uri: Option<Url>,
+
     pub request_uri: Option<Url>,
+
     pub request_uri_method: Option<RequestUriMethod>,
+
     pub dcql_query: Option<DcqlQuery>,
+
     pub client_metadata: Option<Value>,
+
     pub client_metadata_uri: Option<Url>,
+
     pub request: Option<String>,
+
     pub transaction_data: Option<Vec<String>>,
+
     pub verifier_info: Option<Vec<VerifierAttestation>>,
+
     pub expected_origins: Option<Vec<String>>,
 }
 
@@ -648,6 +136,7 @@ impl AuthorizationRequest {
         }
 
         // expected_origins REQUIRED and non-empty for DC API modes (Appendix A.2)
+        // Each origin must be a valid origin tuple (scheme, host, optional port, no path/query/fragment)
         if self.response_mode.is_dc_api() {
             match &self.expected_origins {
                 None => {
@@ -660,7 +149,40 @@ impl AuthorizationRequest {
                         "'expected_origins' must be a non-empty array",
                     ));
                 }
-                _ => {}
+                Some(origins) => {
+                    for (i, origin) in origins.iter().enumerate() {
+                        // Parse as URL to validate structure
+                        let url = Url::parse(origin).map_err(|e| {
+                            invalid_request(format!(
+                                "'expected_origins[{i}]' '{origin}' is not a valid URL: {e}"
+                            ))
+                        })?;
+
+                        // Validate it's a valid origin (no path, query, or fragment)
+                        // Origin = scheme + "://" + host + optional port
+                        if url.path() != "/" && !url.path().is_empty() {
+                            return Err(invalid_request(format!(
+                                "'expected_origins[{i}]' '{origin}' must not contain a path"
+                            )));
+                        }
+                        if url.query().is_some() {
+                            return Err(invalid_request(format!(
+                                "'expected_origins[{i}]' '{origin}' must not contain a query string"
+                            )));
+                        }
+                        if url.fragment().is_some() {
+                            return Err(invalid_request(format!(
+                                "'expected_origins[{i}]' '{origin}' must not contain a fragment"
+                            )));
+                        }
+                        // Must have a host
+                        if url.host().is_none() {
+                            return Err(invalid_request(format!(
+                                "'expected_origins[{i}]' '{origin}' must have a host"
+                            )));
+                        }
+                    }
+                }
             }
         }
 
@@ -748,11 +270,11 @@ fn is_unreserved_chars(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
 }
 
-/// Checks that `s` is a valid DCQL identifier: non-empty, alphanumeric + `_` + `-` (Section 6.1).
-fn is_dcql_identifier(s: &str) -> bool {
+/// Validates that a string is a valid base64url-encoded value (no padding, URL-safe alphabet).
+fn is_base64url(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Deserializes an [`AuthorizationRequest`] and immediately validates it.
@@ -782,6 +304,8 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
         let raw = Raw::deserialize(deserializer)?;
 
         // Section 5.1: request_uri_method MUST NOT be present when request_uri is absent.
+        // This is enforced in validate(); we preserve the raw value so validate() can
+        // produce a clear error rather than silently dropping it.
         let request = Self {
             response_type: raw.response_type,
             client_id: raw.client_id,
@@ -810,10 +334,203 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
 fn invalid_request(message: impl Into<String>) -> Error {
     Error::message(ErrorKind::InvalidPresentationRequest, message.into())
 }
+/// An OpenID4VP Authorization Request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ResponseType {
+    #[serde(rename = "vp_token")]
+    VpToken,
+
+    #[serde(rename = "vp_token id_token")]
+    VpTokenIdToken,
+}
+
+impl std::fmt::Display for ResponseType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::VpToken => write!(f, "vp_token"),
+            Self::VpTokenIdToken => write!(f, "vp_token id_token"),
+        }
+    }
+}
+
+/// The `response_mode` parameter for OpenID4VP Authorization Requests.
+///
+/// Includes `direct_post`/`direct_post.jwt` (Section 5.1) and
+/// `dc_api`/`dc_api.jwt` for the W3C Digital Credentials API (Appendix A).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ResponseMode {
+    #[serde(rename = "direct_post")]
+    DirectPost,
+
+    #[serde(rename = "direct_post.jwt")]
+    DirectPostJwt,
+
+    /// W3C Digital Credentials API response mode (Appendix A).
+    #[serde(rename = "dc_api")]
+    DcApi,
+
+    /// W3C Digital Credentials API response mode with JWT-secured response (Appendix A).
+    #[serde(rename = "dc_api.jwt")]
+    DcApiJwt,
+}
+
+impl ResponseMode {
+    fn is_direct_post(self) -> bool {
+        matches!(self, Self::DirectPost | Self::DirectPostJwt)
+    }
+
+    fn is_dc_api(self) -> bool {
+        matches!(self, Self::DcApi | Self::DcApiJwt)
+    }
+}
+
+impl std::fmt::Display for ResponseMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DirectPost => write!(f, "direct_post"),
+            Self::DirectPostJwt => write!(f, "direct_post.jwt"),
+            Self::DcApi => write!(f, "dc_api"),
+            Self::DcApiJwt => write!(f, "dc_api.jwt"),
+        }
+    }
+}
+
+/// The `request_uri_method` parameter controlling how the Wallet fetches the
+/// Request Object when `request_uri` is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum RequestUriMethod {
+    #[default]
+    #[serde(rename = "get")]
+    Get,
+
+    #[serde(rename = "post")]
+    Post,
+}
+
+impl std::fmt::Display for RequestUriMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Get => write!(f, "get"),
+            Self::Post => write!(f, "post"),
+        }
+    }
+}
+
+/// A single Verifier Attestation object within `verifier_info`.
+///
+/// Section 5.1 defines `verifier_info` as a non-empty array of these objects.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerifierAttestation {
+    /// REQUIRED. The attestation format identifier.
+    pub format: String,
+
+    /// REQUIRED. The attestation data (format-specific).
+    pub data: Value,
+
+    /// OPTIONAL. Non-empty array of DCQL credential query IDs this attestation relates to.
+    pub credential_ids: Option<Vec<String>>,
+}
+
+impl VerifierAttestation {
+    fn validate(&self, idx: usize, valid_credential_ids: &[&str]) -> Result<()> {
+        if self.format.trim().is_empty() {
+            return Err(invalid_request(format!(
+                "'verifier_info[{idx}].format' must not be empty"
+            )));
+        }
+        if let Some(ref ids) = self.credential_ids {
+            if ids.is_empty() {
+                return Err(invalid_request(format!(
+                    "'verifier_info[{idx}].credential_ids' must be a non-empty array when present"
+                )));
+            }
+            for id_ref in ids {
+                if !valid_credential_ids.contains(&id_ref.as_str()) {
+                    return Err(invalid_request(format!(
+                        "'verifier_info[{idx}].credential_ids' references unknown credential id '{id_ref}'"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Supported transaction data types per OpenID4VP Section 8.4.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionDataType {
+    /// OpenID4VP transaction data type.
+    #[serde(rename = "openid4vp")]
+    Openid4vp,
+    /// Extension point for other transaction data types.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl TransactionDataType {
+    /// Returns true if this is a supported transaction data type.
+    fn is_supported(&self) -> bool {
+        matches!(self, Self::Openid4vp)
+    }
+}
+
+impl std::fmt::Display for TransactionDataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Openid4vp => write!(f, "openid4vp"),
+            Self::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+/// Transaction data entry as decoded from base64url.
+///
+/// Section 8.4 requires each entry to be base64url-decoded into a JSON object
+/// with at least `type` and a non-empty `credential_ids` array referencing DCQL credential IDs.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransactionDataEntry {
+    /// REQUIRED. The transaction data type.
+    #[serde(rename = "type")]
+    pub data_type: TransactionDataType,
+
+    pub credential_ids: Vec<String>,
+}
+
+impl TransactionDataEntry {
+    fn validate(&self, idx: usize, valid_credential_ids: &[&str]) -> Result<()> {
+        // Section 8.4: wallet must return invalid_transaction_data for unsupported types
+        if !self.data_type.is_supported() {
+            return Err(invalid_request(format!(
+                "'transaction_data[{idx}].type' '{}' is not a supported transaction data type",
+                self.data_type
+            )));
+        }
+        if self.credential_ids.is_empty() {
+            return Err(invalid_request(format!(
+                "'transaction_data[{idx}].credential_ids' must be a non-empty array"
+            )));
+        }
+        for (ci, id_ref) in self.credential_ids.iter().enumerate() {
+            if !valid_credential_ids.contains(&id_ref.as_str()) {
+                return Err(invalid_request(format!(
+                    "'transaction_data[{idx}].credential_ids[{ci}]' references unknown credential id '{id_ref}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::dcql::{
+        CredentialFormat, CredentialMeta, CredentialQuery, DcSdJwtMeta,
+    };
     use super::*;
+    use crate::core::claim_path_pointer::ClaimValue;
     use serde_json::json;
 
     fn minimal_valid_dcql() -> Value {
@@ -890,7 +607,7 @@ mod tests {
         v["request"] = json!("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9");
 
         v["transaction_data"] =
-            json!(["eyJ0eXBlIjoidGVzdF90eXBlIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"]);
+            json!(["eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"]);
         v["verifier_info"] = json!([{"format": "jwt_vc", "data": "eyJ0eXBlIjoidmVyaWZpZXIifQ"}]);
 
         let req = parse(v).expect("should parse");
@@ -1108,6 +825,7 @@ mod tests {
 
     #[test]
     fn rejects_request_uri_method_without_request_uri() {
+        // must be an error, not silently dropped
         let mut v = minimal_valid_dcql();
         v["request_uri_method"] = json!("post");
         // No request_uri provided
@@ -1266,7 +984,7 @@ mod tests {
         });
         let req = parse(v).expect("should parse mso_mdoc");
         let cred = &req.dcql_query.unwrap().credentials[0];
-        assert_eq!(cred.format, "mso_mdoc");
+        assert_eq!(cred.format, CredentialFormat::MsoMdoc);
         match &cred.meta {
             CredentialMeta::MsoMdoc(meta) => {
                 assert_eq!(meta.doctype_value, "org.iso.18013.5.1.mDL");
@@ -1702,8 +1420,8 @@ mod tests {
     fn rejects_transaction_data_with_empty_credential_ids() {
         let mut v = minimal_valid_dcql();
         // Valid base64url but empty credential_ids array
-        // {"type":"test","credential_ids":[]} -> eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbXX0
-        v["transaction_data"] = json!(["eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbXX0"]);
+        // {"type":"test","credential_ids":[]} -> eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOltdfQ
+        v["transaction_data"] = json!(["eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOltdfQ"]);
         let err = parse(v).unwrap_err();
         assert!(err.to_string().contains("transaction_data"), "{err}");
     }
@@ -1712,9 +1430,9 @@ mod tests {
     fn rejects_transaction_data_with_unknown_credential_id() {
         let mut v = minimal_valid_dcql();
         // Valid base64url but references unknown credential ID
-        // {"type":"test","credential_ids":["unknown"]} -> eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbInVua25vd24iXX0
+        // {"type":"test","credential_ids":["unknown"]} -> eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsidW5rbm93biJdfQ
         v["transaction_data"] =
-            json!(["eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbInVua25vd24iXX0"]);
+            json!(["eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsidW5rbm93biJdfQ"]);
         let err = parse(v).unwrap_err();
         assert!(err.to_string().contains("transaction_data"), "{err}");
     }
@@ -1722,10 +1440,10 @@ mod tests {
     #[test]
     fn accepts_valid_base64url_transaction_data() {
         let mut v = minimal_valid_dcql();
-        // Valid TransactionDataEntry: {"type":"test_type","credential_ids":["pid"]}
-        // base64url: eyJ0eXBlIjoidGVzdF90eXBlIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19
+        // Valid TransactionDataEntry: {"type":"openid4vp","credential_ids":["pid"]}
+        // base64url: eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19
         v["transaction_data"] =
-            json!(["eyJ0eXBlIjoidGVzdF90eXBlIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"]);
+            json!(["eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"]);
         let req = parse(v).expect("should parse");
         assert_eq!(req.transaction_data.unwrap().len(), 1);
     }
@@ -1734,8 +1452,8 @@ mod tests {
     fn accepts_multiple_valid_transaction_data_entries() {
         let mut v = minimal_valid_dcql();
         v["transaction_data"] = json!([
-            "eyJ0eXBlIjoidHgxIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19",
-            "eyJ0eXBlIjoidHgyIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"
+            "eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19",
+            "eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"
         ]);
         let req = parse(v).expect("should parse");
         assert_eq!(req.transaction_data.unwrap().len(), 2);
@@ -1874,7 +1592,7 @@ mod tests {
             dcql_query: Some(DcqlQuery {
                 credentials: vec![CredentialQuery {
                     id: "test-id".to_string(),
-                    format: "dc+sd-jwt".to_string(),
+                    format: CredentialFormat::DcSdJwt,
                     multiple: None,
                     meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
                         vct_values: vec!["https://example.com".to_string()],
@@ -1936,7 +1654,7 @@ mod tests {
             dcql_query: Some(DcqlQuery {
                 credentials: vec![CredentialQuery {
                     id: "test-id".to_string(),
-                    format: "dc+sd-jwt".to_string(),
+                    format: CredentialFormat::DcSdJwt,
                     multiple: None,
                     meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
                         vct_values: vec!["https://example.com".to_string()],
@@ -1976,7 +1694,7 @@ mod tests {
             dcql_query: Some(DcqlQuery {
                 credentials: vec![CredentialQuery {
                     id: "test-id".to_string(),
-                    format: "dc+sd-jwt".to_string(),
+                    format: CredentialFormat::DcSdJwt,
                     multiple: None,
                     meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
                         vct_values: vec!["https://example.com".to_string()],
@@ -2016,7 +1734,7 @@ mod tests {
             dcql_query: Some(DcqlQuery {
                 credentials: vec![CredentialQuery {
                     id: "test-id".to_string(),
-                    format: "dc+sd-jwt".to_string(),
+                    format: CredentialFormat::DcSdJwt,
                     multiple: None,
                     meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
                         vct_values: vec!["https://example.com".to_string()],
@@ -2065,39 +1783,5 @@ mod tests {
     #[test]
     fn request_uri_method_default_is_get() {
         assert_eq!(RequestUriMethod::default(), RequestUriMethod::Get);
-    }
-
-    #[test]
-    fn trusted_authority_type_display() {
-        assert_eq!(TrustedAuthorityType::Aki.to_string(), "aki");
-        assert_eq!(TrustedAuthorityType::EtsiTl.to_string(), "etsi_tl");
-        assert_eq!(
-            TrustedAuthorityType::OpenidFederation.to_string(),
-            "openid_federation"
-        );
-        assert_eq!(
-            TrustedAuthorityType::Other("custom".to_string()).to_string(),
-            "custom"
-        );
-    }
-
-    #[test]
-    fn claim_value_enum_variants() {
-        let string_val = ClaimValue::String("test".to_string());
-        let int_val = ClaimValue::Integer(42);
-        let bool_val = ClaimValue::Boolean(true);
-
-        match string_val {
-            ClaimValue::String(s) => assert_eq!(s, "test"),
-            _ => panic!("expected String"),
-        }
-        match int_val {
-            ClaimValue::Integer(i) => assert_eq!(i, 42),
-            _ => panic!("expected Integer"),
-        }
-        match bool_val {
-            ClaimValue::Boolean(b) => assert!(b),
-            _ => panic!("expected Boolean"),
-        }
     }
 }

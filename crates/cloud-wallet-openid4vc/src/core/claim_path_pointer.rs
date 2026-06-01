@@ -6,6 +6,17 @@ use crate::errors::EmptyClaimPathError;
 use serde::{Deserialize, Serialize, de::Deserializer};
 use serde_json::Value;
 
+/// A single acceptable claim value as defined in OpenID4VP Section 6.3.
+///
+/// Section 6.3 limits `values` to a non-empty array of strings, integers, or booleans.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ClaimValue {
+    String(String),
+    Integer(i64),
+    Boolean(bool),
+}
+
 /// A single element of a claims path pointer.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
