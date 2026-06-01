@@ -17,5 +17,6 @@ extend-exclude = [
   "crates/cloud-wallet-crypto/src/jwk.rs",
   "crates/cloud-wallet-crypto/src/jwk/tests.rs",
   "crates/cloud-wallet-openid4vc/test_data/issuer_metadata.json",
-  "crates/cloud-wallet-openid4vc/test_data/sd_jwt/"
+  "crates/cloud-wallet-openid4vc/test_data/sd_jwt/",
+  "crates/cloud-wallet-openid4vc/src/formats/sd_jwt/metadata.rs",
 ]

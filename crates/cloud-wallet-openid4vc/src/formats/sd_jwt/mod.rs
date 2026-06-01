@@ -1,15 +1,24 @@
+mod decode;
 mod disclosure;
 mod error;
+mod hash;
 mod jwt;
 mod kb_jwt;
+mod metadata;
 #[cfg(test)]
 mod tests;
+mod verification;
 
 pub use disclosure::Disclosure;
-pub use error::Error;
+pub use error::{DisclosureError, Error, ProcessingError};
+pub use hash::IanaHashAlgorithm;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
+pub use metadata::IssuerMetadataError;
+pub use verification::{VerificationError, X5cTrustAnchors};
 
+use jsonwebtoken::Algorithm;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
@@ -24,6 +33,21 @@ const ISSUER_JWT_COMPONENT: &str = "Issuer-Signed JWT";
 const KEY_BINDING_JWT_COMPONENT: &str = "Key Binding JWT";
 const SD_JWT_VC_TYP: &str = "dc+sd-jwt";
 const TRANSITIONAL_SD_JWT_VC_TYP: &str = "vc+sd-jwt";
+const METADATA_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "nbf",
+    "iat",
+    "jti",
+    "vct",
+    "vct#integrity",
+    "cnf",
+    "status",
+    "_sd",
+    "_sd_alg",
+];
 
 /// Parsed SD-JWT VC in combined serialization form.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,14 +127,29 @@ impl<'a> SdJwt<'a> {
         self.disclosures
     }
 
-    /// Returns the optional key binding JWT.
-    pub fn key_binding(&self) -> Option<&KeyBindingJwt<'a>> {
-        self.key_binding.as_ref()
+    /// Returns the disclosed payload after processing and verifying SD-JWT Disclosures.
+    pub fn to_disclosed_payload(&self) -> Result<Value, Error> {
+        decode::process_disclosures(self)
     }
 
-    /// Returns true when the combined serialization includes a key binding JWT.
-    pub fn has_key_binding(&self) -> bool {
-        self.key_binding.is_some()
+    /// Returns disclosed credential claims without top-level JWT and SD-JWT protocol metadata.
+    pub fn to_rendered_claims(&self) -> Result<Value, Error> {
+        let mut payload = self.to_disclosed_payload()?;
+        remove_metadata(&mut payload);
+        Ok(payload)
+    }
+
+    /// Establishes issuer trust and verifies the issuer-signed JWT signature.
+    ///
+    /// Returns the algorithm used for verification.
+    pub async fn verify_signature(
+        &self,
+        http_client: &ClientWithMiddleware,
+        trust_anchors: X5cTrustAnchors<'_>,
+    ) -> Result<Algorithm, Error> {
+        verification::verify_issuer_signature(self, http_client, trust_anchors)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -214,4 +253,14 @@ fn validate_sd_jwt_vc_profile(jwt: &Jwt<'_, SdJwtClaims>) -> Result<(), Error> {
         });
     }
     Ok(())
+}
+
+fn remove_metadata(payload: &mut Value) {
+    let Value::Object(object) = payload else {
+        return;
+    };
+
+    for claim_name in METADATA_CLAIMS {
+        object.remove(*claim_name);
+    }
 }

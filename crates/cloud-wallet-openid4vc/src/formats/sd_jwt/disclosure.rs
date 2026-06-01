@@ -1,7 +1,8 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
+use std::fmt;
 
-use super::Error;
+use super::{DisclosureError, Error};
 
 /// A single SD-JWT disclosure decoded from the combined SD-JWT serialization.
 ///
@@ -10,10 +11,10 @@ use super::Error;
 /// two-element array discloses an array element (`[salt, claim_value]`).
 ///
 /// [RFC 9901]: https://datatracker.ietf.org/doc/html/rfc9901
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Disclosure<'a> {
     /// The salt value.
-    pub salt: String,
+    _salt: String,
     /// The claim name, optional for array elements.
     pub claim_name: Option<String>,
     /// The claim Value which can be of any type.
@@ -22,38 +23,49 @@ pub struct Disclosure<'a> {
     raw: &'a str,
 }
 
+impl fmt::Debug for Disclosure<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Disclosure")
+            .field("_salt", &"<redacted>")
+            .field("claim_name", &self.claim_name)
+            .field("claim_value", &self.claim_value)
+            .field("raw", &"<redacted>")
+            .finish()
+    }
+}
+
 impl<'a> Disclosure<'a> {
     /// Parses an unpadded base64url-encoded disclosure.
     pub fn parse(raw: &'a str, index: usize) -> Result<Self, Error> {
         if raw.is_empty() {
-            return Err(Error::EmptyDisclosure { index });
+            return Err(invalid(index, DisclosureError::Empty));
         }
 
         let decoded = URL_SAFE_NO_PAD
             .decode(raw)
-            .map_err(|source| Error::DisclosureBase64 { index, source })?;
+            .map_err(|source| invalid(index, DisclosureError::Base64(source)))?;
         let value = serde_json::from_slice::<Value>(&decoded)
-            .map_err(|source| Error::DisclosureJson { index, source })?;
+            .map_err(|source| invalid(index, DisclosureError::Json(source)))?;
 
         let array = match value {
             Value::Array(array) => array,
-            _ => return Err(Error::InvalidDisclosureShape { index }),
+            _ => return Err(invalid(index, DisclosureError::InvalidShape)),
         };
 
         match array.as_slice() {
             [salt, claim_value] => Ok(Self {
-                salt: string_field(salt.clone(), index, "salt")?,
+                _salt: string_field(salt.clone(), index, "salt")?,
                 claim_name: None,
                 claim_value: claim_value.clone(),
                 raw,
             }),
             [salt, claim_name, claim_value] => Ok(Self {
-                salt: string_field(salt.clone(), index, "salt")?,
+                _salt: string_field(salt.clone(), index, "salt")?,
                 claim_name: Some(string_field(claim_name.clone(), index, "claim_name")?),
                 claim_value: claim_value.clone(),
                 raw,
             }),
-            _ => Err(Error::InvalidDisclosureShape { index }),
+            _ => Err(invalid(index, DisclosureError::InvalidShape)),
         }
     }
 
@@ -76,6 +88,10 @@ impl<'a> Disclosure<'a> {
 fn string_field(value: Value, index: usize, field: &'static str) -> Result<String, Error> {
     match value {
         Value::String(s) => Ok(s),
-        _ => Err(Error::InvalidDisclosureField { index, field }),
+        _ => Err(invalid(index, DisclosureError::InvalidField { field })),
     }
+}
+
+fn invalid(index: usize, source: DisclosureError) -> Error {
+    Error::InvalidDisclosure { index, source }
 }
