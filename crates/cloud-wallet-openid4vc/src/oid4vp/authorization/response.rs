@@ -180,21 +180,50 @@ impl AuthorizationSuccessResponse {
 /// Authorization Error Response parameters for OpenID4VP.
 ///
 /// Per Section 8.5 of the OpenID4VP specification, error responses follow the
-/// OAuth 2.0 error response format.
+/// OAuth 2.0 error response format defined in RFC 6749 Section 4.1.2.1.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthorizationErrorResponse {
     /// Error code describing why the request could not be completed.
     error: AuthorizationErrorCode,
 
+    /// Human-readable ASCII text providing additional information about the error.
+    ///
+    /// Per RFC 6749, this is optional and used to provide additional information
+    /// beyond what the error code indicates.
+    error_description: Option<String>,
+
+    /// URI identifying a human-readable web page with information about the error.
+    ///
+    /// Per RFC 6749, this is optional and provides a way to link to more detailed
+    /// error documentation.
+    error_uri: Option<String>,
+
     /// Optional state value echoed from the authorization request.
     state: Option<String>,
 }
 
 impl AuthorizationErrorResponse {
-    /// Creates an authorization error response.
+    /// Creates an authorization error response with just an error code.
     pub fn new(error: AuthorizationErrorCode) -> Self {
-        Self { error, state: None }
+        Self {
+            error,
+            error_description: None,
+            error_uri: None,
+            state: None,
+        }
+    }
+
+    /// Adds a human-readable error description to the response.
+    pub fn with_error_description(mut self, description: impl Into<String>) -> Self {
+        self.error_description = Some(description.into());
+        self
+    }
+
+    /// Adds a URI pointing to additional error information to the response.
+    pub fn with_error_uri(mut self, uri: impl Into<String>) -> Self {
+        self.error_uri = Some(uri.into());
+        self
     }
 
     /// Adds a state value to the response.
@@ -269,7 +298,13 @@ where
 
 /// A compact JWE (JSON Web Encryption) string in the form `HEADER.ENCRYPTED_KEY.IV.CIPHERTEXT.TAG`.
 ///
-/// Per RFC 7516, a JWE consists of five non-empty parts separated by dots.
+/// Per RFC 7516 Section 3.1, a JWE consists of five parts separated by dots:
+/// - Protected header (always required, non-empty)
+/// - Encrypted key (may be empty for algorithms like ECDH-ES that don't use a separate key)
+/// - Initialization vector (may be empty for algorithms that don't use an IV)
+/// - Ciphertext (always required, non-empty)
+/// - Authentication tag (may be empty for algorithms that don't use an authentication tag)
+///
 /// This type validates the structural shape at construction time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CompactJwe(String);
@@ -282,7 +317,8 @@ impl CompactJwe {
     /// Returns an error if:
     /// - The string is empty or contains only whitespace
     /// - The string does not contain exactly 5 dot-separated parts
-    /// - Any part is empty
+    /// - The protected header (first part) is empty
+    /// - The ciphertext (fourth part) is empty
     pub fn new(jwe: impl Into<String>) -> Result<Self, String> {
         let jwe = jwe.into();
         if jwe.trim().is_empty() {
@@ -297,11 +333,22 @@ impl CompactJwe {
             ));
         }
 
-        for (i, part) in parts.iter().enumerate() {
-            if part.is_empty() {
-                return Err(format!("JWE part {} is empty", i + 1));
-            }
+        // Protected header (first part) must always be present and non-empty
+        if parts[0].is_empty() {
+            return Err("JWE protected header (part 1) must not be empty".to_string());
         }
+
+        // Encrypted key (second part) may be empty for algorithms like ECDH-ES
+        // that use key agreement and don't have a separate encrypted key
+
+        // IV (third part) may be empty for algorithms that don't use an IV
+
+        // Ciphertext (fourth part) must always be present and non-empty
+        if parts[3].is_empty() {
+            return Err("JWE ciphertext (part 4) must not be empty".to_string());
+        }
+
+        // Authentication tag (fifth part) may be empty for algorithms that don't use an auth tag
 
         Ok(Self(jwe))
     }
@@ -574,10 +621,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_jwe_with_empty_part() {
-        // 5 parts but one is empty
-        let err = DirectPostJwtResponse::new("part1..part3.part4.part5").unwrap_err();
-        assert!(err.contains("JWE part 2 is empty"));
+    fn accepts_jwe_with_empty_encrypted_key() {
+        // ECDH-ES produces JWEs with empty encrypted key (second part)
+        // Format: HEADER..IV.CIPHERTEXT.TAG
+        let response = DirectPostJwtResponse::new("HEADER..IV.CIPHERTEXT.TAG").unwrap();
+        assert_eq!(response.response(), "HEADER..IV.CIPHERTEXT.TAG");
+    }
+
+    #[test]
+    fn rejects_jwe_with_empty_header() {
+        // Header (first part) must always be present
+        let err = DirectPostJwtResponse::new(".KEY.IV.CIPHERTEXT.TAG").unwrap_err();
+        assert!(err.contains("protected header"));
+    }
+
+    #[test]
+    fn rejects_jwe_with_empty_ciphertext() {
+        // Ciphertext (fourth part) must always be present
+        let err = DirectPostJwtResponse::new("HEADER.KEY.IV..TAG").unwrap_err();
+        assert!(err.contains("ciphertext"));
     }
 
     #[test]
