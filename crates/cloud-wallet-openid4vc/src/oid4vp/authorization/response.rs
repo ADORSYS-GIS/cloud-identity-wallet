@@ -4,6 +4,8 @@ use serde::{Serialize, Serializer};
 use serde_with::skip_serializing_none;
 use url::Url;
 
+use super::error::AuthorizationErrorCode;
+
 /// A presentation value returned for one DCQL Credential Query.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
@@ -19,7 +21,8 @@ pub enum Presentation {
 ///
 /// Per the spec, the value is a JSON object keyed by `CredentialQuery.id`,
 /// where each entry contains one or more presentations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct VpToken {
     entries: BTreeMap<String, Vec<Presentation>>,
 }
@@ -61,15 +64,6 @@ impl VpToken {
     }
 }
 
-impl Serialize for VpToken {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.entries.serialize(serializer)
-    }
-}
-
 fn is_valid_dcql_query_id(query_id: &str) -> bool {
     !query_id.is_empty()
         && query_id
@@ -78,7 +72,8 @@ fn is_valid_dcql_query_id(query_id: &str) -> bool {
 }
 
 /// Authorization Response parameters for OpenID4VP.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
 pub enum AuthorizationResponse {
     /// Successful Authorization Response parameters.
     Success(AuthorizationSuccessResponse),
@@ -89,12 +84,8 @@ pub enum AuthorizationResponse {
 
 impl AuthorizationResponse {
     /// Creates a new successful authorization response with a VP token.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the VP token fails validation.
-    pub fn new(vp_token: VpToken) -> Result<Self, String> {
-        Ok(Self::Success(AuthorizationSuccessResponse::new(vp_token)))
+    pub fn new(vp_token: VpToken) -> Self {
+        Self::Success(AuthorizationSuccessResponse::new(vp_token))
     }
 
     /// Creates a new authorization error response.
@@ -115,18 +106,6 @@ impl AuthorizationResponse {
     /// `application/x-www-form-urlencoded` `direct_post`.
     pub fn as_direct_post_form(&self) -> DirectPostAuthorizationResponse<'_> {
         DirectPostAuthorizationResponse { response: self }
-    }
-}
-
-impl Serialize for AuthorizationResponse {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Success(response) => response.serialize(serializer),
-            Self::Error(response) => response.serialize(serializer),
-        }
     }
 }
 
@@ -225,24 +204,6 @@ impl AuthorizationErrorResponse {
     }
 }
 
-/// OAuth and OpenID4VP authorization error codes used by Section 8.5.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthorizationErrorCode {
-    InvalidRequest,
-    InvalidScope,
-    InvalidClient,
-    AccessDenied,
-    UnauthorizedClient,
-    UnsupportedResponseType,
-    ServerError,
-    TemporarilyUnavailable,
-    VpFormatsNotSupported,
-    InvalidRequestUriMethod,
-    InvalidTransactionData,
-    WalletUnavailable,
-}
-
 /// Form-encoding helper for `direct_post` authorization responses.
 #[derive(Debug, Clone, Copy)]
 pub struct DirectPostAuthorizationResponse<'a> {
@@ -286,6 +247,11 @@ impl<'a> DirectPostAuthorizationSuccessResponse<'a> {
     }
 }
 
+/// Serializes an optional `VpToken` as a JSON string for `direct_post` form encoding.
+///
+/// This function is used by `DirectPostAuthorizationSuccessResponse` to serialize
+/// the `vp_token` field as a JSON string (rather than a nested JSON object),
+/// as required by the `application/x-www-form-urlencoded` format.
 fn serialize_optional_vp_token_as_json_string<S>(
     vp_token: &Option<&VpToken>,
     serializer: S,
@@ -476,9 +442,7 @@ mod tests {
             vec![string_presentation("eyJhbGciOiJFUzI1NiJ9...")],
         );
 
-        let response = AuthorizationResponse::new(vp_token(entries))
-            .expect("valid response")
-            .with_state("state-123");
+        let response = AuthorizationResponse::new(vp_token(entries)).with_state("state-123");
 
         let json = serde_json::to_value(&response).expect("serialize");
 
@@ -549,9 +513,7 @@ mod tests {
             vec![string_presentation("vp-token-value")],
         );
 
-        let response = AuthorizationResponse::new(vp_token(entries))
-            .expect("valid response")
-            .with_state("state-123");
+        let response = AuthorizationResponse::new(vp_token(entries)).with_state("state-123");
 
         let encoded =
             serde_urlencoded::to_string(response.as_direct_post_form()).expect("serialize");
