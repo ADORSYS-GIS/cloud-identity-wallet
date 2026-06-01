@@ -1,4 +1,4 @@
-﻿//! mDoc (ISO 18013-5) parsing support.
+//! mDoc (ISO 18013-5) parsing support.
 //!
 //! This module provides foundational CBOR parsing for `mso_mdoc` credentials
 //! returned by OpenID4VCI issuers. The entry point is [`ParsedMdoc::parse`],
@@ -20,6 +20,8 @@ pub mod verifier;
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
 pub use verifier::verify_digests;
+
+use cloud_wallet_crypto::digest::HashAlg;
 
 /// The hash algorithm used in the MSO `digestAlgorithm` field.
 ///
@@ -74,5 +76,16 @@ impl DigestAlgorithm {
 impl std::fmt::Display for DigestAlgorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_mso_str())
+    }
+}
+
+// Bridge to the crypto layer. Placed here so that all `DigestAlgorithm`
+impl From<DigestAlgorithm> for HashAlg {
+    fn from(alg: DigestAlgorithm) -> Self {
+        match alg {
+            DigestAlgorithm::Sha256 => HashAlg::Sha256,
+            DigestAlgorithm::Sha384 => HashAlg::Sha384,
+            DigestAlgorithm::Sha512 => HashAlg::Sha512,
+        }
     }
 }
