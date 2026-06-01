@@ -1,8 +1,10 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
 use url::Url;
 
+use crate::core::claim_path_pointer::ClaimPathPointer;
 use crate::errors::{Error, ErrorKind, Result};
 
 /// The `response_type` parameter for OpenID4VP Authorization Requests.
@@ -25,9 +27,6 @@ impl std::fmt::Display for ResponseType {
 }
 
 /// The `response_mode` parameter for OpenID4VP Authorization Requests.
-///
-/// Includes `direct_post`/`direct_post.jwt` (Section 5.1) and
-/// `dc_api`/`dc_api.jwt` for the W3C Digital Credentials API (Appendix A).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResponseMode {
     #[serde(rename = "direct_post")]
@@ -86,31 +85,30 @@ impl std::fmt::Display for RequestUriMethod {
         }
     }
 }
+
+/// A single acceptable claim value as defined in Section 6.3.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ClaimValue {
+    String(String),
+    Integer(i64),
+    Boolean(bool),
+}
+
 /// A single DCQL Claims Query object.
-///
-/// Defined in [OpenID4VP Section 6.3](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-6.3).
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaimsQuery {
-    /// REQUIRED. A non-empty Claims Path Pointer identifying the claim.
-    pub path: Vec<Value>,
+    pub path: ClaimPathPointer,
 
-    /// OPTIONAL. Identifier for this claims query, required when `claim_sets` is present.
-    /// Must consist only of alphanumeric characters, `_`, or `-`.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 
-    /// OPTIONAL. Non-empty array of acceptable claim values.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<Vec<Value>>,
+    pub values: Option<Vec<ClaimValue>>,
 }
 
 impl ClaimsQuery {
     fn validate(&self, idx: usize, require_id: bool) -> Result<()> {
-        if self.path.is_empty() {
-            return Err(invalid_request(format!(
-                "'claims[{idx}].path' must be a non-empty array"
-            )));
-        }
+        // ClaimPathPointer already validates non-empty on deserialization
         if let Some(ref id) = self.id
             && !is_dcql_identifier(id)
         {
@@ -136,15 +134,11 @@ impl ClaimsQuery {
 }
 
 /// A single Credential Set option entry.
-///
-/// Defined in [OpenID4VP Section 6.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-6.2).
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialSet {
-    /// REQUIRED. Non-empty array of options, each a non-empty list of credential query IDs.
     pub options: Vec<Vec<String>>,
 
-    /// OPTIONAL. Defaults to `true`. Whether this credential set is required.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
 }
 
@@ -173,58 +167,129 @@ impl CredentialSet {
     }
 }
 
+/// The type of trusted authority reference.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustedAuthorityType {
+    /// Authority Key Identifier (AKI) from X.509 certificates.
+    Aki,
+    /// ETSI Trusted List.
+    EtsiTl,
+    /// OpenID Federation entity.
+    OpenidFederation,
+    /// Extension point for other authority types.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl std::fmt::Display for TrustedAuthorityType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Aki => write!(f, "aki"),
+            Self::EtsiTl => write!(f, "etsi_tl"),
+            Self::OpenidFederation => write!(f, "openid_federation"),
+            Self::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 /// A Trusted Authority Query object within a Credential Query.
-///
-/// Section 6.1 defines `trusted_authorities` as an array of these objects.
-/// The fields are format-specific and kept as `Value` for extensibility; callers
-/// that need strict per-format validation should perform it on top of this model.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustedAuthorityQuery {
-    /// The type of trusted authority reference (e.g. `"aki"`, `"etsi_tl"`, `"openid_federation"`).
+    /// REQUIRED. The type of trusted authority reference.
     #[serde(rename = "type")]
-    pub authority_type: String,
+    pub authority_type: TrustedAuthorityType,
 
-    /// Type-specific authority value(s).
-    pub value: Value,
+    /// REQUIRED. Non-empty array of type-specific authority value(s).
+    pub values: Vec<String>,
+}
+
+impl TrustedAuthorityQuery {
+    fn validate(&self, idx: usize) -> Result<()> {
+        if self.values.is_empty() {
+            return Err(invalid_request(format!(
+                "'trusted_authorities[{idx}].values' must be a non-empty array"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Format-specific metadata for `dc+sd-jwt` credentials.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DcSdJwtMeta {
+    pub vct_values: Vec<String>,
+}
+
+impl DcSdJwtMeta {
+    fn validate(&self, idx: usize) -> Result<()> {
+        if self.vct_values.is_empty() {
+            return Err(invalid_request(format!(
+                "'dcql_query.credentials[{idx}].meta.vct_values' must be a non-empty array"
+            )));
+        }
+        for (vi, v) in self.vct_values.iter().enumerate() {
+            if v.trim().is_empty() {
+                return Err(invalid_request(format!(
+                    "'dcql_query.credentials[{idx}].meta.vct_values[{vi}]' must not be empty"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Format-specific metadata for `mso_mdoc` credentials.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MsoMdocMeta {
+    pub doctype_value: String,
+}
+
+impl MsoMdocMeta {
+    fn validate(&self, idx: usize) -> Result<()> {
+        if self.doctype_value.trim().is_empty() {
+            return Err(invalid_request(format!(
+                "'dcql_query.credentials[{idx}].meta.doctype_value' must not be empty"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Format-specific metadata for a credential query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CredentialMeta {
+    /// Metadata for `dc+sd-jwt` format (Section B.3.1).
+    DcSdJwt(DcSdJwtMeta),
+    /// Metadata for `mso_mdoc` format (Section B.3.2).
+    MsoMdoc(MsoMdocMeta),
+    /// Generic metadata for other formats (forward compatibility).
+    Generic(Value),
 }
 
 /// A credential query within a DCQL query.
-///
-/// Defined in [OpenID4VP Section 6.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-6.1).
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CredentialQuery {
-    /// REQUIRED. Unique identifier for this credential query.
-    /// Must consist only of alphanumeric characters, `_`, or `-`.
     pub id: String,
-
-    /// REQUIRED. The format of the requested credential (e.g., `"dc+sd-jwt"`, `"mso_mdoc"`).
     #[serde(rename = "format")]
     pub format: String,
 
-    /// OPTIONAL. When `true`, the wallet MAY return more than one Presentation for this
-    /// query in the `vp_token` array. Defaults to `false` (Section 8.1).
     pub multiple: Option<bool>,
 
-    /// OPTIONAL. Format-specific metadata for the credential query.
-    ///
-    /// For `dc+sd-jwt` (Section B.3.1), `vct_values` must be a non-empty array of strings.
     #[serde(rename = "meta")]
-    pub meta: Option<Value>,
+    pub meta: CredentialMeta,
 
-    /// OPTIONAL. Typed array of DCQL Claims Query objects (Section 6.3).
     pub claims: Option<Vec<ClaimsQuery>>,
 
-    /// OPTIONAL. Non-empty array of claim-id arrays used to select claim combinations.
-    ///
-    /// MUST NOT be present when `claims` is absent (Section 6.4.1).
-    /// When present, every `claims` entry MUST have an `id` (Section 6.3).
     pub claim_sets: Option<Vec<Vec<String>>>,
 
-    /// OPTIONAL. Trusted authority constraints for this credential (Section 6.1).
     pub trusted_authorities: Option<Vec<TrustedAuthorityQuery>>,
 
-    /// OPTIONAL. Whether cryptographic holder binding is required. Defaults to `true` (Section 6.1).
     pub require_cryptographic_holder_binding: Option<bool>,
 }
 
@@ -250,35 +315,38 @@ impl CredentialQuery {
         }
 
         // format-aware meta validation
-        if let Some(ref meta) = self.meta
-            && self.format == "dc+sd-jwt"
-        {
-            let vct = meta.get("vct_values");
-            match vct {
-                Some(Value::Array(arr)) if !arr.is_empty() => {
-                    for (vi, v) in arr.iter().enumerate() {
-                        if !v.is_string() {
-                            return Err(invalid_request(format!(
-                                "'dcql_query.credentials[{idx}].meta.vct_values[{vi}]' must be a string"
-                            )));
-                        }
-                    }
-                }
-                Some(Value::Array(_)) => {
+        match &self.meta {
+            CredentialMeta::DcSdJwt(meta) => {
+                if self.format != "dc+sd-jwt" {
                     return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta.vct_values' must be a non-empty array"
+                        "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure but format is '{}'",
+                        self.format
                     )));
                 }
-                None => {
+                meta.validate(idx)?;
+            }
+            CredentialMeta::MsoMdoc(meta) => {
+                if self.format != "mso_mdoc" {
                     return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta.vct_values' is required for format 'dc+sd-jwt'"
+                        "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure but format is '{}'",
+                        self.format
                     )));
                 }
-                _ => {
+                meta.validate(idx)?;
+            }
+            CredentialMeta::Generic(_) => {
+                // For known formats, Generic meta is not allowed - the meta must match the expected structure
+                if self.format == "dc+sd-jwt" {
                     return Err(invalid_request(format!(
-                        "'dcql_query.credentials[{idx}].meta.vct_values' must be an array of strings"
+                        "'dcql_query.credentials[{idx}].meta' must be a valid dc+sd-jwt meta object with 'vct_values' for format 'dc+sd-jwt'"
                     )));
                 }
+                if self.format == "mso_mdoc" {
+                    return Err(invalid_request(format!(
+                        "'dcql_query.credentials[{idx}].meta' must be a valid mso_mdoc meta object with 'doctype_value' for format 'mso_mdoc'"
+                    )));
+                }
+                // For unknown formats, Generic meta is allowed for forward compatibility
             }
         }
 
@@ -339,20 +407,30 @@ impl CredentialQuery {
             }
         }
 
+        // validate trusted_authorities
+        if let Some(ref authorities) = self.trusted_authorities {
+            if authorities.is_empty() {
+                return Err(invalid_request(format!(
+                    "'dcql_query.credentials[{idx}].trusted_authorities' must be a non-empty array when present"
+                )));
+            }
+            for (ai, authority) in authorities.iter().enumerate() {
+                authority.validate(ai)?;
+            }
+        }
+
         Ok(())
     }
 }
 
 /// A Digital Credentials Query Language (DCQL) query.
-///
-/// Defined in [OpenID4VP Section 5.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.1).
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DcqlQuery {
     /// REQUIRED. Array of credential queries. Must contain at least one element.
     pub credentials: Vec<CredentialQuery>,
 
     /// OPTIONAL. Credential sets for combining multiple credential queries (Section 6.2).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_sets: Option<Vec<CredentialSet>>,
 }
 
@@ -380,6 +458,12 @@ impl DcqlQuery {
 
         // validate credential_sets, passing the set of valid credential IDs
         if let Some(ref sets) = self.credential_sets {
+            // Section 6 says credential_sets, when present, must be a non-empty array
+            if sets.is_empty() {
+                return Err(invalid_request(
+                    "'dcql_query.credential_sets' must be a non-empty array when present",
+                ));
+            }
             for (i, set) in sets.iter().enumerate() {
                 set.validate(i, &seen_ids)?;
             }
@@ -395,9 +479,8 @@ fn is_base64url(s: &str) -> bool {
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
+
 /// A single Verifier Attestation object within `verifier_info`.
-///
-/// Section 5.1 defines `verifier_info` as a non-empty array of these objects.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VerifierAttestation {
@@ -436,87 +519,91 @@ impl VerifierAttestation {
     }
 }
 
+/// Transaction data entry as decoded from base64url.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransactionDataEntry {
+    /// REQUIRED. The transaction data type.
+    #[serde(rename = "type")]
+    pub data_type: String,
+
+    pub credential_ids: Vec<String>,
+
+    #[serde(flatten)]
+    pub additional_fields: Value,
+}
+
+impl TransactionDataEntry {
+    fn validate(&self, idx: usize, valid_credential_ids: &[&str]) -> Result<()> {
+        if self.data_type.trim().is_empty() {
+            return Err(invalid_request(format!(
+                "'transaction_data[{idx}].type' must not be empty"
+            )));
+        }
+        if self.credential_ids.is_empty() {
+            return Err(invalid_request(format!(
+                "'transaction_data[{idx}].credential_ids' must be a non-empty array"
+            )));
+        }
+        for (ci, id_ref) in self.credential_ids.iter().enumerate() {
+            if !valid_credential_ids.contains(&id_ref.as_str()) {
+                return Err(invalid_request(format!(
+                    "'transaction_data[{idx}].credential_ids[{ci}]' references unknown credential id '{id_ref}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// An OpenID4VP Authorization Request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorizationRequest {
-    /// REQUIRED. Must be `vp_token` (or `vp_token id_token`).
     pub response_type: ResponseType,
 
-    /// REQUIRED. The Verifier's client identifier.
     pub client_id: String,
 
-    /// OPTIONAL. Standard OAuth 2.0 redirect URI.
     pub redirect_uri: Option<Url>,
 
-    /// OPTIONAL. OAuth 2.0 scope values representing DCQL query aliases (Section 5.5).
-    /// Mutually exclusive with `dcql_query`.
-    ///
-    /// NOTE: This implementation accepts any non-empty scope string. Strict per-scope
-    /// DCQL alias validation is left to a higher-level layer, since alias definitions
-    /// are deployment-specific (Section 5.5).
     pub scope: Option<String>,
 
-    /// OPTIONAL. Opaque state value echoed back in the response.
-    /// Must contain only unreserved URI characters (A-Z, a-z, 0-9, `-`, `.`, `_`, `~`).
     pub state: Option<String>,
 
-    /// REQUIRED. A fresh, unique nonce binding the VP Token to this request.
-    /// Must contain only unreserved URI characters (A-Z, a-z, 0-9, `-`, `.`, `_`, `~`)
-    /// per Section 5.2.
     pub nonce: String,
 
-    /// REQUIRED. How the Wallet delivers the Authorization Response.
     pub response_mode: ResponseMode,
 
-    /// CONDITIONAL. The URI to which the Wallet POSTs the Authorization Response.
-    /// Required when `response_mode` is `direct_post` or `direct_post.jwt`.
     pub response_uri: Option<Url>,
 
-    /// OPTIONAL. A reference to a JAR (JWT-Secured Authorization Request) object.
     pub request_uri: Option<Url>,
 
-    /// OPTIONAL. Controls whether the Wallet fetches `request_uri` via GET or POST.
-    /// MUST NOT be present when `request_uri` is absent (Section 5.1).
     pub request_uri_method: Option<RequestUriMethod>,
 
-    /// CONDITIONAL. A DCQL query describing the credentials the Verifier requests.
-    /// Mutually exclusive with `scope`.
     pub dcql_query: Option<DcqlQuery>,
 
-    /// OPTIONAL. Verifier metadata provided inline.
     pub client_metadata: Option<Value>,
 
-    /// OPTIONAL. URI from which the Wallet can fetch the Verifier's metadata.
     pub client_metadata_uri: Option<Url>,
 
-    /// OPTIONAL. The Request Object passed by value (JAR).
     pub request: Option<String>,
 
-    /// OPTIONAL. Non-empty array of base64url-encoded JSON strings representing
-    /// transaction data for external authorization (Section 8.4).
-    ///
-    /// A Wallet that does not support `transaction_data` MUST return an error when
-    /// this field is present. Validation here ensures the array is non-empty and
-    /// each entry is a valid base64url string; semantic decoding is the Wallet's
-    /// responsibility.
     pub transaction_data: Option<Vec<String>>,
 
-    /// OPTIONAL. Non-empty array of Verifier Attestation objects for trust establishment
-    /// (Section 5.1).
     pub verifier_info: Option<Vec<VerifierAttestation>>,
 
-    /// CONDITIONAL. Non-empty array of Verifier Origins required for DC API requests
-    /// (Appendix A.2). REQUIRED when `response_mode` is `dc_api` or `dc_api.jwt`.
     pub expected_origins: Option<Vec<String>>,
 }
 
 impl AuthorizationRequest {
-    /// Validates the Authorization Request against all OID4VP spec constraints.
     pub fn validate(&self) -> Result<()> {
-        // response_type must be vp_token (per ticket requirement)
-        if !matches!(self.response_type, ResponseType::VpToken) {
-            return Err(invalid_request("'response_type' must be 'vp_token'"));
+        if !matches!(
+            self.response_type,
+            ResponseType::VpToken | ResponseType::VpTokenIdToken
+        ) {
+            return Err(invalid_request(
+                "'response_type' must be 'vp_token' or 'vp_token id_token'",
+            ));
         }
 
         // client_id MUST be present and non-empty (Section 5.2)
@@ -620,18 +707,49 @@ impl AuthorizationRequest {
         }
 
         // transaction_data: non-empty array, each entry a valid base64url string (Section 8.4)
+        // Section 8.4 requires each entry to be base64url-decoded into a JSON object with
+        // at least `type` and a non-empty `credential_ids` array referencing DCQL credential IDs
         if let Some(ref td) = self.transaction_data {
             if td.is_empty() {
                 return Err(invalid_request(
                     "'transaction_data' must be a non-empty array when present",
                 ));
             }
+
+            // collect valid credential IDs for reference validation
+            let valid_cred_ids: Vec<&str> = self
+                .dcql_query
+                .as_ref()
+                .map(|q| q.credentials.iter().map(|c| c.id.as_str()).collect())
+                .unwrap_or_default();
+
             for (i, entry) in td.iter().enumerate() {
                 if !is_base64url(entry) {
                     return Err(invalid_request(format!(
                         "'transaction_data[{i}]' must be a valid base64url-encoded string"
                     )));
                 }
+
+                // Decode and validate the JSON structure
+                let decoded = URL_SAFE_NO_PAD.decode(entry.as_bytes()).map_err(|e| {
+                    invalid_request(format!(
+                        "'transaction_data[{i}]' is not valid base64url: {e}"
+                    ))
+                })?;
+
+                let json_str = String::from_utf8(decoded).map_err(|e| {
+                    invalid_request(format!(
+                        "'transaction_data[{i}]' does not decode to valid UTF-8: {e}"
+                    ))
+                })?;
+
+                let entry_data: TransactionDataEntry = serde_json::from_str(&json_str)
+                    .map_err(|e| invalid_request(format!(
+                        "'transaction_data[{i}]' does not decode to valid TransactionDataEntry JSON: {e}"
+                    )))?;
+
+                // Validate the entry structure
+                entry_data.validate(i, &valid_cred_ids)?;
             }
         }
 
@@ -699,8 +817,6 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
         let raw = Raw::deserialize(deserializer)?;
 
         // Section 5.1: request_uri_method MUST NOT be present when request_uri is absent.
-        // This is enforced in validate(); we preserve the raw value so validate() can
-        // produce a clear error rather than silently dropping it.
         let request = Self {
             response_type: raw.response_type,
             client_id: raw.client_id,
@@ -807,8 +923,9 @@ mod tests {
     fn parses_request_with_new_spec_fields() {
         let mut v = minimal_valid_dcql();
         v["request"] = json!("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9");
-        // base64url-encoded strings
-        v["transaction_data"] = json!(["dHJhbnNhY3Rpb25fZGF0YQ"]);
+
+        v["transaction_data"] =
+            json!(["eyJ0eXBlIjoidGVzdF90eXBlIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"]);
         v["verifier_info"] = json!([{"format": "jwt_vc", "data": "eyJ0eXBlIjoidmVyaWZpZXIifQ"}]);
 
         let req = parse(v).expect("should parse");
@@ -818,11 +935,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_vp_token_id_token_response_type() {
+    fn accepts_vp_token_id_token_response_type() {
         let mut v = minimal_valid_dcql();
         v["response_type"] = json!("vp_token id_token");
-        let err = parse(v).unwrap_err();
-        assert!(err.to_string().contains("response_type"), "{err}");
+        let req = parse(v).expect("should accept vp_token id_token");
+        assert_eq!(req.response_type, ResponseType::VpTokenIdToken);
     }
 
     #[test]
@@ -992,7 +1109,7 @@ mod tests {
 
     #[test]
     fn accepts_nonce_with_period_and_tilde() {
-        // comment 3: period and tilde are valid unreserved URI characters
+        // period and tilde are valid unreserved URI characters
         let mut v = minimal_valid_dcql();
         v["nonce"] = json!("nonce.with~tilde");
         let req = parse(v).expect("period and tilde should be accepted in nonce");
@@ -1009,7 +1126,7 @@ mod tests {
 
     #[test]
     fn rejects_state_with_invalid_chars() {
-        // comment 3: state is also subject to unreserved char constraint
+        // state is also subject to unreserved char constraint
         let mut v = minimal_valid_dcql();
         v["state"] = json!("state with spaces");
         let err = parse(v).unwrap_err();
@@ -1026,7 +1143,6 @@ mod tests {
 
     #[test]
     fn rejects_request_uri_method_without_request_uri() {
-        // comment 5: must be an error, not silently dropped
         let mut v = minimal_valid_dcql();
         v["request_uri_method"] = json!("post");
         // No request_uri provided
@@ -1084,7 +1200,7 @@ mod tests {
 
     #[test]
     fn rejects_dcql_query_with_invalid_credential_id_chars() {
-        // comment 6: id must be alphanumeric + _ + -
+        // id must be alphanumeric + _ + -
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{ "id": "inv@lid!", "format": "dc+sd-jwt", "meta": { "vct_values": ["x"] } }]
@@ -1095,7 +1211,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_credential_ids() {
-        // comment 6: IDs must be unique
+        // IDs must be unique
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [
@@ -1118,7 +1234,7 @@ mod tests {
 
     #[test]
     fn rejects_dc_sd_jwt_missing_vct_values() {
-        // comment 7: dc+sd-jwt format requires meta.vct_values
+        // dc+sd-jwt format requires meta.vct_values
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{ "id": "pid", "format": "dc+sd-jwt", "meta": {} }]
@@ -1168,8 +1284,54 @@ mod tests {
     }
 
     #[test]
+    fn accepts_mso_mdoc_format_with_doctype_value() {
+        let v = json!({
+            "response_type": "vp_token",
+            "client_id": "https://verifier.example.com",
+            "response_mode": "direct_post",
+            "response_uri": "https://verifier.example.com/response",
+            "nonce": "abc123",
+            "dcql_query": {
+                "credentials": [{
+                    "id": "mdl",
+                    "format": "mso_mdoc",
+                    "meta": { "doctype_value": "org.iso.18013.5.1.mDL" }
+                }]
+            }
+        });
+        let req = parse(v).expect("should parse mso_mdoc");
+        let cred = &req.dcql_query.unwrap().credentials[0];
+        assert_eq!(cred.format, "mso_mdoc");
+        match &cred.meta {
+            CredentialMeta::MsoMdoc(meta) => {
+                assert_eq!(meta.doctype_value, "org.iso.18013.5.1.mDL");
+            }
+            _ => panic!("expected MsoMdoc meta"),
+        }
+    }
+
+    #[test]
+    fn rejects_mso_mdoc_with_empty_doctype_value() {
+        let v = json!({
+            "response_type": "vp_token",
+            "client_id": "https://verifier.example.com",
+            "response_mode": "direct_post",
+            "response_uri": "https://verifier.example.com/response",
+            "nonce": "abc123",
+            "dcql_query": {
+                "credentials": [{
+                    "id": "mdl",
+                    "format": "mso_mdoc",
+                    "meta": { "doctype_value": "" }
+                }]
+            }
+        });
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("doctype_value"), "{err}");
+    }
+
+    #[test]
     fn accepts_credential_query_with_multiple_true() {
-        // comment 10
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
@@ -1185,14 +1347,13 @@ mod tests {
 
     #[test]
     fn accepts_credential_query_with_trusted_authorities() {
-        // comment 11
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
                 "id": "pid",
                 "format": "dc+sd-jwt",
                 "meta": { "vct_values": ["https://example.com"] },
-                "trusted_authorities": [{ "type": "aki", "value": "abc123" }]
+                "trusted_authorities": [{ "type": "aki", "values": ["abc123"] }]
             }]
         });
         let req = parse(v).expect("should parse");
@@ -1204,8 +1365,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_trusted_authorities_with_empty_values() {
+        let mut v = minimal_valid_dcql();
+        v["dcql_query"] = json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com"] },
+                "trusted_authorities": [{ "type": "aki", "values": [] }]
+            }]
+        });
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("trusted_authorities"), "{err}");
+    }
+
+    #[test]
     fn accepts_require_cryptographic_holder_binding_false() {
-        // comment 11
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
@@ -1224,7 +1399,7 @@ mod tests {
 
     #[test]
     fn rejects_claim_sets_without_claims() {
-        // comment 12: claim_sets MUST NOT be present when claims is absent
+        // claim_sets MUST NOT be present when claims is absent
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
@@ -1240,7 +1415,7 @@ mod tests {
 
     #[test]
     fn rejects_claims_without_id_when_claim_sets_present() {
-        // comment 12: claims must have id when claim_sets is present
+        // claims must have id when claim_sets is present
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
@@ -1276,7 +1451,7 @@ mod tests {
 
     #[test]
     fn accepts_valid_claims_with_claim_sets() {
-        // comment 12: valid combination
+        // valid combination
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
@@ -1294,24 +1469,66 @@ mod tests {
     }
 
     #[test]
-    fn rejects_claims_with_empty_path() {
-        // comment 8: path must be non-empty
+    fn accepts_claim_path_pointer_with_string_elements() {
+        // ClaimPathPointer validates non-empty and proper structure
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
                 "id": "pid",
                 "format": "dc+sd-jwt",
                 "meta": { "vct_values": ["https://example.com"] },
-                "claims": [{ "path": [] }]
+                "claims": [{ "path": ["credentialSubject", "given_name"], "id": "gn" }]
             }]
         });
-        let err = parse(v).unwrap_err();
-        assert!(err.to_string().contains("path"), "{err}");
+        let req = parse(v).expect("should parse");
+        let claims = req.dcql_query.as_ref().unwrap().credentials[0]
+            .claims
+            .as_ref()
+            .unwrap();
+        assert_eq!(claims[0].path.len(), 2);
+    }
+
+    #[test]
+    fn accepts_claim_path_pointer_with_index() {
+        let mut v = minimal_valid_dcql();
+        v["dcql_query"] = json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com"] },
+                "claims": [{ "path": ["addresses", 0, "street"], "id": "addr" }]
+            }]
+        });
+        let req = parse(v).expect("should parse");
+        let claims = req.dcql_query.as_ref().unwrap().credentials[0]
+            .claims
+            .as_ref()
+            .unwrap();
+        assert_eq!(claims[0].path.len(), 3);
+    }
+
+    #[test]
+    fn accepts_claim_path_pointer_with_null() {
+        let mut v = minimal_valid_dcql();
+        v["dcql_query"] = json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com"] },
+                "claims": [{ "path": ["phone_numbers", null], "id": "phones" }]
+            }]
+        });
+        let req = parse(v).expect("should parse");
+        let claims = req.dcql_query.as_ref().unwrap().credentials[0]
+            .claims
+            .as_ref()
+            .unwrap();
+        assert_eq!(claims[0].path.len(), 2);
     }
 
     #[test]
     fn rejects_claims_with_empty_values_array() {
-        // comment 8: values must be non-empty when present
+        // values must be non-empty when present
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
@@ -1326,27 +1543,76 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_claim_ids() {
-        // comment 8: claim ids must be unique
+    fn accepts_claims_with_string_values() {
         let mut v = minimal_valid_dcql();
         v["dcql_query"] = json!({
             "credentials": [{
                 "id": "pid",
                 "format": "dc+sd-jwt",
                 "meta": { "vct_values": ["https://example.com"] },
-                "claims": [
-                    { "path": ["given_name"], "id": "dup" },
-                    { "path": ["family_name"], "id": "dup" }
-                ]
+                "claims": [{ "path": ["given_name"], "values": ["John", "Jane"] }]
             }]
         });
-        let err = parse(v).unwrap_err();
-        assert!(err.to_string().contains("unique"), "{err}");
+        let req = parse(v).expect("should parse");
+        let claims = req.dcql_query.as_ref().unwrap().credentials[0]
+            .claims
+            .as_ref()
+            .unwrap();
+        assert_eq!(claims[0].values.as_ref().unwrap().len(), 2);
+        match &claims[0].values.as_ref().unwrap()[0] {
+            ClaimValue::String(s) => assert_eq!(s, "John"),
+            _ => panic!("expected String claim value"),
+        }
+    }
+
+    #[test]
+    fn accepts_claims_with_integer_values() {
+        let mut v = minimal_valid_dcql();
+        v["dcql_query"] = json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com"] },
+                "claims": [{ "path": ["age"], "values": [18, 21, 25] }]
+            }]
+        });
+        let req = parse(v).expect("should parse");
+        let claims = req.dcql_query.as_ref().unwrap().credentials[0]
+            .claims
+            .as_ref()
+            .unwrap();
+        assert_eq!(claims[0].values.as_ref().unwrap().len(), 3);
+        match &claims[0].values.as_ref().unwrap()[0] {
+            ClaimValue::Integer(i) => assert_eq!(*i, 18),
+            _ => panic!("expected Integer claim value"),
+        }
+    }
+
+    #[test]
+    fn accepts_claims_with_boolean_values() {
+        let mut v = minimal_valid_dcql();
+        v["dcql_query"] = json!({
+            "credentials": [{
+                "id": "pid",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com"] },
+                "claims": [{ "path": ["is_active"], "values": [true, false] }]
+            }]
+        });
+        let req = parse(v).expect("should parse");
+        let claims = req.dcql_query.as_ref().unwrap().credentials[0]
+            .claims
+            .as_ref()
+            .unwrap();
+        assert_eq!(claims[0].values.as_ref().unwrap().len(), 2);
+        match &claims[0].values.as_ref().unwrap()[0] {
+            ClaimValue::Boolean(b) => assert!(*b),
+            _ => panic!("expected Boolean claim value"),
+        }
     }
 
     #[test]
     fn accepts_valid_credential_sets() {
-        // comment 9
         let v = json!({
             "response_type": "vp_token",
             "client_id": "https://verifier.example.com",
@@ -1367,8 +1633,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_credential_sets_array() {
+        // Section 6 says credential_sets, when present, must be a non-empty array
+        let v = json!({
+            "response_type": "vp_token",
+            "client_id": "https://verifier.example.com",
+            "response_mode": "direct_post",
+            "response_uri": "https://verifier.example.com/response",
+            "nonce": "abc123",
+            "dcql_query": {
+                "credentials": [
+                    { "id": "id1", "format": "dc+sd-jwt", "meta": { "vct_values": ["x"] } }
+                ],
+                "credential_sets": []
+            }
+        });
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("credential_sets"), "{err}");
+    }
+
+    #[test]
     fn rejects_credential_sets_with_empty_options() {
-        // comment 9
         let v = json!({
             "response_type": "vp_token",
             "client_id": "https://verifier.example.com",
@@ -1390,7 +1675,6 @@ mod tests {
 
     #[test]
     fn rejects_credential_sets_referencing_unknown_credential_id() {
-        // comment 9
         let v = json!({
             "response_type": "vp_token",
             "client_id": "https://verifier.example.com",
@@ -1431,9 +1715,63 @@ mod tests {
     }
 
     #[test]
+    fn rejects_transaction_data_with_invalid_json() {
+        let mut v = minimal_valid_dcql();
+        // Valid base64url but invalid JSON (not a valid TransactionDataEntry)
+        v["transaction_data"] = json!(["aW52YWxpZCBqc29u"]); // "invalid json"
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("transaction_data"), "{err}");
+    }
+
+    #[test]
+    fn rejects_transaction_data_with_missing_type() {
+        let mut v = minimal_valid_dcql();
+        // Valid base64url but missing required "type" field
+        // {"credential_ids":["pid"]} -> eyJjcmVkZW50aWFsX2lkcyI6WyJwaWQiXX0
+        v["transaction_data"] = json!(["eyJjcmVkZW50aWFsX2lkcyI6WyJwaWQiXX0"]);
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("transaction_data"), "{err}");
+    }
+
+    #[test]
+    fn rejects_transaction_data_with_empty_credential_ids() {
+        let mut v = minimal_valid_dcql();
+        // Valid base64url but empty credential_ids array
+        // {"type":"test","credential_ids":[]} -> eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbXX0
+        v["transaction_data"] = json!(["eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbXX0"]);
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("transaction_data"), "{err}");
+    }
+
+    #[test]
+    fn rejects_transaction_data_with_unknown_credential_id() {
+        let mut v = minimal_valid_dcql();
+        // Valid base64url but references unknown credential ID
+        // {"type":"test","credential_ids":["unknown"]} -> eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbInVua25vd24iXX0
+        v["transaction_data"] =
+            json!(["eyJ0eXBlIjoidGVzdCIsImNyZWRlbnRpYWxfaWRzIjpbInVua25vd24iXX0"]);
+        let err = parse(v).unwrap_err();
+        assert!(err.to_string().contains("transaction_data"), "{err}");
+    }
+
+    #[test]
     fn accepts_valid_base64url_transaction_data() {
         let mut v = minimal_valid_dcql();
-        v["transaction_data"] = json!(["dHJhbnNhY3Rpb25fZGF0YQ", "YW5vdGhlcl9lbnRyeQ"]);
+        // Valid TransactionDataEntry: {"type":"test_type","credential_ids":["pid"]}
+        // base64url: eyJ0eXBlIjoidGVzdF90eXBlIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19
+        v["transaction_data"] =
+            json!(["eyJ0eXBlIjoidGVzdF90eXBlIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"]);
+        let req = parse(v).expect("should parse");
+        assert_eq!(req.transaction_data.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn accepts_multiple_valid_transaction_data_entries() {
+        let mut v = minimal_valid_dcql();
+        v["transaction_data"] = json!([
+            "eyJ0eXBlIjoidHgxIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19",
+            "eyJ0eXBlIjoidHgyIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"
+        ]);
         let req = parse(v).expect("should parse");
         assert_eq!(req.transaction_data.unwrap().len(), 2);
     }
@@ -1573,7 +1911,9 @@ mod tests {
                     id: "test-id".to_string(),
                     format: "dc+sd-jwt".to_string(),
                     multiple: None,
-                    meta: Some(serde_json::json!({ "vct_values": ["https://example.com"] })),
+                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
+                        vct_values: vec!["https://example.com".to_string()],
+                    }),
                     claims: None,
                     claim_sets: None,
                     trusted_authorities: None,
@@ -1633,7 +1973,9 @@ mod tests {
                     id: "test-id".to_string(),
                     format: "dc+sd-jwt".to_string(),
                     multiple: None,
-                    meta: Some(serde_json::json!({ "vct_values": ["https://example.com"] })),
+                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
+                        vct_values: vec!["https://example.com".to_string()],
+                    }),
                     claims: None,
                     claim_sets: None,
                     trusted_authorities: None,
@@ -1671,7 +2013,9 @@ mod tests {
                     id: "test-id".to_string(),
                     format: "dc+sd-jwt".to_string(),
                     multiple: None,
-                    meta: Some(serde_json::json!({ "vct_values": ["https://example.com"] })),
+                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
+                        vct_values: vec!["https://example.com".to_string()],
+                    }),
                     claims: None,
                     claim_sets: None,
                     trusted_authorities: None,
@@ -1709,7 +2053,9 @@ mod tests {
                     id: "test-id".to_string(),
                     format: "dc+sd-jwt".to_string(),
                     multiple: None,
-                    meta: Some(serde_json::json!({ "vct_values": ["https://example.com"] })),
+                    meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
+                        vct_values: vec!["https://example.com".to_string()],
+                    }),
                     claims: None,
                     claim_sets: None,
                     trusted_authorities: None,
@@ -1754,5 +2100,39 @@ mod tests {
     #[test]
     fn request_uri_method_default_is_get() {
         assert_eq!(RequestUriMethod::default(), RequestUriMethod::Get);
+    }
+
+    #[test]
+    fn trusted_authority_type_display() {
+        assert_eq!(TrustedAuthorityType::Aki.to_string(), "aki");
+        assert_eq!(TrustedAuthorityType::EtsiTl.to_string(), "etsi_tl");
+        assert_eq!(
+            TrustedAuthorityType::OpenidFederation.to_string(),
+            "openid_federation"
+        );
+        assert_eq!(
+            TrustedAuthorityType::Other("custom".to_string()).to_string(),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn claim_value_enum_variants() {
+        let string_val = ClaimValue::String("test".to_string());
+        let int_val = ClaimValue::Integer(42);
+        let bool_val = ClaimValue::Boolean(true);
+
+        match string_val {
+            ClaimValue::String(s) => assert_eq!(s, "test"),
+            _ => panic!("expected String"),
+        }
+        match int_val {
+            ClaimValue::Integer(i) => assert_eq!(i, 42),
+            _ => panic!("expected Integer"),
+        }
+        match bool_val {
+            ClaimValue::Boolean(b) => assert!(b),
+            _ => panic!("expected Boolean"),
+        }
     }
 }
