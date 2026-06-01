@@ -100,9 +100,7 @@ pub enum ClaimValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaimsQuery {
     pub path: ClaimPathPointer,
-
     pub id: Option<String>,
-
     pub values: Option<Vec<ClaimValue>>,
 }
 
@@ -171,13 +169,9 @@ impl CredentialSet {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustedAuthorityType {
-    /// Authority Key Identifier (AKI) from X.509 certificates.
     Aki,
-    /// ETSI Trusted List.
     EtsiTl,
-    /// OpenID Federation entity.
     OpenidFederation,
-    /// Extension point for other authority types.
     #[serde(untagged)]
     Other(String),
 }
@@ -278,18 +272,12 @@ pub struct CredentialQuery {
     pub id: String,
     #[serde(rename = "format")]
     pub format: String,
-
     pub multiple: Option<bool>,
-
     #[serde(rename = "meta")]
     pub meta: CredentialMeta,
-
     pub claims: Option<Vec<ClaimsQuery>>,
-
     pub claim_sets: Option<Vec<Vec<String>>>,
-
     pub trusted_authorities: Option<Vec<TrustedAuthorityQuery>>,
-
     pub require_cryptographic_holder_binding: Option<bool>,
 }
 
@@ -484,13 +472,8 @@ fn is_base64url(s: &str) -> bool {
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VerifierAttestation {
-    /// REQUIRED. The attestation format identifier.
     pub format: String,
-
-    /// REQUIRED. The attestation data (format-specific).
     pub data: Value,
-
-    /// OPTIONAL. Non-empty array of DCQL credential query IDs this attestation relates to.
     pub credential_ids: Option<Vec<String>>,
 }
 
@@ -526,9 +509,7 @@ pub struct TransactionDataEntry {
     /// REQUIRED. The transaction data type.
     #[serde(rename = "type")]
     pub data_type: String,
-
     pub credential_ids: Vec<String>,
-
     #[serde(flatten)]
     pub additional_fields: Value,
 }
@@ -561,37 +542,21 @@ impl TransactionDataEntry {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorizationRequest {
     pub response_type: ResponseType,
-
     pub client_id: String,
-
     pub redirect_uri: Option<Url>,
-
     pub scope: Option<String>,
-
     pub state: Option<String>,
-
     pub nonce: String,
-
     pub response_mode: ResponseMode,
-
     pub response_uri: Option<Url>,
-
     pub request_uri: Option<Url>,
-
     pub request_uri_method: Option<RequestUriMethod>,
-
     pub dcql_query: Option<DcqlQuery>,
-
     pub client_metadata: Option<Value>,
-
     pub client_metadata_uri: Option<Url>,
-
     pub request: Option<String>,
-
     pub transaction_data: Option<Vec<String>>,
-
     pub verifier_info: Option<Vec<VerifierAttestation>>,
-
     pub expected_origins: Option<Vec<String>>,
 }
 
