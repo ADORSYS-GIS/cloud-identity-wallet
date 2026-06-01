@@ -1,3 +1,3 @@
-mod dcql;
+mod query;
 
-pub use dcql::*;
+pub use query::*;

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_with::skip_serializing_none;
 
 use crate::core::claim_path_pointer::{ClaimPathElement, ClaimPathPointer, ClaimValue};
@@ -210,68 +209,80 @@ impl TrustedAuthorityQuery {
     }
 }
 
-/// Format-specific metadata for `dc+sd-jwt` credentials.
+/// Format-specific metadata for a credential query.
 ///
-/// Defined in [OpenID4VP Section B.3.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.3.1).
-#[skip_serializing_none]
+/// Defined in [OpenID4VP Section 6.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-6.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DcSdJwtMeta {
-    /// REQUIRED. Non-empty array of VCT (Verifiable Credential Type) values.
-    pub vct_values: Vec<String>,
+#[serde(untagged)]
+pub enum CredentialMeta {
+    /// Metadata for W3C VC formats (jwt_vc_json, jwt_vc_json-ld, ldp_vc).
+    /// Requires `type_values` - a non-empty array of credential type URIs.
+    W3CFormat { type_values: Vec<Vec<String>> },
+    /// Metadata for `dc+sd-jwt` format (Section B.3.1).
+    SdJwt { vct_values: Vec<String> },
+    /// Metadata for `mso_mdoc` format (Section B.3.2).
+    MsoMdoc { doctype_value: String },
 }
 
-impl DcSdJwtMeta {
-    pub(crate) fn validate(&self, idx: usize) -> Result<()> {
-        if self.vct_values.is_empty() {
-            return Err(invalid_dcql(format!(
-                "'dcql_query.credentials[{idx}].meta.vct_values' must be a non-empty array"
-            )));
-        }
-        for (vi, v) in self.vct_values.iter().enumerate() {
-            if v.trim().is_empty() {
+impl CredentialMeta {
+    /// Validates the metadata structure for the given format.
+    fn validate(&self, idx: usize, format: &CredentialFormat) -> Result<()> {
+        match (self, format) {
+            (CredentialMeta::W3CFormat { type_values }, _) => {
+                if type_values.is_empty() {
+                    return Err(invalid_dcql(format!(
+                        "'dcql_query.credentials[{idx}].meta.type_values' must be a non-empty array"
+                    )));
+                }
+                for (vi, values) in type_values.iter().enumerate() {
+                    if values.is_empty() {
+                        return Err(invalid_dcql(format!(
+                            "'dcql_query.credentials[{idx}].meta.type_values[{vi}]' must be a non-empty array"
+                        )));
+                    }
+                    for (ti, t) in values.iter().enumerate() {
+                        if t.trim().is_empty() {
+                            return Err(invalid_dcql(format!(
+                                "'dcql_query.credentials[{idx}].meta.type_values[{vi}][{ti}]' must not be empty"
+                            )));
+                        }
+                    }
+                }
+            }
+            (CredentialMeta::SdJwt { vct_values }, CredentialFormat::DcSdJwt) => {
+                if vct_values.is_empty() {
+                    return Err(invalid_dcql(format!(
+                        "'dcql_query.credentials[{idx}].meta.vct_values' must be a non-empty array"
+                    )));
+                }
+                for (vi, v) in vct_values.iter().enumerate() {
+                    if v.trim().is_empty() {
+                        return Err(invalid_dcql(format!(
+                            "'dcql_query.credentials[{idx}].meta.vct_values[{vi}]' must not be empty"
+                        )));
+                    }
+                }
+            }
+            (CredentialMeta::SdJwt { .. }, _) => {
                 return Err(invalid_dcql(format!(
-                    "'dcql_query.credentials[{idx}].meta.vct_values[{vi}]' must not be empty"
+                    "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure but format is not 'dc+sd-jwt'"
+                )));
+            }
+            (CredentialMeta::MsoMdoc { doctype_value }, CredentialFormat::MsoMdoc) => {
+                if doctype_value.trim().is_empty() {
+                    return Err(invalid_dcql(format!(
+                        "'dcql_query.credentials[{idx}].meta.doctype_value' must not be empty"
+                    )));
+                }
+            }
+            (CredentialMeta::MsoMdoc { .. }, _) => {
+                return Err(invalid_dcql(format!(
+                    "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure but format is not 'mso_mdoc'"
                 )));
             }
         }
         Ok(())
     }
-}
-
-/// Format-specific metadata for `mso_mdoc` credentials.
-///
-/// Defined in [OpenID4VP Section B.3.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.3.2).
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MsoMdocMeta {
-    /// REQUIRED. The doctype value for the mDL or other mdoc document type.
-    pub doctype_value: String,
-}
-
-impl MsoMdocMeta {
-    pub(crate) fn validate(&self, idx: usize) -> Result<()> {
-        if self.doctype_value.trim().is_empty() {
-            return Err(invalid_dcql(format!(
-                "'dcql_query.credentials[{idx}].meta.doctype_value' must not be empty"
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Format-specific metadata for a credential query.
-///
-/// Section 6.1 makes `meta` REQUIRED as an object; it may be empty for unknown formats,
-/// but for known formats it must contain the appropriate fields.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum CredentialMeta {
-    /// Metadata for `dc+sd-jwt` format (Section B.3.1).
-    DcSdJwt(DcSdJwtMeta),
-    /// Metadata for `mso_mdoc` format (Section B.3.2).
-    MsoMdoc(MsoMdocMeta),
-    /// Generic metadata for other formats (forward compatibility).
-    Generic(Value),
 }
 
 /// Supported credential formats for DCQL queries.
@@ -340,40 +351,7 @@ impl CredentialQuery {
         }
 
         // format-aware meta validation
-        match &self.meta {
-            CredentialMeta::DcSdJwt(meta) => {
-                if !matches!(self.format, CredentialFormat::DcSdJwt) {
-                    return Err(invalid_dcql(format!(
-                        "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure but format is '{}'",
-                        self.format
-                    )));
-                }
-                meta.validate(idx)?;
-            }
-            CredentialMeta::MsoMdoc(meta) => {
-                if !matches!(self.format, CredentialFormat::MsoMdoc) {
-                    return Err(invalid_dcql(format!(
-                        "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure but format is '{}'",
-                        self.format
-                    )));
-                }
-                meta.validate(idx)?;
-            }
-            CredentialMeta::Generic(_) => {
-                // For known formats, Generic meta is not allowed - the meta must match the expected structure
-                if matches!(self.format, CredentialFormat::DcSdJwt) {
-                    return Err(invalid_dcql(format!(
-                        "'dcql_query.credentials[{idx}].meta' must be a valid dc+sd-jwt meta object with 'vct_values' for format 'dc+sd-jwt'"
-                    )));
-                }
-                if matches!(self.format, CredentialFormat::MsoMdoc) {
-                    return Err(invalid_dcql(format!(
-                        "'dcql_query.credentials[{idx}].meta' must be a valid mso_mdoc meta object with 'doctype_value' for format 'mso_mdoc'"
-                    )));
-                }
-                // For unknown formats, Generic meta is allowed for forward compatibility
-            }
-        }
+        self.meta.validate(idx, &self.format)?;
 
         // claim_sets MUST NOT be present when claims is absent
         if self.claim_sets.is_some() && self.claims.is_none() {
@@ -536,29 +514,15 @@ mod tests {
     }
 
     #[test]
-    fn dcql_query_generic_meta_for_unknown_format() {
-        let query: DcqlQuery = serde_json::from_value(json!({
-            "credentials": [{
-                "id": "test",
-                "format": "unknown_format",
-                "meta": { "custom": "value" }
-            }]
-        }))
-        .unwrap();
-
-        assert!(query.validate().is_ok());
-    }
-
-    #[test]
     fn dcql_serde_roundtrip() {
         let query = DcqlQuery {
             credentials: vec![CredentialQuery {
                 id: "pid".to_string(),
                 format: CredentialFormat::DcSdJwt,
                 multiple: Some(true),
-                meta: CredentialMeta::DcSdJwt(DcSdJwtMeta {
+                meta: CredentialMeta::SdJwt {
                     vct_values: vec!["https://example.com/vct".to_string()],
-                }),
+                },
                 claims: Some(vec![ClaimsQuery {
                     path: ClaimPathPointer::try_new(vec![ClaimPathElement::from("name")]).unwrap(),
                     id: Some("name_claim".to_string()),
