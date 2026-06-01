@@ -7,6 +7,7 @@ mod kb_jwt;
 mod metadata;
 #[cfg(test)]
 mod tests;
+mod verification;
 
 pub use disclosure::Disclosure;
 pub use error::{DisclosureError, Error, ProcessingError};
@@ -14,7 +15,10 @@ pub use hash::IanaHashAlgorithm;
 pub use jwt::Jwt;
 pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
 pub use metadata::IssuerMetadataError;
+pub use verification::{VerificationError, X5cTrustAnchors};
 
+use jsonwebtoken::Algorithm;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
@@ -32,9 +36,11 @@ const TRANSITIONAL_SD_JWT_VC_TYP: &str = "vc+sd-jwt";
 const METADATA_CLAIMS: &[&str] = &[
     "iss",
     "sub",
+    "aud",
     "exp",
     "nbf",
     "iat",
+    "jti",
     "vct",
     "vct#integrity",
     "cnf",
@@ -131,6 +137,19 @@ impl<'a> SdJwt<'a> {
         let mut payload = self.to_disclosed_payload()?;
         remove_metadata(&mut payload);
         Ok(payload)
+    }
+
+    /// Establishes issuer trust and verifies the issuer-signed JWT signature.
+    ///
+    /// Returns the algorithm used for verification.
+    pub async fn verify_signature(
+        &self,
+        http_client: &ClientWithMiddleware,
+        trust_anchors: X5cTrustAnchors<'_>,
+    ) -> Result<Algorithm, Error> {
+        verification::verify_issuer_signature(self, http_client, trust_anchors)
+            .await
+            .map_err(Into::into)
     }
 }
 
