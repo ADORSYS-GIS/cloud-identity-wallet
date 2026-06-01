@@ -144,6 +144,13 @@ pub enum AuthorizationErrorCode {
     /// Definition provided by the Verifier.
     #[error("The presentation definition is not supported")]
     PresentationDefinitionUnsupported,
+
+    /// The Wallet is unavailable to process the request.
+    ///
+    /// This error indicates that the Wallet is temporarily unavailable
+    /// or cannot be reached to process the authorization request.
+    #[error("The wallet is unavailable")]
+    WalletUnavailable,
 }
 
 #[cfg(test)]
