@@ -49,12 +49,6 @@ impl AuthorizationErrorResponse {
         self
     }
 
-    /// Serializes the error response as `application/x-www-form-urlencoded`.
-    ///
-    /// This is the format required for `direct_post` response mode.
-    pub fn to_form_urlencoded(&self) -> Result<String, serde_urlencoded::ser::Error> {
-        serde_urlencoded::to_string(self)
-    }
 }
 
 impl Display for AuthorizationErrorResponse {
@@ -217,25 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn test_authorization_error_response_serialize_form_urlencoded() {
-        let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequest)
-            .with_description("Missing parameter")
-            .with_state("state123");
-
-        let form = error.to_form_urlencoded().unwrap();
-        assert!(form.contains("error=invalid_request"));
-        assert!(form.contains("error_description=Missing+parameter"));
-        assert!(form.contains("state=state123"));
-    }
-
-    #[test]
-    fn test_authorization_error_response_serialize_form_urlencoded_minimal() {
-        let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::ServerError);
-        let form = error.to_form_urlencoded().unwrap();
-        assert_eq!(form, "error=server_error");
-    }
-
-    #[test]
     fn test_authorization_error_response_deserialize_json() {
         let json = r#"{"error":"invalid_request","error_description":"Bad request","state":"abc"}"#;
         let error: AuthorizationErrorResponse = serde_json::from_str(json).unwrap();
@@ -328,18 +303,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_form_urlencoded_special_characters() {
-        let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequest)
-            .with_description("Invalid parameter: presentation_definition & client_id")
-            .with_state("state=123&foo=bar");
-
-        let form = error.to_form_urlencoded().unwrap();
-        // URL encoding should handle special characters properly
-        assert!(form.contains("error=invalid_request"));
-        assert!(form.contains(
-            "error_description=Invalid+parameter%3A+presentation_definition+%26+client_id"
-        ));
-        assert!(form.contains("state=state%3D123%26foo%3Dbar"));
-    }
 }

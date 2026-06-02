@@ -4,6 +4,6 @@
 //! enabling the Wallet to respond to presentation requests from Verifiers.
 
 pub mod error;
+pub mod authorization;
 
 pub use error::*;
-pub mod authorization;
