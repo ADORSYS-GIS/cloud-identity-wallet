@@ -214,6 +214,18 @@ pub enum ErrorKind {
     #[error("Invalid authorization request")]
     InvalidAuthorizationRequest,
 
+    /// OAuth Client Metadata failed structural validation.
+    ///
+    /// Defined by [RFC 7591 §2](https://www.rfc-editor.org/rfc/rfc7591.html#section-2).
+    #[error("Invalid client metadata")]
+    InvalidClientMetadata,
+
+    /// Verifier Metadata failed structural validation.
+    ///
+    /// Defined by [OpenID4VP §11](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-11).
+    #[error("Invalid verifier metadata")]
+    InvalidVerifierMetadata,
+
     /// A Notification Request failed validation (e.g. empty `notification_id`,
     /// disallowed characters in `event_description`).
     ///
