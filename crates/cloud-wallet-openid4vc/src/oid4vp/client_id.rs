@@ -66,7 +66,7 @@ pub enum ClientIdParseError {
     #[error("invalid redirect URI in redirect_uri client_id: {0}")]
     InvalidRedirectUri(String),
     #[error("invalid DNS name in x509_san_dns client_id: {0}")]
-    InvalidDnsName(String),
+    InvalidDnsName(String), 
     #[error("invalid origin in origin client_id: {0}")]
     InvalidOrigin(String),
 }
