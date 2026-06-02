@@ -229,7 +229,6 @@ pub enum ErrorKind {
     InvalidNotificationId,
 
     // OID4VP Error Kinds
-
     /// An Authorization Request for OID4VP failed validation or parsing.
     ///
     /// This encompasses:

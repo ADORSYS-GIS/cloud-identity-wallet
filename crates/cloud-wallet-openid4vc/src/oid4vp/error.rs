@@ -282,7 +282,10 @@ mod tests {
             .with_description("User denied")
             .with_state("test");
         let display = format!("{}", error);
-        assert!(display.contains("Error: The resource owner or authorization server denied the request"));
+        assert!(
+            display
+                .contains("Error: The resource owner or authorization server denied the request")
+        );
         assert!(display.contains("Description: User denied"));
         assert!(display.contains("State: test"));
     }
@@ -291,7 +294,9 @@ mod tests {
     fn test_authorization_error_response_display_minimal() {
         let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::ServerError);
         let display = format!("{}", error);
-        assert!(display.contains("Error: The authorization server encountered an unexpected condition"));
+        assert!(
+            display.contains("Error: The authorization server encountered an unexpected condition")
+        );
         assert!(!display.contains("Description:"));
         assert!(!display.contains("State:"));
     }
@@ -309,9 +314,14 @@ mod tests {
 
     #[test]
     fn test_presentation_definition_unsupported_error() {
-        let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::PresentationDefinitionUnsupported)
-            .with_description("Unsupported input descriptor format");
-        assert_eq!(error.error, AuthorizationErrorCode::PresentationDefinitionUnsupported);
+        let error = AuthorizationErrorResponse::new(
+            AuthorizationErrorCode::PresentationDefinitionUnsupported,
+        )
+        .with_description("Unsupported input descriptor format");
+        assert_eq!(
+            error.error,
+            AuthorizationErrorCode::PresentationDefinitionUnsupported
+        );
         assert_eq!(
             error.error_description,
             Some("Unsupported input descriptor format".to_string())
@@ -327,7 +337,9 @@ mod tests {
         let form = error.to_form_urlencoded().unwrap();
         // URL encoding should handle special characters properly
         assert!(form.contains("error=invalid_request"));
-        assert!(form.contains("error_description=Invalid+parameter%3A+presentation_definition+%26+client_id"));
+        assert!(form.contains(
+            "error_description=Invalid+parameter%3A+presentation_definition+%26+client_id"
+        ));
         assert!(form.contains("state=state%3D123%26foo%3Dbar"));
     }
 }
