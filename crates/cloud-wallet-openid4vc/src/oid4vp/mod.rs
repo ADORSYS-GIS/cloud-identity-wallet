@@ -6,5 +6,7 @@
 pub mod authorization;
 pub mod dcql;
 pub mod error;
+pub mod metadata;
 
 pub use error::*;
+pub use metadata::*;
