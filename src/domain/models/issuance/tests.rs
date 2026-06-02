@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cloud_wallet_crypto::ecdsa::{Curve as EcdsaCurve, KeyPair as EcdsaKeyPair};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use cloud_wallet_openid4vc::{
     core::client::{Config as Oid4vciClientConfig, OidClient},
     oid4vci::credential::formats::{
@@ -13,7 +13,12 @@ use cloud_wallet_openid4vc::{
     oid4vci::metadata::CredentialDisplay,
 };
 use jsonwebtoken::{Algorithm as JwtAlgorithm, EncodingKey, Header};
+use rcgen::{
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyPair as CertKeyPair, KeyUsagePurpose,
+};
 use url::Url;
+use webpki::anchor_from_trusted_cert;
 
 use super::*;
 use crate::outbound::{
@@ -118,18 +123,70 @@ fn sd_jwt_config(vct: &str) -> CredentialConfiguration {
     }
 }
 
-fn signed_sd_jwt(claims: serde_json::Value) -> String {
-    let key_pair = EcdsaKeyPair::generate(EcdsaCurve::P256).expect("key generation works");
+struct X5cSdJwt {
+    raw: String,
+    trust_anchor: rustls_pki_types::TrustAnchor<'static>,
+}
+
+fn signed_x5c_sd_jwt(claims: serde_json::Value) -> X5cSdJwt {
+    let root_key = CertKeyPair::generate().expect("root key generation works");
+    let mut root_params = CertificateParams::default();
+    root_params.distinguished_name = DistinguishedName::new();
+    root_params
+        .distinguished_name
+        .push(DnType::CommonName, "Test Root CA");
+    root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    root_params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+        KeyUsagePurpose::DigitalSignature,
+    ];
+    let root_cert = root_params
+        .self_signed(&root_key)
+        .expect("root certificate should sign");
+    let trust_anchor = anchor_from_trusted_cert(root_cert.der())
+        .expect("root certificate should become trust anchor")
+        .to_owned();
+    let root_issuer = Issuer::new(root_params, root_key);
+
+    let leaf_key = CertKeyPair::generate().expect("leaf key generation works");
+    let mut leaf_params =
+        CertificateParams::new(["issuer.example.com".to_owned()]).expect("leaf params build");
+    leaf_params.distinguished_name = DistinguishedName::new();
+    leaf_params
+        .distinguished_name
+        .push(DnType::CommonName, "issuer.example.com");
+    leaf_params.is_ca = IsCa::NoCa;
+    leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let leaf_cert = leaf_params
+        .signed_by(&leaf_key, &root_issuer)
+        .expect("leaf certificate should sign");
+
     let mut header = Header::new(JwtAlgorithm::ES256);
     header.typ = Some("dc+sd-jwt".to_owned());
+    header.x5c = Some(vec![STANDARD.encode(leaf_cert.der().as_ref())]);
 
     let token = jsonwebtoken::encode(
         &header,
         &claims,
-        &EncodingKey::from_ec_der(key_pair.to_pkcs8_der()),
+        &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
     )
     .expect("test JWT should sign");
-    format!("{token}~")
+
+    X5cSdJwt {
+        raw: format!("{token}~"),
+        trust_anchor,
+    }
+}
+
+fn tamper_jwt_signature(raw: &str) -> String {
+    let token = raw.strip_suffix('~').expect("issued SD-JWT has trailing ~");
+    let (signed_part, signature) = token.rsplit_once('.').expect("JWT has signature segment");
+    let mut signature = signature.to_owned();
+    let replacement = if signature.starts_with('A') { "B" } else { "A" };
+    signature.replace_range(0..1, replacement);
+    format!("{signed_part}.{signature}~")
 }
 
 #[tokio::test]
@@ -177,7 +234,7 @@ async fn sd_jwt_metadata_is_persisted_and_retrieved() {
     let tenant_id = Uuid::new_v4();
     let issued_at = time::UtcDateTime::now().unix_timestamp();
     let valid_until = issued_at + 3600;
-    let raw = signed_sd_jwt(serde_json::json!({
+    let fixture = signed_x5c_sd_jwt(serde_json::json!({
         "iss": "https://issuer.example.com",
         "sub": "did:example:alice",
         "iat": issued_at,
@@ -190,16 +247,20 @@ async fn sd_jwt_metadata_is_persisted_and_retrieved() {
             }
         }
     }));
-    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+    let engine = make_engine(RecordingTaskQueue::default())
+        .with_x5c_trust_anchors(vec![fixture.trust_anchor]);
+    let config = sd_jwt_config("https://credentials.example.com/test");
 
-    let credential = credential_from_sd_jwt(
-        tenant_id,
-        "https://fallback-issuer.example.com",
-        sd_jwt.into_jwt().into_claims(),
-        raw.clone(),
-        time::UtcDateTime::from_unix_timestamp(issued_at).unwrap(),
-    )
-    .unwrap();
+    let credential = engine
+        .build_credential(
+            tenant_id,
+            "https://issuer.example.com",
+            &config,
+            fixture.raw,
+            time::UtcDateTime::from_unix_timestamp(issued_at).unwrap(),
+        )
+        .await
+        .unwrap();
     let repo = MemoryCredentialRepo::new();
     let id = repo.upsert(credential, None).await.unwrap();
 
@@ -226,6 +287,76 @@ async fn sd_jwt_metadata_is_persisted_and_retrieved() {
     );
     assert_eq!(stored.status_index, Some(42));
     assert_eq!(stored.external_id.as_deref(), None);
+}
+
+#[tokio::test]
+async fn sd_jwt_tampered_signature_is_rejected_during_build_credential() {
+    let fixture = signed_x5c_sd_jwt(serde_json::json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/test"
+    }));
+    let engine = make_engine(RecordingTaskQueue::default())
+        .with_x5c_trust_anchors(vec![fixture.trust_anchor]);
+    let config = sd_jwt_config("https://credentials.example.com/test");
+
+    let result = engine
+        .build_credential(
+            Uuid::new_v4(),
+            "https://issuer.example.com",
+            &config,
+            tamper_jwt_signature(&fixture.raw),
+            time::UtcDateTime::now(),
+        )
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn sd_jwt_issuer_claim_is_stored_when_it_differs_from_metadata_issuer() {
+    let fixture = signed_x5c_sd_jwt(serde_json::json!({
+        "iss": "https://evil.example.com",
+        "vct": "https://credentials.example.com/test"
+    }));
+    let engine = make_engine(RecordingTaskQueue::default())
+        .with_x5c_trust_anchors(vec![fixture.trust_anchor]);
+    let config = sd_jwt_config("https://credentials.example.com/test");
+
+    let credential = engine
+        .build_credential(
+            Uuid::new_v4(),
+            "https://issuer.example.com",
+            &config,
+            fixture.raw,
+            time::UtcDateTime::now(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(credential.issuer, "https://evil.example.com");
+}
+
+#[tokio::test]
+async fn sd_jwt_missing_issuer_uses_metadata_issuer_during_build_credential() {
+    let fixture = signed_x5c_sd_jwt(serde_json::json!({
+        "vct": "https://credentials.example.com/test"
+    }));
+    let engine = make_engine(RecordingTaskQueue::default())
+        .with_x5c_trust_anchors(vec![fixture.trust_anchor]);
+    let config = sd_jwt_config("https://credentials.example.com/test");
+
+    let credential = engine
+        .build_credential(
+            Uuid::new_v4(),
+            "https://issuer.example.com",
+            &config,
+            fixture.raw,
+            time::UtcDateTime::now(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(credential.issuer, "https://issuer.example.com");
 }
 
 #[tokio::test]
@@ -267,30 +398,26 @@ fn sd_jwt_alg_allow_list_is_enforced_when_present() {
     assert!(validate_credential_signing_alg(&config, JwtAlgorithm::RS256).is_err());
 }
 
-#[test]
-fn sd_jwt_vct_mismatch_is_rejected_before_mapping() {
+#[tokio::test]
+async fn sd_jwt_vct_mismatch_is_rejected_before_mapping() {
     let config = sd_jwt_config("https://credentials.example.com/expected");
-    let raw = signed_sd_jwt(serde_json::json!({
+    let fixture = signed_x5c_sd_jwt(serde_json::json!({
         "iss": "https://issuer.example.com",
         "vct": "https://credentials.example.com/actual"
     }));
-    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
-    let CredentialFormatDetails::DcSdJwt(sd_config) = &config.format_details else {
-        panic!("test config should be SD-JWT VC");
-    };
+    let engine = make_engine(RecordingTaskQueue::default())
+        .with_x5c_trust_anchors(vec![fixture.trust_anchor]);
 
-    let result = if sd_jwt.jwt().claims().vct != sd_config.vct {
-        Err(IssuanceError::credential_request("vct mismatch"))
-    } else {
-        credential_from_sd_jwt(
+    let result = engine
+        .build_credential(
             Uuid::new_v4(),
-            "https://fallback-issuer.example.com",
-            sd_jwt.into_jwt().into_claims(),
-            raw.clone(),
+            "https://issuer.example.com",
+            &config,
+            fixture.raw,
             time::UtcDateTime::now(),
         )
-        .map(|_| ())
-    };
+        .await;
+
     assert!(result.is_err());
 }
 
