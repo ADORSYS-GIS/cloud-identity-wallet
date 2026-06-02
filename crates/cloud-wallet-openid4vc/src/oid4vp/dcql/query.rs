@@ -226,9 +226,21 @@ pub enum CredentialMeta {
 
 impl CredentialMeta {
     /// Validates the metadata structure for the given format.
+    ///
+    /// Each credential format must use its matching metadata shape:
+    /// - W3C formats (jwt_vc_json, jwt_vc_json-ld, ldp_vc) use `type_values`
+    /// - dc+sd-jwt format uses `vct_values`
+    /// - mso_mdoc format uses `doctype_value`
     fn validate(&self, idx: usize, format: &CredentialFormat) -> Result<()> {
         match (self, format) {
-            (CredentialMeta::W3CFormat { type_values }, _) => {
+            // W3C formats (jwt_vc_json, jwt_vc_json-ld, ldp_vc) use type_values
+            (CredentialMeta::W3CFormat { type_values }, CredentialFormat::Other(fmt)) => {
+                // Only allow W3CFormat for known W3C credential formats
+                if !is_w3c_format(fmt) {
+                    return Err(invalid_dcql(format!(
+                        "'dcql_query.credentials[{idx}].meta' has W3C format structure but format '{fmt}' is not a recognized W3C VC format"
+                    )));
+                }
                 if type_values.is_empty() {
                     return Err(invalid_dcql(format!(
                         "'dcql_query.credentials[{idx}].meta.type_values' must be a non-empty array"
@@ -249,6 +261,17 @@ impl CredentialMeta {
                     }
                 }
             }
+            (CredentialMeta::W3CFormat { .. }, CredentialFormat::DcSdJwt) => {
+                return Err(invalid_dcql(format!(
+                    "'dcql_query.credentials[{idx}].meta' has W3C format structure (type_values) but format is 'dc+sd-jwt' which requires 'vct_values'"
+                )));
+            }
+            (CredentialMeta::W3CFormat { .. }, CredentialFormat::MsoMdoc) => {
+                return Err(invalid_dcql(format!(
+                    "'dcql_query.credentials[{idx}].meta' has W3C format structure (type_values) but format is 'mso_mdoc' which requires 'doctype_value'"
+                )));
+            }
+            // dc+sd-jwt format uses vct_values
             (CredentialMeta::SdJwt { vct_values }, CredentialFormat::DcSdJwt) => {
                 if vct_values.is_empty() {
                     return Err(invalid_dcql(format!(
@@ -263,11 +286,17 @@ impl CredentialMeta {
                     }
                 }
             }
-            (CredentialMeta::SdJwt { .. }, _) => {
+            (CredentialMeta::SdJwt { .. }, CredentialFormat::MsoMdoc) => {
                 return Err(invalid_dcql(format!(
-                    "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure but format is not 'dc+sd-jwt'"
+                    "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure (vct_values) but format is 'mso_mdoc' which requires 'doctype_value'"
                 )));
             }
+            (CredentialMeta::SdJwt { .. }, CredentialFormat::Other(fmt)) => {
+                return Err(invalid_dcql(format!(
+                    "'dcql_query.credentials[{idx}].meta' has dc+sd-jwt structure (vct_values) but format is '{fmt}'"
+                )));
+            }
+            // mso_mdoc format uses doctype_value
             (CredentialMeta::MsoMdoc { doctype_value }, CredentialFormat::MsoMdoc) => {
                 if doctype_value.trim().is_empty() {
                     return Err(invalid_dcql(format!(
@@ -275,14 +304,24 @@ impl CredentialMeta {
                     )));
                 }
             }
-            (CredentialMeta::MsoMdoc { .. }, _) => {
+            (CredentialMeta::MsoMdoc { .. }, CredentialFormat::DcSdJwt) => {
                 return Err(invalid_dcql(format!(
-                    "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure but format is not 'mso_mdoc'"
+                    "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure (doctype_value) but format is 'dc+sd-jwt' which requires 'vct_values'"
+                )));
+            }
+            (CredentialMeta::MsoMdoc { .. }, CredentialFormat::Other(fmt)) => {
+                return Err(invalid_dcql(format!(
+                    "'dcql_query.credentials[{idx}].meta' has mso_mdoc structure (doctype_value) but format is '{fmt}'"
                 )));
             }
         }
         Ok(())
     }
+}
+
+/// Checks if a format string is a recognized W3C VC format.
+fn is_w3c_format(fmt: &str) -> bool {
+    matches!(fmt, "jwt_vc_json" | "jwt_vc_json-ld" | "ldp_vc")
 }
 
 /// Supported credential formats for DCQL queries.
