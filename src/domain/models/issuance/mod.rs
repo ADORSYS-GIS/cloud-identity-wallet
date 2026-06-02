@@ -27,6 +27,7 @@ use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, Notificat
 use cloud_wallet_openid4vc::oid4vci::token::TokenResponse;
 use jsonwebtoken::Algorithm as JwtAlgorithm;
 use parking_lot::Mutex;
+use rustls_pki_types::TrustAnchor;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
@@ -70,6 +71,7 @@ pub struct IssuanceEngine {
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     worker_notify: Arc<Notify>,
     preferred_display_locales: Arc<Vec<String>>,
+    x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
 }
 
 impl Clone for IssuanceEngine {
@@ -84,6 +86,7 @@ impl Clone for IssuanceEngine {
             workers: Arc::clone(&self.workers),
             worker_notify: Arc::clone(&self.worker_notify),
             preferred_display_locales: Arc::clone(&self.preferred_display_locales),
+            x5c_trust_anchors: Arc::clone(&self.x5c_trust_anchors),
         }
     }
 }
@@ -177,9 +180,18 @@ impl IssuanceEngine {
             workers: Arc::default(),
             worker_notify: Arc::new(Notify::new()),
             preferred_display_locales: Arc::new(preferred_display_locales),
+            x5c_trust_anchors: Arc::default(),
         };
 
         engine.start_worker_count(session_store.clone(), worker_count)
+    }
+
+    /// Configure custom x5c trust anchors for SD-JWT VC issuer signature verification.
+    ///
+    /// When no custom anchors are configured, Mozilla WebPKI roots are used.
+    pub fn with_x5c_trust_anchors(mut self, trust_anchors: Vec<TrustAnchor<'static>>) -> Self {
+        self.x5c_trust_anchors = Arc::new(trust_anchors);
+        self
     }
 
     /// Return the number of worker currently attached to this engine.
@@ -636,7 +648,7 @@ impl IssuanceEngine {
                 sd_jwt.to_disclosed_payload()?;
 
                 let algorithm = sd_jwt
-                    .verify_signature(self.client.http_client(), X5cTrustAnchors::default())
+                    .verify_signature(self.client.http_client(), self.x5c_trust_anchors())
                     .await?;
                 validate_credential_signing_alg(config, algorithm)?;
 
@@ -653,6 +665,14 @@ impl IssuanceEngine {
                 "unsupported credential format '{}'",
                 other.format_str()
             ))),
+        }
+    }
+
+    fn x5c_trust_anchors(&self) -> X5cTrustAnchors<'_> {
+        if self.x5c_trust_anchors.is_empty() {
+            X5cTrustAnchors::default()
+        } else {
+            X5cTrustAnchors::Custom(self.x5c_trust_anchors.as_slice())
         }
     }
 
