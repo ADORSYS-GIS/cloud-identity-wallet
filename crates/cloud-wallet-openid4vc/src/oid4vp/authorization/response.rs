@@ -4,7 +4,7 @@ use serde::{Serialize, Serializer};
 use serde_with::skip_serializing_none;
 use url::Url;
 
-use super::error::AuthorizationErrorCode;
+use crate::oid4vp::AuthorizationErrorCode;
 
 /// A presentation value returned for one DCQL Credential Query.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
