@@ -48,7 +48,6 @@ impl AuthorizationErrorResponse {
         self.state = Some(state.into());
         self
     }
-
 }
 
 impl Display for AuthorizationErrorResponse {
@@ -302,5 +301,4 @@ mod tests {
             Some("Unsupported input descriptor format".to_string())
         );
     }
-
 }
