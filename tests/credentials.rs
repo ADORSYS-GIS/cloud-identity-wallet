@@ -481,7 +481,7 @@ async fn list_credentials_returns_expires_at_when_credential_has_expiry() {
 
     // Act
     let response = Client::new()
-        .get(format!("{}/api/v1/credentials/{id}", server.base_url))
+        .get(format!("{}/api/v1/credentials", server.base_url))
         .bearer_auth(&token)
         .send()
         .await
@@ -490,10 +490,18 @@ async fn list_credentials_returns_expires_at_when_credential_has_expiry() {
     // Assert: expires_at is present and is a non-null string
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
+    let credential = body["credentials"]
+        .as_array()
+        .and_then(|credentials| {
+            credentials
+                .iter()
+                .find(|credential| credential["id"] == id.to_string())
+        })
+        .expect("expiring credential should be listed");
     assert!(
-        body["expires_at"].is_string(),
+        credential["expires_at"].is_string(),
         "expected expires_at to be a date-time string, got: {}",
-        body["expires_at"]
+        credential["expires_at"]
     );
 }
 

@@ -197,6 +197,12 @@ pub struct CredentialSummary {
     /// The date and time when the credential was issued.
     #[serde(serialize_with = "serialize_utc_datetime_rfc3339")]
     pub issued_at: UtcDateTime,
+    /// The date and time when the credential expires, if known.
+    #[serde(
+        rename = "expires_at",
+        serialize_with = "serialize_optional_utc_datetime_rfc3339"
+    )]
+    pub valid_until: Option<UtcDateTime>,
 }
 
 fn serialize_utc_datetime_rfc3339<S>(value: &UtcDateTime, serializer: S) -> Result<S::Ok, S::Error>
@@ -208,6 +214,19 @@ where
 
     let value = value.format(&Rfc3339).map_err(S::Error::custom)?;
     serializer.serialize_str(&value)
+}
+
+fn serialize_optional_utc_datetime_rfc3339<S>(
+    value: &Option<UtcDateTime>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(value) => serialize_utc_datetime_rfc3339(value, serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 /// Response body for `GET /api/v1/credentials`.
