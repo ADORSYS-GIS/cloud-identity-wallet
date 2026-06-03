@@ -5,6 +5,31 @@
 use super::*;
 
 #[test]
+fn parses_jwe_key_management_algorithm_in_jwk_metadata() {
+    let val = serde_json::json!({
+        "keys": [
+            {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "YO4epjifD-KWeq1sL2tNmm36BhXnkJ0He-WqMYrp9Fk",
+                "y": "Hekpm0zfK7C-YccH5iBjcIXgf6YdUvNUac_0At55Okk",
+                "use": "enc",
+                "alg": "ECDH-ES",
+                "kid": "enc-key-1"
+            }
+        ]
+    });
+
+    let jwks: JwkSet = serde_json::from_value(val.clone()).unwrap();
+
+    assert_eq!(
+        jwks.keys[0].prm.alg,
+        Some(Algorithm::KeyManagement(KeyManagement::EcdhEs))
+    );
+    assert_eq!(serde_json::to_value(&jwks).unwrap(), val);
+}
+
+#[test]
 fn test_ec_rsa_set_1() {
     let val = serde_json::json!({
     "keys": [
