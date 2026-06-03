@@ -80,9 +80,10 @@ fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError>
         return Ok(CredentialFilter::default());
     };
 
-    let filter: CredentialFilter = (*query_config())
+    let mut filter: CredentialFilter = (*query_config())
         .deserialize_str(query)
         .map_err(|error| invalid_query(format!("invalid credentials filter query: {error}")))?;
+    normalize_credential_type_filter(&mut filter)?;
 
     // Validate issuer is a valid URI if provided
     if let Some(ref issuer) = filter.issuer
@@ -91,6 +92,27 @@ fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError>
         return Err(invalid_query("issuer must be a valid URI"));
     }
     Ok(filter)
+}
+
+fn normalize_credential_type_filter(filter: &mut CredentialFilter) -> Result<(), ApiError> {
+    let Some(types) = filter.credential_types.take() else {
+        return Ok(());
+    };
+
+    let mut normalized = Vec::new();
+    for value in types {
+        for ty in value.split(',').map(str::trim) {
+            if ty.is_empty() {
+                return Err(invalid_query(
+                    "credential_types must not contain empty values",
+                ));
+            }
+            normalized.push(ty.to_owned());
+        }
+    }
+
+    filter.credential_types = Some(normalized);
+    Ok(())
 }
 
 fn query_config() -> &'static Config {
@@ -229,6 +251,20 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.error, "invalid_request");
         assert!(error.error_description.is_some());
+    }
+
+    #[test]
+    fn rejects_empty_credential_type_filter_values() {
+        let error = deserialize_filter(Some("credential_types=EmployeeBadge,,Pid")).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.error, "invalid_request");
+        assert!(
+            error
+                .error_description
+                .as_deref()
+                .is_some_and(|description| description.contains("credential_types"))
+        );
     }
 
     #[test]
