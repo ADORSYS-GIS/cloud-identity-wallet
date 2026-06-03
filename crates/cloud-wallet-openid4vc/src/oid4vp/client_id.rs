@@ -77,7 +77,9 @@ pub enum ClientIdParseError {
     InvalidX509Hash(String),
     #[error("invalid origin in origin client_id: {0}")]
     InvalidOrigin(String),
-    #[error("origin client identifier prefix is reserved for the Digital Credentials API and MUST NOT be accepted in OpenID4VP requests (Section 5.9.3)")]
+    #[error(
+        "origin client identifier prefix is reserved for the Digital Credentials API and MUST NOT be accepted in OpenID4VP requests (Section 5.9.3)"
+    )]
     OriginPrefixRejected,
 }
 
@@ -386,7 +388,10 @@ mod tests {
     #[test]
     fn test_client_id_prefix_as_str() {
         assert_eq!(ClientIdPrefix::RedirectUri.as_str(), "redirect_uri");
-        assert_eq!(ClientIdPrefix::OpenidFederation.as_str(), "openid_federation");
+        assert_eq!(
+            ClientIdPrefix::OpenidFederation.as_str(),
+            "openid_federation"
+        );
         assert_eq!(
             ClientIdPrefix::DecentralizedIdentifier.as_str(),
             "decentralized_identifier"
@@ -534,8 +539,7 @@ mod tests {
 
     #[test]
     fn test_parse_origin_accepted_in_dc_api() {
-        let parsed =
-            ParsedClientId::parse_dc_api("origin:https://verifier.example.com").unwrap();
+        let parsed = ParsedClientId::parse_dc_api("origin:https://verifier.example.com").unwrap();
         assert_eq!(parsed.prefix(), Some(ClientIdPrefix::Origin));
         assert_eq!(parsed.value(), "https://verifier.example.com");
         assert!(parsed.is_origin());
@@ -657,7 +661,12 @@ mod tests {
         // 16 bytes decoded - wrong length
         assert!(validate_x509_hash("YWJjZGVmZ2hpamtsbW5vcA").is_err());
         // 48 bytes decoded - wrong length
-        assert!(validate_x509_hash("YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QUVJTVFVWVlhZWjEyMzQ1").is_err());
+        assert!(
+            validate_x509_hash(
+                "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QUVJTVFVWVlhZWjEyMzQ1"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -679,8 +688,7 @@ mod tests {
     #[test]
     fn test_value_start_offset_no_clone() {
         // Verify that value() returns a slice of raw() without duplicating the string
-        let parsed =
-            ParsedClientId::parse("redirect_uri:https://client.example.org/cb").unwrap();
+        let parsed = ParsedClientId::parse("redirect_uri:https://client.example.org/cb").unwrap();
         let value = parsed.value();
         let raw = parsed.raw();
         // value must be a suffix of raw
