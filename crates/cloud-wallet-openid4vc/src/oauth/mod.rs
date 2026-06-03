@@ -1,3 +1,1 @@
-mod client_metadata;
-
-pub use client_metadata::*;
+pub mod client_metadata;
