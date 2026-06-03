@@ -1,5 +1,6 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
+use std::fmt;
 
 use super::{DisclosureError, Error};
 
@@ -10,16 +11,27 @@ use super::{DisclosureError, Error};
 /// two-element array discloses an array element (`[salt, claim_value]`).
 ///
 /// [RFC 9901]: https://datatracker.ietf.org/doc/html/rfc9901
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Disclosure<'a> {
     /// The salt value.
-    pub salt: String,
+    _salt: String,
     /// The claim name, optional for array elements.
     pub claim_name: Option<String>,
     /// The claim Value which can be of any type.
     pub claim_value: Value,
     /// Raw Base64Url-encoded disclosure.
     raw: &'a str,
+}
+
+impl fmt::Debug for Disclosure<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Disclosure")
+            .field("_salt", &"<redacted>")
+            .field("claim_name", &self.claim_name)
+            .field("claim_value", &self.claim_value)
+            .field("raw", &"<redacted>")
+            .finish()
+    }
 }
 
 impl<'a> Disclosure<'a> {
@@ -42,13 +54,13 @@ impl<'a> Disclosure<'a> {
 
         match array.as_slice() {
             [salt, claim_value] => Ok(Self {
-                salt: string_field(salt.clone(), index, "salt")?,
+                _salt: string_field(salt.clone(), index, "salt")?,
                 claim_name: None,
                 claim_value: claim_value.clone(),
                 raw,
             }),
             [salt, claim_name, claim_value] => Ok(Self {
-                salt: string_field(salt.clone(), index, "salt")?,
+                _salt: string_field(salt.clone(), index, "salt")?,
                 claim_name: Some(string_field(claim_name.clone(), index, "claim_name")?),
                 claim_value: claim_value.clone(),
                 raw,

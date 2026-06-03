@@ -11,7 +11,7 @@ use jsonwebtoken::{
 use reqwest_middleware::ClientWithMiddleware;
 use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use serde_json::Error as JsonError;
-use webpki::{EndEntityCert, Error as WebPkiError, KeyUsage};
+use webpki::{EndEntityCert, Error as WebPkiError};
 use x509_parser::{extensions::ParsedExtension, parse_x509_certificate, public_key::PublicKey};
 
 use super::{SdJwt, SdJwtClaims, metadata};
@@ -303,12 +303,23 @@ fn validate_with_trust_anchors(chain: &[Vec<u8>], trust_anchors: &[TrustAnchor<'
             trust_anchors,
             &intermediates,
             UnixTime::now(),
-            KeyUsage::server_auth(),
+            &AnyKeyUsage,
             None,
             None,
         )
         .map_err(|source| x5c_error("certificate chain is not trusted", source))?;
     Ok(())
+}
+
+struct AnyKeyUsage;
+
+impl webpki::ExtendedKeyUsageValidator for AnyKeyUsage {
+    fn validate(
+        &self,
+        _iter: webpki::KeyPurposeIdIter<'_, '_>,
+    ) -> std::result::Result<(), WebPkiError> {
+        Ok(())
+    }
 }
 
 fn leaf_spki_for_algorithm(leaf_der: &[u8], algorithm: JwtAlgorithm) -> Result<Vec<u8>> {

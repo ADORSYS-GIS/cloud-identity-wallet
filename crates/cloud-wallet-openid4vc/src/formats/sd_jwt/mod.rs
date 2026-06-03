@@ -36,9 +36,11 @@ const TRANSITIONAL_SD_JWT_VC_TYP: &str = "vc+sd-jwt";
 const METADATA_CLAIMS: &[&str] = &[
     "iss",
     "sub",
+    "aud",
     "exp",
     "nbf",
     "iat",
+    "jti",
     "vct",
     "vct#integrity",
     "cnf",
@@ -144,8 +146,10 @@ impl<'a> SdJwt<'a> {
         &self,
         http_client: &ClientWithMiddleware,
         trust_anchors: X5cTrustAnchors<'_>,
-    ) -> Result<Algorithm, VerificationError> {
-        verification::verify_issuer_signature(self, http_client, trust_anchors).await
+    ) -> Result<Algorithm, Error> {
+        verification::verify_issuer_signature(self, http_client, trust_anchors)
+            .await
+            .map_err(Into::into)
     }
 }
 
