@@ -7,7 +7,7 @@ use crate::errors::{Error, ErrorKind};
 use crate::impl_string_enum;
 use crate::oid4vp::metadata::verifier::{
     CredentialFormatIdentifier, VpFormatCapability, VpFormatsSupported,
-    deserialize_vp_formats_supported, serialize_vp_formats_supported,
+    deserialize_vp_formats_supported,
 };
 
 /// Wallet Metadata for OID4VP.
@@ -17,7 +17,6 @@ use crate::oid4vp::metadata::verifier::{
 pub struct WalletPresentationMetadata {
     #[serde(
         rename = "vp_formats_supported",
-        serialize_with = "serialize_vp_formats_supported",
         deserialize_with = "deserialize_vp_formats_supported"
     )]
     pub vp_formats_supported: VpFormatsSupported,

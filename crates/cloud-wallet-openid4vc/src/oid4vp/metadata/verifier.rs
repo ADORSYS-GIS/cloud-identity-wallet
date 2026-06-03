@@ -14,8 +14,8 @@ use serde_with::skip_serializing_none;
 
 use crate::errors::{Error, ErrorKind};
 use crate::impl_string_enum;
-use crate::oauth::client_metadata::{AdditionalClientMetadata, ClientMetadata};
-use crate::utils::{validate_non_empty_array, validate_non_empty_string_array};
+use crate::oauth::client_metadata::ClientMetadata;
+use crate::utils::validate_non_empty_array_with_kind;
 
 /// Extension format capability object.
 pub type ExtensionFormatCapability = HashMap<String, Value>;
@@ -47,19 +47,17 @@ pub struct VerifierMetadata {
     ///
     /// The final OpenID4VP text derives the JWE `alg` from the selected JWK,
     /// but this field is accepted for profiles and drafts that advertise it.
-    pub encrypted_response_alg_values_supported: Option<Vec<KeyManagement>>,
+    pub encrypted_response_alg_values_supported: Option<Vec<JweKeyManagementAlgorithm>>,
 
     /// Credential formats the Verifier supports.
-    #[serde(serialize_with = "serialize_vp_formats_supported")]
     pub vp_formats_supported: VpFormatsSupported,
-
-    /// Additional client metadata parameters from profiles or deployment-specific extensions.
-    #[serde(flatten)]
-    pub extra_fields: AdditionalClientMetadata,
 }
 
 impl VerifierMetadata {
     /// Validates OpenID4VP Verifier Metadata requirements.
+    ///
+    /// Deserialization already performs this validation. Calling this method is
+    /// useful for values constructed or mutated programmatically.
     #[must_use = "validation result must be checked"]
     pub fn validate(&self) -> Result<(), Error> {
         self.client_metadata.validate().map_err(|error| {
@@ -83,13 +81,11 @@ impl VerifierMetadata {
         }
 
         if let Some(values) = &self.encrypted_response_enc_values_supported {
-            validate_non_empty_array(values, "encrypted_response_enc_values_supported")
-                .map_err(to_verifier_error)?;
+            validate_non_empty_verifier_array(values, "encrypted_response_enc_values_supported")?;
         }
 
         if let Some(values) = &self.encrypted_response_alg_values_supported {
-            validate_non_empty_array(values, "encrypted_response_alg_values_supported")
-                .map_err(to_verifier_error)?;
+            validate_non_empty_verifier_array(values, "encrypted_response_alg_values_supported")?;
             if self.encrypted_response_enc_values_supported.is_none() {
                 return invalid(
                     "encrypted_response_enc_values_supported must be present when \
@@ -138,11 +134,9 @@ struct VerifierMetadataUnchecked {
     #[serde(flatten)]
     client_metadata: ClientMetadata,
     encrypted_response_enc_values_supported: Option<Vec<JweContentEncryptionAlgorithm>>,
-    encrypted_response_alg_values_supported: Option<Vec<KeyManagement>>,
+    encrypted_response_alg_values_supported: Option<Vec<JweKeyManagementAlgorithm>>,
     #[serde(deserialize_with = "deserialize_vp_formats_supported")]
     vp_formats_supported: VpFormatsSupported,
-    #[serde(flatten)]
-    extra_fields: AdditionalClientMetadata,
 }
 
 impl From<VerifierMetadataUnchecked> for VerifierMetadata {
@@ -152,7 +146,6 @@ impl From<VerifierMetadataUnchecked> for VerifierMetadata {
             encrypted_response_enc_values_supported: value.encrypted_response_enc_values_supported,
             encrypted_response_alg_values_supported: value.encrypted_response_alg_values_supported,
             vp_formats_supported: value.vp_formats_supported,
-            extra_fields: value.extra_fields,
         }
     }
 }
@@ -359,7 +352,7 @@ impl<'de> Deserialize<'de> for NonEmptyString {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::new(value, "identifier").map_err(D::Error::custom)
+        Self::new(value, "non-empty string identifier").map_err(D::Error::custom)
     }
 }
 
@@ -405,6 +398,95 @@ impl_string_enum!(
     "encrypted_response_enc_values_supported"
 );
 
+/// JWE key management algorithm identifier used in Verifier metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JweKeyManagementAlgorithm {
+    Registered(KeyManagement),
+    Other(String),
+}
+
+impl JweKeyManagementAlgorithm {
+    fn parse(value: String) -> Result<Self, String> {
+        if value.trim().is_empty() {
+            return Err("encrypted_response_alg_values_supported must not be empty".to_string());
+        }
+
+        Ok(match value.as_str() {
+            "RSA1_5" => Self::Registered(KeyManagement::Rsa1_5),
+            "RSA-OAEP" => Self::Registered(KeyManagement::RsaOaep),
+            "RSA-OAEP-256" => Self::Registered(KeyManagement::RsaOaep256),
+            "RSA-OAEP-384" => Self::Registered(KeyManagement::RsaOaep384),
+            "RSA-OAEP-512" => Self::Registered(KeyManagement::RsaOaep512),
+            "A128KW" => Self::Registered(KeyManagement::A128Kw),
+            "A192KW" => Self::Registered(KeyManagement::A192Kw),
+            "A256KW" => Self::Registered(KeyManagement::A256Kw),
+            "dir" => Self::Registered(KeyManagement::Direct),
+            "ECDH-ES" => Self::Registered(KeyManagement::EcdhEs),
+            "ECDH-ES+A128KW" => Self::Registered(KeyManagement::EcdhEsA128Kw),
+            "ECDH-ES+A192KW" => Self::Registered(KeyManagement::EcdhEsA192Kw),
+            "ECDH-ES+A256KW" => Self::Registered(KeyManagement::EcdhEsA256Kw),
+            "A128GCMKW" => Self::Registered(KeyManagement::A128GcmKw),
+            "A192GCMKW" => Self::Registered(KeyManagement::A192GcmKw),
+            "A256GCMKW" => Self::Registered(KeyManagement::A256GcmKw),
+            "PBES2-HS256+A128KW" => Self::Registered(KeyManagement::Pbes2Hs256A128Kw),
+            "PBES2-HS384+A192KW" => Self::Registered(KeyManagement::Pbes2Hs384A192Kw),
+            "PBES2-HS512+A256KW" => Self::Registered(KeyManagement::Pbes2Hs512A256Kw),
+            _ => Self::Other(value),
+        })
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Registered(KeyManagement::Rsa1_5) => "RSA1_5",
+            Self::Registered(KeyManagement::RsaOaep) => "RSA-OAEP",
+            Self::Registered(KeyManagement::RsaOaep256) => "RSA-OAEP-256",
+            Self::Registered(KeyManagement::RsaOaep384) => "RSA-OAEP-384",
+            Self::Registered(KeyManagement::RsaOaep512) => "RSA-OAEP-512",
+            Self::Registered(KeyManagement::A128Kw) => "A128KW",
+            Self::Registered(KeyManagement::A192Kw) => "A192KW",
+            Self::Registered(KeyManagement::A256Kw) => "A256KW",
+            Self::Registered(KeyManagement::Direct) => "dir",
+            Self::Registered(KeyManagement::EcdhEs) => "ECDH-ES",
+            Self::Registered(KeyManagement::EcdhEsA128Kw) => "ECDH-ES+A128KW",
+            Self::Registered(KeyManagement::EcdhEsA192Kw) => "ECDH-ES+A192KW",
+            Self::Registered(KeyManagement::EcdhEsA256Kw) => "ECDH-ES+A256KW",
+            Self::Registered(KeyManagement::A128GcmKw) => "A128GCMKW",
+            Self::Registered(KeyManagement::A192GcmKw) => "A192GCMKW",
+            Self::Registered(KeyManagement::A256GcmKw) => "A256GCMKW",
+            Self::Registered(KeyManagement::Pbes2Hs256A128Kw) => "PBES2-HS256+A128KW",
+            Self::Registered(KeyManagement::Pbes2Hs384A192Kw) => "PBES2-HS384+A192KW",
+            Self::Registered(KeyManagement::Pbes2Hs512A256Kw) => "PBES2-HS512+A256KW",
+            Self::Registered(_) => unreachable!("unknown registered JWE key management algorithm"),
+            Self::Other(value) => value,
+        }
+    }
+}
+
+impl Serialize for JweKeyManagementAlgorithm {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for JweKeyManagementAlgorithm {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(D::Error::custom)
+    }
+}
+
+impl fmt::Display for JweKeyManagementAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 pub(crate) fn deserialize_vp_formats_supported<'de, D>(
     deserializer: D,
 ) -> Result<VpFormatsSupported, D::Error>
@@ -420,16 +502,6 @@ where
         formats.insert(format, capability);
     }
     Ok(formats)
-}
-
-pub(crate) fn serialize_vp_formats_supported<S>(
-    formats: &VpFormatsSupported,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    formats.serialize(serializer)
 }
 
 fn parse_format_capability(
@@ -460,8 +532,7 @@ fn validate_optional_identifier_array(
     field: &str,
 ) -> Result<(), Error> {
     if let Some(values) = values {
-        let string_values: Vec<String> = values.iter().map(ToString::to_string).collect();
-        validate_non_empty_string_array(&string_values, field).map_err(to_verifier_error)?;
+        validate_non_empty_verifier_array(values, field)?;
     }
     Ok(())
 }
@@ -471,13 +542,13 @@ fn validate_optional_cose_array(
     field: &str,
 ) -> Result<(), Error> {
     if let Some(values) = values {
-        validate_non_empty_array(values, field).map_err(to_verifier_error)?;
+        validate_non_empty_verifier_array(values, field)?;
     }
     Ok(())
 }
 
-fn to_verifier_error(error: Error) -> Error {
-    Error::message(ErrorKind::InvalidVerifierMetadata, error.to_string())
+fn validate_non_empty_verifier_array<T>(values: &[T], field: &str) -> Result<(), Error> {
+    validate_non_empty_array_with_kind(values, field, ErrorKind::InvalidVerifierMetadata)
 }
 
 fn invalid<T>(message: impl Into<String>) -> Result<T, Error> {
@@ -572,9 +643,41 @@ mod tests {
 
         let metadata: VerifierMetadata =
             serde_json::from_value(value.clone()).expect("valid metadata");
+        assert_eq!(
+            metadata
+                .client_metadata
+                .additional
+                .get("custom_profile_field"),
+            Some(&json!({"enabled": true}))
+        );
         let round_trip = serde_json::to_value(&metadata).expect("serialize metadata");
 
         assert_eq!(round_trip, value);
+    }
+
+    #[test]
+    fn preserves_extension_encrypted_response_alg_values() {
+        let mut value = minimal_metadata_json();
+        value["encrypted_response_enc_values_supported"] = json!(["A128GCM"]);
+        value["encrypted_response_alg_values_supported"] =
+            json!(["ECDH-ES", "urn:example:jwe-alg"]);
+
+        let metadata: VerifierMetadata =
+            serde_json::from_value(value.clone()).expect("extension alg values are valid");
+
+        assert_eq!(
+            metadata.encrypted_response_alg_values_supported.as_deref(),
+            Some(
+                &[
+                    JweKeyManagementAlgorithm::Registered(KeyManagement::EcdhEs),
+                    JweKeyManagementAlgorithm::Other("urn:example:jwe-alg".to_string())
+                ][..]
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(&metadata).expect("serialize metadata"),
+            value
+        );
     }
 
     #[test]
