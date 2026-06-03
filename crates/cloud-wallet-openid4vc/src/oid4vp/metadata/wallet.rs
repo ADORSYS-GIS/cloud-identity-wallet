@@ -75,19 +75,20 @@ impl Default for WalletPresentationMetadata {
 
         let mut vp_formats_supported = HashMap::new();
 
-        // Helper to create NonEmptyString from known-valid algorithm identifiers.
-        // These are hardcoded JOSE algorithm names which are always non-empty.
-        fn alg(name: &'static str) -> NonEmptyString {
-            NonEmptyString::new(name, "algorithm identifier")
-                .expect("JOSE algorithm identifiers are non-empty")
-        }
+        let es256 = NonEmptyString::new("ES256", "algorithm identifier");
+        let es384 = NonEmptyString::new("ES384", "algorithm identifier");
+        let es512 = NonEmptyString::new("ES512", "algorithm identifier");
 
         // vc+sd-jwt format with ES256, ES384, ES512
+        let sd_jwt_algs = match (&es256, &es384, &es512) {
+            (Ok(a), Ok(b), Ok(c)) => Some(vec![a.clone(), b.clone(), c.clone()]),
+            _ => None,
+        };
         vp_formats_supported.insert(
             CredentialFormatIdentifier::DcSdJwt,
             VpFormatCapability::DcSdJwt(SdJwtVcFormatCapability {
-                sd_jwt_alg_values: Some(vec![alg("ES256"), alg("ES384"), alg("ES512")]),
-                kb_jwt_alg_values: Some(vec![alg("ES256"), alg("ES384"), alg("ES512")]),
+                sd_jwt_alg_values: sd_jwt_algs.clone(),
+                kb_jwt_alg_values: sd_jwt_algs,
             }),
         );
 
@@ -109,10 +110,14 @@ impl Default for WalletPresentationMetadata {
         );
 
         // jwt_vc_json format with ES256, ES384, ES512
+        let jwt_vc_algs = match (es256, es384, es512) {
+            (Ok(a), Ok(b), Ok(c)) => Some(vec![a, b, c]),
+            _ => None,
+        };
         vp_formats_supported.insert(
             CredentialFormatIdentifier::JwtVcJson,
             VpFormatCapability::JwtVcJson(JwtVcJsonFormatCapability {
-                alg_values: Some(vec![alg("ES256"), alg("ES384"), alg("ES512")]),
+                alg_values: jwt_vc_algs,
             }),
         );
 
