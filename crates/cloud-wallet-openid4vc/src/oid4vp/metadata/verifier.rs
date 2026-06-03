@@ -14,7 +14,7 @@ use serde_with::skip_serializing_none;
 
 use crate::errors::{Error, ErrorKind};
 use crate::impl_string_enum;
-use crate::oauth::{AdditionalClientMetadata, ClientMetadata};
+use crate::oauth::client_metadata::{AdditionalClientMetadata, ClientMetadata};
 use crate::utils::{validate_non_empty_array, validate_non_empty_string_array};
 
 /// Extension format capability object.
@@ -125,7 +125,8 @@ impl<'de> Deserialize<'de> for VerifierMetadata {
     where
         D: Deserializer<'de>,
     {
-        let metadata = VerifierMetadataUnchecked::deserialize(deserializer)?.into_metadata();
+        let metadata: VerifierMetadata =
+            VerifierMetadataUnchecked::deserialize(deserializer)?.into();
         metadata.validate().map_err(D::Error::custom)?;
         Ok(metadata)
     }
@@ -144,14 +145,14 @@ struct VerifierMetadataUnchecked {
     extra_fields: AdditionalClientMetadata,
 }
 
-impl VerifierMetadataUnchecked {
-    fn into_metadata(self) -> VerifierMetadata {
-        VerifierMetadata {
-            client_metadata: self.client_metadata,
-            encrypted_response_enc_values_supported: self.encrypted_response_enc_values_supported,
-            encrypted_response_alg_values_supported: self.encrypted_response_alg_values_supported,
-            vp_formats_supported: self.vp_formats_supported,
-            extra_fields: self.extra_fields,
+impl From<VerifierMetadataUnchecked> for VerifierMetadata {
+    fn from(value: VerifierMetadataUnchecked) -> Self {
+        Self {
+            client_metadata: value.client_metadata,
+            encrypted_response_enc_values_supported: value.encrypted_response_enc_values_supported,
+            encrypted_response_alg_values_supported: value.encrypted_response_alg_values_supported,
+            vp_formats_supported: value.vp_formats_supported,
+            extra_fields: value.extra_fields,
         }
     }
 }
@@ -487,7 +488,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth::{GrantType, ResponseType, TokenEndpointAuthMethod};
+    use crate::oauth::client_metadata::{GrantType, ResponseType, TokenEndpointAuthMethod};
     use serde_json::json;
 
     fn valid_jwks() -> Value {
