@@ -107,7 +107,7 @@ impl ParsedClientId {
     /// - `redirect_uri:`: validates that the value is a valid URI
     /// - `x509_san_dns:`: validates that the value is a valid DNS name
     /// - `x509_hash:`: validates that the value is valid base64url-unpadded encoding of a 32-byte SHA-256 hash
-    /// - `origin:`: **rejected** per Section 5.9.3 (reserved for DC API; use [`parse_dc_api`] instead)
+    /// - `origin:`: **rejected** per Section 5.9.3 (reserved for DC API; use [`Self::parse_dc_api`] instead)
     /// - Other prefixes: accept any value (validation is separate)
     ///
     /// For unknown prefixes or no prefix, returns `None` for the prefix (pre-registered).
@@ -117,7 +117,7 @@ impl ParsedClientId {
 
     /// Parses a raw client_id string in Digital Credentials API context.
     ///
-    /// Unlike [`parse`], this method accepts the `origin:` prefix which is
+    /// Unlike [`Self::parse`], this method accepts the `origin:` prefix which is
     /// reserved for the DC API per Section 5.9.3 of the OpenID4VP spec.
     pub fn parse_dc_api(raw: impl Into<String>) -> Result<Self, ClientIdParseError> {
         Self::parse_inner(raw, true)
