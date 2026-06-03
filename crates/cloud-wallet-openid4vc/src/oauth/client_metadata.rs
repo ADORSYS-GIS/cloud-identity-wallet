@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::errors::{Error, ErrorKind};
 use crate::impl_string_enum;
+use crate::utils::{validate_non_empty_array, validate_non_empty_string_array};
 
 /// Additional RFC 7591 client metadata fields not explicitly modeled by this crate.
 pub type AdditionalClientMetadata = HashMap<String, Value>;
@@ -160,22 +161,6 @@ impl_string_enum!(
     },
     "response_type"
 );
-
-pub(crate) fn validate_non_empty_string_array(values: &[String], field: &str) -> Result<(), Error> {
-    validate_non_empty_array(values, field)?;
-
-    if values.iter().any(|value| value.trim().is_empty()) {
-        return invalid(format!("{field} must not contain empty strings"));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_non_empty_array<T>(values: &[T], field: &str) -> Result<(), Error> {
-    if values.is_empty() {
-        return invalid(format!("{field} must be a non-empty array"));
-    }
-    Ok(())
-}
 
 fn invalid<T>(message: impl Into<String>) -> Result<T, Error> {
     Err(Error::message(
