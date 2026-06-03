@@ -5,6 +5,7 @@ mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
+use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 pub use signer::{
     Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
@@ -151,6 +152,11 @@ impl Oid4vciClient {
         Self {
             inner_client: client,
         }
+    }
+
+    /// Returns the underlying HTTP client used for OID4VCI requests.
+    pub fn http_client(&self) -> &ClientWithMiddleware {
+        self.inner_client.http_client()
     }
 
     /// Resolve a raw credential offer string into a typed `CredentialOffer`.
