@@ -86,6 +86,18 @@ struct X5cSdJwt {
 }
 
 fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
+    sd_jwt_with_custom_x5c(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        true,
+    )
+}
+
+fn sd_jwt_with_custom_x5c(
+    jwt_algorithm: JwtAlgorithm,
+    leaf_key_usages: Vec<KeyUsagePurpose>,
+    sign_with_leaf_key: bool,
+) -> X5cSdJwt {
     let root_key = CertKeyPair::generate().expect("root key generation should work");
     let mut root_params = CertificateParams::default();
     root_params.distinguished_name = DistinguishedName::new();
@@ -114,7 +126,7 @@ fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
         .distinguished_name
         .push(DnType::CommonName, "issuer.example.com");
     leaf_params.is_ca = IsCa::NoCa;
-    leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    leaf_params.key_usages = leaf_key_usages;
     leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &root_issuer)
@@ -130,7 +142,7 @@ fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
         .expect("untrusted root certificate should become trust anchor")
         .to_owned();
 
-    let mut header = Header::new(JwtAlgorithm::ES256);
+    let mut header = Header::new(jwt_algorithm);
     header.typ = Some("dc+sd-jwt".to_owned());
     header.x5c = Some(vec![STANDARD.encode(leaf_cert.der().as_ref())]);
 
@@ -139,12 +151,19 @@ fn signed_sd_jwt_with_custom_x5c() -> X5cSdJwt {
         "vct": "https://credentials.example.com/identity",
         "given_name": "Ada"
     });
-    let token = jsonwebtoken::encode(
-        &header,
-        &claims,
-        &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
-    )
-    .expect("test JWT should sign with leaf key");
+    let token = if sign_with_leaf_key {
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
+        )
+        .expect("test JWT should sign with leaf key")
+    } else {
+        compact_jwt(
+            serde_json::to_value(header).expect("test header should serialize"),
+            claims,
+        )
+    };
 
     X5cSdJwt {
         raw: format!("{token}~"),
@@ -166,6 +185,14 @@ fn disclosure_digest(disclosure: &str) -> String {
 // Calculate the digest of a disclosure with a specific algorithm
 fn disclosure_digest_with(disclosure: &str, algorithm: HashAlg) -> String {
     URL_SAFE_NO_PAD.encode(algorithm.hash(disclosure.as_bytes()).as_ref())
+}
+
+fn nested_claim(depth: usize) -> Value {
+    let mut value = json!("leaf");
+    for _ in 0..depth {
+        value = json!({ "nested": value });
+    }
+    value
 }
 
 // Get the issuer claims as JSON
@@ -207,9 +234,11 @@ fn assert_no_rendering_metadata(value: &Value) {
     for claim_name in [
         "iss",
         "sub",
+        "aud",
         "exp",
         "nbf",
         "iat",
+        "jti",
         "vct",
         "vct#integrity",
         "cnf",
@@ -528,6 +557,66 @@ fn processes_array_element_disclosures() {
 }
 
 #[test]
+fn removes_sd_alg_only_from_top_level_payload() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity",
+            "_sd_alg": "sha-256",
+            "address": {
+                "_sd_alg": "claim-value",
+                "street_address": "Main Street 1"
+            }
+        }),
+    );
+    let raw = format!("{jwt}~");
+
+    let processed = SdJwt::parse(&raw)
+        .expect("SD-JWT should parse")
+        .to_disclosed_payload()
+        .expect("payload should process");
+
+    assert!(!processed.as_object().unwrap().contains_key("_sd_alg"));
+    assert_eq!(processed["address"]["_sd_alg"], json!("claim-value"));
+    assert_eq!(
+        processed["address"]["street_address"],
+        json!("Main Street 1")
+    );
+}
+
+#[test]
+fn rejects_payloads_that_exceed_processing_depth_limit() {
+    let jwt = compact_jwt(
+        json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity",
+            "claim": nested_claim(80)
+        }),
+    );
+    let raw = format!("{jwt}~");
+
+    assert!(matches!(
+        SdJwt::parse(&raw).and_then(|sd_jwt| sd_jwt.to_disclosed_payload()),
+        Err(Error::DisclosureProcessing {
+            reason: ProcessingError::MaxDepthExceeded(64)
+        })
+    ));
+}
+
+#[test]
+fn disclosure_debug_redacts_salt_and_raw_value() {
+    let raw = disclosure(json!(["secret-salt", "given_name", "Ada"]));
+    let disclosure = Disclosure::parse(&raw, 0).expect("disclosure should parse");
+    let debug = format!("{disclosure:?}");
+
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("secret-salt"));
+    assert!(!debug.contains(&raw));
+}
+
+#[test]
 fn rejects_unreferenced_disclosures() {
     let unreferenced = disclosure(json!(["salt-1", "given_name", "Ada"]));
     let jwt = compact_jwt(
@@ -806,7 +895,7 @@ async fn rejects_x5c_signature_with_untrusted_trust_anchor() {
         sd_jwt
             .verify_signature(&http_client, X5cTrustAnchors::Custom(&trust_anchors))
             .await,
-        Err(VerificationError::X5c { .. })
+        Err(Error::Verification(VerificationError::X5c { .. }))
     ));
 }
 
@@ -829,5 +918,59 @@ fn rejects_invalid_x5c_certificate_chain_before_signature_verification() {
     assert!(matches!(
         verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
         Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_empty_x5c_certificate_chain() {
+    let jwt = compact_jwt(
+        json!({
+            "alg": "ES256",
+            "typ": "dc+sd-jwt",
+            "x5c": []
+        }),
+        json!({
+            "iss": "https://issuer.example.com",
+            "vct": "https://credentials.example.com/identity"
+        }),
+    );
+    let raw = format!("{jwt}~");
+    let sd_jwt = SdJwt::parse(&raw).expect("SD-JWT with x5c header should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
+        Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_x5c_leaf_without_digital_signature_key_usage() {
+    let fixture = sd_jwt_with_custom_x5c(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::KeyEncipherment],
+        true,
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::InvalidKey { .. })
+    ));
+}
+
+#[test]
+fn rejects_x5c_leaf_public_key_type_that_does_not_match_algorithm() {
+    let fixture = sd_jwt_with_custom_x5c(
+        JwtAlgorithm::RS256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        false,
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::InvalidKey { .. })
     ));
 }
