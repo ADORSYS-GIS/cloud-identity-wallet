@@ -42,10 +42,13 @@ tracing = "0.1"
 base64 = "0.22"
 dashmap = "6"
 rand = "0.10"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+rustls-pki-types = "1.14"
 sqlx = "0.8"
 time = "0.3"
 url = "2.5"
 uuid = "1"
+webpki = { package = "rustls-webpki", version = "0.103", features = ["aws-lc-rs"] }
 zeroize = "1.8"
 
 [workspace.lints.clippy]
@@ -72,6 +75,7 @@ futures.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 parking_lot = "0.12"
 rand.workspace = true
+rustls-pki-types.workspace = true
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -107,6 +111,7 @@ features = [
 ]
 
 [dev-dependencies]
+rcgen.workspace = true
 reqwest = { version = "0.13", features = ["json"] }
 serde_json = { workspace = true }
 testcontainers-modules = { version = "0.15", features = [
@@ -115,6 +120,7 @@ testcontainers-modules = { version = "0.15", features = [
   "redis"
 ] }
 tower = { version = "0.5", features = ["util"] }
+webpki.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
