@@ -3,26 +3,32 @@ mod error;
 mod events;
 mod start;
 mod task;
+#[cfg(test)]
+mod tests;
 mod tx_code;
 
-use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
+use cloud_wallet_openid4vc::oid4vci::metadata::{CredentialConfiguration, CredentialDisplay};
 pub use consent::{ConsentError, ConsentRequest, ConsentResponse, NextAction};
 pub use error::{IssuanceError, IssuanceErrorCode};
 pub use events::*;
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 pub use start::{CredentialTypeDisplay, StartIssuanceRequest, StartIssuanceResponse};
 pub use task::{IssuanceTask, TaskResult};
 pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
+use cloud_wallet_openid4vc::formats::sd_jwt::{SdJwt, SdJwtClaims, StatusClaim, X5cTrustAnchors};
 use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::credential::formats::CredentialFormatDetails;
 use cloud_wallet_openid4vc::oid4vci::credential::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
 use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
 use cloud_wallet_openid4vc::oid4vci::token::TokenResponse;
+use jsonwebtoken::Algorithm as JwtAlgorithm;
+use parking_lot::Mutex;
+use rustls_pki_types::TrustAnchor;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -65,6 +71,7 @@ pub struct IssuanceEngine {
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     worker_notify: Arc<Notify>,
     preferred_display_locales: Arc<Vec<String>>,
+    x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
 }
 
 impl Clone for IssuanceEngine {
@@ -79,6 +86,7 @@ impl Clone for IssuanceEngine {
             workers: Arc::clone(&self.workers),
             worker_notify: Arc::clone(&self.worker_notify),
             preferred_display_locales: Arc::clone(&self.preferred_display_locales),
+            x5c_trust_anchors: Arc::clone(&self.x5c_trust_anchors),
         }
     }
 }
@@ -172,9 +180,18 @@ impl IssuanceEngine {
             workers: Arc::default(),
             worker_notify: Arc::new(Notify::new()),
             preferred_display_locales: Arc::new(preferred_display_locales),
+            x5c_trust_anchors: Arc::default(),
         };
 
         engine.start_worker_count(session_store.clone(), worker_count)
+    }
+
+    /// Configure custom x5c trust anchors for SD-JWT VC issuer signature verification.
+    ///
+    /// When no custom anchors are configured, Mozilla WebPKI roots are used.
+    pub fn with_x5c_trust_anchors(mut self, trust_anchors: Vec<TrustAnchor<'static>>) -> Self {
+        self.x5c_trust_anchors = Arc::new(trust_anchors);
+        self
     }
 
     /// Return the number of worker currently attached to this engine.
@@ -486,7 +503,6 @@ impl IssuanceEngine {
         credential_types: &mut Vec<String>,
     ) -> Result<Option<String>> {
         let notification_id = immediate.notification_id;
-        let issuer = context.offer.credential_issuer.as_str();
         let display_metadata =
             extract_display_metadata(context, config_id, &self.preferred_display_locales);
 
@@ -500,7 +516,7 @@ impl IssuanceEngine {
                 }
             };
             let cred_id = self
-                .store_credential(tenant_id, issuer, config_id, raw, display_metadata.clone())
+                .store_credential(tenant_id, context, config_id, raw, display_metadata.clone())
                 .await?;
 
             credential_ids.push(cred_id.to_string());
@@ -588,36 +604,76 @@ impl IssuanceEngine {
     async fn store_credential(
         &self,
         tenant_id: Uuid,
-        issuer: &str,
+        context: &ResolvedOfferContext,
         credential_config_id: &str,
         raw_credential: String,
         display_metadata: CredentialDisplayMetadata,
     ) -> Result<Uuid> {
-        // TODO : Parse the raw credential to extract the fields
-        let credential = Credential {
-            id: Uuid::new_v4(),
-            tenant_id,
-            issuer: issuer.to_owned(),
-            subject: None,
-            credential_types: vec![credential_config_id.to_owned()],
-            format: CredentialFormat::SdJwtVc,
-            external_id: None,
-            status: CredentialStatus::Active,
-            issued_at: time::UtcDateTime::now(),
-            valid_until: None,
-            is_revoked: false,
-            status_location: None,
-            status_index: None,
-            raw_credential,
-        };
+        let config = context
+            .issuer_metadata
+            .credential_configurations_supported
+            .get(credential_config_id)
+            .ok_or_else(|| {
+                IssuanceError::credential_request(format!(
+                    "unknown credential configuration '{credential_config_id}'"
+                ))
+            })?;
+
+        let receipt_time = time::UtcDateTime::now();
+        let issuer = context.offer.credential_issuer.as_str();
+        let credential = self
+            .build_credential(tenant_id, issuer, config, raw_credential, receipt_time)
+            .await?;
 
         let id = self
             .credential_repo
             .upsert(credential, Some(display_metadata))
             .await?;
 
-        info!(credential_id = %id, "credential stored successfully");
+        info!(credential_id = %id, tenant_id = %tenant_id, "credential stored successfully");
         Ok(id)
+    }
+
+    async fn build_credential(
+        &self,
+        tenant_id: Uuid,
+        issuer: &str,
+        config: &CredentialConfiguration,
+        raw_credential: String,
+        receipt_time: time::UtcDateTime,
+    ) -> Result<Credential> {
+        match &config.format_details {
+            CredentialFormatDetails::DcSdJwt(sd_config) => {
+                let sd_jwt = SdJwt::parse(&raw_credential)?;
+                sd_jwt.to_disclosed_payload()?;
+
+                let algorithm = sd_jwt
+                    .verify_signature(self.client.http_client(), self.x5c_trust_anchors())
+                    .await?;
+                validate_credential_signing_alg(config, algorithm)?;
+
+                let claims = sd_jwt.into_jwt().into_claims();
+                if claims.vct != sd_config.vct {
+                    return Err(IssuanceError::credential_request(format!(
+                        "SD-JWT VC vct '{}' does not match credential configuration vct '{}'",
+                        claims.vct, sd_config.vct
+                    )));
+                }
+                credential_from_sd_jwt(tenant_id, issuer, claims, raw_credential, receipt_time)
+            }
+            other => Err(IssuanceError::credential_request(format!(
+                "unsupported credential format '{}'",
+                other.format_str()
+            ))),
+        }
+    }
+
+    fn x5c_trust_anchors(&self) -> X5cTrustAnchors<'_> {
+        if self.x5c_trust_anchors.is_empty() {
+            X5cTrustAnchors::default()
+        } else {
+            X5cTrustAnchors::Custom(self.x5c_trust_anchors.as_slice())
+        }
     }
 
     /// Emit a processing SSE event (best-effort, non-fatal on failure).
@@ -685,6 +741,81 @@ fn default_worker_count() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
 }
 
+fn credential_from_sd_jwt(
+    tenant_id: Uuid,
+    issuer: &str,
+    claims: SdJwtClaims,
+    raw_credential: String,
+    receipt_time: time::UtcDateTime,
+) -> Result<Credential> {
+    let issuer = claims.rfc7519.iss.unwrap_or(issuer.to_owned());
+    let issued_at = claims
+        .rfc7519
+        .iat
+        .map(utc_from_numeric_date)
+        .transpose()?
+        .unwrap_or(receipt_time);
+    let valid_until = claims.rfc7519.exp.map(utc_from_numeric_date).transpose()?;
+    let (status_location, status_index) = status_list_metadata(claims.status)?;
+
+    Ok(Credential {
+        id: Uuid::new_v4(),
+        tenant_id,
+        issuer,
+        subject: claims.rfc7519.sub,
+        credential_types: vec![claims.vct],
+        format: CredentialFormat::SdJwtVc,
+        external_id: claims.rfc7519.jti,
+        status: CredentialStatus::Active,
+        issued_at,
+        valid_until,
+        is_revoked: false,
+        status_location,
+        status_index,
+        raw_credential,
+    })
+}
+
+fn validate_credential_signing_alg(
+    config: &CredentialConfiguration,
+    alg: JwtAlgorithm,
+) -> Result<()> {
+    let Some(supported) = config.credential_signing_alg_values_supported.as_ref() else {
+        return Ok(());
+    };
+
+    if supported
+        .iter()
+        .any(|candidate| candidate.as_str() == Some(&format!("{alg:?}")))
+    {
+        Ok(())
+    } else {
+        Err(IssuanceError::credential_request(format!(
+            "SD-JWT VC signing alg '{alg:?}' is not supported by credential configuration"
+        )))
+    }
+}
+
+fn utc_from_numeric_date(value: i64) -> Result<time::UtcDateTime> {
+    time::UtcDateTime::from_unix_timestamp(value).map_err(|err| {
+        IssuanceError::credential_request(format!("invalid JWT NumericDate '{value}': {err}"))
+    })
+}
+
+fn status_list_metadata(status: Option<StatusClaim>) -> Result<(Option<url::Url>, Option<i64>)> {
+    let Some(status_list) = status.and_then(|status| status.status_list) else {
+        return Ok((None, None));
+    };
+
+    let index = i64::try_from(status_list.idx).map_err(|_| {
+        IssuanceError::credential_request(format!(
+            "status_list.idx '{}' exceeds supported range",
+            status_list.idx
+        ))
+    })?;
+    Ok((Some(status_list.uri), Some(index)))
+}
+
 /// Extracts display metadata from the resolved offer context for a given
 /// credential configuration ID.
 fn extract_display_metadata(
@@ -698,7 +829,7 @@ fn extract_display_metadata(
         .as_deref()
         .and_then(|displays| select_preferred(displays, |d| d.locale.as_deref(), preferred))
         .and_then(|d| d.name.clone())
-        .unwrap_or_else(|| context.offer.credential_issuer.to_string());
+        .unwrap_or(context.offer.credential_issuer.to_string());
 
     let cred_display = context
         .issuer_metadata
@@ -743,188 +874,4 @@ where
         }
     }
     items.first()
-}
-
-#[cfg(test)]
-mod tests {
-    use parking_lot::Mutex;
-    use std::collections::VecDeque;
-    use std::sync::Arc;
-
-    use async_trait::async_trait;
-    use cloud_wallet_openid4vc::{
-        core::client::{Config as Oid4vciClientConfig, OidClient},
-        oid4vci::metadata::CredentialDisplay,
-    };
-    use url::Url;
-
-    use super::*;
-    use crate::outbound::{
-        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTenantRepo,
-    };
-    use crate::session::MemorySession;
-
-    #[derive(Debug, Clone, Default)]
-    struct RecordingTaskQueue {
-        state: Arc<Mutex<RecordingTaskQueueState>>,
-    }
-
-    #[derive(Debug, Default)]
-    struct RecordingTaskQueueState {
-        next_id: u64,
-        queued: VecDeque<IssuanceTask>,
-        acked: Vec<IssuanceTask>,
-    }
-
-    impl RecordingTaskQueue {
-        fn acked(&self) -> Vec<IssuanceTask> {
-            self.state.lock().acked.clone()
-        }
-
-        fn queued_len(&self) -> usize {
-            self.state.lock().queued.len()
-        }
-    }
-
-    #[async_trait]
-    impl IssuanceTaskQueue for RecordingTaskQueue {
-        async fn push(&self, task: &IssuanceTask) -> Result<()> {
-            self.state.lock().queued.push_back(task.clone());
-            Ok(())
-        }
-
-        async fn pop(&self) -> Result<Option<IssuanceTask>> {
-            let mut state = self.state.lock();
-            let Some(mut task) = state.queued.pop_front() else {
-                return Ok(None);
-            };
-
-            state.next_id += 1;
-            task.queue_id = Some(format!("queue-{}", state.next_id));
-            Ok(Some(task))
-        }
-
-        async fn ack(&self, task: &IssuanceTask) -> Result<()> {
-            self.state.lock().acked.push(task.clone());
-            Ok(())
-        }
-    }
-
-    fn make_engine(queue: RecordingTaskQueue) -> IssuanceEngine {
-        let inner_client = OidClient::new(Oid4vciClientConfig::new(
-            "test-client",
-            Url::parse("https://wallet.example.com/callback").unwrap(),
-        ))
-        .unwrap();
-        let client = Oid4vciClient::new(inner_client);
-
-        let sessions = MemorySession::default();
-        let publisher = MemoryEventPublisher::new(16);
-
-        IssuanceEngine::with_worker_count(
-            client,
-            queue,
-            publisher.clone(),
-            MemoryEventSubscriber::new(&publisher),
-            MemoryCredentialRepo::new(),
-            MemoryTenantRepo::new(),
-            &sessions,
-            vec!["en".to_owned()],
-            1,
-        )
-    }
-
-    fn make_task(session_id: &str) -> IssuanceTask {
-        IssuanceTask {
-            queue_id: None,
-            session_id: session_id.to_owned(),
-            tenant_id: Uuid::new_v4(),
-            flow: FlowType::PreAuthorizedCode,
-            authorization_code: None,
-            pkce_verifier: None,
-            pre_authorized_code: Some("pre-auth-code".to_owned()),
-            tx_code: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn enqueue_persists_work_without_acknowledging_it() {
-        let queue = RecordingTaskQueue::default();
-        let engine = make_engine(queue.clone());
-
-        engine.enqueue(&make_task("ses_enqueue")).await.unwrap();
-
-        assert_eq!(queue.queued_len(), 1);
-        assert!(queue.acked().is_empty());
-    }
-
-    #[tokio::test]
-    async fn processing_next_task_claims_and_acks_the_popped_task() {
-        let queue = RecordingTaskQueue::default();
-        let engine = make_engine(queue.clone());
-        let sessions = MemorySession::default();
-
-        engine.enqueue(&make_task("ses_missing")).await.unwrap();
-        let result = engine.process_next_task(&sessions).await;
-
-        assert!(result.is_err(), "missing session should fail terminally");
-        assert_eq!(queue.queued_len(), 0);
-
-        let acked = queue.acked();
-        assert_eq!(acked.len(), 1);
-        assert_eq!(acked[0].session_id, "ses_missing");
-        assert_eq!(acked[0].queue_id.as_deref(), Some("queue-1"));
-    }
-
-    #[tokio::test]
-    async fn processing_empty_queue_reports_no_work() {
-        let queue = RecordingTaskQueue::default();
-        let engine = make_engine(queue);
-        let sessions = MemorySession::default();
-
-        let processed = engine.process_next_task(&sessions).await.unwrap();
-
-        assert!(!processed);
-    }
-
-    #[test]
-    fn select_preferred_chooses_locale_by_prefix() {
-        // Arrange: two display entries; French listed second.
-        let entries = vec![
-            CredentialDisplay {
-                name: "English".to_owned(),
-                locale: Some("en-US".to_owned()),
-                ..Default::default()
-            },
-            CredentialDisplay {
-                name: "French".to_owned(),
-                locale: Some("fr-FR".to_owned()),
-                ..Default::default()
-            },
-        ];
-        let preferred = vec!["fr".to_owned()];
-
-        // Act
-        let result = select_preferred(&entries, |d| d.locale.as_deref(), &preferred);
-
-        // Assert: the French entry is selected even though it is listed second.
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().name, "French");
-    }
-
-    #[test]
-    fn select_preferred_falls_back_to_first_when_no_match() {
-        let entries = vec![CredentialDisplay {
-            name: "English".to_owned(),
-            locale: Some("en-US".to_owned()),
-            ..Default::default()
-        }];
-        let preferred = vec!["fr".to_owned()];
-
-        // Act: preferred locale not present — should fall back to first entry.
-        let result = select_preferred(&entries, |d| d.locale.as_deref(), &preferred);
-
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().name, "English");
-    }
 }
