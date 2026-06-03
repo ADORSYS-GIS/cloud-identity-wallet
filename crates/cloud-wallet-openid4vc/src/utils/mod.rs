@@ -149,26 +149,39 @@ where
 }
 
 pub fn validate_non_empty_string_array(values: &[String], field: &str) -> Result<(), Error> {
-    validate_non_empty_array(values, field)?;
+    validate_non_empty_string_array_with_kind(values, field, ErrorKind::InvalidClientMetadata)
+}
+
+pub fn validate_non_empty_string_array_with_kind(
+    values: &[String],
+    field: &str,
+    kind: ErrorKind,
+) -> Result<(), Error> {
+    validate_non_empty_array_with_kind(values, field, kind)?;
 
     if values.iter().any(|value| value.trim().is_empty()) {
-        return invalid_client_metadata(format!("{field} must not contain empty strings"));
+        return invalid_metadata(kind, format!("{field} must not contain empty strings"));
     }
     Ok(())
 }
 
 pub fn validate_non_empty_array<T>(values: &[T], field: &str) -> Result<(), Error> {
+    validate_non_empty_array_with_kind(values, field, ErrorKind::InvalidClientMetadata)
+}
+
+pub fn validate_non_empty_array_with_kind<T>(
+    values: &[T],
+    field: &str,
+    kind: ErrorKind,
+) -> Result<(), Error> {
     if values.is_empty() {
-        return invalid_client_metadata(format!("{field} must be a non-empty array"));
+        return invalid_metadata(kind, format!("{field} must be a non-empty array"));
     }
     Ok(())
 }
 
-fn invalid_client_metadata<T>(message: impl Into<String>) -> Result<T, Error> {
-    Err(Error::message(
-        ErrorKind::InvalidClientMetadata,
-        message.into(),
-    ))
+fn invalid_metadata<T>(kind: ErrorKind, message: impl Into<String>) -> Result<T, Error> {
+    Err(Error::message(kind, message.into()))
 }
 
 /// A parsed, duplicate-free set of query parameters.
