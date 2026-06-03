@@ -15,7 +15,6 @@ use crate::oid4vp::metadata::verifier::{
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WalletPresentationMetadata {
-    /// Credential formats the Wallet supports for presentations.
     #[serde(
         rename = "vp_formats_supported",
         serialize_with = "serialize_vp_formats_supported",
@@ -23,33 +22,8 @@ pub struct WalletPresentationMetadata {
     )]
     pub vp_formats_supported: VpFormatsSupported,
 
-    /// Whether the Wallet supports presentation_definition in the request.
-    #[serde(rename = "presentation_definition_supported")]
-    pub presentation_definition_supported: Option<bool>,
-
-    /// Whether the Wallet supports presentation_definition_uri in the request.
-    #[serde(rename = "presentation_definition_uri_supported")]
-    pub presentation_definition_uri_supported: Option<bool>,
-
-    /// Client ID prefixes supported by the Wallet.
     #[serde(rename = "client_id_prefixes_supported")]
     pub client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
-
-    /// JWS signing algorithms supported for Request Objects.
-    #[serde(rename = "request_object_signing_alg_values_supported")]
-    pub request_object_signing_alg_values_supported: Option<Vec<String>>,
-
-    /// JWE encryption algorithms supported for Request Objects.
-    #[serde(rename = "request_object_encryption_alg_values_supported")]
-    pub request_object_encryption_alg_values_supported: Option<Vec<String>>,
-
-    /// JWE encryption methods supported for Request Objects.
-    #[serde(rename = "request_object_encryption_enc_values_supported")]
-    pub request_object_encryption_enc_values_supported: Option<Vec<String>>,
-
-    /// Response modes supported by the Wallet.
-    #[serde(rename = "response_modes_supported")]
-    pub response_modes_supported: Option<Vec<String>>,
 
     /// Additional metadata parameters from profiles or deployment-specific extensions.
     #[serde(flatten)]
@@ -59,12 +33,20 @@ pub struct WalletPresentationMetadata {
 /// Client ID prefix values defined by OpenID4VP Section 10.1.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClientIdPrefix {
+    /// Pre-registered behavior (when no Client Identifier Prefix is used).
+    PreRegistered,
     /// Redirect URI prefix.
     RedirectUri,
-    /// HTTPS prefix.
-    Https,
-    /// Verifier Attestation prefix (HAIP profile).
+    /// OpenID Federation prefix.
+    OpenidFederation,
+    /// Verifier Attestation prefix.
     VerifierAttestation,
+    /// Decentralized Identifier prefix.
+    DecentralizedIdentifier,
+    /// X.509 SAN DNS prefix.
+    X509SanDns,
+    /// X.509 Hash prefix.
+    X509Hash,
     /// Extension prefix.
     Other(String),
 }
@@ -72,9 +54,13 @@ pub enum ClientIdPrefix {
 impl_string_enum!(
     ClientIdPrefix,
     {
+        PreRegistered => "pre-registered",
         RedirectUri => "redirect_uri",
-        Https => "https",
-        VerifierAttestation => "verifier_attestation"
+        OpenidFederation => "openid_federation",
+        VerifierAttestation => "verifier_attestation",
+        DecentralizedIdentifier => "decentralized_identifier",
+        X509SanDns => "x509_san_dns",
+        X509Hash => "x509_hash"
     },
     "client_id_prefix"
 );
@@ -132,22 +118,9 @@ impl Default for WalletPresentationMetadata {
 
         Self {
             vp_formats_supported,
-            presentation_definition_supported: Some(true),
-            presentation_definition_uri_supported: Some(true),
             client_id_prefixes_supported: Some(vec![
+                ClientIdPrefix::PreRegistered,
                 ClientIdPrefix::RedirectUri,
-                ClientIdPrefix::Https,
-            ]),
-            request_object_signing_alg_values_supported: Some(vec![
-                "ES256".to_string(),
-                "ES384".to_string(),
-                "ES512".to_string(),
-            ]),
-            request_object_encryption_alg_values_supported: None,
-            request_object_encryption_enc_values_supported: None,
-            response_modes_supported: Some(vec![
-                "direct_post".to_string(),
-                "direct_post.jwt".to_string(),
             ]),
             extra_fields: HashMap::new(),
         }
@@ -190,20 +163,8 @@ struct WalletPresentationMetadataUnchecked {
         deserialize_with = "deserialize_vp_formats_supported"
     )]
     vp_formats_supported: VpFormatsSupported,
-    #[serde(rename = "presentation_definition_supported")]
-    presentation_definition_supported: Option<bool>,
-    #[serde(rename = "presentation_definition_uri_supported")]
-    presentation_definition_uri_supported: Option<bool>,
     #[serde(rename = "client_id_prefixes_supported")]
     client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
-    #[serde(rename = "request_object_signing_alg_values_supported")]
-    request_object_signing_alg_values_supported: Option<Vec<String>>,
-    #[serde(rename = "request_object_encryption_alg_values_supported")]
-    request_object_encryption_alg_values_supported: Option<Vec<String>>,
-    #[serde(rename = "request_object_encryption_enc_values_supported")]
-    request_object_encryption_enc_values_supported: Option<Vec<String>>,
-    #[serde(rename = "response_modes_supported")]
-    response_modes_supported: Option<Vec<String>>,
     #[serde(flatten)]
     extra_fields: HashMap<String, serde_json::Value>,
 }
@@ -212,16 +173,7 @@ impl WalletPresentationMetadataUnchecked {
     fn into_metadata(self) -> WalletPresentationMetadata {
         WalletPresentationMetadata {
             vp_formats_supported: self.vp_formats_supported,
-            presentation_definition_supported: self.presentation_definition_supported,
-            presentation_definition_uri_supported: self.presentation_definition_uri_supported,
             client_id_prefixes_supported: self.client_id_prefixes_supported,
-            request_object_signing_alg_values_supported: self
-                .request_object_signing_alg_values_supported,
-            request_object_encryption_alg_values_supported: self
-                .request_object_encryption_alg_values_supported,
-            request_object_encryption_enc_values_supported: self
-                .request_object_encryption_enc_values_supported,
-            response_modes_supported: self.response_modes_supported,
             extra_fields: self.extra_fields,
         }
     }
@@ -290,45 +242,13 @@ mod tests {
             _ => panic!("Expected JwtVcJson format capability"),
         }
 
-        // Verify presentation_definition support
-        assert_eq!(metadata.presentation_definition_supported, Some(true));
-        assert_eq!(metadata.presentation_definition_uri_supported, Some(true));
-
-        // Verify client_id_prefixes_supported
+        // Verify client_id_prefixes_supported - spec-compliant defaults
         assert_eq!(
             metadata.client_id_prefixes_supported,
-            Some(vec![ClientIdPrefix::RedirectUri, ClientIdPrefix::Https])
-        );
-
-        // Verify request_object_signing_alg_values_supported
-        assert_eq!(
-            metadata.request_object_signing_alg_values_supported,
             Some(vec![
-                "ES256".to_string(),
-                "ES384".to_string(),
-                "ES512".to_string()
+                ClientIdPrefix::PreRegistered,
+                ClientIdPrefix::RedirectUri
             ])
-        );
-
-        // Verify response_modes_supported
-        assert_eq!(
-            metadata.response_modes_supported,
-            Some(vec![
-                "direct_post".to_string(),
-                "direct_post.jwt".to_string()
-            ])
-        );
-
-        // Verify optional fields are None by default
-        assert!(
-            metadata
-                .request_object_encryption_alg_values_supported
-                .is_none()
-        );
-        assert!(
-            metadata
-                .request_object_encryption_enc_values_supported
-                .is_none()
         );
 
         // Verify extra_fields is empty
@@ -356,9 +276,7 @@ mod tests {
                     "kb-jwt_alg_values": ["ES256"]
                 }
             },
-            "presentation_definition_supported": true,
-            "client_id_prefixes_supported": ["redirect_uri"],
-            "response_modes_supported": ["direct_post"]
+            "client_id_prefixes_supported": ["redirect_uri", "pre-registered"]
         }"#;
         let metadata: WalletPresentationMetadata =
             serde_json::from_str(json).expect("Failed to parse JSON");
@@ -367,35 +285,34 @@ mod tests {
                 .vp_formats_supported
                 .contains_key(&CredentialFormatIdentifier::DcSdJwt)
         );
-        assert_eq!(metadata.presentation_definition_supported, Some(true));
         assert_eq!(
             metadata.client_id_prefixes_supported,
-            Some(vec![ClientIdPrefix::RedirectUri])
+            Some(vec![
+                ClientIdPrefix::RedirectUri,
+                ClientIdPrefix::PreRegistered
+            ])
         );
     }
 
     #[test]
     fn test_serde_skips_none_fields() {
+        // Create a minimal metadata with empty vp_formats_supported and None client_id_prefixes_supported
+        // Note: This won't pass validation but we're only testing serialization behavior
+        let mut vp_formats_supported = HashMap::new();
+        vp_formats_supported.insert(
+            CredentialFormatIdentifier::DcSdJwt,
+            VpFormatCapability::DcSdJwt(Default::default()),
+        );
         let metadata = WalletPresentationMetadata {
-            vp_formats_supported: HashMap::new(),
-            presentation_definition_supported: None,
-            presentation_definition_uri_supported: None,
+            vp_formats_supported,
             client_id_prefixes_supported: None,
-            request_object_signing_alg_values_supported: None,
-            request_object_encryption_alg_values_supported: None,
-            request_object_encryption_enc_values_supported: None,
-            response_modes_supported: None,
             extra_fields: HashMap::new(),
         };
         let json = serde_json::to_string(&metadata).expect("Failed to serialize");
         // None fields should be skipped in serialization
-        assert!(!json.contains("presentation_definition_supported"));
-        assert!(!json.contains("presentation_definition_uri_supported"));
         assert!(!json.contains("client_id_prefixes_supported"));
-        assert!(!json.contains("request_object_signing_alg_values_supported"));
-        assert!(!json.contains("request_object_encryption_alg_values_supported"));
-        assert!(!json.contains("request_object_encryption_enc_values_supported"));
-        assert!(!json.contains("response_modes_supported"));
+        // vp_formats_supported should be present since it's required
+        assert!(json.contains("vp_formats_supported"));
     }
 
     #[test]
@@ -416,14 +333,27 @@ mod tests {
 
     #[test]
     fn test_client_id_prefix_serde() {
-        // Test serialization
-        let prefix = ClientIdPrefix::RedirectUri;
-        let json = serde_json::to_string(&prefix).expect("Failed to serialize");
-        assert_eq!(json, "\"redirect_uri\"");
+        // Test serialization of all spec-defined prefixes
+        let test_cases = vec![
+            (ClientIdPrefix::PreRegistered, "\"pre-registered\""),
+            (ClientIdPrefix::RedirectUri, "\"redirect_uri\""),
+            (ClientIdPrefix::OpenidFederation, "\"openid_federation\""),
+            (
+                ClientIdPrefix::VerifierAttestation,
+                "\"verifier_attestation\"",
+            ),
+            (
+                ClientIdPrefix::DecentralizedIdentifier,
+                "\"decentralized_identifier\"",
+            ),
+            (ClientIdPrefix::X509SanDns, "\"x509_san_dns\""),
+            (ClientIdPrefix::X509Hash, "\"x509_hash\""),
+        ];
 
-        let prefix = ClientIdPrefix::Https;
-        let json = serde_json::to_string(&prefix).expect("Failed to serialize");
-        assert_eq!(json, "\"https\"");
+        for (prefix, expected) in test_cases {
+            let json = serde_json::to_string(&prefix).expect("Failed to serialize");
+            assert_eq!(json, expected);
+        }
 
         // Test deserialization
         let prefix: ClientIdPrefix =
@@ -431,8 +361,12 @@ mod tests {
         assert_eq!(prefix, ClientIdPrefix::RedirectUri);
 
         let prefix: ClientIdPrefix =
-            serde_json::from_str("\"https\"").expect("Failed to deserialize");
-        assert_eq!(prefix, ClientIdPrefix::Https);
+            serde_json::from_str("\"pre-registered\"").expect("Failed to deserialize");
+        assert_eq!(prefix, ClientIdPrefix::PreRegistered);
+
+        let prefix: ClientIdPrefix =
+            serde_json::from_str("\"verifier_attestation\"").expect("Failed to deserialize");
+        assert_eq!(prefix, ClientIdPrefix::VerifierAttestation);
 
         // Test extension prefix
         let prefix: ClientIdPrefix =
@@ -444,16 +378,36 @@ mod tests {
     fn test_rejects_empty_vp_formats_supported() {
         let metadata = WalletPresentationMetadata {
             vp_formats_supported: HashMap::new(),
-            presentation_definition_supported: None,
-            presentation_definition_uri_supported: None,
             client_id_prefixes_supported: None,
-            request_object_signing_alg_values_supported: None,
-            request_object_encryption_alg_values_supported: None,
-            request_object_encryption_enc_values_supported: None,
-            response_modes_supported: None,
             extra_fields: HashMap::new(),
         };
         let err = metadata.validate().unwrap_err();
         assert!(err.to_string().contains("vp_formats_supported"));
+    }
+
+    #[test]
+    fn test_supports_all_spec_client_id_prefixes() {
+        // Verify all spec-defined prefixes can be deserialized
+        let prefixes_json = r#"[
+            "pre-registered",
+            "redirect_uri",
+            "openid_federation",
+            "verifier_attestation",
+            "decentralized_identifier",
+            "x509_san_dns",
+            "x509_hash"
+        ]"#;
+
+        let prefixes: Vec<ClientIdPrefix> =
+            serde_json::from_str(prefixes_json).expect("Failed to deserialize prefixes");
+
+        assert_eq!(prefixes.len(), 7);
+        assert!(prefixes.contains(&ClientIdPrefix::PreRegistered));
+        assert!(prefixes.contains(&ClientIdPrefix::RedirectUri));
+        assert!(prefixes.contains(&ClientIdPrefix::OpenidFederation));
+        assert!(prefixes.contains(&ClientIdPrefix::VerifierAttestation));
+        assert!(prefixes.contains(&ClientIdPrefix::DecentralizedIdentifier));
+        assert!(prefixes.contains(&ClientIdPrefix::X509SanDns));
+        assert!(prefixes.contains(&ClientIdPrefix::X509Hash));
     }
 }
