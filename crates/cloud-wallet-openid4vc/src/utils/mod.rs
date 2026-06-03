@@ -8,6 +8,58 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use crate::errors::{Error, ErrorKind};
 
+/// Implements serde string conversion and display for string-valued enums with
+/// an `Other(String)` extension variant.
+#[macro_export]
+macro_rules! impl_string_enum {
+    ($ty:ident, { $($variant:ident => $wire:literal),+ $(,)? }, $field:literal) => {
+        impl $ty {
+            fn parse(value: String) -> Result<Self, String> {
+                if value.trim().is_empty() {
+                    return Err(format!("{} must not be empty", $field));
+                }
+
+                Ok(match value.as_str() {
+                    $($wire => Self::$variant,)+
+                    _ => Self::Other(value),
+                })
+            }
+
+            fn as_str(&self) -> &str {
+                match self {
+                    $(Self::$variant => $wire,)+
+                    Self::Other(value) => value,
+                }
+            }
+        }
+
+        impl serde::Serialize for $ty {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $ty {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::parse(value).map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    };
+}
+
 /// Serialize a value as a JSON string
 pub fn serialize_json_string<S, T>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -94,6 +146,29 @@ where
     }
 
     Ok(attestation)
+}
+
+pub fn validate_non_empty_string_array(values: &[String], field: &str) -> Result<(), Error> {
+    validate_non_empty_array(values, field)?;
+
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return invalid_client_metadata(format!("{field} must not contain empty strings"));
+    }
+    Ok(())
+}
+
+pub fn validate_non_empty_array<T>(values: &[T], field: &str) -> Result<(), Error> {
+    if values.is_empty() {
+        return invalid_client_metadata(format!("{field} must be a non-empty array"));
+    }
+    Ok(())
+}
+
+fn invalid_client_metadata<T>(message: impl Into<String>) -> Result<T, Error> {
+    Err(Error::message(
+        ErrorKind::InvalidClientMetadata,
+        message.into(),
+    ))
 }
 
 /// A parsed, duplicate-free set of query parameters.

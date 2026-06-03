@@ -1,2 +1,5 @@
+mod verifier;
 pub mod wallet;
-pub use wallet::{VpFormat, WalletPresentationMetadata};
+
+pub use verifier::*;
+pub use wallet::WalletPresentationMetadata;
