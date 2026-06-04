@@ -476,20 +476,28 @@ pub struct Thumbprint {
 }
 
 /// Algorithm types that can be specified in JWK metadata.
-///
-/// Currently only signing algorithms are represented.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[non_exhaustive]
 pub enum Algorithm {
     /// Algorithms for digital signatures and MACs.
     Signing(Signing),
+
+    /// Algorithms for JSON Web Encryption key management.
+    KeyManagement(KeyManagement),
 }
 
 impl From<Signing> for Algorithm {
     #[inline(always)]
     fn from(alg: Signing) -> Self {
         Self::Signing(alg)
+    }
+}
+
+impl From<KeyManagement> for Algorithm {
+    #[inline(always)]
+    fn from(alg: KeyManagement) -> Self {
+        Self::KeyManagement(alg)
     }
 }
 
@@ -548,6 +556,92 @@ pub enum Signing {
     /// No digital signature or MAC performed (Optional)
     #[serde(rename = "none")]
     Null,
+}
+
+/// JWE key management algorithms as defined in RFC 7518 Section 4.1.
+///
+/// These algorithms are used by the JWE `alg` header parameter and may also
+/// appear in JWK metadata for encryption keys.
+///
+/// [RFC 7518 Section 4.1]: https://www.rfc-editor.org/rfc/rfc7518#section-4.1
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeyManagement {
+    /// RSAES-PKCS1-v1_5.
+    #[serde(rename = "RSA1_5")]
+    Rsa1_5,
+
+    /// RSAES OAEP using default parameters.
+    #[serde(rename = "RSA-OAEP")]
+    RsaOaep,
+
+    /// RSAES OAEP using SHA-256 and MGF1 with SHA-256.
+    #[serde(rename = "RSA-OAEP-256")]
+    RsaOaep256,
+
+    /// RSAES OAEP using SHA-384 and MGF1 with SHA-384.
+    #[serde(rename = "RSA-OAEP-384")]
+    RsaOaep384,
+
+    /// RSAES OAEP using SHA-512 and MGF1 with SHA-512.
+    #[serde(rename = "RSA-OAEP-512")]
+    RsaOaep512,
+
+    /// AES Key Wrap using 128-bit key.
+    #[serde(rename = "A128KW")]
+    A128Kw,
+
+    /// AES Key Wrap using 192-bit key.
+    #[serde(rename = "A192KW")]
+    A192Kw,
+
+    /// AES Key Wrap using 256-bit key.
+    #[serde(rename = "A256KW")]
+    A256Kw,
+
+    /// Direct use of a shared symmetric key.
+    #[serde(rename = "dir")]
+    Direct,
+
+    /// ECDH-ES using Concat KDF.
+    #[serde(rename = "ECDH-ES")]
+    EcdhEs,
+
+    /// ECDH-ES with AES Key Wrap using 128-bit key.
+    #[serde(rename = "ECDH-ES+A128KW")]
+    EcdhEsA128Kw,
+
+    /// ECDH-ES with AES Key Wrap using 192-bit key.
+    #[serde(rename = "ECDH-ES+A192KW")]
+    EcdhEsA192Kw,
+
+    /// ECDH-ES with AES Key Wrap using 256-bit key.
+    #[serde(rename = "ECDH-ES+A256KW")]
+    EcdhEsA256Kw,
+
+    /// AES GCM Key Wrap using 128-bit key.
+    #[serde(rename = "A128GCMKW")]
+    A128GcmKw,
+
+    /// AES GCM Key Wrap using 192-bit key.
+    #[serde(rename = "A192GCMKW")]
+    A192GcmKw,
+
+    /// AES GCM Key Wrap using 256-bit key.
+    #[serde(rename = "A256GCMKW")]
+    A256GcmKw,
+
+    /// PBES2 with HMAC SHA-256 and AES Key Wrap using 128-bit key.
+    #[serde(rename = "PBES2-HS256+A128KW")]
+    Pbes2Hs256A128Kw,
+
+    /// PBES2 with HMAC SHA-384 and AES Key Wrap using 192-bit key.
+    #[serde(rename = "PBES2-HS384+A192KW")]
+    Pbes2Hs384A192Kw,
+
+    /// PBES2 with HMAC SHA-512 and AES Key Wrap using 256-bit key.
+    #[serde(rename = "PBES2-HS512+A256KW")]
+    Pbes2Hs512A256Kw,
 }
 
 impl std::fmt::Display for Signing {
