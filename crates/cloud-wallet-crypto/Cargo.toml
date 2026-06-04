@@ -19,7 +19,7 @@ pkcs8 = { version = "0.10", features = ["std"] }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_with = { version = "3", optional = true }
 simple_asn1 = { version = "0.6", optional = true }
-subtle = "2.6"
+subtle.workspace = true
 thiserror.workspace = true
 url = { workspace = true, features = ["serde"], optional = true }
 zeroize.workspace = true

@@ -1,13 +1,16 @@
-//! Error types for mDoc (ISO 18013-5) parsing.
+//! Error types for mDoc (ISO 18013-5) parsing and digest verification.
 
 use thiserror::Error;
 
 /// A specialised [`Result`] type for mDoc parsing operations.
 pub type Result<T> = std::result::Result<T, MdocError>;
 
-/// Errors that can occur while parsing an [`IssuerSigned`] mDoc document.
+/// Errors that can occur while parsing or verifying an mDoc document.
 ///
-/// [`IssuerSigned`]: crate::formats::mdoc::ParsedMdoc::parse
+/// Returned by [`ParsedMdoc::parse`] and [`verify_digests`].
+///
+/// [`ParsedMdoc::parse`]: crate::formats::mdoc::ParsedMdoc::parse
+/// [`verify_digests`]: crate::formats::mdoc::verifier::verify_digests
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum MdocError {
@@ -84,7 +87,7 @@ pub enum MdocError {
     /// A CBOR map contains the same text key more than once.
     ///
     /// RFC 8949 §5.6 requires implementations to reject duplicate keys in
-    /// security-sensitive contexts; duplicate keys can hide a second value
+    /// security-sensitive contexts; a duplicate key could hide a second value
     /// behind a valid first one (e.g. `validUntil`, `digestID`).
     #[error("duplicate CBOR map key: '{key}'")]
     DuplicateMapKey {
