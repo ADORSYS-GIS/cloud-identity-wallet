@@ -3053,3 +3053,83 @@ fn verify_issuer_signature_accepts_valid_ed25519() {
         "cert_chain[0] must be the DSC leaf certificate"
     );
 }
+
+#[test]
+fn tbs_data_preserves_original_protected_header_bytes() {
+    // Arrange
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+
+    // {1: -7} (ES256), CBOR-encoded: a1 01 26 — these are the exact bytes the parser
+    // will store as CoseSign1::protected::original_data.
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
+
+    // RFC 9052 §4.4 Sig_Structure: ["Signature1", protected_bstr, external_aad, payload]
+    let expected_tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]), // external AAD = b""
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+
+    let sig_bytes = signing_key
+        .sign_sha256(&expected_tbs)
+        .expect("signing must succeed in tests");
+
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+    let cose_sign1_val = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1_val),
+    ]);
+    let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+
+    // Act: ask coset for the Sig_Structure it will use for verification.
+    let actual_tbs = mdoc.cose_sign1.tbs_data(b"");
+
+    // Assert: byte-exact match confirms no re-encoding occurred between parse and verify.
+    assert_eq!(
+        actual_tbs, expected_tbs,
+        "tbs_data() must return the same byte sequence as the manually-constructed Sig_Structure"
+    );
+
+    // End-to-end confirmation: the signature was created over `expected_tbs`; if
+    // tbs_data() had re-encoded the header, verification would fail with InvalidIssuerSignature.
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    assert!(
+        result.is_ok(),
+        "signature over original protected-header bytes must verify: {result:?}"
+    );
+}
