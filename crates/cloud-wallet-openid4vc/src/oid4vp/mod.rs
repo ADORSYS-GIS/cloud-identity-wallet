@@ -7,5 +7,7 @@ pub mod authorization;
 pub mod dcql;
 pub mod error;
 pub mod metadata;
+pub mod request_object;
 
 pub use error::*;
+pub use request_object::*;

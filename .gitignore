@@ -21,4 +21,5 @@ target/
 
 # Kilocode
 .kilocode
+.kilo
 implementation_plans/

@@ -144,6 +144,15 @@ pub enum AuthorizationErrorCode {
     /// or cannot be reached to process the authorization request.
     #[error("The wallet is unavailable")]
     WalletUnavailable,
+
+    /// The Request Object JWT is invalid or malformed.
+    ///
+    /// This error is returned when the Request Object JWT signature
+    /// verification fails, the JWT is expired, or required claims are missing.
+    /// Defined in [RFC 9101 §5](https://datatracker.ietf.org/doc/html/rfc9101#section-5)
+    /// and [OpenID4VP §5.8](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.8).
+    #[error("The request object is invalid or malformed")]
+    InvalidRequestObject,
 }
 
 #[cfg(test)]
@@ -299,6 +308,17 @@ mod tests {
         assert_eq!(
             error.error_description,
             Some("Unsupported input descriptor format".to_string())
+        );
+    }
+
+    #[test]
+    fn test_invalid_request_object_error() {
+        let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequestObject)
+            .with_description("Request Object signature verification failed");
+        assert_eq!(error.error, AuthorizationErrorCode::InvalidRequestObject);
+        assert_eq!(
+            error.error_description,
+            Some("Request Object signature verification failed".to_string())
         );
     }
 }
