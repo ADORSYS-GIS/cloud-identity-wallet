@@ -324,6 +324,13 @@ fn validate_origin(value: &str) -> Result<(), ClientIdParseError> {
         )));
     }
 
+    // Reject if path is not empty (origins don't have paths)
+    if url.path() != "" && url.path() != "/" {
+        return Err(ClientIdParseError::InvalidOrigin(format!(
+            "origin must not contain a path, got: {value}"
+        )));
+    }
+
     Ok(())
 }
 
@@ -688,6 +695,13 @@ mod tests {
         assert!(validate_origin("not-a-url").is_err());
         assert!(validate_origin("ftp://example.com").is_err());
         assert!(validate_origin("https://").is_err());
+    }
+
+    #[test]
+    fn test_validate_origin_rejects_path() {
+        // Origins should not have paths
+        assert!(validate_origin("https://example.com/callback").is_err());
+        assert!(validate_origin("https://example.com/path/to/resource").is_err());
     }
 
     #[test]
