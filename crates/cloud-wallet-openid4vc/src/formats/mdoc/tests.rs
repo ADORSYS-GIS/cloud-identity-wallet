@@ -1373,7 +1373,8 @@ fn build_chain_params(
     dsc_state: Option<&str>,
 ) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
     use rcgen::{
-        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyUsagePurpose,
     };
     let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
     let mut iaca_params =
@@ -1391,6 +1392,7 @@ fn build_chain_params(
         .self_signed(&iaca_key)
         .expect("self-signed IACA cert must succeed");
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
     let dsc_aws_key =
         cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
@@ -1430,7 +1432,7 @@ fn build_chain_params(
     }
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &iaca_cert, &iaca_key)
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
         .expect("DSC signing by IACA must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
@@ -1845,7 +1847,8 @@ fn verify_issuer_signature_rejects_dsc_validity_too_long() {
 /// `cloud_wallet_crypto::ecdsa::Curve::P521`.
 fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
     use rcgen::{
-        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyUsagePurpose,
     };
 
     let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
@@ -1856,6 +1859,7 @@ fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair)
         .self_signed(&iaca_key)
         .expect("self-signed IACA cert must succeed");
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
     let dsc_aws_key =
         cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P521)
@@ -1885,7 +1889,7 @@ fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair)
         .push(DnType::CommonName, "DSC P521");
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &iaca_cert, &iaca_key)
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
         .expect("DSC P-521 signing by IACA must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
@@ -2006,7 +2010,8 @@ fn verify_issuer_signature_rejects_state_mismatch() {
 /// bit is NOT set (only `ContentCommitment`), exercising the key-usage rejection path.
 fn build_chain_dsc_wrong_key_usage() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
     use rcgen::{
-        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyUsagePurpose,
     };
 
     let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
@@ -2017,6 +2022,7 @@ fn build_chain_dsc_wrong_key_usage() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::
         .self_signed(&iaca_key)
         .expect("self-signed IACA cert must succeed");
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
     let dsc_aws_key =
         cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
@@ -2048,7 +2054,7 @@ fn build_chain_dsc_wrong_key_usage() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::
         .distinguished_name
         .push(DnType::CommonName, "DSC Wrong KU");
     let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &iaca_cert, &iaca_key)
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
         .expect("DSC signing must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
@@ -2259,7 +2265,7 @@ fn build_three_cert_chain() -> (
     cloud_wallet_crypto::ecdsa::KeyPair,
 ) {
     use rcgen::{
-        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
     };
 
     // IACA root (self-signed CA)
@@ -2271,6 +2277,7 @@ fn build_three_cert_chain() -> (
         .self_signed(&iaca_key)
         .expect("IACA self-sign must succeed");
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
     // Intermediate CA (signed by IACA root)
     let int_key = rcgen::KeyPair::generate().expect("Intermediate CA key generation must succeed");
@@ -2278,9 +2285,10 @@ fn build_three_cert_chain() -> (
         CertificateParams::new(vec!["Three-tier Intermediate CA".to_string()]).expect("int params");
     int_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let int_cert = int_params
-        .signed_by(&int_key, &iaca_cert, &iaca_key)
+        .signed_by(&int_key, &iaca_issuer)
         .expect("Intermediate CA signing must succeed");
     let int_der: Vec<u8> = int_cert.der().to_vec();
+    let int_issuer = Issuer::new(int_params, int_key);
 
     // DSC (signed by Intermediate CA)
     let dsc_aws_key =
@@ -2309,7 +2317,7 @@ fn build_three_cert_chain() -> (
     dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &int_cert, &int_key)
+        .signed_by(&dsc_rcgen_key, &int_issuer)
         .expect("DSC signing by Intermediate CA must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
@@ -2771,7 +2779,7 @@ fn verify_issuer_signature_rejects_ed448_algorithm() {
 /// Returns `(iaca_der, dsc_der, dsc_signing_key)`.
 fn build_chain_p384() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
     use rcgen::{
-        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
     };
 
     let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
@@ -2782,6 +2790,7 @@ fn build_chain_p384() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair)
         .self_signed(&iaca_key)
         .expect("self-signed IACA cert must succeed");
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
     let dsc_aws_key =
         cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P384)
@@ -2808,7 +2817,7 @@ fn build_chain_p384() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair)
     dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &iaca_cert, &iaca_key)
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
         .expect("DSC P-384 signing by IACA must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
@@ -2909,7 +2918,7 @@ fn verify_issuer_signature_accepts_valid_es384() {
 /// Returns `(iaca_der, dsc_der, dsc_signing_key)`.
 fn build_chain_ed25519() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ed25519::KeyPair) {
     use rcgen::{
-        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose,
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
     };
 
     let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
@@ -2920,6 +2929,7 @@ fn build_chain_ed25519() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ed25519::Key
         .self_signed(&iaca_key)
         .expect("self-signed IACA cert must succeed");
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
     let dsc_aws_key = cloud_wallet_crypto::ed25519::KeyPair::generate()
         .expect("aws-lc-rs Ed25519 key generation must succeed");
@@ -2949,7 +2959,7 @@ fn build_chain_ed25519() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ed25519::Key
     dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &iaca_cert, &iaca_key)
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
         .expect("DSC Ed25519 signing by IACA must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
