@@ -15,7 +15,6 @@ use crate::oid4vp::metadata::verifier::{
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WalletPresentationMetadata {
-    #[serde(deserialize_with = "deserialize_vp_formats_supported")]
     pub vp_formats_supported: VpFormatsSupported,
 
     pub client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
@@ -157,6 +156,16 @@ impl WalletPresentationMetadata {
                     format!("vp_formats_supported validation failed: {e}"),
                 )
             })?;
+        }
+
+        // Validate client_id_prefixes_supported is non-empty if present (OID4VP Section 10.1)
+        if let Some(prefixes) = &self.client_id_prefixes_supported
+            && prefixes.is_empty()
+        {
+            return Err(Error::message(
+                ErrorKind::InvalidWalletMetadata,
+                "client_id_prefixes_supported must be a non-empty array",
+            ));
         }
 
         Ok(())
@@ -414,5 +423,24 @@ mod tests {
         assert!(prefixes.contains(&ClientIdPrefix::DecentralizedIdentifier));
         assert!(prefixes.contains(&ClientIdPrefix::X509SanDns));
         assert!(prefixes.contains(&ClientIdPrefix::X509Hash));
+    }
+
+    #[test]
+    fn test_rejects_empty_client_id_prefixes_supported() {
+        let metadata = WalletPresentationMetadata {
+            vp_formats_supported: {
+                let mut map = HashMap::new();
+                map.insert(
+                    CredentialFormatIdentifier::DcSdJwt,
+                    VpFormatCapability::DcSdJwt(Default::default()),
+                );
+                map
+            },
+            client_id_prefixes_supported: Some(vec![]),
+            extra_fields: HashMap::new(),
+        };
+        let err = metadata.validate().unwrap_err();
+        assert!(err.to_string().contains("client_id_prefixes_supported"));
+        assert_eq!(err.kind(), ErrorKind::InvalidWalletMetadata);
     }
 }
