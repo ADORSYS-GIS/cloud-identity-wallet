@@ -57,7 +57,9 @@ impl ParsedClientId {
                     "x509_san_dns scheme requires a non-empty SAN DNS name",
                 ));
             }
-            return Ok(Self::X509SanDns { san_dns: san_dns.to_string() });
+            return Ok(Self::X509SanDns {
+                san_dns: san_dns.to_string(),
+            });
         }
 
         if let Some(rest) = client_id.strip_prefix("x509_hash:") {
@@ -89,11 +91,15 @@ impl ParsedClientId {
                     "verifier_attestation scheme requires a non-empty attestation JWT",
                 ));
             }
-            return Ok(Self::VerifierAttestation { attestation: attestation.to_string() });
+            return Ok(Self::VerifierAttestation {
+                attestation: attestation.to_string(),
+            });
         }
 
         if client_id.starts_with("did:") {
-            return Ok(Self::DecentralizedIdentifier { did: client_id.to_string() });
+            return Ok(Self::DecentralizedIdentifier {
+                did: client_id.to_string(),
+            });
         }
 
         if let Ok(uri) = Url::parse(client_id) {
