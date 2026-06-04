@@ -243,6 +243,20 @@ impl Serialize for ParsedClientId {
     }
 }
 
+impl ParsedClientId {
+    /// Deserializes a client_id in Digital Credentials API context.
+    ///
+    /// Use this with `#[serde(deserialize_with = "ParsedClientId::deserialize_dc_api")]`
+    /// for fields that receive DC API requests containing `origin:` client identifiers.
+    pub fn deserialize_dc_api<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_dc_api(raw).map_err(serde::de::Error::custom)
+    }
+}
+
 impl<'de> Deserialize<'de> for ParsedClientId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -253,6 +267,13 @@ impl<'de> Deserialize<'de> for ParsedClientId {
     }
 }
 
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host == "[::1]"
+        || host.starts_with("127.")
+}
+
 fn validate_uri(value: &str) -> Result<(), ClientIdParseError> {
     if value.is_empty() {
         return Err(ClientIdParseError::InvalidRedirectUri(
@@ -260,7 +281,32 @@ fn validate_uri(value: &str) -> Result<(), ClientIdParseError> {
         ));
     }
 
-    Url::parse(value).map_err(|_| ClientIdParseError::InvalidRedirectUri(value.to_string()))?;
+    let url = Url::parse(value).map_err(|_| {
+        ClientIdParseError::InvalidRedirectUri(format!("invalid URI: {value}"))
+    })?;
+
+    match url.scheme() {
+        "https" => {}
+        "http" => {
+            let host = url.host_str().unwrap_or("");
+            if !is_loopback_host(host) {
+                return Err(ClientIdParseError::InvalidRedirectUri(format!(
+                    "http scheme only allowed for loopback (localhost, 127.0.0.1, [::1]), got host: {host}"
+                )));
+            }
+        }
+        scheme => {
+            return Err(ClientIdParseError::InvalidRedirectUri(format!(
+                "URI scheme must be https or http (loopback only), got: {scheme}"
+            )));
+        }
+    }
+
+    if url.fragment().is_some() {
+        return Err(ClientIdParseError::InvalidRedirectUri(
+            "URI must not contain a fragment (RFC 6749 §3.1.2)".to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -667,6 +713,90 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn test_validate_uri_rejects_javascript_scheme() {
+        let result = ParsedClientId::parse("redirect_uri:javascript:alert(1)");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ClientIdParseError::InvalidRedirectUri(msg) => {
+                assert!(msg.contains("https") || msg.contains("http"));
+            }
+            other => panic!("expected InvalidRedirectUri, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_uri_rejects_data_scheme() {
+        let result = ParsedClientId::parse("redirect_uri:data:text/html,<script>alert(1)</script>");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_uri_rejects_fragment() {
+        let result = ParsedClientId::parse("redirect_uri:https://example.com/cb#fragment");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ClientIdParseError::InvalidRedirectUri(msg) => {
+                assert!(msg.contains("fragment"));
+            }
+            other => panic!("expected InvalidRedirectUri, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_uri_accepts_https() {
+        let parsed = ParsedClientId::parse("redirect_uri:https://example.com/callback").unwrap();
+        assert_eq!(parsed.value(), "https://example.com/callback");
+    }
+
+    #[test]
+    fn test_validate_uri_accepts_http_loopback_localhost() {
+        let parsed = ParsedClientId::parse("redirect_uri:http://localhost/callback").unwrap();
+        assert_eq!(parsed.value(), "http://localhost/callback");
+    }
+
+    #[test]
+    fn test_validate_uri_accepts_http_loopback_127() {
+        let parsed = ParsedClientId::parse("redirect_uri:http://127.0.0.1/callback").unwrap();
+        assert_eq!(parsed.value(), "http://127.0.0.1/callback");
+    }
+
+    #[test]
+    fn test_validate_uri_accepts_http_loopback_ipv6() {
+        let parsed = ParsedClientId::parse("redirect_uri:http://[::1]/callback").unwrap();
+        assert_eq!(parsed.value(), "http://[::1]/callback");
+    }
+
+    #[test]
+    fn test_validate_uri_rejects_http_non_loopback() {
+        let result = ParsedClientId::parse("redirect_uri:http://example.com/callback");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ClientIdParseError::InvalidRedirectUri(msg) => {
+                assert!(msg.contains("loopback"));
+            }
+            other => panic!("expected InvalidRedirectUri, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_dc_api_accepts_origin() {
+        // Deserialize with deserialize_dc_api allows origin:
+        let parsed = ParsedClientId::deserialize_dc_api(
+            &mut serde_json::de::Deserializer::from_str(r#""origin:https://example.com""#),
+        )
+        .unwrap();
+        assert!(parsed.is_origin());
+        assert_eq!(parsed.value(), "https://example.com");
+    }
+
+    #[test]
+    fn test_deserialize_default_rejects_origin() {
+        let result: Result<ParsedClientId, _> =
+            serde_json::from_str(r#""origin:https://example.com""#);
+        assert!(result.is_err());
     }
 
     #[test]
