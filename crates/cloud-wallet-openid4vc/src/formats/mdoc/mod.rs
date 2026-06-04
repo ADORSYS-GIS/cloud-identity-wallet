@@ -11,6 +11,7 @@
 //! - [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) — CBOR
 //! - [RFC 9052](https://www.rfc-editor.org/rfc/rfc9052) — COSE_Sign1
 
+mod cert_chain;
 pub mod error;
 mod parser;
 #[cfg(test)]
@@ -19,7 +20,9 @@ pub mod verifier;
 
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
-pub use verifier::verify_digests;
+pub use verifier::{
+    IacaTrustStore, IssuerInfo, StaticTrustStore, verify_digests, verify_issuer_signature,
+};
 
 use cloud_wallet_crypto::digest::HashAlg;
 
