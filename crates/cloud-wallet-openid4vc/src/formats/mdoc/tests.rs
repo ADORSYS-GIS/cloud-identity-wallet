@@ -2625,7 +2625,7 @@ fn build_ed448_dsc_manual(
     }
     fn integer_pos(b: Vec<u8>) -> Vec<u8> {
         let mut content = b;
-        if content.first().map_or(false, |&x| x & 0x80 != 0) {
+        if content.first().is_some_and(|&x| x & 0x80 != 0) {
             content.insert(0, 0);
         }
         tlv(0x02, content)
