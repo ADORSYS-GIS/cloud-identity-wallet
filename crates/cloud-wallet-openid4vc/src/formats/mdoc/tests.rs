@@ -1,4 +1,4 @@
-use base64ct::{Base64UrlUnpadded, Encoding as _};
+﻿use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::Value;
 use cloud_wallet_crypto::digest::HashAlg;
 use cloud_wallet_crypto::jwk::{B64, Curve, Ec, Jwk, Key, Okp, OkpCurve, Parameters};
@@ -2352,6 +2352,8 @@ fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     );
 }
 
+
+
 #[test]
 fn verify_issuer_signature_accepts_single_bstr_x5chain() {
     // RFC 9360 §2 permits x5chain to be either a single bstr or an array of
@@ -2371,6 +2373,8 @@ fn verify_issuer_signature_accepts_single_bstr_x5chain() {
         "credential with single-bstr x5chain must be accepted: {result:?}"
     );
 }
+
+─
 
 #[test]
 fn verify_issuer_signature_accepts_intermediate_ca_chain() {
@@ -2423,6 +2427,7 @@ fn verify_issuer_signature_rejects_tampered_intermediate() {
     );
 }
 
+
 #[test]
 fn verify_issuer_signature_rejects_empty_trust_store() {
     // An empty trust store cannot anchor any chain.
@@ -2443,6 +2448,8 @@ fn verify_issuer_signature_rejects_empty_trust_store() {
     );
 }
 
+
+//
 // Algorithm IDs -38, -47, -48 (Brainpool) must be recognised by read_cose_alg
 // and reach dispatch_verify, which returns UnsupportedAlgorithm immediately.
 // The credential structure must otherwise be valid (chain, EKU, etc.) so the
@@ -2540,6 +2547,8 @@ fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     );
 }
 
+──
+
 /// Constructs a minimal X.509 certificate with an Ed448 public key (OID `1.3.101.113`)
 /// in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
 ///
@@ -2625,6 +2634,7 @@ fn build_ed448_dsc_manual(
         tlv(0x17, s.as_bytes().to_vec())
     }
 
+ 
     let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
     let serial = integer_pos(vec![0x01]); // serialNumber = 1
     let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
@@ -2750,6 +2760,8 @@ fn verify_issuer_signature_rejects_ed448_algorithm() {
         "expected UnsupportedAlgorithm {{ alg: -8 }}, got: {err:?}"
     );
 }
+
+
 
 /// Builds an IACA root (P-256) and a DSC backed by a P-384 key (ES384 / -35).
 ///
@@ -3111,7 +3123,7 @@ fn tbs_data_preserves_original_protected_header_bytes() {
     );
 }
 
-// ── device-key binding tests ─────────────────────────────────────────────────
+
 
 /// Builds a fresh `ParsedMdoc` and overwrites its `device_key` with `cose_key`,
 /// keeping the rest of the document valid and within its validity window.
@@ -3423,5 +3435,4 @@ fn verify_device_key_binding_rejects_mismatched_ed25519_x() {
         "expected DeviceKeyMismatch, got: {err:?}"
     );
 }
-    );
-}
+   
