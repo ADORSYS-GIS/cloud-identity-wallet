@@ -367,16 +367,25 @@ pub fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result
         }
     };
 
-    // Helper: find an integer-labelled entry and return its Value.
-    let get_val = |label: i64| -> Option<&Value> {
-        entries.iter().find_map(|(k, v)| match k {
-            Value::Integer(n) if i128::from(*n) == i128::from(label) => Some(v),
-            _ => None,
-        })
-    };
+    // RFC 7049 §3.1 forbids duplicate keys in CBOR maps. Reject to prevent
+    // split-key constructions where the same integer label appears twice.
+    // COSE_Keys have at most ~6 entries; the O(n²) scan avoids a heap allocation.
+    for i in 0..entries.len() {
+        if let Value::Integer(a) = &entries[i].0 {
+            for item in entries.iter().skip(i + 1) {
+                if let Value::Integer(b) = &item.0
+                    && i128::from(*a) == i128::from(*b)
+                {
+                    return Err(MdocError::MalformedDeviceKey {
+                        reason: "COSE_Key map contains duplicate integer label".to_owned(),
+                    });
+                }
+            }
+        }
+    }
 
     // kty (label 1) — determines EC2 vs OKP dispatch.
-    let kty: i128 = match get_val(1) {
+    let kty: i128 = match cose_key_get(&entries, 1) {
         Some(Value::Integer(n)) => i128::from(*n),
         Some(_) => {
             return Err(MdocError::MalformedDeviceKey {
@@ -399,15 +408,8 @@ pub fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result
 
 /// EC2 device-key binding check (kty=2, ISO 18013-5 Table 22 NIST curves).
 fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
-    let get_val = |label: i64| -> Option<&Value> {
-        entries.iter().find_map(|(k, v)| match k {
-            Value::Integer(n) if i128::from(*n) == i128::from(label) => Some(v),
-            _ => None,
-        })
-    };
-
     // crv (label -1): map integer to (curve name string, JWK Curve variant).
-    let (cose_crv_name, jwk_curve) = match get_val(-1) {
+    let (cose_crv_name, jwk_curve) = match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
             1 => ("P-256", cloud_wallet_crypto::jwk::Curve::P256),
             2 => ("P-384", cloud_wallet_crypto::jwk::Curve::P384),
@@ -427,7 +429,7 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     };
 
     // x (label -2): must be bytes.
-    let cose_x = match get_val(-2) {
+    let cose_x = match cose_key_get(entries, -2) {
         Some(Value::Bytes(b)) => b.as_slice(),
         Some(_) => {
             return Err(MdocError::MalformedDeviceKey {
@@ -442,7 +444,7 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     };
 
     // y (label -3): bytes (uncompressed) or bool (compressed — explicitly unsupported).
-    let cose_y = match get_val(-3) {
+    let cose_y = match cose_key_get(entries, -3) {
         Some(Value::Bytes(b)) => b.as_slice(),
         // RFC 8152 §13.1 permits y as a bool for compressed EC2 points. We cannot
         // compare compressed-only keys against the uncompressed JWK y without EC
@@ -482,7 +484,26 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
         });
     }
 
-    // Constant-time comparison — both run unconditionally to avoid timing side channels.
+    // Validate coordinate byte lengths match the curve before ct_eq: subtle's
+    // ConstantTimeEq for &[u8] short-circuits (non-constant-time) on length
+    // mismatch; an equal-length gate here guarantees the comparison is always
+    // constant-time over the full coordinate.
+    let expected_coord_len: usize = match jwk_curve {
+        cloud_wallet_crypto::jwk::Curve::P256 => 32,
+        cloud_wallet_crypto::jwk::Curve::P384 => 48,
+        cloud_wallet_crypto::jwk::Curve::P521 => 66,
+        _ => unreachable!("jwk_curve was matched from a P-256/P-384/P-521 COSE crv"),
+    };
+    if cose_x.len() != expected_coord_len
+        || cose_y.len() != expected_coord_len
+        || ec.x.as_ref().len() != expected_coord_len
+        || ec.y.as_ref().len() != expected_coord_len
+    {
+        return Err(MdocError::MalformedDeviceKey {
+            reason: "coordinate length does not match curve".to_owned(),
+        });
+    }
+    // Both slices are guaranteed equal-length; ct_eq runs in constant time over all bytes.
     let x_eq: bool = cose_x.ct_eq(ec.x.as_ref()).into();
     let y_eq: bool = cose_y.ct_eq(ec.y.as_ref()).into();
     if !x_eq || !y_eq {
@@ -494,15 +515,8 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
 
 /// OKP Ed25519 device-key binding check (kty=1, crv=6, x-only, RFC 8152 §13.2).
 fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
-    let get_val = |label: i64| -> Option<&Value> {
-        entries.iter().find_map(|(k, v)| match k {
-            Value::Integer(n) if i128::from(*n) == i128::from(label) => Some(v),
-            _ => None,
-        })
-    };
-
     // crv (label -1): must be 6 (Ed25519). All other OKP curves are unsupported.
-    match get_val(-1) {
+    match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
             6 => {} // Ed25519 — proceed
             _ => return Err(MdocError::UnsupportedDeviceKeyType),
@@ -520,7 +534,7 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     }
 
     // x (label -2): must be bytes. OKP has no y (RFC 8152 §13.2).
-    let cose_x = match get_val(-2) {
+    let cose_x = match cose_key_get(entries, -2) {
         Some(Value::Bytes(b)) => b.as_slice(),
         Some(_) => {
             return Err(MdocError::MalformedDeviceKey {
@@ -537,15 +551,31 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     // Match proof JWK — must be OKP Ed25519.
     let okp = match &proof_jwk.key {
         Key::Okp(okp) if okp.crv == OkpCurve::Ed25519 => okp,
-        Key::Okp(_) => return Err(MdocError::UnsupportedDeviceKeyType),
         _ => return Err(MdocError::UnsupportedDeviceKeyType),
     };
 
-    // Constant-time comparison on x (the sole coordinate for OKP).
+    // Ed25519 x must be exactly 32 bytes; validate before ct_eq to ensure the
+    // constant-time property holds for equal-length slices.
+    if cose_x.len() != 32 || okp.x.as_ref().len() != 32 {
+        return Err(MdocError::MalformedDeviceKey {
+            reason: "Ed25519 x coordinate must be 32 bytes".to_owned(),
+        });
+    }
+    // Both slices are guaranteed 32 bytes; ct_eq runs in constant time over all bytes.
     let x_eq: bool = cose_x.ct_eq(okp.x.as_ref()).into();
     if !x_eq {
         return Err(MdocError::DeviceKeyMismatch);
     }
 
     Ok(())
+}
+
+/// Returns the value associated with the given integer label in a COSE_Key map,
+/// or `None` if no entry with that label is present.
+#[inline]
+fn cose_key_get(entries: &[(Value, Value)], label: i64) -> Option<&Value> {
+    entries.iter().find_map(|(k, v)| match k {
+        Value::Integer(n) if i128::from(*n) == i128::from(label) => Some(v),
+        _ => None,
+    })
 }
