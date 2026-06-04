@@ -458,8 +458,6 @@ fn rejects_duplicate_namespace_in_value_digests() {
     );
 }
 
-// ── digest-verification helpers ──────────────────────────────────────────────
-
 /// Builds the `#6.24(bstr .cbor IssuerSignedItem)` encoding for one item
 /// and returns `(raw_tag24_bytes, real_sha256_digest)`.
 ///
@@ -787,8 +785,6 @@ fn build_two_namespace_mdoc() -> String {
     ]);
     Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
 }
-
-// ── verify_digests tests ──────────────────────────────────────────────────────
 
 #[test]
 fn verify_digests_passes_for_all_valid() {
@@ -2082,8 +2078,6 @@ fn verify_issuer_signature_rejects_missing_key_usage() {
     );
 }
 
-// ── New helpers and tests added to improve coverage ─────────────────────────
-
 /// Builds an `IssuerSigned` where the x5chain unprotected header value is a
 /// single `bstr` rather than `[bstr]`.  Per RFC 9360 §2 both forms are valid.
 fn build_issuer_signed_single_bstr_x5chain(
@@ -2324,8 +2318,6 @@ fn build_three_cert_chain() -> (
     (iaca_der, int_der, dsc_der, dsc_aws_key)
 }
 
-// ── BLOCKING-2: signed timestamp after DSC notAfter ──────────────────────────
-
 #[test]
 fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     // Arrange: DSC validity window 2023-01-01..2023-06-30 (170 days, well under the
@@ -2359,8 +2351,6 @@ fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     );
 }
 
-// ── NB-10: single-bstr x5chain ───────────────────────────────────────────────
-
 #[test]
 fn verify_issuer_signature_accepts_single_bstr_x5chain() {
     // RFC 9360 §2 permits x5chain to be either a single bstr or an array of
@@ -2380,8 +2370,6 @@ fn verify_issuer_signature_accepts_single_bstr_x5chain() {
         "credential with single-bstr x5chain must be accepted: {result:?}"
     );
 }
-
-// ── NB-11: multi-cert chain (IACA → IntCA → DSC) ─────────────────────────────
 
 #[test]
 fn verify_issuer_signature_accepts_intermediate_ca_chain() {
@@ -2434,8 +2422,6 @@ fn verify_issuer_signature_rejects_tampered_intermediate() {
     );
 }
 
-// ── NB-12: empty trust store ──────────────────────────────────────────────────
-
 #[test]
 fn verify_issuer_signature_rejects_empty_trust_store() {
     // An empty trust store cannot anchor any chain.
@@ -2456,8 +2442,6 @@ fn verify_issuer_signature_rejects_empty_trust_store() {
     );
 }
 
-// ── NB-13: Brainpool P-256/P-384/P-512 algorithm identifiers ─────────────────
-//
 // Algorithm IDs -38, -47, -48 (Brainpool) must be recognised by read_cose_alg
 // and reach dispatch_verify, which returns UnsupportedAlgorithm immediately.
 // The credential structure must otherwise be valid (chain, EKU, etc.) so the
@@ -2528,8 +2512,6 @@ fn verify_issuer_signature_rejects_brainpool_p512_algorithm() {
     );
 }
 
-// ── NB-4: IACA root present in x5chain ────────────────────────────────────────
-
 #[test]
 fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     // ISO 18013-5 Annex B §B.1: the IACA root must NOT appear in x5chain.
@@ -2557,8 +2539,6 @@ fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     );
 }
 
-// ── NB-5: Ed448 public key rejected ──────────────────────────────────────────
-
 /// Constructs a minimal X.509 certificate with an Ed448 public key (OID `1.3.101.113`)
 /// in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
 ///
@@ -2576,7 +2556,6 @@ fn build_ed448_dsc_manual(
         X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
     let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
 
-    // ── Minimal DER helpers ──────────────────────────────────────────────────
     fn len_bytes(n: usize) -> Vec<u8> {
         if n < 128 {
             vec![n as u8]
@@ -2645,7 +2624,6 @@ fn build_ed448_dsc_manual(
         tlv(0x17, s.as_bytes().to_vec())
     }
 
-    // ── Build TBSCertificate ─────────────────────────────────────────────────
     let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
     let serial = integer_pos(vec![0x01]); // serialNumber = 1
     let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
@@ -2771,8 +2749,6 @@ fn verify_issuer_signature_rejects_ed448_algorithm() {
         "expected UnsupportedAlgorithm {{ alg: -8 }}, got: {err:?}"
     );
 }
-
-// ── NB-6: ES384 and Ed25519 happy-path tests ──────────────────────────────────
 
 /// Builds an IACA root (P-256) and a DSC backed by a P-384 key (ES384 / -35).
 ///
