@@ -268,10 +268,7 @@ impl<'de> Deserialize<'de> for ParsedClientId {
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "[::1]"
-        || host.starts_with("127.")
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host.starts_with("127.")
 }
 
 fn validate_uri(value: &str) -> Result<(), ClientIdParseError> {
@@ -281,9 +278,8 @@ fn validate_uri(value: &str) -> Result<(), ClientIdParseError> {
         ));
     }
 
-    let url = Url::parse(value).map_err(|_| {
-        ClientIdParseError::InvalidRedirectUri(format!("invalid URI: {value}"))
-    })?;
+    let url = Url::parse(value)
+        .map_err(|_| ClientIdParseError::InvalidRedirectUri(format!("invalid URI: {value}")))?;
 
     match url.scheme() {
         "https" => {}
