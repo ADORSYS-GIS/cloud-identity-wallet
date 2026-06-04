@@ -15,13 +15,9 @@ use crate::oid4vp::metadata::verifier::{
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WalletPresentationMetadata {
-    #[serde(
-        rename = "vp_formats_supported",
-        deserialize_with = "deserialize_vp_formats_supported"
-    )]
+    #[serde(deserialize_with = "deserialize_vp_formats_supported")]
     pub vp_formats_supported: VpFormatsSupported,
 
-    #[serde(rename = "client_id_prefixes_supported")]
     pub client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
 
     /// Additional metadata parameters from profiles or deployment-specific extensions.
@@ -74,15 +70,16 @@ impl Default for WalletPresentationMetadata {
 
         let mut vp_formats_supported = HashMap::new();
 
-        let es256 = NonEmptyString::new("ES256", "algorithm identifier");
-        let es384 = NonEmptyString::new("ES384", "algorithm identifier");
-        let es512 = NonEmptyString::new("ES512", "algorithm identifier");
+        // Hardcoded algorithm constants - NonEmptyString::new will never fail here
+        let es256 = NonEmptyString::new("ES256", "algorithm identifier")
+            .expect("ES256 is a valid non-empty algorithm identifier");
+        let es384 = NonEmptyString::new("ES384", "algorithm identifier")
+            .expect("ES384 is a valid non-empty algorithm identifier");
+        let es512 = NonEmptyString::new("ES512", "algorithm identifier")
+            .expect("ES512 is a valid non-empty algorithm identifier");
 
         // vc+sd-jwt format with ES256, ES384, ES512
-        let sd_jwt_algs = match (&es256, &es384, &es512) {
-            (Ok(a), Ok(b), Ok(c)) => Some(vec![a.clone(), b.clone(), c.clone()]),
-            _ => None,
-        };
+        let sd_jwt_algs = Some(vec![es256.clone(), es384.clone(), es512.clone()]);
         vp_formats_supported.insert(
             CredentialFormatIdentifier::DcSdJwt,
             VpFormatCapability::DcSdJwt(SdJwtVcFormatCapability {
@@ -109,10 +106,7 @@ impl Default for WalletPresentationMetadata {
         );
 
         // jwt_vc_json format with ES256, ES384, ES512
-        let jwt_vc_algs = match (es256, es384, es512) {
-            (Ok(a), Ok(b), Ok(c)) => Some(vec![a, b, c]),
-            _ => None,
-        };
+        let jwt_vc_algs = Some(vec![es256, es384, es512]);
         vp_formats_supported.insert(
             CredentialFormatIdentifier::JwtVcJson,
             VpFormatCapability::JwtVcJson(JwtVcJsonFormatCapability {
@@ -150,9 +144,19 @@ impl WalletPresentationMetadata {
         // Validate that vp_formats_supported is not empty
         if self.vp_formats_supported.is_empty() {
             return Err(Error::message(
-                ErrorKind::InvalidAuthorizationServerMetadata,
+                ErrorKind::InvalidWalletMetadata,
                 "vp_formats_supported must contain at least one entry",
             ));
+        }
+
+        // Validate individual format capabilities
+        for capability in self.vp_formats_supported.values() {
+            capability.validate().map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidWalletMetadata,
+                    format!("vp_formats_supported validation failed: {e}"),
+                )
+            })?;
         }
 
         Ok(())
@@ -162,12 +166,8 @@ impl WalletPresentationMetadata {
 #[skip_serializing_none]
 #[derive(Debug, Deserialize)]
 struct WalletPresentationMetadataUnchecked {
-    #[serde(
-        rename = "vp_formats_supported",
-        deserialize_with = "deserialize_vp_formats_supported"
-    )]
+    #[serde(deserialize_with = "deserialize_vp_formats_supported")]
     vp_formats_supported: VpFormatsSupported,
-    #[serde(rename = "client_id_prefixes_supported")]
     client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
     #[serde(flatten)]
     extra_fields: HashMap<String, serde_json::Value>,
@@ -387,6 +387,7 @@ mod tests {
         };
         let err = metadata.validate().unwrap_err();
         assert!(err.to_string().contains("vp_formats_supported"));
+        assert_eq!(err.kind(), ErrorKind::InvalidWalletMetadata);
     }
 
     #[test]

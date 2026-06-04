@@ -222,7 +222,8 @@ pub enum VpFormatCapability {
 }
 
 impl VpFormatCapability {
-    fn validate(&self) -> Result<(), Error> {
+    /// Validates the format capability.
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         match self {
             Self::JwtVcJson(capability) => capability.validate(),
             Self::LdpVc(capability) => capability.validate(),
@@ -258,7 +259,7 @@ pub struct JwtVcJsonFormatCapability {
 }
 
 impl JwtVcJsonFormatCapability {
-    fn validate(&self) -> Result<(), Error> {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         validate_optional_identifier_array(&self.alg_values, "jwt_vc_json.alg_values")
     }
 }
@@ -276,7 +277,7 @@ pub struct LdpVcFormatCapability {
 }
 
 impl LdpVcFormatCapability {
-    fn validate(&self) -> Result<(), Error> {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         validate_optional_identifier_array(&self.proof_type_values, "ldp_vc.proof_type_values")?;
         validate_optional_identifier_array(&self.cryptosuite_values, "ldp_vc.cryptosuite_values")
     }
@@ -295,7 +296,7 @@ pub struct MsoMdocFormatCapability {
 }
 
 impl MsoMdocFormatCapability {
-    fn validate(&self) -> Result<(), Error> {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         validate_optional_cose_array(
             &self.issuerauth_alg_values,
             "mso_mdoc.issuerauth_alg_values",
@@ -322,7 +323,7 @@ pub struct SdJwtVcFormatCapability {
 }
 
 impl SdJwtVcFormatCapability {
-    fn validate(&self) -> Result<(), Error> {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         validate_optional_identifier_array(&self.sd_jwt_alg_values, "dc+sd-jwt.sd-jwt_alg_values")?;
         validate_optional_identifier_array(&self.kb_jwt_alg_values, "dc+sd-jwt.kb-jwt_alg_values")
     }
