@@ -1,13 +1,14 @@
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::Value;
 use cloud_wallet_crypto::digest::HashAlg;
+use cloud_wallet_crypto::jwk::{B64, Curve, Ec, Jwk, Key, Okp, OkpCurve, Parameters};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::DigestAlgorithm;
 use super::error::MdocError;
 use super::parser::ParsedMdoc;
-use super::verifier::{StaticTrustStore, verify_digests, verify_issuer_signature};
+use super::verifier::{StaticTrustStore, verify_device_key_binding, verify_digests, verify_issuer_signature};
 
 // CBOR construction helpers
 
@@ -3107,5 +3108,320 @@ fn tbs_data_preserves_original_protected_header_bytes() {
     assert!(
         result.is_ok(),
         "signature over original protected-header bytes must verify: {result:?}"
+    );
+}
+
+// ── device-key binding tests ─────────────────────────────────────────────────
+
+/// Builds a fresh `ParsedMdoc` and overwrites its `device_key` with `cose_key`,
+/// keeping the rest of the document valid and within its validity window.
+fn parsed_with_device_key(cose_key: Value) -> ParsedMdoc {
+    let mut parsed =
+        ParsedMdoc::parse(&build_issuer_signed("2020-01-01T00:00:00Z", "9998-01-01T00:00:00Z"))
+            .expect("base mdoc must parse");
+    parsed.device_key = cbor(&cose_key);
+    parsed
+}
+
+#[test]
+fn verify_device_key_binding_passes_matching_p256_key() {
+    // Arrange
+    let x_bytes = vec![1u8; 32];
+    let y_bytes = vec![2u8; 32];
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(x_bytes.clone())),
+        (Value::Integer((-3i64).into()), Value::Bytes(y_bytes.clone())),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(x_bytes),
+            y: B64::new(y_bytes),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let result = verify_device_key_binding(&parsed, &proof_jwk);
+
+    // Assert
+    assert!(result.is_ok(), "matching P-256 keys must pass, got: {result:?}");
+}
+
+#[test]
+fn verify_device_key_binding_rejects_mismatched_x_coordinate() {
+    // Arrange
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![1u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(vec![9u8; 32]), // different x
+            y: B64::new(vec![2u8; 32]),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("mismatched x must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DeviceKeyMismatch),
+        "expected DeviceKeyMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_mismatched_y_coordinate() {
+    // Arrange
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![1u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(vec![1u8; 32]),
+            y: B64::new(vec![9u8; 32]), // different y
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("mismatched y must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DeviceKeyMismatch),
+        "expected DeviceKeyMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_different_key_entirely() {
+    // Arrange
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![1u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(vec![3u8; 32]),
+            y: B64::new(vec![4u8; 32]),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("completely different key must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DeviceKeyMismatch),
+        "expected DeviceKeyMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_curve_mismatch() {
+    // Arrange: COSE_Key uses P-384 (crv=2, 48-byte coordinates).
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(2i64.into())), // P-384
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![1u8; 48])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 48])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    // JWK claims P-256 — curve mismatch.
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(vec![1u8; 32]),
+            y: B64::new(vec![2u8; 32]),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("curve mismatch must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::CurveMismatch { .. }),
+        "expected CurveMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_malformed_cose_key() {
+    // Arrange: `device_key` contains invalid CBOR bytes.
+    let mut parsed =
+        ParsedMdoc::parse(&build_issuer_signed("2020-01-01T00:00:00Z", "9998-01-01T00:00:00Z"))
+            .expect("base mdoc must parse");
+    parsed.device_key = vec![0xffu8]; // 0xff is not valid initial CBOR
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(vec![0u8; 32]),
+            y: B64::new(vec![0u8; 32]),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("malformed COSE_Key bytes must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::MalformedDeviceKey { .. }),
+        "expected MalformedDeviceKey, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_malformed_jwk() {
+    // Arrange: COSE_Key is EC2/P-256 but the proof JWK is an OKP X25519 key — incompatible.
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![1u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Okp(Okp {
+            crv: OkpCurve::X25519,
+            x: B64::new(vec![1u8; 32]),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("EC2 COSE_Key against non-EC proof JWK must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedDeviceKeyType),
+        "expected UnsupportedDeviceKeyType, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_unknown_curve() {
+    // Arrange: COSE_Key has kty=2 (EC2) but crv=99 — an unrecognised curve integer.
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(99i64.into())), // unknown crv
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![1u8; 32])),
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Ec(Ec {
+            crv: Curve::P256,
+            x: B64::new(vec![1u8; 32]),
+            y: B64::new(vec![2u8; 32]),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("unknown COSE_Key curve must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedDeviceKeyType),
+        "expected UnsupportedDeviceKeyType, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_passes_matching_ed25519_key() {
+    // Arrange: COSE_Key kty=1 (OKP), crv=6 (Ed25519), x=[5u8;32].
+    let x_bytes = vec![5u8; 32];
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(1i64.into())), // kty=OKP
+        (Value::Integer((-1i64).into()), Value::Integer(6i64.into())), // crv=Ed25519
+        (Value::Integer((-2i64).into()), Value::Bytes(x_bytes.clone())),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Okp(Okp {
+            crv: OkpCurve::Ed25519,
+            x: B64::new(x_bytes),
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let result = verify_device_key_binding(&parsed, &proof_jwk);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "matching Ed25519 keys must pass, got: {result:?}"
+    );
+}
+
+#[test]
+fn verify_device_key_binding_rejects_mismatched_ed25519_x() {
+    // Arrange: COSE x=[5u8;32] but JWK x=[9u8;32].
+    let cose_key = Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(1i64.into())),
+        (Value::Integer((-1i64).into()), Value::Integer(6i64.into())),
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![5u8; 32])),
+    ]);
+    let parsed = parsed_with_device_key(cose_key);
+    let proof_jwk = Jwk {
+        key: Key::Okp(Okp {
+            crv: OkpCurve::Ed25519,
+            x: B64::new(vec![9u8; 32]), // different x
+            d: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    // Act
+    let err = verify_device_key_binding(&parsed, &proof_jwk)
+        .expect_err("mismatched Ed25519 x must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DeviceKeyMismatch),
+        "expected DeviceKeyMismatch, got: {err:?}"
+    );
+}
     );
 }
