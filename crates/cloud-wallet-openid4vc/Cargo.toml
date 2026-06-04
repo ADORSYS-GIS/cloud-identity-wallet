@@ -26,14 +26,16 @@ serde_urlencoded = "0.7"
 serde_with.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+x509-parser = { version = "0.18", features = ["verify"] }
 time = { workspace = true, features = ["std", "parsing"] }
 url = { workspace = true, features = ["serde"] }
 validator = { version = "0.20", features = ["derive"] }
 webpki-roots = "1"
 webpki.workspace = true
-x509-parser = "0.18"
+
 
 [dev-dependencies]
 rcgen.workspace = true
+rustls-pki-types.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
