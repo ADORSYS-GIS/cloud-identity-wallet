@@ -198,8 +198,8 @@ impl<'de> Deserialize<'de> for WalletPresentationMetadata {
     where
         D: Deserializer<'de>,
     {
-        let metadata =
-            WalletPresentationMetadataUnchecked::deserialize(deserializer)?.into_metadata();
+        let metadata: WalletPresentationMetadata =
+            WalletPresentationMetadataUnchecked::deserialize(deserializer)?.into();
         metadata.validate().map_err(DeError::custom)?;
         Ok(metadata)
     }
@@ -215,12 +215,12 @@ struct WalletPresentationMetadataUnchecked {
     client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
 }
 
-impl WalletPresentationMetadataUnchecked {
-    fn into_metadata(self) -> WalletPresentationMetadata {
+impl From<WalletPresentationMetadataUnchecked> for WalletPresentationMetadata {
+    fn from(value: WalletPresentationMetadataUnchecked) -> Self {
         WalletPresentationMetadata {
-            authorization_server_metadata: self.authorization_server_metadata,
-            vp_formats_supported: self.vp_formats_supported,
-            client_id_prefixes_supported: self.client_id_prefixes_supported,
+            authorization_server_metadata: value.authorization_server_metadata,
+            vp_formats_supported: value.vp_formats_supported,
+            client_id_prefixes_supported: value.client_id_prefixes_supported,
         }
     }
 }
