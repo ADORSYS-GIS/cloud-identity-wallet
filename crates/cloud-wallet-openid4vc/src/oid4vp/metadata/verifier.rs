@@ -15,17 +15,7 @@ use crate::impl_string_enum;
 use crate::oauth::client_metadata::ClientMetadata;
 use crate::utils::validate_non_empty_array_with_kind;
 
-// Import shared components from parent module
 use super::{VpFormatsSupported, deserialize_vp_formats_supported};
-
-// Re-export shared types for convenience
-pub use super::{
-    CoseAlgorithmIdentifier, CredentialFormatIdentifier, CryptosuiteIdentifier,
-    ExtensionFormatCapability, JoseAlgorithmIdentifier, JwtVcJsonFormatCapability,
-    LdpVcFormatCapability, MsoMdocFormatCapability, NonEmptyString, ProofTypeIdentifier,
-    SdJwtVcFormatCapability, VpFormatCapability,
-};
-
 /// Verifier Metadata, also known as OAuth Client Metadata in OpenID4VP.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -273,6 +263,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T, Error> {
 mod tests {
     use super::*;
     use crate::oauth::client_metadata::{GrantType, ResponseType, TokenEndpointAuthMethod};
+    use crate::oid4vp::metadata::{CredentialFormatIdentifier, VpFormatCapability};
     use serde_json::{Value, json};
 
     fn valid_jwks() -> Value {
