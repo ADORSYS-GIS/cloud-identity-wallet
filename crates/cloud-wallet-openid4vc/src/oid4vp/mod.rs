@@ -10,4 +10,3 @@ pub mod error;
 pub mod metadata;
 
 pub use error::*;
-pub use metadata::*;

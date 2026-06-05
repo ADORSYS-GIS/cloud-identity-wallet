@@ -237,14 +237,6 @@ impl NonEmptyString {
         Ok(Self(value))
     }
 
-    /// Creates a NonEmptyString from a static string without Result wrapping.
-    pub fn from_static(value: &'static str) -> Self {
-        if value.is_empty() {
-            panic!("NonEmptyString cannot be created from empty string");
-        }
-        Self(value.into())
-    }
-
     /// Returns the string slice.
     pub fn as_str(&self) -> &str {
         &self.0

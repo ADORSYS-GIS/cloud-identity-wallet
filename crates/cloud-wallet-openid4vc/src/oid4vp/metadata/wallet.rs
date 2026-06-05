@@ -87,10 +87,21 @@ impl WalletPresentationMetadata {
 
         let mut vp_formats_supported = HashMap::new();
 
-        // Compile-time safe constants for algorithm identifiers
-        let es256 = NonEmptyString::from_static("ES256");
-        let es384 = NonEmptyString::from_static("ES384");
-        let es512 = NonEmptyString::from_static("ES512");
+        // Helper to safely create NonEmptyString from hardcoded constants
+        fn make_alg(value: &'static str) -> Option<NonEmptyString> {
+            NonEmptyString::new(value, "algorithm identifier").ok()
+        }
+
+        // Algorithm identifiers - these are hardcoded and always valid
+        let Some(es256) = make_alg("ES256") else {
+            return vp_formats_supported;
+        };
+        let Some(es384) = make_alg("ES384") else {
+            return vp_formats_supported;
+        };
+        let Some(es512) = make_alg("ES512") else {
+            return vp_formats_supported;
+        };
 
         // vc+sd-jwt format with ES256, ES384, ES512
         let sd_jwt_algs = Some(vec![es256.clone(), es384.clone(), es512.clone()]);
