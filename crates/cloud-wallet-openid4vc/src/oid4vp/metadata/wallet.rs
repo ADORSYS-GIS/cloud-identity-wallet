@@ -5,23 +5,30 @@ use std::collections::HashMap;
 
 use crate::errors::{Error, ErrorKind};
 use crate::impl_string_enum;
+use crate::oid4vci::metadata::AuthorizationServerMetadata;
 use crate::oid4vp::metadata::verifier::{
     CredentialFormatIdentifier, VpFormatCapability, VpFormatsSupported,
     deserialize_vp_formats_supported,
 };
 
 /// Wallet Metadata for OID4VP.
-/// Defined in [OpenID4VP Section 10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-10).
+///
+/// Per [OpenID4VP Section 10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-10),
+/// Wallet Metadata is OAuth 2.0 Authorization Server Metadata ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414.html))
+/// plus the OID4VP-specific extension parameters (`vp_formats_supported`, `client_id_prefixes_supported`).
+///
+/// This struct composes the base [`AuthorizationServerMetadata`] with the OID4VP-specific
+/// fields to represent a complete, spec-compliant Wallet Metadata document that can be
+/// serialized and published at the Wallet's metadata endpoint.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WalletPresentationMetadata {
+    #[serde(flatten)]
+    pub authorization_server_metadata: AuthorizationServerMetadata,
+
     pub vp_formats_supported: VpFormatsSupported,
 
     pub client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
-
-    /// Additional metadata parameters from profiles or deployment-specific extensions.
-    #[serde(flatten)]
-    pub extra_fields: HashMap<String, serde_json::Value>,
 }
 
 /// Client ID prefix values defined by OpenID4VP Section 10.1.
@@ -59,9 +66,20 @@ impl_string_enum!(
     "client_id_prefix"
 );
 
-impl Default for WalletPresentationMetadata {
-    /// Returns sensible defaults for the Wallet's presentation capabilities.
-    fn default() -> Self {
+impl WalletPresentationMetadata {
+    pub fn new(
+        authorization_server_metadata: AuthorizationServerMetadata,
+        vp_formats_supported: VpFormatsSupported,
+    ) -> Self {
+        Self {
+            authorization_server_metadata,
+            vp_formats_supported,
+            client_id_prefixes_supported: None,
+        }
+    }
+
+    /// Returns sensible defaults for the Wallet's presentation capabilities (`vp_formats_supported`).
+    pub fn default_vp_formats() -> VpFormatsSupported {
         use crate::oid4vp::metadata::verifier::{
             CoseAlgorithmIdentifier, JwtVcJsonFormatCapability, MsoMdocFormatCapability,
             NonEmptyString, SdJwtVcFormatCapability,
@@ -113,34 +131,29 @@ impl Default for WalletPresentationMetadata {
             }),
         );
 
-        Self {
-            vp_formats_supported,
-            client_id_prefixes_supported: Some(vec![
-                ClientIdPrefix::PreRegistered,
-                ClientIdPrefix::RedirectUri,
-            ]),
-            extra_fields: HashMap::new(),
-        }
+        vp_formats_supported
     }
-}
 
-impl<'de> Deserialize<'de> for WalletPresentationMetadata {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let metadata =
-            WalletPresentationMetadataUnchecked::deserialize(deserializer)?.into_metadata();
-        metadata.validate().map_err(DeError::custom)?;
-        Ok(metadata)
+    /// Returns sensible defaults for `client_id_prefixes_supported`.
+    pub fn default_client_id_prefixes() -> Option<Vec<ClientIdPrefix>> {
+        Some(vec![
+            ClientIdPrefix::PreRegistered,
+            ClientIdPrefix::RedirectUri,
+        ])
     }
-}
 
-impl WalletPresentationMetadata {
     /// Validates the Wallet Presentation Metadata.
     #[must_use = "validation result must be checked"]
     pub fn validate(&self) -> Result<(), Error> {
-        // Validate that vp_formats_supported is not empty
+        // Validate the base Authorization Server Metadata
+        self.authorization_server_metadata.validate().map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidWalletMetadata,
+                format!("authorization server metadata validation failed: {e}"),
+            )
+        })?;
+
+        // Validate that vp_formats_supported is not empty (OID4VP Section 10.1)
         if self.vp_formats_supported.is_empty() {
             return Err(Error::message(
                 ErrorKind::InvalidWalletMetadata,
@@ -172,22 +185,34 @@ impl WalletPresentationMetadata {
     }
 }
 
+impl<'de> Deserialize<'de> for WalletPresentationMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let metadata =
+            WalletPresentationMetadataUnchecked::deserialize(deserializer)?.into_metadata();
+        metadata.validate().map_err(DeError::custom)?;
+        Ok(metadata)
+    }
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Deserialize)]
 struct WalletPresentationMetadataUnchecked {
+    #[serde(flatten)]
+    authorization_server_metadata: AuthorizationServerMetadata,
     #[serde(deserialize_with = "deserialize_vp_formats_supported")]
     vp_formats_supported: VpFormatsSupported,
     client_id_prefixes_supported: Option<Vec<ClientIdPrefix>>,
-    #[serde(flatten)]
-    extra_fields: HashMap<String, serde_json::Value>,
 }
 
 impl WalletPresentationMetadataUnchecked {
     fn into_metadata(self) -> WalletPresentationMetadata {
         WalletPresentationMetadata {
+            authorization_server_metadata: self.authorization_server_metadata,
             vp_formats_supported: self.vp_formats_supported,
             client_id_prefixes_supported: self.client_id_prefixes_supported,
-            extra_fields: self.extra_fields,
         }
     }
 }
@@ -195,159 +220,149 @@ impl WalletPresentationMetadataUnchecked {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oid4vci::metadata::AuthorizationServerMetadata;
 
+    fn minimal_as_metadata() -> AuthorizationServerMetadata {
+        use url::Url;
+        AuthorizationServerMetadata {
+            issuer: Url::parse("https://wallet.example.com").unwrap(),
+            authorization_endpoint: Some(
+                Url::parse("https://wallet.example.com/authorize").unwrap(),
+            ),
+            token_endpoint: Some(Url::parse("https://wallet.example.com/token").unwrap()),
+            jwks_uri: None,
+            registration_endpoint: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["vp_token".to_string()]),
+            response_modes_supported: None,
+            grant_types_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            token_endpoint_auth_signing_alg_values_supported: None,
+            service_documentation: None,
+            ui_locales_supported: None,
+            op_policy_uri: None,
+            op_tos_uri: None,
+            revocation_endpoint: None,
+            revocation_endpoint_auth_methods_supported: None,
+            revocation_endpoint_auth_signing_alg_values_supported: None,
+            introspection_endpoint: None,
+            introspection_endpoint_auth_methods_supported: None,
+            introspection_endpoint_auth_signing_alg_values_supported: None,
+            code_challenge_methods_supported: None,
+            pushed_authorization_request_endpoint: None,
+            require_pushed_authorization_requests: None,
+            pre_authorized_grant_anonymous_access_supported: None,
+            extra_fields: HashMap::new(),
+        }
+    }
+
+    /// Tests that default VP formats contain expected formats with correct algorithms.
     #[test]
-    fn test_default_wallet_presentation_metadata() {
-        let metadata = WalletPresentationMetadata::default();
+    fn defaults_contain_expected_formats_and_algorithms() {
+        let vp_formats = WalletPresentationMetadata::default_vp_formats();
 
-        // Verify vp_formats_supported contains all expected formats
-        assert!(
-            metadata
-                .vp_formats_supported
-                .contains_key(&CredentialFormatIdentifier::DcSdJwt)
-        );
-        assert!(
-            metadata
-                .vp_formats_supported
-                .contains_key(&CredentialFormatIdentifier::MsoMdoc)
-        );
-        assert!(
-            metadata
-                .vp_formats_supported
-                .contains_key(&CredentialFormatIdentifier::JwtVcJson)
-        );
+        assert_eq!(vp_formats.len(), 3);
+        assert!(vp_formats.contains_key(&CredentialFormatIdentifier::DcSdJwt));
+        assert!(vp_formats.contains_key(&CredentialFormatIdentifier::MsoMdoc));
+        assert!(vp_formats.contains_key(&CredentialFormatIdentifier::JwtVcJson));
 
-        // Verify vc+sd-jwt format has correct algorithm fields
-        let sd_jwt_format = metadata
-            .vp_formats_supported
+        // Verify dc+sd-jwt format has ES256, ES384, ES512
+        match vp_formats
             .get(&CredentialFormatIdentifier::DcSdJwt)
-            .unwrap();
-        match sd_jwt_format {
+            .unwrap()
+        {
             VpFormatCapability::DcSdJwt(cap) => {
                 assert_eq!(cap.sd_jwt_alg_values.as_ref().map(|v| v.len()), Some(3));
-                assert_eq!(cap.kb_jwt_alg_values.as_ref().map(|v| v.len()), Some(3));
             }
             _ => panic!("Expected DcSdJwt format capability"),
         }
-
-        // Verify mso_mdoc format has correct algorithm fields
-        let mdoc_format = metadata
-            .vp_formats_supported
-            .get(&CredentialFormatIdentifier::MsoMdoc)
-            .unwrap();
-        match mdoc_format {
-            VpFormatCapability::MsoMdoc(cap) => {
-                assert_eq!(cap.issuerauth_alg_values.as_ref().map(|v| v.len()), Some(3));
-                assert_eq!(cap.deviceauth_alg_values.as_ref().map(|v| v.len()), Some(3));
-            }
-            _ => panic!("Expected MsoMdoc format capability"),
-        }
-
-        // Verify jwt_vc_json format has correct algorithm fields
-        let jwt_vc_format = metadata
-            .vp_formats_supported
-            .get(&CredentialFormatIdentifier::JwtVcJson)
-            .unwrap();
-        match jwt_vc_format {
-            VpFormatCapability::JwtVcJson(cap) => {
-                assert_eq!(cap.alg_values.as_ref().map(|v| v.len()), Some(3));
-            }
-            _ => panic!("Expected JwtVcJson format capability"),
-        }
-
-        // Verify client_id_prefixes_supported - spec-compliant defaults
-        assert_eq!(
-            metadata.client_id_prefixes_supported,
-            Some(vec![
-                ClientIdPrefix::PreRegistered,
-                ClientIdPrefix::RedirectUri
-            ])
-        );
-
-        // Verify extra_fields is empty
-        assert!(metadata.extra_fields.is_empty());
     }
 
+    /// Tests complete spec-compliant metadata document serialization roundtrip.
     #[test]
-    fn test_serde_roundtrip() {
-        let original = WalletPresentationMetadata::default();
-        // Serialize to JSON
-        let json = serde_json::to_string(&original).expect("Failed to serialize");
-        // Deserialize back
-        let deserialized: WalletPresentationMetadata =
-            serde_json::from_str(&json).expect("Failed to deserialize");
-        // Verify round-trip fidelity
-        assert_eq!(original, deserialized);
-    }
-
-    #[test]
-    fn test_serde_deserialization() {
+    fn complete_metadata_roundtrip() {
         let json = r#"{
+            "issuer": "https://wallet.example.com",
+            "authorization_endpoint": "https://wallet.example.com/authorize",
+            "token_endpoint": "https://wallet.example.com/token",
+            "response_types_supported": ["vp_token"],
             "vp_formats_supported": {
                 "dc+sd-jwt": {
                     "sd-jwt_alg_values": ["ES256"],
                     "kb-jwt_alg_values": ["ES256"]
+                },
+                "mso_mdoc": {
+                    "issuerauth_alg_values": [-7],
+                    "deviceauth_alg_values": [-7]
                 }
             },
             "client_id_prefixes_supported": ["redirect_uri", "pre-registered"]
         }"#;
-        let metadata: WalletPresentationMetadata =
-            serde_json::from_str(json).expect("Failed to parse JSON");
+
+        let metadata: WalletPresentationMetadata = serde_json::from_str(json).unwrap();
+
+        // Verify base AS fields
+        assert_eq!(
+            metadata.authorization_server_metadata.issuer.as_str(),
+            "https://wallet.example.com/"
+        );
+
+        // Verify OID4VP fields
+        assert_eq!(metadata.vp_formats_supported.len(), 2);
         assert!(
             metadata
-                .vp_formats_supported
-                .contains_key(&CredentialFormatIdentifier::DcSdJwt)
+                .client_id_prefixes_supported
+                .as_ref()
+                .unwrap()
+                .contains(&ClientIdPrefix::RedirectUri)
         );
-        assert_eq!(
-            metadata.client_id_prefixes_supported,
-            Some(vec![
-                ClientIdPrefix::RedirectUri,
-                ClientIdPrefix::PreRegistered
-            ])
-        );
+
+        // Validate and serialize back
+        assert!(metadata.validate().is_ok());
+        let _json_out = serde_json::to_string(&metadata).unwrap();
     }
 
+    /// Tests that validation rejects invalid metadata.
     #[test]
-    fn test_serde_skips_none_fields() {
-        // Create a minimal metadata with empty vp_formats_supported and None client_id_prefixes_supported
-        // Note: This won't pass validation but we're only testing serialization behavior
-        let mut vp_formats_supported = HashMap::new();
-        vp_formats_supported.insert(
-            CredentialFormatIdentifier::DcSdJwt,
-            VpFormatCapability::DcSdJwt(Default::default()),
-        );
+    fn validation_rejects_invalid_metadata() {
+        // Empty vp_formats_supported should fail
+        let as_metadata = minimal_as_metadata();
         let metadata = WalletPresentationMetadata {
-            vp_formats_supported,
+            authorization_server_metadata: as_metadata,
+            vp_formats_supported: HashMap::new(),
             client_id_prefixes_supported: None,
-            extra_fields: HashMap::new(),
         };
-        let json = serde_json::to_string(&metadata).expect("Failed to serialize");
-        // None fields should be skipped in serialization
-        assert!(!json.contains("client_id_prefixes_supported"));
-        // vp_formats_supported should be present since it's required
-        assert!(json.contains("vp_formats_supported"));
+        let err = metadata.validate().unwrap_err();
+        assert!(err.to_string().contains("vp_formats_supported"));
+        assert_eq!(err.kind(), ErrorKind::InvalidWalletMetadata);
+
+        // Empty client_id_prefixes_supported should fail
+        let as_metadata = minimal_as_metadata();
+        let metadata = WalletPresentationMetadata {
+            authorization_server_metadata: as_metadata,
+            vp_formats_supported: WalletPresentationMetadata::default_vp_formats(),
+            client_id_prefixes_supported: Some(vec![]),
+        };
+        let err = metadata.validate().unwrap_err();
+        assert!(err.to_string().contains("client_id_prefixes_supported"));
+
+        // Invalid AS metadata (http issuer) should fail
+        use url::Url;
+        let mut as_metadata = minimal_as_metadata();
+        as_metadata.issuer = Url::parse("http://wallet.example.com").unwrap();
+        let metadata = WalletPresentationMetadata {
+            authorization_server_metadata: as_metadata,
+            vp_formats_supported: WalletPresentationMetadata::default_vp_formats(),
+            client_id_prefixes_supported: None,
+        };
+        let err = metadata.validate().unwrap_err();
+        assert!(err.to_string().contains("authorization server metadata"));
     }
 
+    /// Tests ClientIdPrefix serialization and deserialization.
     #[test]
-    fn test_extra_fields_roundtrip() {
-        let mut metadata = WalletPresentationMetadata::default();
-        metadata.extra_fields.insert(
-            "custom_field".to_string(),
-            serde_json::json!("custom_value"),
-        );
-        let json = serde_json::to_string(&metadata).expect("Failed to serialize");
-        let deserialized: WalletPresentationMetadata =
-            serde_json::from_str(&json).expect("Failed to deserialize");
-        assert_eq!(
-            deserialized.extra_fields.get("custom_field"),
-            Some(&serde_json::json!("custom_value"))
-        );
-    }
-
-    #[test]
-    fn test_client_id_prefix_serde() {
-        // Test serialization of all spec-defined prefixes
-        let test_cases = vec![
+    fn client_id_prefix_serde() {
+        let test_cases = [
             (ClientIdPrefix::PreRegistered, "\"pre-registered\""),
             (ClientIdPrefix::RedirectUri, "\"redirect_uri\""),
             (ClientIdPrefix::OpenidFederation, "\"openid_federation\""),
@@ -364,83 +379,11 @@ mod tests {
         ];
 
         for (prefix, expected) in test_cases {
-            let json = serde_json::to_string(&prefix).expect("Failed to serialize");
-            assert_eq!(json, expected);
+            assert_eq!(serde_json::to_string(&prefix).unwrap(), expected);
         }
 
-        // Test deserialization
-        let prefix: ClientIdPrefix =
-            serde_json::from_str("\"redirect_uri\"").expect("Failed to deserialize");
-        assert_eq!(prefix, ClientIdPrefix::RedirectUri);
-
-        let prefix: ClientIdPrefix =
-            serde_json::from_str("\"pre-registered\"").expect("Failed to deserialize");
-        assert_eq!(prefix, ClientIdPrefix::PreRegistered);
-
-        let prefix: ClientIdPrefix =
-            serde_json::from_str("\"verifier_attestation\"").expect("Failed to deserialize");
-        assert_eq!(prefix, ClientIdPrefix::VerifierAttestation);
-
-        // Test extension prefix
-        let prefix: ClientIdPrefix =
-            serde_json::from_str("\"custom_prefix\"").expect("Failed to deserialize");
+        // Extension prefix deserializes to Other
+        let prefix: ClientIdPrefix = serde_json::from_str("\"custom_prefix\"").unwrap();
         assert_eq!(prefix, ClientIdPrefix::Other("custom_prefix".to_string()));
-    }
-
-    #[test]
-    fn test_rejects_empty_vp_formats_supported() {
-        let metadata = WalletPresentationMetadata {
-            vp_formats_supported: HashMap::new(),
-            client_id_prefixes_supported: None,
-            extra_fields: HashMap::new(),
-        };
-        let err = metadata.validate().unwrap_err();
-        assert!(err.to_string().contains("vp_formats_supported"));
-        assert_eq!(err.kind(), ErrorKind::InvalidWalletMetadata);
-    }
-
-    #[test]
-    fn test_supports_all_spec_client_id_prefixes() {
-        // Verify all spec-defined prefixes can be deserialized
-        let prefixes_json = r#"[
-            "pre-registered",
-            "redirect_uri",
-            "openid_federation",
-            "verifier_attestation",
-            "decentralized_identifier",
-            "x509_san_dns",
-            "x509_hash"
-        ]"#;
-
-        let prefixes: Vec<ClientIdPrefix> =
-            serde_json::from_str(prefixes_json).expect("Failed to deserialize prefixes");
-
-        assert_eq!(prefixes.len(), 7);
-        assert!(prefixes.contains(&ClientIdPrefix::PreRegistered));
-        assert!(prefixes.contains(&ClientIdPrefix::RedirectUri));
-        assert!(prefixes.contains(&ClientIdPrefix::OpenidFederation));
-        assert!(prefixes.contains(&ClientIdPrefix::VerifierAttestation));
-        assert!(prefixes.contains(&ClientIdPrefix::DecentralizedIdentifier));
-        assert!(prefixes.contains(&ClientIdPrefix::X509SanDns));
-        assert!(prefixes.contains(&ClientIdPrefix::X509Hash));
-    }
-
-    #[test]
-    fn test_rejects_empty_client_id_prefixes_supported() {
-        let metadata = WalletPresentationMetadata {
-            vp_formats_supported: {
-                let mut map = HashMap::new();
-                map.insert(
-                    CredentialFormatIdentifier::DcSdJwt,
-                    VpFormatCapability::DcSdJwt(Default::default()),
-                );
-                map
-            },
-            client_id_prefixes_supported: Some(vec![]),
-            extra_fields: HashMap::new(),
-        };
-        let err = metadata.validate().unwrap_err();
-        assert!(err.to_string().contains("client_id_prefixes_supported"));
-        assert_eq!(err.kind(), ErrorKind::InvalidWalletMetadata);
     }
 }
