@@ -11,25 +11,33 @@
 //! - [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) — CBOR
 //! - [RFC 9052](https://www.rfc-editor.org/rfc/rfc9052) — COSE_Sign1
 
+mod cert_chain;
 pub mod error;
 mod parser;
 #[cfg(test)]
 mod tests;
+pub mod verifier;
 
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
+pub use verifier::{
+    IacaTrustStore, IssuerInfo, StaticTrustStore, verify_digests, verify_issuer_signature,
+};
 
-/// Hash algorithm declared in the MSO `digestAlgorithm` field.
+use cloud_wallet_crypto::digest::HashAlg;
+
+/// The hash algorithm used in the MSO `digestAlgorithm` field.
 ///
 /// ISO 18013-5 §9.1.2.5 defines the permitted set as SHA-256, SHA-384, and SHA-512.
 /// A `DigestAlgorithm` value guarantees the algorithm has already been validated
 /// as one of the three supported variants — the parser rejects anything else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DigestAlgorithm {
+    /// SHA-256 (32-byte output).
     Sha256,
-
+    /// SHA-384 (48-byte output).
     Sha384,
-
+    /// SHA-512 (64-byte output).
     Sha512,
 }
 
@@ -71,5 +79,16 @@ impl DigestAlgorithm {
 impl std::fmt::Display for DigestAlgorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_mso_str())
+    }
+}
+
+// Bridge to the crypto layer. Placed here so that all `DigestAlgorithm`
+impl From<DigestAlgorithm> for HashAlg {
+    fn from(alg: DigestAlgorithm) -> Self {
+        match alg {
+            DigestAlgorithm::Sha256 => HashAlg::Sha256,
+            DigestAlgorithm::Sha384 => HashAlg::Sha384,
+            DigestAlgorithm::Sha512 => HashAlg::Sha512,
+        }
     }
 }
