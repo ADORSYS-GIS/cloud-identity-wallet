@@ -3,14 +3,14 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use cloud_wallet_openid4vc::formats::sd_jwt::SdJwt;
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
-use time::format_description::well_known::Rfc3339;
 use url::Url;
 use uuid::Uuid;
 
 use crate::domain::models::credential::{
-    Credential, CredentialFilter, CredentialListResponse, CredentialRecord,
+    Credential, CredentialFilter, CredentialFormat, CredentialListResponse,
 };
 use crate::server::error::ApiError;
 use crate::server::{AppState, responses::ResponseBody};
@@ -52,8 +52,8 @@ pub async fn get_credential<S: SessionStore>(
         .find_by_id(id, tenant_id)
         .await?;
 
-    let record = to_record(credential)?;
-    Ok(ResponseBody::new(StatusCode::OK, record))
+    let claims = render_claims(&credential)?;
+    Ok(ResponseBody::new(StatusCode::OK, claims))
 }
 
 /// Deletes a credential owned by the authenticated tenant.
@@ -80,9 +80,10 @@ fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError>
         return Ok(CredentialFilter::default());
     };
 
-    let filter: CredentialFilter = (*query_config())
+    let mut filter: CredentialFilter = (*query_config())
         .deserialize_str(query)
         .map_err(|error| invalid_query(format!("invalid credentials filter query: {error}")))?;
+    normalize_credential_type_filter(&mut filter)?;
 
     // Validate issuer is a valid URI if provided
     if let Some(ref issuer) = filter.issuer
@@ -91,6 +92,27 @@ fn deserialize_filter(query: Option<&str>) -> Result<CredentialFilter, ApiError>
         return Err(invalid_query("issuer must be a valid URI"));
     }
     Ok(filter)
+}
+
+fn normalize_credential_type_filter(filter: &mut CredentialFilter) -> Result<(), ApiError> {
+    let Some(types) = filter.credential_types.take() else {
+        return Ok(());
+    };
+
+    let mut normalized = Vec::new();
+    for value in types {
+        for ty in value.split(',').map(str::trim) {
+            if ty.is_empty() {
+                return Err(invalid_query(
+                    "credential_types must not contain empty values",
+                ));
+            }
+            normalized.push(ty.to_owned());
+        }
+    }
+
+    filter.credential_types = Some(normalized);
+    Ok(())
 }
 
 fn query_config() -> &'static Config {
@@ -102,32 +124,15 @@ fn query_config() -> &'static Config {
     })
 }
 
-/// Map a domain `Credential` to its HTTP response shape.
-fn to_record(c: Credential) -> Result<CredentialRecord, ApiError> {
-    let credential_configuration_id = c
-        .credential_types
-        .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::internal("credential has no credential_types"))?;
-    Ok(CredentialRecord {
-        id: c.id,
-        credential_configuration_id,
-        format: c.format.as_str().to_string(),
-        issuer: c.issuer,
-        status: c.status.as_str().to_string(),
-        issued_at: format_utc(c.issued_at).map_err(ApiError::internal)?,
-        expires_at: c
-            .valid_until
-            .map(format_utc)
-            .transpose()
-            .map_err(ApiError::internal)?,
-        claims: serde_json::Value::Null,
-    })
-}
-
-/// Format a `UtcDateTime` as an RFC 3339 string.
-fn format_utc(dt: time::UtcDateTime) -> Result<String, time::error::Format> {
-    dt.format(&Rfc3339)
+fn render_claims(c: &Credential) -> Result<serde_json::Value, ApiError> {
+    match c.format {
+        CredentialFormat::SdJwtVc => SdJwt::parse(&c.raw_credential)
+            .and_then(|sd_jwt| sd_jwt.to_rendered_claims())
+            .map_err(|error| {
+                ApiError::internal(format!("failed to parse stored SD-JWT VC claims: {error}"))
+            }),
+        format => Err(unsupported_credential_format(format)),
+    }
 }
 
 fn invalid_query(description: impl Into<String>) -> ApiError {
@@ -138,10 +143,67 @@ fn invalid_query(description: impl Into<String>) -> ApiError {
     }
 }
 
+fn unsupported_credential_format(format: CredentialFormat) -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        error: Cow::Borrowed("unsupported_credential_format"),
+        error_description: Some(format!(
+            "Rendering claims for credential format '{format}' is not supported yet."
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::models::credential::{CredentialFormat, CredentialStatus};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    fn b64(value: serde_json::Value) -> String {
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("test JSON should serialize"))
+    }
+
+    fn compact_jwt(header: serde_json::Value, claims: serde_json::Value) -> String {
+        format!("{}.{}.sig", b64(header), b64(claims))
+    }
+
+    fn raw_sd_jwt() -> String {
+        let jwt = compact_jwt(
+            serde_json::json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+            serde_json::json!({
+                "iss": "https://issuer.example.com",
+                "sub": "did:example:subject",
+                "iat": 1_683_000_000,
+                "exp": 1_883_000_000,
+                "vct": "eu.europa.ec.eudi.pid.1",
+                "given_name": "Ada",
+                "family_name": "Lovelace",
+                "address": {
+                    "locality": "London"
+                }
+            }),
+        );
+        format!("{jwt}~")
+    }
+
+    fn credential(raw_credential: String) -> Credential {
+        Credential {
+            id: Uuid::new_v4(),
+            tenant_id: Uuid::new_v4(),
+            issuer: "https://issuer.example.com".to_string(),
+            subject: Some("did:example:subject".to_string()),
+            credential_types: vec!["eu.europa.ec.eudi.pid.1".to_string()],
+            format: CredentialFormat::SdJwtVc,
+            external_id: None,
+            status: CredentialStatus::Active,
+            issued_at: time::UtcDateTime::now(),
+            valid_until: None,
+            is_revoked: false,
+            status_location: None,
+            status_index: None,
+            raw_credential,
+        }
+    }
 
     #[test]
     fn parses_credential_filters() {
@@ -199,5 +261,50 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.error, "invalid_request");
         assert!(error.error_description.is_some());
+    }
+
+    #[test]
+    fn rejects_empty_credential_type_filter_values() {
+        let error = deserialize_filter(Some("credential_types=EmployeeBadge,,Pid")).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.error, "invalid_request");
+        assert!(
+            error
+                .error_description
+                .as_deref()
+                .is_some_and(|description| description.contains("credential_types"))
+        );
+    }
+
+    #[test]
+    fn renders_sd_jwt_claims() {
+        let claims = render_claims(&credential(raw_sd_jwt())).expect("claims should render");
+
+        assert_eq!(claims["given_name"], "Ada");
+        assert_eq!(claims["family_name"], "Lovelace");
+        assert_eq!(claims["address"]["locality"], "London");
+        assert!(claims.get("iss").is_none());
+        assert!(claims.get("sub").is_none());
+        assert!(claims.get("iat").is_none());
+        assert!(claims.get("exp").is_none());
+        assert!(claims.get("vct").is_none());
+    }
+
+    #[test]
+    fn rejects_claim_rendering_for_unsupported_formats() {
+        let mut credential = credential("{}".to_string());
+        credential.format = CredentialFormat::Mdoc;
+
+        let error = render_claims(&credential).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(error.error, "unsupported_credential_format");
+        assert!(
+            error
+                .error_description
+                .as_deref()
+                .is_some_and(|description| description.contains("mso_mdoc"))
+        );
     }
 }
