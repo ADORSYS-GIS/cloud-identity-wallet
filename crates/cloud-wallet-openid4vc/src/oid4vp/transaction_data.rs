@@ -17,6 +17,9 @@ pub struct TransactionData {
 
     #[serde(flatten)]
     pub additional_params: Value,
+
+    #[serde(skip)]
+    original_encoded: Option<String>,
 }
 
 impl TransactionData {
@@ -32,7 +35,7 @@ impl TransactionData {
             })?;
 
         // Parse JSON
-        let data: TransactionData = serde_json::from_slice(&decoded_bytes).map_err(|e| {
+        let mut data: TransactionData = serde_json::from_slice(&decoded_bytes).map_err(|e| {
             Error::message(
                 ErrorKind::InvalidPresentationRequest,
                 format!("Invalid transaction data JSON: {e}"),
@@ -41,6 +44,9 @@ impl TransactionData {
 
         // Validate required fields
         data.validate()?;
+
+        // Store the original encoded string for hash computation
+        data.original_encoded = Some(base64url_encoded.to_string());
 
         Ok(data)
     }
@@ -87,23 +93,30 @@ impl TransactionData {
     }
 
     /// Computes a hash of the original base64url-encoded transaction data.
-    pub fn compute_hash(base64url_encoded: &str, alg: &str) -> Result<String> {
+    pub fn compute_hash(&self, alg: &str) -> Result<String> {
+        let original_encoded = self.original_encoded.as_ref().ok_or_else(|| {
+            Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                "Cannot compute hash: original encoded data not available",
+            )
+        })?;
+
         let hash_bytes = match alg.to_lowercase().as_str() {
             "sha-256" => {
                 let mut hasher = Sha256::new();
-                hasher.update(base64url_encoded.as_bytes());
+                hasher.update(original_encoded.as_bytes());
                 hasher.finalize().to_vec()
             }
             "sha-384" => {
                 use sha2::Sha384;
                 let mut hasher = Sha384::new();
-                hasher.update(base64url_encoded.as_bytes());
+                hasher.update(original_encoded.as_bytes());
                 hasher.finalize().to_vec()
             }
             "sha-512" => {
                 use sha2::Sha512;
                 let mut hasher = Sha512::new();
-                hasher.update(base64url_encoded.as_bytes());
+                hasher.update(original_encoded.as_bytes());
                 hasher.finalize().to_vec()
             }
             _ => {
@@ -162,14 +175,14 @@ impl TransactionDataSet {
     pub fn hashes_for_credential(&self, credential_query_id: &str) -> Vec<String> {
         let mut hashes = Vec::new();
 
-        for (encoded, data) in &self.entries {
+        for (_encoded, data) in &self.entries {
             if data.applies_to_credential(credential_query_id) {
                 // Get the algorithms to use (default to sha-256 if not specified)
                 let algs = data.hash_algorithms();
 
                 // Compute hash with the first (primary) algorithm
                 // Per the spec, the wallet MUST use one of the specified algorithms
-                if let Ok(hash) = TransactionData::compute_hash(encoded, &algs[0]) {
+                if let Ok(hash) = data.compute_hash(&algs[0]) {
                     hashes.push(hash);
                 }
             }
@@ -350,13 +363,14 @@ mod tests {
         // Test hash computation
         let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
 
-        let hash = TransactionData::compute_hash(encoded, "sha-256").unwrap();
+        let data = TransactionData::decode(encoded).unwrap();
+        let hash = data.compute_hash("sha-256").unwrap();
 
         // Verify it's base64url encoded (no padding)
         assert!(!hash.contains('='));
 
         // Verify consistent output
-        let hash2 = TransactionData::compute_hash(encoded, "sha-256").unwrap();
+        let hash2 = data.compute_hash("sha-256").unwrap();
         assert_eq!(hash, hash2);
     }
 
@@ -364,7 +378,8 @@ mod tests {
     fn test_hash_computation_sha384() {
         let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
 
-        let hash = TransactionData::compute_hash(encoded, "sha-384").unwrap();
+        let data = TransactionData::decode(encoded).unwrap();
+        let hash = data.compute_hash("sha-384").unwrap();
 
         // SHA-384 produces 48 bytes = 64 base64url chars
         assert_eq!(hash.len(), 64);
@@ -374,7 +389,8 @@ mod tests {
     fn test_hash_computation_sha512() {
         let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
 
-        let hash = TransactionData::compute_hash(encoded, "sha-512").unwrap();
+        let data = TransactionData::decode(encoded).unwrap();
+        let hash = data.compute_hash("sha-512").unwrap();
 
         // SHA-512 produces 64 bytes = 86 base64url chars
         assert_eq!(hash.len(), 86);
@@ -384,7 +400,8 @@ mod tests {
     fn test_hash_computation_unsupported_alg() {
         let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
 
-        let result = TransactionData::compute_hash(encoded, "md5");
+        let data = TransactionData::decode(encoded).unwrap();
+        let result = data.compute_hash("md5");
         assert!(result.is_err());
     }
 
@@ -394,17 +411,24 @@ mod tests {
         // not the decoded content.
         let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
 
-        // Compute hash of the encoded string
-        let hash_from_encoded = TransactionData::compute_hash(encoded, "sha-256").unwrap();
-
-        // Decode and re-encode to get potentially different representation
+        // Decode the transaction data
         let decoded = TransactionData::decode(encoded).unwrap();
+
+        // Compute hash - should use the original encoded string internally
+        let hash_from_encoded = decoded.compute_hash("sha-256").unwrap();
+
+        // Verify consistent output on same data
+        let hash2 = decoded.compute_hash("sha-256").unwrap();
+        assert_eq!(hash_from_encoded, hash2);
+
+        // Create a different encoded representation of the same content
         let re_encoded = encode_json(&serde_json::to_value(&decoded).unwrap());
+        let decoded2 = TransactionData::decode(&re_encoded).unwrap();
 
         // Compute hash of the re-encoded string
-        let hash_from_reencoded = TransactionData::compute_hash(&re_encoded, "sha-256").unwrap();
+        let hash_from_reencoded = decoded2.compute_hash("sha-256").unwrap();
 
-        // Hashes should be different because the encoded strings are different
+        // Hashes should be different because the original encoded strings are different
         // (even though they decode to the same content)
         assert_ne!(hash_from_encoded, hash_from_reencoded);
     }
