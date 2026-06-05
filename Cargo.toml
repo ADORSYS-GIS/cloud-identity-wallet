@@ -76,15 +76,11 @@ axum = { version = "0.8", features = ["macros"] }
 base64.workspace = true
 cloud-wallet-crypto = {
   path = "crates/cloud-wallet-crypto",
-  features = [
-    "jwk",
-  ]
+  features = ["jwk"]
 }
 cloud-wallet-kms = {
   path = "crates/cloud-wallet-kms",
-  features = [
-    "local-kms",
-  ]
+  features = ["local-kms"]
 }
 cloud-wallet-openid4vc = { path = "crates/cloud-wallet-openid4vc" }
 color-eyre.workspace = true
@@ -104,12 +100,7 @@ thiserror.workspace = true
 time = { workspace = true, features = ["formatting", "serde"] }
 tokio = {
   version = "1",
-  features = [
-    "macros",
-    "net",
-    "rt-multi-thread",
-    "time",
-  ]
+  features = ["macros", "net", "rt-multi-thread", "time"]
 }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing.workspace = true
@@ -123,7 +114,7 @@ features = [
   "ahash",
   "connection-manager",
   "tls-rustls-webpki-roots",
-  "tokio-rustls-comp",
+  "tokio-rustls-comp"
 ]
 
 [dependencies.sqlx]
@@ -143,11 +134,7 @@ reqwest = { version = "0.13", features = ["json"] }
 serde_json = { workspace = true }
 testcontainers-modules = {
   version = "0.15",
-  features = [
-    "mysql",
-    "postgres",
-    "redis",
-  ]
+  features = ["mysql", "postgres", "redis"]
 }
 tower = { version = "0.5", features = ["util"] }
 webpki.workspace = true
