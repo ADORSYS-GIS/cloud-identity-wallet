@@ -102,10 +102,10 @@ impl ParsedClientId {
             });
         }
 
-        if let Ok(uri) = Url::parse(client_id) {
-            if uri.scheme() == "https" {
-                return Ok(Self::RedirectUri { uri });
-            }
+        if let Ok(uri) = Url::parse(client_id)
+            && uri.scheme() == "https"
+        {
+            return Ok(Self::RedirectUri { uri });
         }
 
         Err(Error::message(
@@ -505,13 +505,13 @@ fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str, client_id: &st
         ));
     }
 
-    if let Some(ref iss) = claims.rfc7519.iss {
-        if iss != client_id {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("Request Object iss claim '{iss}' does not match client_id '{client_id}'"),
-            ));
-        }
+    if let Some(ref iss) = claims.rfc7519.iss
+        && iss != client_id
+    {
+        return Err(Error::message(
+            ErrorKind::InvalidPresentationRequest,
+            format!("Request Object iss claim '{iss}' does not match client_id '{client_id}'"),
+        ));
     }
 
     if let Some(exp) = claims.rfc7519.exp {
