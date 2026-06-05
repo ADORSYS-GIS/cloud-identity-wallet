@@ -16,6 +16,8 @@ jobs:
 
       - name: Cargo deny
         uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: "stable"
 
   cargo-audit:
     runs-on: ubuntu-latest
