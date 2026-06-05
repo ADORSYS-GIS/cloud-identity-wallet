@@ -1,5 +1,6 @@
 mod utils;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_identity_wallet::domain::models::credential::{
     Credential, CredentialDisplay, CredentialDisplayMetadata, CredentialFormat, CredentialStatus,
 };
@@ -7,6 +8,33 @@ use cloud_identity_wallet::domain::ports::CredentialRepo;
 use reqwest::Client;
 use time::UtcDateTime;
 use uuid::Uuid;
+
+fn b64(value: serde_json::Value) -> String {
+    URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("test JSON should serialize"))
+}
+
+fn compact_jwt(header: serde_json::Value, claims: serde_json::Value) -> String {
+    format!("{}.{}.sig", b64(header), b64(claims))
+}
+
+fn raw_sd_jwt() -> String {
+    let jwt = compact_jwt(
+        serde_json::json!({ "alg": "ES256", "typ": "dc+sd-jwt" }),
+        serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": "did:example:subject",
+            "iat": 1_683_000_000,
+            "exp": 1_883_000_000,
+            "vct": "eu.europa.ec.eudi.pid.1",
+            "given_name": "Ada",
+            "family_name": "Lovelace",
+            "address": {
+                "locality": "London"
+            }
+        }),
+    );
+    format!("{jwt}~")
+}
 
 /// Build a minimal `Credential` owned by `tenant_id`.
 fn make_credential(tenant_id: Uuid) -> Credential {
@@ -24,7 +52,7 @@ fn make_credential(tenant_id: Uuid) -> Credential {
         is_revoked: false,
         status_location: None,
         status_index: None,
-        raw_credential: "dummy".to_string(),
+        raw_credential: raw_sd_jwt(),
     }
 }
 
@@ -306,10 +334,14 @@ async fn get_credential_returns_credential_for_owner() {
     // Assert
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["id"], id.to_string());
-    assert_eq!(body["format"], "dc+sd-jwt");
-    assert_eq!(body["status"], "active");
-    assert!(body.get("issued_at").is_some());
+    assert_eq!(body["given_name"], "Ada");
+    assert_eq!(body["family_name"], "Lovelace");
+    assert_eq!(body["address"]["locality"], "London");
+    assert!(body.get("iss").is_none());
+    assert!(body.get("sub").is_none());
+    assert!(body.get("iat").is_none());
+    assert!(body.get("exp").is_none());
+    assert!(body.get("vct").is_none());
 }
 
 #[tokio::test]
@@ -449,7 +481,7 @@ async fn list_credentials_returns_expires_at_when_credential_has_expiry() {
 
     // Act
     let response = Client::new()
-        .get(format!("{}/api/v1/credentials/{id}", server.base_url))
+        .get(format!("{}/api/v1/credentials", server.base_url))
         .bearer_auth(&token)
         .send()
         .await
@@ -458,10 +490,18 @@ async fn list_credentials_returns_expires_at_when_credential_has_expiry() {
     // Assert: expires_at is present and is a non-null string
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
+    let credential = body["credentials"]
+        .as_array()
+        .and_then(|credentials| {
+            credentials
+                .iter()
+                .find(|credential| credential["id"] == id.to_string())
+        })
+        .expect("expiring credential should be listed");
     assert!(
-        body["expires_at"].is_string(),
+        credential["expires_at"].is_string(),
         "expected expires_at to be a date-time string, got: {}",
-        body["expires_at"]
+        credential["expires_at"]
     );
 }
 

@@ -368,7 +368,7 @@ struct FilterBuilder<'d> {
 impl<'d> FilterBuilder<'d> {
     fn for_summaries(driver: &'d Driver) -> Self {
         let sql = String::from(
-            "SELECT c.id AS credential_id, c.issued_at, \
+            "SELECT c.id AS credential_id, c.issued_at, c.valid_until, \
              d.display, d.issuer_name, d.credential_type \
              FROM credentials c \
              INNER JOIN credential_display_metadata d \
@@ -607,6 +607,7 @@ static UPSERT_DISPLAY_METADATA_MYSQL: Query = Query::new(
 struct DisplayMetadataRecord {
     credential_id: String,
     issued_at: i64,
+    valid_until: Option<i64>,
     display: Vec<u8>,
     issuer_name: String,
     credential_type: String,
@@ -618,6 +619,10 @@ impl TryFrom<DisplayMetadataRecord> for CredentialSummary {
     fn try_from(row: DisplayMetadataRecord) -> Result<Self> {
         let id = Uuid::from_str(&row.credential_id)?;
         let issued_at = UtcDateTime::from_unix_timestamp(row.issued_at)?;
+        let valid_until = row
+            .valid_until
+            .map(UtcDateTime::from_unix_timestamp)
+            .transpose()?;
         let display = serde_json::from_slice(&row.display)?;
 
         Ok(Self {
@@ -628,6 +633,7 @@ impl TryFrom<DisplayMetadataRecord> for CredentialSummary {
                 credential_type: row.credential_type,
             },
             issued_at,
+            valid_until,
         })
     }
 }
@@ -817,6 +823,7 @@ impl CredentialRepo for MemoryCredentialRepo {
                         id: cred.id,
                         display: display_ref.value().clone(),
                         issued_at: cred.issued_at,
+                        valid_until: cred.valid_until,
                     });
                 }
             }
