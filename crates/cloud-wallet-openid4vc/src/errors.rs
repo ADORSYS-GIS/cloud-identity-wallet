@@ -226,6 +226,12 @@ pub enum ErrorKind {
     #[error("Invalid verifier metadata")]
     InvalidVerifierMetadata,
 
+    /// Wallet Metadata failed structural validation.
+    ///
+    /// Defined by [OpenID4VP §10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-10).
+    #[error("Invalid wallet metadata")]
+    InvalidWalletMetadata,
+
     /// A Notification Request failed validation (e.g. empty `notification_id`,
     /// disallowed characters in `event_description`).
     ///
