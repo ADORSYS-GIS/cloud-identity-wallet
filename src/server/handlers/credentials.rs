@@ -131,7 +131,7 @@ fn render_claims(c: &Credential) -> Result<serde_json::Value, ApiError> {
             .map_err(|error| {
                 ApiError::internal(format!("failed to parse stored SD-JWT VC claims: {error}"))
             }),
-        _ => Ok(serde_json::Value::Null),
+        format => Err(unsupported_credential_format(format)),
     }
 }
 
@@ -140,6 +140,16 @@ fn invalid_query(description: impl Into<String>) -> ApiError {
         status: StatusCode::BAD_REQUEST,
         error: Cow::Borrowed("invalid_request"),
         error_description: Some(description.into()),
+    }
+}
+
+fn unsupported_credential_format(format: CredentialFormat) -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        error: Cow::Borrowed("unsupported_credential_format"),
+        error_description: Some(format!(
+            "Rendering claims for credential format '{format}' is not supported yet."
+        )),
     }
 }
 
@@ -279,5 +289,22 @@ mod tests {
         assert!(claims.get("iat").is_none());
         assert!(claims.get("exp").is_none());
         assert!(claims.get("vct").is_none());
+    }
+
+    #[test]
+    fn rejects_claim_rendering_for_unsupported_formats() {
+        let mut credential = credential("{}".to_string());
+        credential.format = CredentialFormat::Mdoc;
+
+        let error = render_claims(&credential).unwrap_err();
+
+        assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(error.error, "unsupported_credential_format");
+        assert!(
+            error
+                .error_description
+                .as_deref()
+                .is_some_and(|description| description.contains("mso_mdoc"))
+        );
     }
 }
