@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::errors::{Error, ErrorKind};
 use crate::impl_string_enum;
 use crate::oid4vci::metadata::AuthorizationServerMetadata;
-use crate::oid4vp::metadata::verifier::{
+use crate::oid4vp::metadata::{
     CredentialFormatIdentifier, VpFormatCapability, VpFormatsSupported,
     deserialize_vp_formats_supported,
 };
@@ -80,20 +80,17 @@ impl WalletPresentationMetadata {
 
     /// Returns sensible defaults for the Wallet's presentation capabilities (`vp_formats_supported`).
     pub fn default_vp_formats() -> VpFormatsSupported {
-        use crate::oid4vp::metadata::verifier::{
+        use crate::oid4vp::metadata::{
             CoseAlgorithmIdentifier, JwtVcJsonFormatCapability, MsoMdocFormatCapability,
             NonEmptyString, SdJwtVcFormatCapability,
         };
 
         let mut vp_formats_supported = HashMap::new();
 
-        // Hardcoded algorithm constants - NonEmptyString::new will never fail here
-        let es256 = NonEmptyString::new("ES256", "algorithm identifier")
-            .expect("ES256 is a valid non-empty algorithm identifier");
-        let es384 = NonEmptyString::new("ES384", "algorithm identifier")
-            .expect("ES384 is a valid non-empty algorithm identifier");
-        let es512 = NonEmptyString::new("ES512", "algorithm identifier")
-            .expect("ES512 is a valid non-empty algorithm identifier");
+        // Compile-time safe constants for algorithm identifiers
+        let es256 = NonEmptyString::from_static("ES256");
+        let es384 = NonEmptyString::from_static("ES384");
+        let es512 = NonEmptyString::from_static("ES512");
 
         // vc+sd-jwt format with ES256, ES384, ES512
         let sd_jwt_algs = Some(vec![es256.clone(), es384.clone(), es512.clone()]);
@@ -224,12 +221,18 @@ mod tests {
 
     fn minimal_as_metadata() -> AuthorizationServerMetadata {
         use url::Url;
+
+        fn parse_url(url: &str) -> Option<Url> {
+            Url::parse(url).ok()
+        }
+
         AuthorizationServerMetadata {
-            issuer: Url::parse("https://wallet.example.com").unwrap(),
-            authorization_endpoint: Some(
-                Url::parse("https://wallet.example.com/authorize").unwrap(),
-            ),
-            token_endpoint: Some(Url::parse("https://wallet.example.com/token").unwrap()),
+            issuer: match parse_url("https://wallet.example.com") {
+                Some(url) => url,
+                None => panic!("Invalid issuer URL in test data"),
+            },
+            authorization_endpoint: parse_url("https://wallet.example.com/authorize"),
+            token_endpoint: parse_url("https://wallet.example.com/token"),
             jwks_uri: None,
             registration_endpoint: None,
             scopes_supported: None,
@@ -267,11 +270,8 @@ mod tests {
         assert!(vp_formats.contains_key(&CredentialFormatIdentifier::JwtVcJson));
 
         // Verify dc+sd-jwt format has ES256, ES384, ES512
-        match vp_formats
-            .get(&CredentialFormatIdentifier::DcSdJwt)
-            .unwrap()
-        {
-            VpFormatCapability::DcSdJwt(cap) => {
+        match vp_formats.get(&CredentialFormatIdentifier::DcSdJwt) {
+            Some(VpFormatCapability::DcSdJwt(cap)) => {
                 assert_eq!(cap.sd_jwt_alg_values.as_ref().map(|v| v.len()), Some(3));
             }
             _ => panic!("Expected DcSdJwt format capability"),
@@ -299,7 +299,10 @@ mod tests {
             "client_id_prefixes_supported": ["redirect_uri", "pre-registered"]
         }"#;
 
-        let metadata: WalletPresentationMetadata = serde_json::from_str(json).unwrap();
+        let metadata: WalletPresentationMetadata = match serde_json::from_str(json) {
+            Ok(m) => m,
+            Err(e) => panic!("Failed to parse JSON: {}", e),
+        };
 
         // Verify base AS fields
         assert_eq!(
@@ -309,17 +312,19 @@ mod tests {
 
         // Verify OID4VP fields
         assert_eq!(metadata.vp_formats_supported.len(), 2);
-        assert!(
-            metadata
-                .client_id_prefixes_supported
-                .as_ref()
-                .unwrap()
-                .contains(&ClientIdPrefix::RedirectUri)
-        );
+        match &metadata.client_id_prefixes_supported {
+            Some(prefixes) => {
+                assert!(prefixes.contains(&ClientIdPrefix::RedirectUri));
+            }
+            None => panic!("Expected client_id_prefixes_supported"),
+        }
 
         // Validate and serialize back
         assert!(metadata.validate().is_ok());
-        let _json_out = serde_json::to_string(&metadata).unwrap();
+        match serde_json::to_string(&metadata) {
+            Ok(_) => {} // serialization succeeded
+            Err(e) => panic!("Failed to serialize: {}", e),
+        }
     }
 
     /// Tests that validation rejects invalid metadata.
@@ -332,9 +337,13 @@ mod tests {
             vp_formats_supported: HashMap::new(),
             client_id_prefixes_supported: None,
         };
-        let err = metadata.validate().unwrap_err();
-        assert!(err.to_string().contains("vp_formats_supported"));
-        assert_eq!(err.kind(), ErrorKind::InvalidWalletMetadata);
+        match metadata.validate() {
+            Err(e) => {
+                assert!(e.to_string().contains("vp_formats_supported"));
+                assert_eq!(e.kind(), ErrorKind::InvalidWalletMetadata);
+            }
+            Ok(_) => panic!("Expected validation to fail for empty vp_formats_supported"),
+        }
 
         // Empty client_id_prefixes_supported should fail
         let as_metadata = minimal_as_metadata();
@@ -343,20 +352,31 @@ mod tests {
             vp_formats_supported: WalletPresentationMetadata::default_vp_formats(),
             client_id_prefixes_supported: Some(vec![]),
         };
-        let err = metadata.validate().unwrap_err();
-        assert!(err.to_string().contains("client_id_prefixes_supported"));
+        match metadata.validate() {
+            Err(e) => {
+                assert!(e.to_string().contains("client_id_prefixes_supported"));
+            }
+            Ok(_) => panic!("Expected validation to fail for empty client_id_prefixes_supported"),
+        }
 
         // Invalid AS metadata (http issuer) should fail
         use url::Url;
         let mut as_metadata = minimal_as_metadata();
-        as_metadata.issuer = Url::parse("http://wallet.example.com").unwrap();
+        as_metadata.issuer = match Url::parse("http://wallet.example.com") {
+            Ok(url) => url,
+            Err(e) => panic!("Failed to parse URL: {}", e),
+        };
         let metadata = WalletPresentationMetadata {
             authorization_server_metadata: as_metadata,
             vp_formats_supported: WalletPresentationMetadata::default_vp_formats(),
             client_id_prefixes_supported: None,
         };
-        let err = metadata.validate().unwrap_err();
-        assert!(err.to_string().contains("authorization server metadata"));
+        match metadata.validate() {
+            Err(e) => {
+                assert!(e.to_string().contains("authorization server metadata"));
+            }
+            Ok(_) => panic!("Expected validation to fail for http issuer"),
+        }
     }
 
     /// Tests ClientIdPrefix serialization and deserialization.
@@ -379,11 +399,18 @@ mod tests {
         ];
 
         for (prefix, expected) in test_cases {
-            assert_eq!(serde_json::to_string(&prefix).unwrap(), expected);
+            match serde_json::to_string(&prefix) {
+                Ok(json) => assert_eq!(json, expected),
+                Err(e) => panic!("Failed to serialize: {}", e),
+            }
         }
 
         // Extension prefix deserializes to Other
-        let prefix: ClientIdPrefix = serde_json::from_str("\"custom_prefix\"").unwrap();
-        assert_eq!(prefix, ClientIdPrefix::Other("custom_prefix".to_string()));
+        match serde_json::from_str::<ClientIdPrefix>("\"custom_prefix\"") {
+            Ok(prefix) => {
+                assert_eq!(prefix, ClientIdPrefix::Other("custom_prefix".to_string()));
+            }
+            Err(e) => panic!("Failed to deserialize: {}", e),
+        }
     }
 }
