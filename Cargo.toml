@@ -43,7 +43,7 @@ tracing = "0.1"
 base64 = "0.22"
 dashmap = "6"
 rand = "0.10"
-rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+rcgen = { version = "0.14", default-features = false, features = ["x509-parser","aws_lc_rs"] }
 rustls-pki-types = "1.14"
 sqlx = "0.8"
 time = "0.3"
