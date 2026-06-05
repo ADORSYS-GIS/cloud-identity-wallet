@@ -186,4 +186,122 @@ pub enum MdocError {
         /// Actual byte length found.
         actual: usize,
     },
+
+    /// The COSE_Sign1 protected header has no algorithm field, or the algorithm
+    /// field is a text label rather than an integer.
+    ///
+    /// ISO 18013-5 §9.1.2 requires the algorithm to be present and to be one of
+    /// the integer COSE algorithm identifiers.
+    #[error("COSE_Sign1 protected header is missing the algorithm field")]
+    MissingAlgorithm,
+
+    /// The COSE_Sign1 algorithm identifier is not supported for issuer signature
+    /// verification.
+    ///
+    /// Supported algorithm identifiers: -7 (ES256/P-256), -35 (ES384/P-384),
+    /// -36 (ES512/P-521), -8 (EdDSA/Ed25519).
+    #[error("unsupported COSE signature algorithm: {alg}")]
+    UnsupportedAlgorithm {
+        /// The raw COSE algorithm integer label.
+        alg: i64,
+    },
+
+    /// The `x5chain` header (COSE unprotected header label 33) is absent.
+    ///
+    /// ISO 18013-5 §9.1.2 requires the issuer certificate chain to be conveyed
+    /// in the `x5chain` header so the verifier can validate the signing certificate.
+    #[error("x5chain (COSE header key 33) not found in unprotected header")]
+    MissingX5Chain,
+
+    /// The Document Signer Certificate (DSC) does not carry the required Extended Key
+    /// Usage OID.
+    ///
+    /// ISO 18013-5 §9.1.2 mandates that every DSC includes OID 1.0.18013.5.1.2 in its
+    /// Extended Key Usage extension.
+    #[error("document signer certificate is missing required EKU OID 1.0.18013.5.1.2")]
+    MissingDocSignerEku,
+
+    /// The Document Signer Certificate does not have the `digitalSignature` key usage
+    /// bit set, or its Key Usage extension is absent entirely.
+    ///
+    /// ISO 18013-5 Annex B Table B.3 requires every DSC to carry a critical Key Usage
+    /// extension with (at least) the `digitalSignature` bit asserted.
+    #[error(
+        "document signer certificate missing required digitalSignature key usage bit \
+         (ISO 18013-5 Annex B Table B.3)"
+    )]
+    MissingDigitalSignatureKeyUsage,
+
+    /// The certificate chain could not be validated against a trusted IACA root.
+    ///
+    /// This covers both structural chain errors (e.g. signature mismatch between
+    /// consecutive certificates) and the absence of any trusted root for the chain.
+    #[error("certificate chain validation failed: {reason}")]
+    InvalidCertificateChain {
+        /// Human-readable description of why validation failed.
+        reason: String,
+    },
+
+    /// The COSE_Sign1 signature does not verify against the Document Signer Certificate.
+    ///
+    /// Returned when the cryptographic signature check (EC-DSA or EdDSA) fails after
+    /// a valid certificate chain has already been established.
+    #[error("issuer signature verification failed")]
+    InvalidIssuerSignature,
+
+    /// DSC subject country code does not match the IACA root subject country (ISO 18013-5 §9.3.3).
+    ///
+    /// Country consistency is checked between the Document Signer Certificate subject DN
+    /// and the trust-store IACA root subject DN; both must carry the same ISO 3166-1
+    /// alpha-2 `CountryName` attribute when the attribute is present in both certs.
+    #[error(
+        "country mismatch: DSC subject country '{dsc_country}' differs from IACA subject country '{iaca_country}'"
+    )]
+    CountryMismatch {
+        /// Country code from the DSC's subject distinguished name.
+        dsc_country: String,
+        /// Country code from the IACA root's subject distinguished name.
+        iaca_country: String,
+    },
+
+    /// DSC subject stateOrProvinceName does not match the IACA root subject stateOrProvinceName
+    /// (ISO 18013-5 §9.3.3).
+    ///
+    /// When both the DSC and the trusted IACA root carry a `stateOrProvinceName` attribute in
+    /// their subject DNs, the values must be equal.
+    #[error(
+        "state/province mismatch: DSC subject state '{dsc_state}' differs from IACA subject state '{iaca_state}'"
+    )]
+    StateMismatch {
+        /// stateOrProvinceName from the DSC's subject distinguished name.
+        dsc_state: String,
+        /// stateOrProvinceName from the IACA root's subject distinguished name.
+        iaca_state: String,
+    },
+
+    /// MSO `validityInfo.signed` falls outside the Document Signer Certificate validity
+    /// window (ISO 18013-5 §9.3.1 step 5).
+    ///
+    /// The three timestamps are provided as Unix seconds for diagnostic logging.
+    #[error("MSO signed at {signed_at} is outside DSC validity window [{not_before}, {not_after}]")]
+    SignedOutsideDscValidity {
+        /// The `validityInfo.signed` timestamp from the MSO, as a Unix second.
+        signed_at: i64,
+        /// The DSC `notBefore` timestamp, as a Unix second.
+        not_before: i64,
+        /// The DSC `notAfter` timestamp, as a Unix second.
+        not_after: i64,
+    },
+
+    /// MSO `docType` does not match the outer document `docType` (ISO 18013-5 §9.3.1 step 4).
+    ///
+    /// The `docType` in the MSO payload must equal the `docType` in the enclosing document
+    /// structure; a mismatch indicates the credential was prepared for a different document type.
+    #[error("docType mismatch: MSO contains '{mso}' but outer document contains '{document}'")]
+    DocTypeMismatch {
+        /// The `docType` string as it appeared in the MSO.
+        mso: String,
+        /// The `docType` string from the outer document.
+        document: String,
+    },
 }

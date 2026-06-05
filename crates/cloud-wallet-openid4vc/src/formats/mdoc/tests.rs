@@ -7,7 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use super::DigestAlgorithm;
 use super::error::MdocError;
 use super::parser::ParsedMdoc;
-use super::verifier::verify_digests;
+use super::verifier::{StaticTrustStore, verify_digests, verify_issuer_signature};
 
 // CBOR construction helpers
 
@@ -458,8 +458,6 @@ fn rejects_duplicate_namespace_in_value_digests() {
     );
 }
 
-// ── digest-verification helpers ──────────────────────────────────────────────
-
 /// Builds the `#6.24(bstr .cbor IssuerSignedItem)` encoding for one item
 /// and returns `(raw_tag24_bytes, real_sha256_digest)`.
 ///
@@ -787,8 +785,6 @@ fn build_two_namespace_mdoc() -> String {
     ]);
     Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
 }
-
-// ── verify_digests tests ──────────────────────────────────────────────────────
 
 #[test]
 fn verify_digests_passes_for_all_valid() {
@@ -1337,5 +1333,1779 @@ fn verify_digests_rejects_namespace_absent_from_value_digests() {
         matches!(err, MdocError::MissingDigest { ref namespace, digest_id: 0 }
             if namespace == "org.iso.18013.5.1"),
         "expected MissingDigest {{ namespace: org.iso.18013.5.1, digest_id: 0 }}, got: {err:?}"
+    );
+}
+
+/// ISO 18013-5 Document Signer Certificate EKU OID (arc 1.0.18013.5.1.2).
+/// Encoded as relative OID component integers for rcgen `ExtendedKeyUsagePurpose::Other`.
+const DSC_EKU_OID: &[u64] = &[1, 0, 18013, 5, 1, 2];
+
+/// Builds an IACA root CA cert and a DSC cert signed by that IACA, returning
+/// `(iaca_der, dsc_der, dsc_signing_key)` where `dsc_signing_key` is backed by
+/// `aws-lc-rs` so that signatures produced by it can be verified by
+/// `cloud_wallet_crypto::ecdsa::VerifyingKey`.
+///
+/// The `include_dsc_eku` flag controls whether the DSC carries the mandatory
+/// ISO 18013-5 EKU OID; set it to `false` to exercise the missing-EKU path.
+fn build_chain(include_dsc_eku: bool) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+    build_chain_params(include_dsc_eku, None, None, None, None, None)
+}
+
+/// Parameterised version of [`build_chain`] for tests that need specific DSC validity
+/// dates, per-country-code attributes, or stateOrProvinceName attributes.
+///
+/// - `dsc_validity`: `(not_before, not_after)` for the DSC; defaults to a 396-day window
+///   (`2023-12-01` to `2024-12-31`) that covers the `minimal_mso_cbor()` `signed` timestamp.
+/// - `iaca_country`: `CountryName` for the IACA subject DN (e.g. `"DE"`).
+/// - `dsc_country`: `CountryName` for the DSC subject DN (e.g. `"FR"`).
+/// - `iaca_state`: `stateOrProvinceName` for the IACA subject DN (e.g. `"California"`).
+/// - `dsc_state`: `stateOrProvinceName` for the DSC subject DN (e.g. `"NewYork"`).
+fn build_chain_params(
+    include_dsc_eku: bool,
+    dsc_validity: Option<(time::OffsetDateTime, time::OffsetDateTime)>,
+    iaca_country: Option<&str>,
+    dsc_country: Option<&str>,
+    iaca_state: Option<&str>,
+    dsc_state: Option<&str>,
+) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyUsagePurpose,
+    };
+    let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
+    let mut iaca_params =
+        CertificateParams::new(vec!["IACA Root".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    if let Some(c) = iaca_country {
+        iaca_params.distinguished_name.push(DnType::CountryName, c);
+    }
+    if let Some(s) = iaca_state {
+        iaca_params
+            .distinguished_name
+            .push(DnType::StateOrProvinceName, s);
+    }
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_key)
+        .expect("self-signed IACA cert must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+    let dsc_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+            .expect("aws-lc-rs DSC key generation must succeed");
+
+    let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            dsc_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+    )
+    .expect("loading aws-lc-rs key into rcgen must succeed");
+
+    // Default DSC validity: 396-day window that covers the minimal_mso_cbor() signed date.
+    let (not_before, not_after) = dsc_validity.unwrap_or_else(|| {
+        (
+            OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse"),
+            OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse"),
+        )
+    });
+
+    let mut dsc_params = CertificateParams::new(vec!["DSC".to_string()]).expect("dsc params");
+    dsc_params.is_ca = IsCa::NoCa;
+    dsc_params.not_before = not_before;
+    dsc_params.not_after = not_after;
+    if include_dsc_eku {
+        dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    }
+    if let Some(c) = dsc_country {
+        dsc_params.distinguished_name.push(DnType::CountryName, c);
+    }
+    if let Some(s) = dsc_state {
+        dsc_params
+            .distinguished_name
+            .push(DnType::StateOrProvinceName, s);
+    }
+    dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    let dsc_cert = dsc_params
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
+        .expect("DSC signing by IACA must succeed");
+    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+    (iaca_der, dsc_der, dsc_aws_key)
+}
+
+/// Constructs the COSE Sig_Structure (RFC 9052 §4.4) and signs it with
+/// `signing_key`, then assembles a raw `IssuerSigned` CBOR payload suitable
+/// for `ParsedMdoc::parse`.
+///
+/// The unprotected header carries `x5chain` (label 33) as an array of two
+/// DER-encoded certs: `[dsc_der, iaca_der]`.
+///
+/// If `tamper` is `true` the COSE signature bytes are altered after signing so
+/// that signature verification fails while the payload structure remains valid.
+fn build_issuer_signed_with_issuer_auth(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+    tamper: bool,
+) -> String {
+    // {1: -7} (ES256), CBOR-encoded: a1 01 26
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
+
+    // RFC 9052 §4.4 Sig_Structure: ["Signature1", protected_bstr, external_aad, payload]
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]), // external AAD = b""
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+
+    let sig_bytes = signing_key
+        .sign_sha256(&tbs)
+        .expect("COSE signing must succeed");
+
+    // Flip one byte so signature verification fails while CBOR structure stays intact.
+    let final_sig: Vec<u8> = if tamper {
+        let mut corrupted = sig_bytes.to_vec();
+        corrupted[0] ^= 0xff;
+        corrupted
+    } else {
+        sig_bytes.to_vec()
+    };
+
+    // Label 33 must be an integer key so coset parses it as Label::Int(33).
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(final_sig),
+        ])),
+    );
+
+    // Parser requires at least one namespace entry.
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+
+    let raw = cbor(&issuer_signed);
+    Base64UrlUnpadded::encode_string(&raw)
+}
+
+/// Returns the MSO payload bytes as they appear inside the COSE_Sign1 `payload` field:
+/// `Tag(24, bstr(mso_cbor))` per ISO 18013-5 §9.1.2 MobileSecurityObjectBytes.
+fn minimal_mso_cbor() -> Vec<u8> {
+    let validity_info = Value::Map(vec![
+        (
+            Value::Text("signed".into()),
+            Value::Tag(0, Box::new(Value::Text("2024-01-01T00:00:00Z".into()))),
+        ),
+        (
+            Value::Text("validFrom".into()),
+            Value::Tag(0, Box::new(Value::Text("2024-01-01T00:00:00Z".into()))),
+        ),
+        (
+            Value::Text("validUntil".into()),
+            Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
+        ),
+    ]);
+
+    let mso = Value::Map(vec![
+        (Value::Text("version".into()), Value::Text("1.0".into())),
+        (
+            Value::Text("digestAlgorithm".into()),
+            Value::Text("SHA-256".into()),
+        ),
+        // valueDigests must have at least one namespace with at least one digest (32 bytes for SHA-256).
+        (
+            Value::Text("valueDigests".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Map(vec![(
+                    Value::Integer(0.into()),
+                    Value::Bytes(vec![0u8; 32]),
+                )]),
+            )]),
+        ),
+        // deviceKeyInfo must contain a deviceKey entry.
+        (
+            Value::Text("deviceKeyInfo".into()),
+            Value::Map(vec![(
+                Value::Text("deviceKey".into()),
+                // Minimal COSE_Key: {1: 2, -1: 1} (kty=EC2, crv=P-256)
+                Value::Map(vec![
+                    (Value::Integer(1.into()), Value::Integer(2.into())),
+                    (
+                        Value::Integer(ciborium::value::Integer::from(-1i64)),
+                        Value::Integer(1.into()),
+                    ),
+                ]),
+            )]),
+        ),
+        (
+            Value::Text("docType".into()),
+            Value::Text("org.iso.18013.5.1.mDL".into()),
+        ),
+        (Value::Text("validityInfo".into()), validity_info),
+    ]);
+
+    cbor(&Value::Tag(24, Box::new(Value::Bytes(cbor(&mso)))))
+}
+
+#[test]
+fn verify_issuer_signature_accepts_valid_chain() {
+    // Arrange
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der.clone(), &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "valid COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_tampered_payload() {
+    // Arrange: sign normally, then corrupt the payload bytes so the signature
+    // covers different content than what the verifier sees.
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(
+        mso_bytes,
+        dsc_der,
+        &signing_key,
+        true, // tamper = true
+    );
+    let mdoc =
+        ParsedMdoc::parse(&raw).expect("tampered mdoc must still parse (parser is not a verifier)");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("tampered payload must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidIssuerSignature),
+        "expected InvalidIssuerSignature, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_untrusted_root() {
+    // Arrange: produce a valid chain but supply a *different* CA as trust anchor.
+    let (_, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+
+    let (unrelated_iaca_der, _, _) = build_chain(true);
+    let trust_store = StaticTrustStore::new(vec![unrelated_iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("chain not anchored to trusted root must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidCertificateChain { .. }),
+        "expected InvalidCertificateChain, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_missing_eku() {
+    // Arrange: DSC is validly signed by IACA but lacks the ISO 18013-5 EKU OID.
+    let (iaca_der, dsc_der, signing_key) = build_chain(false); // no EKU
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("DSC without ISO 18013-5 EKU must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::MissingDocSignerEku),
+        "expected MissingDocSignerEku, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_missing_x5chain() {
+    // Arrange: build an IssuerSigned where the unprotected header has NO x5chain entry.
+    let (iaca_der, _dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]),
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+    let sig_bytes = signing_key.sign_sha256(&tbs).expect("signing must succeed");
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            Value::Map(vec![]), // empty unprotected header
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+    let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc without x5chain must still parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("missing x5chain must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::MissingX5Chain),
+        "expected MissingX5Chain, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_doctype_mismatch() {
+    // Arrange: MSO has docType "org.iso.18013.5.1.mDL" but outer_doc_type differs.
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act: pass a different outer_doc_type.
+    let err = verify_issuer_signature(&mdoc, "com.example.other.doctype", &trust_store)
+        .expect_err("docType mismatch must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::DocTypeMismatch { .. }),
+        "expected DocTypeMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
+    // Arrange: DSC valid 2025-01-01..2025-12-31 (365 days < 457-day max), but the MSO
+    // signed timestamp is "2024-01-01T00:00:00Z" — before the DSC notBefore.
+    let (iaca_der, dsc_der, signing_key) = build_chain_params(
+        true,
+        Some((
+            OffsetDateTime::parse("2025-01-01T00:00:00Z", &Rfc3339).expect("date must parse"),
+            OffsetDateTime::parse("2025-12-31T23:59:59Z", &Rfc3339).expect("date must parse"),
+        )),
+        None,
+        None,
+        None,
+        None,
+    );
+    let mso_bytes = minimal_mso_cbor(); // signed = "2024-01-01T00:00:00Z"
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("MSO signed before DSC notBefore must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::SignedOutsideDscValidity { .. }),
+        "expected SignedOutsideDscValidity, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_country_mismatch() {
+    // Arrange: IACA subject C=DE, DSC subject C=FR — country mismatch (ISO 18013-5 §9.3.3).
+    let (iaca_der, dsc_der, signing_key) =
+        build_chain_params(true, None, Some("DE"), Some("FR"), None, None);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("DSC/IACA country mismatch must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::CountryMismatch { .. }),
+        "expected CountryMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_dsc_validity_too_long() {
+    // Arrange: DSC notBefore=2024-01-01, notAfter=2025-04-04 → 459 days > 457-day maximum.
+    // MSO signed="2024-01-01T00:00:00Z" = DSC notBefore (would be within-window if allowed).
+    let (iaca_der, dsc_der, signing_key) = build_chain_params(
+        true,
+        Some((
+            OffsetDateTime::parse("2024-01-01T00:00:00Z", &Rfc3339).expect("date must parse"),
+            OffsetDateTime::parse("2025-04-04T00:00:00Z", &Rfc3339).expect("date must parse"),
+        )),
+        None,
+        None,
+        None,
+        None,
+    );
+    let mso_bytes = minimal_mso_cbor(); // signed = "2024-01-01T00:00:00Z"
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("DSC with 459-day validity must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidCertificateChain { .. }),
+        "expected InvalidCertificateChain (457-day limit exceeded), got: {err:?}"
+    );
+}
+
+/// Builds an IACA root and DSC cert chain backed by P-521 keys (ES512 / -36).
+///
+/// Returns `(iaca_der, dsc_der, dsc_signing_key)` where the signing key uses
+/// `cloud_wallet_crypto::ecdsa::Curve::P521`.
+fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyUsagePurpose,
+    };
+
+    let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
+    let mut iaca_params =
+        CertificateParams::new(vec!["IACA Root P521".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_key)
+        .expect("self-signed IACA cert must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+    let dsc_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P521)
+            .expect("aws-lc-rs P-521 key generation must succeed");
+
+    let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            dsc_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P521_SHA512,
+    )
+    .expect("loading P-521 key into rcgen must succeed");
+
+    let not_before =
+        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
+    let not_after =
+        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
+
+    let mut dsc_params = CertificateParams::new(vec!["DSC P521".to_string()]).expect("dsc params");
+    dsc_params.is_ca = IsCa::NoCa;
+    dsc_params.not_before = not_before;
+    dsc_params.not_after = not_after;
+    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    dsc_params
+        .distinguished_name
+        .push(DnType::CommonName, "DSC P521");
+    dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    let dsc_cert = dsc_params
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
+        .expect("DSC P-521 signing by IACA must succeed");
+    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+    (iaca_der, dsc_der, dsc_aws_key)
+}
+
+/// Like [`build_issuer_signed_with_issuer_auth`] but uses the ES512 algorithm (-36).
+///
+/// Protected header encodes `{1: -36}` and the payload is signed with SHA-512.
+fn build_issuer_signed_with_issuer_auth_es512(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -36} (ES512), CBOR-encoded: a1 01 38 23
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x38, 0x23];
+
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]),
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+
+    let sig_bytes = signing_key
+        .sign_sha512(&tbs)
+        .expect("ES512 COSE signing must succeed");
+
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+
+    let raw = cbor(&issuer_signed);
+    Base64UrlUnpadded::encode_string(&raw)
+}
+
+#[test]
+fn verify_issuer_signature_accepts_valid_es512() {
+    // Arrange: P-521 key pair, real ES512 signature, proper chain and EKU.
+    let (iaca_der, dsc_der, signing_key) = build_chain_p521();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth_es512(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ES512 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "valid ES512 COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_state_mismatch() {
+    // Arrange: IACA subject ST=California, DSC subject ST=NewYork — state mismatch (ISO 18013-5 §9.3.3).
+    let (iaca_der, dsc_der, signing_key) =
+        build_chain_params(true, None, None, None, Some("California"), Some("NewYork"));
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("DSC/IACA state mismatch must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::StateMismatch { .. }),
+        "expected StateMismatch, got: {err:?}"
+    );
+}
+
+/// Builds a chain where the DSC has a Key Usage extension but the `digitalSignature`
+/// bit is NOT set (only `ContentCommitment`), exercising the key-usage rejection path.
+fn build_chain_dsc_wrong_key_usage() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+        KeyUsagePurpose,
+    };
+
+    let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
+    let mut iaca_params =
+        CertificateParams::new(vec!["IACA Root".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_key)
+        .expect("self-signed IACA cert must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+    let dsc_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+            .expect("aws-lc-rs DSC key generation must succeed");
+
+    let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            dsc_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+    )
+    .expect("loading key into rcgen must succeed");
+
+    let not_before =
+        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
+    let not_after =
+        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
+
+    let mut dsc_params =
+        CertificateParams::new(vec!["DSC Wrong KU".to_string()]).expect("dsc params");
+    dsc_params.is_ca = IsCa::NoCa;
+    dsc_params.not_before = not_before;
+    dsc_params.not_after = not_after;
+    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    // Key Usage extension IS present, but digitalSignature bit is NOT set.
+    dsc_params.key_usages = vec![KeyUsagePurpose::ContentCommitment];
+    dsc_params
+        .distinguished_name
+        .push(DnType::CommonName, "DSC Wrong KU");
+    let dsc_cert = dsc_params
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
+        .expect("DSC signing must succeed");
+    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+    (iaca_der, dsc_der, dsc_aws_key)
+}
+
+#[test]
+fn verify_issuer_signature_rejects_missing_key_usage() {
+    // Arrange: DSC carries a Key Usage extension but only ContentCommitment is set —
+    // the digitalSignature bit required by ISO 18013-5 Annex B Table B.3 is absent.
+    let (iaca_der, dsc_der, signing_key) = build_chain_dsc_wrong_key_usage();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("DSC without digitalSignature key usage must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::MissingDigitalSignatureKeyUsage),
+        "expected MissingDigitalSignatureKeyUsage, got: {err:?}"
+    );
+}
+
+/// Builds an `IssuerSigned` where the x5chain unprotected header value is a
+/// single `bstr` rather than `[bstr]`.  Per RFC 9360 §2 both forms are valid.
+fn build_issuer_signed_single_bstr_x5chain(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -7} (ES256)
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
+
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]),
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+    let sig_bytes = signing_key
+        .sign_sha256(&tbs)
+        .expect("COSE signing must succeed");
+
+    // Single bstr — no wrapping array.
+    let unprotected_map = Value::Map(vec![(Value::Integer(33.into()), Value::Bytes(dsc_der))]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+}
+
+/// Builds an `IssuerSigned` with a multi-cert x5chain `[dsc, …]` (leaf-first).
+///
+/// The protected header is fixed to ES256; the signature covers `mso_bytes`
+/// using `signing_key`.
+fn build_issuer_signed_with_chain_x5chain(
+    mso_bytes: Vec<u8>,
+    cert_chain: Vec<Vec<u8>>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
+
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]),
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+    let sig_bytes = signing_key
+        .sign_sha256(&tbs)
+        .expect("COSE signing must succeed");
+
+    let chain_vals: Vec<Value> = cert_chain.into_iter().map(Value::Bytes).collect();
+    let unprotected_map = Value::Map(vec![(Value::Integer(33.into()), Value::Array(chain_vals))]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+}
+
+/// Builds an `IssuerSigned` with an arbitrary raw protected-header CBOR blob and
+/// a dummy (zero-filled) COSE signature.  Intended for tests that verify errors
+/// that fire before signature verification (e.g. unsupported algorithm).
+fn build_issuer_signed_with_custom_alg(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    protected_header_bytes: Vec<u8>,
+) -> String {
+    // Dummy 64-byte signature — error fires in dispatch_verify before verification.
+    let dummy_sig = vec![0u8; 64];
+
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(dummy_sig),
+        ])),
+    );
+
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+}
+
+/// Builds a three-tier certificate chain: IACA root → Intermediate CA → DSC.
+///
+/// Returns `(iaca_der, intermediate_der, dsc_der, dsc_signing_key)`.
+fn build_three_cert_chain() -> (
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    cloud_wallet_crypto::ecdsa::KeyPair,
+) {
+    use rcgen::{
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
+    };
+
+    // IACA root (self-signed CA)
+    let iaca_key = rcgen::KeyPair::generate().expect("IACA key generation must succeed");
+    let mut iaca_params =
+        CertificateParams::new(vec!["Three-tier IACA Root".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_key)
+        .expect("IACA self-sign must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+    // Intermediate CA (signed by IACA root)
+    let int_key = rcgen::KeyPair::generate().expect("Intermediate CA key generation must succeed");
+    let mut int_params =
+        CertificateParams::new(vec!["Three-tier Intermediate CA".to_string()]).expect("int params");
+    int_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let int_cert = int_params
+        .signed_by(&int_key, &iaca_issuer)
+        .expect("Intermediate CA signing must succeed");
+    let int_der: Vec<u8> = int_cert.der().to_vec();
+    let int_issuer = Issuer::new(int_params, int_key);
+
+    // DSC (signed by Intermediate CA)
+    let dsc_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+            .expect("aws-lc-rs DSC key generation must succeed");
+
+    let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            dsc_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+    )
+    .expect("loading aws-lc-rs key into rcgen must succeed");
+
+    let not_before =
+        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
+    let not_after =
+        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
+
+    let mut dsc_params =
+        CertificateParams::new(vec!["Three-tier DSC".to_string()]).expect("dsc params");
+    dsc_params.is_ca = IsCa::NoCa;
+    dsc_params.not_before = not_before;
+    dsc_params.not_after = not_after;
+    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    let dsc_cert = dsc_params
+        .signed_by(&dsc_rcgen_key, &int_issuer)
+        .expect("DSC signing by Intermediate CA must succeed");
+    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+    (iaca_der, int_der, dsc_der, dsc_aws_key)
+}
+
+#[test]
+fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
+    // Arrange: DSC validity window 2023-01-01..2023-06-30 (170 days, well under the
+    // 457-day limit).  The minimal_mso_cbor() fixture has signed = "2024-01-01",
+    // which is after notAfter (2023-06-30), so check_signed_within_dsc_validity
+    // must reject the credential.
+    let (iaca_der, dsc_der, signing_key) = build_chain_params(
+        true,
+        Some((
+            OffsetDateTime::parse("2023-01-01T00:00:00Z", &Rfc3339).expect("fixed date must parse"),
+            OffsetDateTime::parse("2023-06-30T23:59:59Z", &Rfc3339).expect("fixed date must parse"),
+        )),
+        None,
+        None,
+        None,
+        None,
+    );
+    let mso_bytes = minimal_mso_cbor(); // signed = "2024-01-01" — after notAfter
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("MSO signed after DSC notAfter must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::SignedOutsideDscValidity { .. }),
+        "expected SignedOutsideDscValidity, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_accepts_single_bstr_x5chain() {
+    // RFC 9360 §2 permits x5chain to be either a single bstr or an array of
+    // bstr.  Both forms must be accepted.
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_single_bstr_x5chain(mso_bytes, dsc_der, &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "credential with single-bstr x5chain must be accepted: {result:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_accepts_intermediate_ca_chain() {
+    // x5chain = [dsc_der, int_der] (leaf first; IACA root not included per
+    // ISO 18013-5 Annex B §B.1).  validate_cert_chain must walk the full path.
+    let (iaca_der, int_der, dsc_der, signing_key) = build_three_cert_chain();
+    let mso_bytes = minimal_mso_cbor();
+    let raw =
+        build_issuer_signed_with_chain_x5chain(mso_bytes, vec![dsc_der, int_der], &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "three-cert chain with valid intermediate must be accepted: {result:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_tampered_intermediate() {
+    // Replace the real intermediate with a fresh IACA root (different key).
+    // chain[0].verify_signature(chain[1].public_key()) will fail because the
+    // DSC was signed by the real intermediate, not by the replacement.
+    let (iaca_der, _int_der, dsc_der, signing_key) = build_three_cert_chain();
+
+    // A fresh IACA cert has a different key — use it as the "wrong intermediate".
+    let (wrong_cert_der, _, _) = build_chain(true);
+
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_chain_x5chain(
+        mso_bytes,
+        vec![dsc_der, wrong_cert_der],
+        &signing_key,
+    );
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc must still parse structurally");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("chain with wrong intermediate must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidCertificateChain { .. }),
+        "expected InvalidCertificateChain, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_empty_trust_store() {
+    // An empty trust store cannot anchor any chain.
+    let (_iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![]); // empty
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("empty trust store must reject all chains");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidCertificateChain { .. }),
+        "expected InvalidCertificateChain, got: {err:?}"
+    );
+}
+
+// Algorithm IDs -38, -47, -48 (Brainpool) must be recognised by read_cose_alg
+// and reach dispatch_verify, which returns UnsupportedAlgorithm immediately.
+// The credential structure must otherwise be valid (chain, EKU, etc.) so the
+// error comes from dispatch_verify, not from an earlier check.
+//
+// CBOR protected header encoding:
+//   {1: -38} = a1 01 38 25   (Brainpool P-256r1)
+//   {1: -47} = a1 01 38 2e   (Brainpool P-384r1)
+//   {1: -48} = a1 01 38 2f   (Brainpool P-512r1)
+
+#[test]
+fn verify_issuer_signature_rejects_brainpool_p256_algorithm() {
+    let (iaca_der, dsc_der, _) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -38} CBOR = a1 01 38 25
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x38, 0x25]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Brainpool P-256 alg must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("Brainpool P-256 must be rejected as unsupported");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedAlgorithm { alg: -38 }),
+        "expected UnsupportedAlgorithm {{ alg: -38 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_brainpool_p384_algorithm() {
+    let (iaca_der, dsc_der, _) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -47} CBOR = a1 01 38 2e
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x38, 0x2e]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Brainpool P-384 alg must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("Brainpool P-384 must be rejected as unsupported");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedAlgorithm { alg: -47 }),
+        "expected UnsupportedAlgorithm {{ alg: -47 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_brainpool_p512_algorithm() {
+    let (iaca_der, dsc_der, _) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -48} CBOR = a1 01 38 2f
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x38, 0x2f]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Brainpool P-512 alg must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("Brainpool P-512 must be rejected as unsupported");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedAlgorithm { alg: -48 }),
+        "expected UnsupportedAlgorithm {{ alg: -48 }}, got: {err:?}"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
+    // ISO 18013-5 Annex B §B.1: the IACA root must NOT appear in x5chain.
+    // Placing it as the second entry causes validate_cert_chain to find the
+    // trusted root inside the chain and reject the credential.
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    // chain = [dsc_der, iaca_der] — IACA root is present as the second entry.
+    let raw = build_issuer_signed_with_chain_x5chain(
+        mso_bytes,
+        vec![dsc_der, iaca_der.clone()],
+        &signing_key,
+    );
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with IACA root in chain must still parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("IACA root present in x5chain must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::InvalidCertificateChain { .. }),
+        "expected InvalidCertificateChain, got: {err:?}"
+    );
+}
+
+/// Constructs a minimal X.509 certificate with an Ed448 public key (OID `1.3.101.113`)
+/// in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
+///
+/// `rcgen 0.13` does not support Ed448 key generation, so the certificate is built from
+/// raw DER.  The public key payload is all-zeros (57 bytes) — sufficient for the Ed448
+/// OID check in `verify_issuer_signature`, which fires before any key-payload check.
+fn build_ed448_dsc_manual(
+    iaca_cert_der: &[u8],
+    iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> Vec<u8> {
+    use x509_parser::prelude::{FromDer as _, X509Certificate};
+
+    // Extract the IACA subject DER bytes — these become the DSC issuer field.
+    let (_, iaca_x509) =
+        X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
+    let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
+
+    fn len_bytes(n: usize) -> Vec<u8> {
+        if n < 128 {
+            vec![n as u8]
+        } else if n < 256 {
+            vec![0x81, n as u8]
+        } else {
+            vec![0x82, (n >> 8) as u8, (n & 0xff) as u8]
+        }
+    }
+    fn tlv(tag: u8, body: Vec<u8>) -> Vec<u8> {
+        let mut v = vec![tag];
+        v.extend(len_bytes(body.len()));
+        v.extend(body);
+        v
+    }
+    fn seq(body: Vec<u8>) -> Vec<u8> {
+        tlv(0x30, body)
+    }
+    fn set(body: Vec<u8>) -> Vec<u8> {
+        tlv(0x31, body)
+    }
+    fn ctx_explicit(n: u8, body: Vec<u8>) -> Vec<u8> {
+        tlv(0xa0 | n, body)
+    }
+    fn oid(components: &[u64]) -> Vec<u8> {
+        fn base128(mut n: u64) -> Vec<u8> {
+            if n == 0 {
+                return vec![0];
+            }
+            let mut b = Vec::new();
+            while n > 0 {
+                b.push((n & 0x7f) as u8);
+                n >>= 7;
+            }
+            b.reverse();
+            for i in 0..b.len() - 1 {
+                b[i] |= 0x80;
+            }
+            b
+        }
+        let mut bytes = base128(components[0] * 40 + components[1]);
+        for &c in &components[2..] {
+            bytes.extend(base128(c));
+        }
+        tlv(0x06, bytes)
+    }
+    fn integer_pos(b: Vec<u8>) -> Vec<u8> {
+        let mut content = b;
+        if content.first().is_some_and(|&x| x & 0x80 != 0) {
+            content.insert(0, 0);
+        }
+        tlv(0x02, content)
+    }
+    fn bit_str(data: Vec<u8>) -> Vec<u8> {
+        let mut c = vec![0x00]; // 0 unused bits
+        c.extend(data);
+        tlv(0x03, c)
+    }
+    fn octet_str(b: Vec<u8>) -> Vec<u8> {
+        tlv(0x04, b)
+    }
+    fn bool_true() -> Vec<u8> {
+        vec![0x01, 0x01, 0xff]
+    }
+    fn utc_time(s: &'static str) -> Vec<u8> {
+        tlv(0x17, s.as_bytes().to_vec())
+    }
+
+    let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
+    let serial = integer_pos(vec![0x01]); // serialNumber = 1
+    let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
+    let validity = seq({
+        let mut b = utc_time("231201000000Z");
+        b.extend(utc_time("241231235959Z"));
+        b
+    });
+    let subject = seq(set(seq({
+        let mut b = oid(&[2, 5, 4, 3]); // id-at-commonName
+        b.extend(tlv(0x0c, b"Ed448DSC".to_vec())); // UTF8String
+        b
+    })));
+    let spki = seq({
+        let mut b = seq(oid(&[1, 3, 101, 113])); // id-Ed448, no params
+        b.extend(bit_str(vec![0u8; 57])); // fake 57-byte public key
+        b
+    });
+    // extendedKeyUsage (2.5.29.37), critical — ISO 18013-5 EKU
+    let eku_ext = seq({
+        let mut b = oid(&[2, 5, 29, 37]);
+        b.extend(bool_true());
+        // ExtKeyUsageSyntax ::= SEQUENCE SIZE (1..MAX) OF KeyPurposeId
+        b.extend(octet_str(seq(oid(&[1, 0, 18013, 5, 1, 2]))));
+        b
+    });
+    // keyUsage (2.5.29.15), critical, digitalSignature bit set
+    let ku_ext = seq({
+        let mut b = oid(&[2, 5, 29, 15]);
+        b.extend(bool_true());
+        b.extend(octet_str(tlv(0x03, vec![0x07, 0x80]))); // BIT STRING: 7 unused, bit 0
+        b
+    });
+    let extensions = ctx_explicit(
+        3,
+        seq({
+            let mut b = eku_ext;
+            b.extend(ku_ext);
+            b
+        }),
+    );
+    let tbs = seq({
+        let mut b = version;
+        b.extend(serial);
+        b.extend(sig_alg_id.clone());
+        b.extend(issuer_raw);
+        b.extend(validity);
+        b.extend(subject);
+        b.extend(spki);
+        b.extend(extensions);
+        b
+    });
+
+    // Sign TBSCertificate with the IACA's P-256 key (ASN.1 DER encoding for X.509).
+    let mut sig_buf = [0u8; 80]; // P-256 ASN.1 ECDSA signature is at most ~72 bytes
+    let sig = iaca_key
+        .sign_sha256_asn1(&tbs, &mut sig_buf)
+        .expect("ECDSA-P256 signing of TBSCertificate must succeed");
+
+    // Assemble full Certificate = SEQUENCE { TBSCertificate, AlgorithmIdentifier, BIT STRING }
+    seq({
+        let mut b = tbs;
+        b.extend(sig_alg_id);
+        b.extend(bit_str(sig.to_vec()));
+        b
+    })
+}
+
+/// Builds a P-256 IACA root and a minimal Ed448 DSC signed by that root.
+///
+/// `rcgen 0.13` does not support Ed448 key generation; the DSC is assembled from raw
+/// DER via [`build_ed448_dsc_manual`].  The DSC's SPKI holds OID `1.3.101.113`
+/// (id-Ed448) with a fake public key — sufficient to exercise the OID rejection check.
+fn build_ed448_dsc_chain() -> (Vec<u8>, Vec<u8>) {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa};
+
+    // Use cloud_wallet_crypto key so we can sign the TBSCertificate for the DSC.
+    let iaca_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+            .expect("P-256 IACA key generation must succeed");
+
+    let iaca_pkcs8 = iaca_aws_key.to_pkcs8_der();
+    let iaca_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            iaca_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+    )
+    .expect("loading P-256 key into rcgen must succeed");
+
+    let mut iaca_params =
+        CertificateParams::new(vec!["Ed448 Test IACA".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_rcgen_key)
+        .expect("IACA self-sign must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+
+    let dsc_der = build_ed448_dsc_manual(&iaca_der, &iaca_aws_key);
+
+    (iaca_der, dsc_der)
+}
+
+#[test]
+fn verify_issuer_signature_rejects_ed448_algorithm() {
+    // Ed448 (OID 1.3.101.113) is not supported even when the COSE alg field is
+    // EdDSA (-8). The check fires after chain validation but before the crypto
+    // backend, so a dummy signature is sufficient to reach the rejection.
+    let (iaca_der, dsc_der) = build_ed448_dsc_chain();
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -8} (EdDSA) protected header: a1 01 27
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x27]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Ed448 DSC must still parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
+        .expect_err("Ed448 DSC must be rejected");
+
+    // Assert
+    assert!(
+        matches!(err, MdocError::UnsupportedAlgorithm { alg: -8 }),
+        "expected UnsupportedAlgorithm {{ alg: -8 }}, got: {err:?}"
+    );
+}
+
+/// Builds an IACA root (P-256) and a DSC backed by a P-384 key (ES384 / -35).
+///
+/// Returns `(iaca_der, dsc_der, dsc_signing_key)`.
+fn build_chain_p384() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+    use rcgen::{
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
+    };
+
+    let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
+    let mut iaca_params =
+        CertificateParams::new(vec!["IACA Root P384".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_key)
+        .expect("self-signed IACA cert must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+    let dsc_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P384)
+            .expect("aws-lc-rs P-384 key generation must succeed");
+
+    let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            dsc_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P384_SHA384,
+    )
+    .expect("loading P-384 key into rcgen must succeed");
+
+    let not_before =
+        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
+    let not_after =
+        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
+
+    let mut dsc_params = CertificateParams::new(vec!["DSC P384".to_string()]).expect("dsc params");
+    dsc_params.is_ca = IsCa::NoCa;
+    dsc_params.not_before = not_before;
+    dsc_params.not_after = not_after;
+    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    let dsc_cert = dsc_params
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
+        .expect("DSC P-384 signing by IACA must succeed");
+    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+    (iaca_der, dsc_der, dsc_aws_key)
+}
+
+/// Like [`build_issuer_signed_with_issuer_auth`] but uses the ES384 algorithm (-35).
+///
+/// Protected header encodes `{1: -35}` and the payload is signed with SHA-384.
+fn build_issuer_signed_es384(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -35} (ES384), CBOR-encoded: a1 01 38 22
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x38, 0x22];
+
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]),
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+
+    let sig_bytes = signing_key
+        .sign_sha384(&tbs)
+        .expect("ES384 COSE signing must succeed");
+
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+
+    let raw = cbor(&issuer_signed);
+    Base64UrlUnpadded::encode_string(&raw)
+}
+
+#[test]
+fn verify_issuer_signature_accepts_valid_es384() {
+    // Arrange: P-384 key pair, real ES384 signature, proper chain and EKU.
+    let (iaca_der, dsc_der, signing_key) = build_chain_p384();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_es384(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ES384 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "valid ES384 COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+/// Builds an IACA root (P-256) and a DSC backed by an Ed25519 key.
+///
+/// Returns `(iaca_der, dsc_der, dsc_signing_key)`.
+fn build_chain_ed25519() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ed25519::KeyPair) {
+    use rcgen::{
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
+    };
+
+    let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
+    let mut iaca_params =
+        CertificateParams::new(vec!["IACA Root Ed25519".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_key)
+        .expect("self-signed IACA cert must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+    let dsc_aws_key = cloud_wallet_crypto::ed25519::KeyPair::generate()
+        .expect("aws-lc-rs Ed25519 key generation must succeed");
+
+    let mut pkcs8_buf = [0u8; 128];
+    let dsc_pkcs8 = dsc_aws_key
+        .to_pkcs8_der(&mut pkcs8_buf)
+        .expect("Ed25519 PKCS#8 export must succeed");
+    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            dsc_pkcs8.to_vec(),
+        )),
+        &rcgen::PKCS_ED25519,
+    )
+    .expect("loading Ed25519 key into rcgen must succeed");
+
+    let not_before =
+        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
+    let not_after =
+        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
+
+    let mut dsc_params =
+        CertificateParams::new(vec!["DSC Ed25519".to_string()]).expect("dsc params");
+    dsc_params.is_ca = IsCa::NoCa;
+    dsc_params.not_before = not_before;
+    dsc_params.not_after = not_after;
+    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    let dsc_cert = dsc_params
+        .signed_by(&dsc_rcgen_key, &iaca_issuer)
+        .expect("DSC Ed25519 signing by IACA must succeed");
+    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+    (iaca_der, dsc_der, dsc_aws_key)
+}
+
+/// Like [`build_issuer_signed_with_issuer_auth`] but uses the EdDSA algorithm (-8)
+/// with an Ed25519 signing key.
+///
+/// Protected header encodes `{1: -8}` and the TBS is signed directly by `signing_key`.
+fn build_issuer_signed_ed25519(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ed25519::KeyPair,
+) -> String {
+    // {1: -8} (EdDSA), CBOR-encoded: a1 01 27
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x27];
+
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]),
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+
+    let sig_bytes = signing_key.sign(&tbs);
+
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+
+    let cose_sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1),
+    ]);
+
+    let raw = cbor(&issuer_signed);
+    Base64UrlUnpadded::encode_string(&raw)
+}
+
+#[test]
+fn verify_issuer_signature_accepts_valid_ed25519() {
+    // Arrange: Ed25519 key pair, real EdDSA signature, proper chain and EKU.
+    let (iaca_der, dsc_der, signing_key) = build_chain_ed25519();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_ed25519(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid Ed25519 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    // Act
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "valid EdDSA/Ed25519 COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+#[test]
+fn tbs_data_preserves_original_protected_header_bytes() {
+    // Arrange
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+
+    // {1: -7} (ES256), CBOR-encoded: a1 01 26 — these are the exact bytes the parser
+    // will store as CoseSign1::protected::original_data.
+    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
+
+    // RFC 9052 §4.4 Sig_Structure: ["Signature1", protected_bstr, external_aad, payload]
+    let expected_tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header_bytes.clone()),
+        Value::Bytes(vec![]), // external AAD = b""
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+
+    let sig_bytes = signing_key
+        .sign_sha256(&expected_tbs)
+        .expect("signing must succeed in tests");
+
+    let unprotected_map = Value::Map(vec![(
+        Value::Integer(33.into()),
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+    )]);
+    let cose_sign1_val = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header_bytes),
+            unprotected_map,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig_bytes.to_vec()),
+        ])),
+    );
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let issuer_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".into()),
+            Value::Map(vec![(
+                Value::Text("org.iso.18013.5.1".into()),
+                Value::Array(vec![item_tag24]),
+            )]),
+        ),
+        (Value::Text("issuerAuth".into()), cose_sign1_val),
+    ]);
+    let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
+
+    // Act: ask coset for the Sig_Structure it will use for verification.
+    let actual_tbs = mdoc.cose_sign1.tbs_data(b"");
+
+    // Assert: byte-exact match confirms no re-encoding occurred between parse and verify.
+    assert_eq!(
+        actual_tbs, expected_tbs,
+        "tbs_data() must return the same byte sequence as the manually-constructed Sig_Structure"
+    );
+
+    // End-to-end confirmation: the signature was created over `expected_tbs`; if
+    // tbs_data() had re-encoded the header, verification would fail with InvalidIssuerSignature.
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    assert!(
+        result.is_ok(),
+        "signature over original protected-header bytes must verify: {result:?}"
     );
 }
