@@ -1,3 +1,6 @@
+pub mod verifier;
+pub mod wallet;
+
 use std::collections::HashMap;
 use std::fmt;
 
@@ -8,9 +11,6 @@ use serde_with::skip_serializing_none;
 
 use crate::errors::{Error, ErrorKind};
 use crate::utils::validate_non_empty_array_with_kind;
-
-pub mod verifier;
-pub mod wallet;
 
 /// Extension format capability object for unknown credential formats.
 pub type ExtensionFormatCapability = HashMap<String, Value>;
