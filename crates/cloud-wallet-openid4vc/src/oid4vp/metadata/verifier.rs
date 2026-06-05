@@ -3,13 +3,11 @@
 //! OpenID4VP Section 11 reuses OAuth Client Metadata from RFC 7591 and adds
 //! `vp_formats_supported`.
 
-use std::collections::HashMap;
 use std::fmt;
 
 use cloud_wallet_crypto::jwk::{JwkSet, KeyManagement};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use serde_with::skip_serializing_none;
 
 use crate::errors::{Error, ErrorKind};
@@ -17,20 +15,16 @@ use crate::impl_string_enum;
 use crate::oauth::client_metadata::ClientMetadata;
 use crate::utils::validate_non_empty_array_with_kind;
 
-/// Extension format capability object.
-pub type ExtensionFormatCapability = HashMap<String, Value>;
+// Import shared components from parent module
+use super::{VpFormatsSupported, deserialize_vp_formats_supported};
 
-/// Non-empty JOSE algorithm identifier.
-pub type JoseAlgorithmIdentifier = NonEmptyString;
-
-/// Non-empty Data Integrity proof type identifier.
-pub type ProofTypeIdentifier = NonEmptyString;
-
-/// Non-empty Data Integrity cryptosuite identifier.
-pub type CryptosuiteIdentifier = NonEmptyString;
-
-/// Credential formats supported by a Verifier, keyed by Credential Format Identifier.
-pub type VpFormatsSupported = HashMap<CredentialFormatIdentifier, VpFormatCapability>;
+// Re-export shared types for convenience
+pub use super::{
+    CoseAlgorithmIdentifier, CredentialFormatIdentifier, CryptosuiteIdentifier,
+    ExtensionFormatCapability, JoseAlgorithmIdentifier, JwtVcJsonFormatCapability,
+    LdpVcFormatCapability, MsoMdocFormatCapability, NonEmptyString, ProofTypeIdentifier,
+    SdJwtVcFormatCapability, VpFormatCapability,
+};
 
 /// Verifier Metadata, also known as OAuth Client Metadata in OpenID4VP.
 #[skip_serializing_none]
@@ -150,230 +144,6 @@ impl From<VerifierMetadataUnchecked> for VerifierMetadata {
     }
 }
 
-/// Credential Format Identifier values defined by OpenID4VP Appendix B.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CredentialFormatIdentifier {
-    JwtVcJson,
-    LdpVc,
-    MsoMdoc,
-    DcSdJwt,
-    Other(String),
-}
-
-impl CredentialFormatIdentifier {
-    fn parse(value: String) -> Result<Self, String> {
-        if value.trim().is_empty() {
-            return Err("credential format identifier must not be empty".to_string());
-        }
-
-        Ok(match value.as_str() {
-            "jwt_vc_json" => Self::JwtVcJson,
-            "ldp_vc" => Self::LdpVc,
-            "mso_mdoc" => Self::MsoMdoc,
-            "dc+sd-jwt" => Self::DcSdJwt,
-            _ => Self::Other(value),
-        })
-    }
-
-    fn as_str(&self) -> &str {
-        match self {
-            Self::JwtVcJson => "jwt_vc_json",
-            Self::LdpVc => "ldp_vc",
-            Self::MsoMdoc => "mso_mdoc",
-            Self::DcSdJwt => "dc+sd-jwt",
-            Self::Other(value) => value,
-        }
-    }
-}
-
-impl Serialize for CredentialFormatIdentifier {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for CredentialFormatIdentifier {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(value).map_err(D::Error::custom)
-    }
-}
-
-impl fmt::Display for CredentialFormatIdentifier {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Format-specific capability object used in `vp_formats_supported`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VpFormatCapability {
-    JwtVcJson(JwtVcJsonFormatCapability),
-    LdpVc(LdpVcFormatCapability),
-    MsoMdoc(MsoMdocFormatCapability),
-    DcSdJwt(SdJwtVcFormatCapability),
-    Other(ExtensionFormatCapability),
-}
-
-impl VpFormatCapability {
-    /// Validates the format capability.
-    pub(crate) fn validate(&self) -> Result<(), Error> {
-        match self {
-            Self::JwtVcJson(capability) => capability.validate(),
-            Self::LdpVc(capability) => capability.validate(),
-            Self::MsoMdoc(capability) => capability.validate(),
-            Self::DcSdJwt(capability) => capability.validate(),
-            Self::Other(_) => Ok(()),
-        }
-    }
-}
-
-impl Serialize for VpFormatCapability {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::JwtVcJson(capability) => capability.serialize(serializer),
-            Self::LdpVc(capability) => capability.serialize(serializer),
-            Self::MsoMdoc(capability) => capability.serialize(serializer),
-            Self::DcSdJwt(capability) => capability.serialize(serializer),
-            Self::Other(capability) => capability.serialize(serializer),
-        }
-    }
-}
-
-/// Metadata for `jwt_vc_json`.
-#[skip_serializing_none]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct JwtVcJsonFormatCapability {
-    /// JOSE algorithms supported for a JWT-secured W3C VC or VP.
-    pub alg_values: Option<Vec<JoseAlgorithmIdentifier>>,
-}
-
-impl JwtVcJsonFormatCapability {
-    pub(crate) fn validate(&self) -> Result<(), Error> {
-        validate_optional_identifier_array(&self.alg_values, "jwt_vc_json.alg_values")
-    }
-}
-
-/// Metadata for `ldp_vc`.
-#[skip_serializing_none]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LdpVcFormatCapability {
-    /// Data Integrity proof types supported for a W3C VC or VP.
-    pub proof_type_values: Option<Vec<ProofTypeIdentifier>>,
-
-    /// Data Integrity cryptosuites supported for a W3C VC or VP.
-    pub cryptosuite_values: Option<Vec<CryptosuiteIdentifier>>,
-}
-
-impl LdpVcFormatCapability {
-    pub(crate) fn validate(&self) -> Result<(), Error> {
-        validate_optional_identifier_array(&self.proof_type_values, "ldp_vc.proof_type_values")?;
-        validate_optional_identifier_array(&self.cryptosuite_values, "ldp_vc.cryptosuite_values")
-    }
-}
-
-/// Metadata for `mso_mdoc`.
-#[skip_serializing_none]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MsoMdocFormatCapability {
-    /// COSE algorithm identifiers supported for mdoc IssuerAuth.
-    pub issuerauth_alg_values: Option<Vec<CoseAlgorithmIdentifier>>,
-
-    /// COSE algorithm identifiers supported for mdoc DeviceAuth.
-    pub deviceauth_alg_values: Option<Vec<CoseAlgorithmIdentifier>>,
-}
-
-impl MsoMdocFormatCapability {
-    pub(crate) fn validate(&self) -> Result<(), Error> {
-        validate_optional_cose_array(
-            &self.issuerauth_alg_values,
-            "mso_mdoc.issuerauth_alg_values",
-        )?;
-        validate_optional_cose_array(
-            &self.deviceauth_alg_values,
-            "mso_mdoc.deviceauth_alg_values",
-        )
-    }
-}
-
-/// Metadata for `dc+sd-jwt`.
-#[skip_serializing_none]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SdJwtVcFormatCapability {
-    /// JOSE algorithms supported for an Issuer-signed SD-JWT.
-    #[serde(rename = "sd-jwt_alg_values")]
-    pub sd_jwt_alg_values: Option<Vec<JoseAlgorithmIdentifier>>,
-
-    /// JOSE algorithms supported for a Key Binding JWT.
-    #[serde(rename = "kb-jwt_alg_values")]
-    pub kb_jwt_alg_values: Option<Vec<JoseAlgorithmIdentifier>>,
-}
-
-impl SdJwtVcFormatCapability {
-    pub(crate) fn validate(&self) -> Result<(), Error> {
-        validate_optional_identifier_array(&self.sd_jwt_alg_values, "dc+sd-jwt.sd-jwt_alg_values")?;
-        validate_optional_identifier_array(&self.kb_jwt_alg_values, "dc+sd-jwt.kb-jwt_alg_values")
-    }
-}
-
-/// Non-empty string identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct NonEmptyString(String);
-
-impl NonEmptyString {
-    pub fn new(value: impl Into<String>, field: &str) -> Result<Self, String> {
-        let value = value.into();
-        if value.trim().is_empty() {
-            return Err(format!("{field} must not be empty"));
-        }
-        Ok(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for NonEmptyString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value, "non-empty string identifier").map_err(D::Error::custom)
-    }
-}
-
-impl fmt::Display for NonEmptyString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// COSE algorithm identifier used by mdoc metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum CoseAlgorithmIdentifier {
-    /// Numeric COSE algorithm identifier.
-    Integer(i64),
-
-    /// Fully specified algorithm identifier from a profile or registry.
-    String(NonEmptyString),
-}
-
 /// JWE content encryption algorithms from RFC 7518 Section 5.1.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum JweContentEncryptionAlgorithm {
@@ -488,66 +258,6 @@ impl fmt::Display for JweKeyManagementAlgorithm {
     }
 }
 
-pub(crate) fn deserialize_vp_formats_supported<'de, D>(
-    deserializer: D,
-) -> Result<VpFormatsSupported, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw = HashMap::<String, Value>::deserialize(deserializer)?;
-    let mut formats = HashMap::with_capacity(raw.len());
-
-    for (format, value) in raw {
-        let format = CredentialFormatIdentifier::parse(format).map_err(D::Error::custom)?;
-        let capability = parse_format_capability(&format, value).map_err(D::Error::custom)?;
-        formats.insert(format, capability);
-    }
-    Ok(formats)
-}
-
-fn parse_format_capability(
-    format: &CredentialFormatIdentifier,
-    value: Value,
-) -> Result<VpFormatCapability, serde_json::Error> {
-    Ok(match format {
-        CredentialFormatIdentifier::JwtVcJson => {
-            VpFormatCapability::JwtVcJson(serde_json::from_value(value)?)
-        }
-        CredentialFormatIdentifier::LdpVc => {
-            VpFormatCapability::LdpVc(serde_json::from_value(value)?)
-        }
-        CredentialFormatIdentifier::MsoMdoc => {
-            VpFormatCapability::MsoMdoc(serde_json::from_value(value)?)
-        }
-        CredentialFormatIdentifier::DcSdJwt => {
-            VpFormatCapability::DcSdJwt(serde_json::from_value(value)?)
-        }
-        CredentialFormatIdentifier::Other(_) => {
-            VpFormatCapability::Other(serde_json::from_value(value)?)
-        }
-    })
-}
-
-fn validate_optional_identifier_array(
-    values: &Option<Vec<NonEmptyString>>,
-    field: &str,
-) -> Result<(), Error> {
-    if let Some(values) = values {
-        validate_non_empty_verifier_array(values, field)?;
-    }
-    Ok(())
-}
-
-fn validate_optional_cose_array(
-    values: &Option<Vec<CoseAlgorithmIdentifier>>,
-    field: &str,
-) -> Result<(), Error> {
-    if let Some(values) = values {
-        validate_non_empty_verifier_array(values, field)?;
-    }
-    Ok(())
-}
-
 fn validate_non_empty_verifier_array<T>(values: &[T], field: &str) -> Result<(), Error> {
     validate_non_empty_array_with_kind(values, field, ErrorKind::InvalidVerifierMetadata)
 }
@@ -563,7 +273,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T, Error> {
 mod tests {
     use super::*;
     use crate::oauth::client_metadata::{GrantType, ResponseType, TokenEndpointAuthMethod};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn valid_jwks() -> Value {
         json!({
