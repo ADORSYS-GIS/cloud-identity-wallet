@@ -351,7 +351,7 @@ fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str) -> Result<()> 
 mod tests {
     use url::Url;
 
-use super::super::authorization::{AuthorizationRequest, ResponseMode, ResponseType};
+    use super::super::authorization::{AuthorizationRequest, ResponseMode, ResponseType};
     use super::super::client_id::{ClientIdPrefix, ParsedClientId};
     use super::*;
 
