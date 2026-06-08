@@ -2,7 +2,10 @@
 ignore = [
     # Present in rsa crate. As there is currently no available fix for this vulnerability,
     # this change temporarily ignores the advisory to allow CI/CD pipelines to pass
-    "RUSTSEC-2023-0071"
+    "RUSTSEC-2023-0071",
+    # This is caused by `proc-macro-error2`, which is a dependency of the `validator` crate and is currently unmaintained.
+    # This advisory will be ignored until the validator crate is updated to use a maintained version of proc-macro-error.
+    "RUSTSEC-2026-0173"
 ]  # advisory IDs to ignore
 
 informational_warnings = ["unmaintained"]
