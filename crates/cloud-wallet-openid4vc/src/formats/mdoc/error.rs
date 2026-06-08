@@ -7,10 +7,10 @@ pub type Result<T> = std::result::Result<T, MdocError>;
 
 /// Errors that can occur while parsing or verifying an mDoc document.
 ///
-/// Returned by [`ParsedMdoc::parse`] and [`verify_digests`].
+/// Returned by [`ParsedMdoc::parse`] and verify_digests.
 ///
 /// [`ParsedMdoc::parse`]: crate::formats::mdoc::ParsedMdoc::parse
-/// [`verify_digests`]: crate::formats::mdoc::verifier::verify_digests
+/// verify_digests crate::formats::mdoc::verifier::verify_digests
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum MdocError {
