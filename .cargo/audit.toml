@@ -11,7 +11,7 @@ severity_threshold = "low"
 # Output Configuration
 [output]
 deny = [
-    "unmaintained"
+  "unmaintained"
 ]  # exit on error if unmaintained dependencies are found
 format = "terminal"  # "terminal" (human readable report) or "json"
 quiet = false  # Only print information on error
