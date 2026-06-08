@@ -15,9 +15,6 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-# Only fail on medium severity or higher advisories
-# This allows informational advisories like "unmaintained" (low severity) to pass
-severity-threshold = "medium"
 ignore = [
   # Present in rsa crate. As there is currently no available fix for this vulnerability,
   # this change temporarily ignores the advisory to allow CI/CD pipelines to pass

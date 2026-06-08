@@ -10,7 +10,9 @@ severity_threshold = "low"
 
 # Output Configuration
 [output]
-deny = []  # Don't exit on error for any informational categories
+deny = [
+    "unmaintained"
+]  # Don't exit on error for any informational categories
 format = "terminal"  # "terminal" (human readable report) or "json"
 quiet = false  # Only print information on error
 
