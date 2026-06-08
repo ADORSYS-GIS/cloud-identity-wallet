@@ -15,6 +15,8 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
+# The lint level for unmaintained crates
+unmaintained = "workspace"
 ignore = [
   # Present in rsa crate. As there is currently no available fix for this vulnerability,
   # this change temporarily ignores the advisory to allow CI/CD pipelines to pass
