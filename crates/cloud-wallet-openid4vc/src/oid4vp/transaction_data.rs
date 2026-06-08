@@ -628,7 +628,7 @@ mod tests {
         assert_eq!(hash1, hash1_again);
 
         // The hash is computed over the original base64url string, not the decoded content.
-        assert_eq!(decoded1.original_encoded().as_ref(), encoded1);
+        assert_eq!(decoded1.original_encoded(), encoded1);
 
         // Create a different physical encoding with extra whitespace
         let json_str_with_whitespace = r#"{ "type": "openid4vp", "credential_ids": ["cred1"] }"#;
