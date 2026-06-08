@@ -8,11 +8,14 @@ use super::authorization::AuthorizationRequest;
 use super::client_id::ParsedClientId;
 use crate::core::rfc7519::RFC7519Claims;
 use crate::errors::{Error, ErrorKind, Result};
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, dangerous, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
+const REQUEST_OBJECT_TYP: &str = "oauth-authz-req+jwt";
+const SELF_ISSUED_AUDIENCE: &str = "https://self-issued.me/v2";
 /// Async trait for resolving verifier public keys for signature verification.
 #[async_trait::async_trait]
 pub trait VerifierKeyResolver: Send + Sync {
@@ -21,32 +24,11 @@ pub trait VerifierKeyResolver: Send + Sync {
     -> Result<DecodingKey>;
 }
 
-const REQUEST_OBJECT_TYP: &str = "oauth-authz-req+jwt";
-const SELF_ISSUED_AUDIENCE: &str = "https://self-issued.me/v2";
-
 /// Returns `true` if the client_id scheme requires a signed Request Object.
 ///
 /// Per OpenID4VP Section 5.6, only `redirect_uri` scheme permits unsigned requests.
 pub fn client_id_requires_signature(client_id: &ParsedClientId) -> bool {
     !client_id.is_redirect_uri()
-}
-
-/// Validates the JWT header for a Request Object per RFC 9101.
-fn validate_header(header: &Header) -> Result<()> {
-    let typ = header.typ.as_deref().ok_or_else(|| {
-        Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            "Request Object typ claim is missing",
-        )
-    })?;
-    if typ.to_lowercase() != REQUEST_OBJECT_TYP.to_lowercase() {
-        return Err(Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            format!("Request Object typ must be '{REQUEST_OBJECT_TYP}', got '{typ}'"),
-        ));
-    }
-
-    Ok(())
 }
 
 /// Claims in a Request Object JWT (OpenID4VP Section 5.8 / RFC 9101).
@@ -240,6 +222,24 @@ impl RequestObject {
             client_id: parsed_client_id,
         })
     }
+}
+
+/// Validates the JWT header for a Request Object per RFC 9101.
+fn validate_header(header: &Header) -> Result<()> {
+    let typ = header.typ.as_deref().ok_or_else(|| {
+        Error::message(
+            ErrorKind::InvalidPresentationRequest,
+            "Request Object typ claim is missing",
+        )
+    })?;
+    if typ.to_lowercase() != REQUEST_OBJECT_TYP.to_lowercase() {
+        return Err(Error::message(
+            ErrorKind::InvalidPresentationRequest,
+            format!("Request Object typ must be '{REQUEST_OBJECT_TYP}', got '{typ}'"),
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str) -> Result<()> {
