@@ -13,6 +13,7 @@ use cloud_wallet_crypto::ecdsa::VerifyingKey as EcdsaKey;
 use cloud_wallet_crypto::ed25519::VerifyingKey as Ed25519Key;
 use cloud_wallet_crypto::jwk::{Jwk, Key, OkpCurve};
 use x509_parser::prelude::{FromDer as _, X509Certificate};
+use time::OffsetDateTime;
 
 use super::cert_chain::{
     check_country_consistency, check_dsc_eku, check_dsc_key_usage, check_dsc_validity_period,
@@ -154,6 +155,10 @@ pub struct IssuerInfo {
 ///   root appears in the chain, or the DSC validity period exceeds 457 days.
 /// - [`MdocError::CountryMismatch`] — DSC and IACA have different country codes.
 /// - [`MdocError::MissingDocSignerEku`] — DSC does not carry OID 1.0.18013.5.1.2.
+/// - [`MdocError::MissingDigitalSignatureKeyUsage`] — DSC Key Usage extension is absent or
+///   `digitalSignature` bit is not set.
+/// - [`MdocError::NonCriticalKeyUsage`] — DSC Key Usage extension is present and bit is set
+///   but the extension is not marked critical.
 /// - [`MdocError::DocTypeMismatch`] — outer `docType` differs from MSO `docType`.
 /// - [`MdocError::SignedOutsideDscValidity`] — MSO `signed` is outside DSC validity.
 /// - [`MdocError::InvalidIssuerSignature`] — signature does not verify.
@@ -567,6 +572,36 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
         return Err(MdocError::DeviceKeyMismatch);
     }
 
+    Ok(())
+}
+
+/// Runs the full ISO 18013-5 §9.1.2 verification chain for an already-parsed mdoc.
+/// Using this function rather than calling the four checks individually ensures
+/// that no check is accidentally omitted or reordered at a call site.
+///
+/// # Arguments
+///
+/// * `parsed` — the structurally-parsed mdoc (from [`ParsedMdoc::parse`]).
+/// * `outer_doc_type` — the `docType` string from the credential configuration,
+///   matched against the MSO `docType` field.
+/// * `trust_store` — IACA root certificates accepted for this wallet deployment.
+/// * `proof_jwk` — the holder's public key from the OID4VCI proof JWT header.
+/// * `now` — the current time; use `OffsetDateTime::now_utc()` in production.
+///
+/// # Errors
+///
+/// Propagates errors from any of the four underlying checks.
+pub fn verify_mdoc_for_issuance(
+    parsed: &ParsedMdoc,
+    outer_doc_type: &str,
+    trust_store: &dyn IacaTrustStore,
+    proof_jwk: &Jwk,
+    now: OffsetDateTime,
+) -> Result<()> {
+    parsed.check_temporal_validity(now)?;       
+    verify_issuer_signature(parsed, outer_doc_type, trust_store)?;  
+    verify_digests(parsed)?;                     
+    verify_device_key_binding(parsed, proof_jwk)?;
     Ok(())
 }
 

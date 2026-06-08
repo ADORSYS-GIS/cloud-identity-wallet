@@ -121,6 +121,8 @@ features = [
 ]
 
 [dev-dependencies]
+base64ct = { workspace = true, features = ["alloc"] }
+ciborium = "0.2"
 rcgen.workspace = true
 reqwest = { version = "0.13", features = ["json"] }
 serde_json = { workspace = true }

@@ -142,30 +142,36 @@ pub(super) fn check_dsc_eku(dsc: &X509Certificate<'_>) -> Result<()> {
 }
 
 /// Checks that the Document Signer Certificate has the `digitalSignature` key usage bit
-/// set (ISO 18013-5 Annex B Table B.3).
+/// set **and** that the Key Usage extension is marked critical
+/// (ISO 18013-5 Annex B Table B.3).
 ///
 /// # Errors
 ///
 /// - [`MdocError::MissingDigitalSignatureKeyUsage`] — the Key Usage extension is absent
 ///   or the `digitalSignature` bit is not set.
+/// - [`MdocError::NonCriticalKeyUsage`] — the `digitalSignature` bit is set but the
+///   extension is not marked critical.
 pub(super) fn check_dsc_key_usage(dsc: &X509Certificate<'_>) -> Result<()> {
-    let digital_signature_set = dsc
+    // Collect both the bit value and the criticality flag in one pass.
+    let key_usage_ext = dsc
         .extensions()
         .iter()
         .find_map(|ext| {
             if let ParsedExtension::KeyUsage(ku) = ext.parsed_extension() {
-                Some(ku.digital_signature())
+                Some((ku.digital_signature(), ext.critical))
             } else {
                 None
             }
-        })
-        .unwrap_or(false); // absent extension → treat as not set
+        });
 
-    if !digital_signature_set {
-        return Err(MdocError::MissingDigitalSignatureKeyUsage);
+    match key_usage_ext {
+        // Extension absent or digitalSignature bit not set.
+        None | Some((false, _)) => Err(MdocError::MissingDigitalSignatureKeyUsage),
+        // Bit set but extension is non-critical — distinct violation per Annex B Table B.3.
+        Some((true, false)) => Err(MdocError::NonCriticalKeyUsage),
+        // Bit set and extension is critical — compliant.
+        Some((true, true)) => Ok(()),
     }
-
-    Ok(())
 }
 
 /// Extracts the raw SubjectPublicKeyInfo (SPKI) DER bytes from a parsed certificate.
