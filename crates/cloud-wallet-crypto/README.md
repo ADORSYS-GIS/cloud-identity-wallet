@@ -187,33 +187,36 @@ assert_eq!(digest.as_ref().len(), 32); // SHA-256 = 32 bytes
 > **Note**: JWK support requires the `jwk` feature flag.
 
 ```rust
+# #[cfg(feature = "jwk")]
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use cloud_wallet_crypto::{
     ecdsa::{KeyPair, Curve},
     jwk::{Jwk, Parameters, Algorithm, Signing},
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Generate key and convert to JWK
-    let keypair = KeyPair::generate(Curve::P256)?;
-    let mut jwk = Jwk::try_from(&keypair)?;
+// Generate key and convert to JWK
+let keypair = KeyPair::generate(Curve::P256)?;
+let mut jwk = Jwk::try_from(&keypair)?;
 
-    // Add metadata
-    jwk.prm = Parameters {
-        kid: Some("signing-key".to_string()),
-        alg: Some(Algorithm::Signing(Signing::Es256)),
-        ..Default::default()
-    };
+// Add metadata
+jwk.prm = Parameters {
+    kid: Some("signing-key".to_string()),
+    alg: Some(Algorithm::Signing(Signing::Es256)),
+    ..Default::default()
+};
 
-    // Serialize to JSON
-    let json = serde_json::to_string_pretty(&jwk)?;
+// Serialize to JSON
+let json = serde_json::to_string_pretty(&jwk)?;
 
-    // Parse from JSON
-    let parsed: Jwk = serde_json::from_str(&json)?;
+// Parse from JSON
+let parsed: Jwk = serde_json::from_str(&json)?;
 
-    // Convert back to verifying key
-    let verifying_key = cloud_wallet_crypto::ecdsa::VerifyingKey::try_from(&parsed)?;
-    Ok(())
-}
+// Convert back to verifying key
+let verifying_key = cloud_wallet_crypto::ecdsa::VerifyingKey::try_from(&parsed)?;
+Ok(())
+# }
+# #[cfg(not(feature = "jwk"))]
+# fn main() {}
 ```
 
 ## Contributing
