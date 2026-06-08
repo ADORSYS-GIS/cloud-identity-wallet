@@ -1,18 +1,8 @@
 use std::collections::BTreeMap;
 
-use thiserror::Error;
-
 use crate::oid4vp::authorization::{Presentation, VpToken};
 
-#[derive(Debug, Error)]
-pub enum VpTokenBuilderError {
-    #[error("VP token must contain at least one credential query entry")]
-    EmptyEntries,
-    #[error("VP token entry '{query_id}' must contain at least one presentation")]
-    EmptyPresentation { query_id: String },
-    #[error("Invalid DCQL query identifier: {0}")]
-    InvalidQueryId(String),
-}
+use super::error::VpTokenBuilderError;
 
 pub type Result<T> = std::result::Result<T, VpTokenBuilderError>;
 

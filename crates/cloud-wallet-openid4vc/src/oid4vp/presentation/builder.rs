@@ -1,29 +1,11 @@
 use std::collections::BTreeMap;
 
-use thiserror::Error;
-
 use crate::oid4vp::authorization::AuthorizationRequest;
 use crate::oid4vp::dcql::{CredentialFormat, CredentialQuery};
 use crate::oid4vp::presentation::vp_token::VpTokenBuilder;
 
-use super::holder_binding::{HolderBinding, HolderBindingProofError, KeyBindingInput};
-
-#[derive(Debug, Error)]
-pub enum PresentationBuilderError {
-    #[error("No credentials selected for presentation")]
-    NoCredentialsSelected,
-    #[error("Credential query ID '{0}' not found in DCQL query")]
-    QueryNotFound(String),
-    #[error("Format mismatch: credential format '{credential_format}' does not match query format '{query_format}'")]
-    FormatMismatch {
-        credential_format: String,
-        query_format: String,
-    },
-    #[error("Holder binding proof error: {0}")]
-    HolderBindingProof(#[from] HolderBindingProofError),
-    #[error("Failed to build VP token: {0}")]
-    VpTokenBuild(String),
-}
+use super::error::PresentationBuilderError;
+use super::holder_binding::{HolderBinding, KeyBindingInput};
 
 pub type Result<T> = std::result::Result<T, PresentationBuilderError>;
 
