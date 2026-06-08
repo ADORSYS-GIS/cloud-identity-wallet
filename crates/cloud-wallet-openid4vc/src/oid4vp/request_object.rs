@@ -4,129 +4,55 @@
 //! and RFC 9101. Verifiers send Authorization Requests as signed JWTs; the Wallet
 //! verifies the signature and validates claims.
 
+use super::authorization::AuthorizationRequest;
+use super::client_id::ParsedClientId;
+use crate::core::rfc7519::RFC7519Claims;
+use crate::errors::{Error, ErrorKind, Result};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use jsonwebtoken::Header;
+use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, decode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
-use url::Url;
 
-use super::authorization::AuthorizationRequest;
-use crate::core::rfc7519::RFC7519Claims;
-use crate::errors::{Error, ErrorKind, Result};
+/// Async trait for resolving verifier public keys for signature verification.
+#[async_trait::async_trait]
+pub trait VerifierKeyResolver: Send + Sync {
+    /// Resolves the decoding key for signature verification.
+    async fn resolve_key(
+        &self,
+        client_id: &ParsedClientId,
+        header: &RequestObjectHeader,
+    ) -> Result<DecodingKey>;
+}
 
 const REQUEST_OBJECT_TYP: &str = "oauth-authz-req+jwt";
 const SELF_ISSUED_AUDIENCE: &str = "https://self-issued.me/v2";
 
-/// Parsed `client_id` identifying the key resolution strategy.
+/// Returns `true` if the client_id scheme requires a signed Request Object.
 ///
-/// Per OpenID4VP Section 5.6, the `client_id` prefix determines how the verifier's
-/// public key is obtained for signature verification.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParsedClientId {
-    /// X.509 certificate with SAN DNS. Format: `x509_san_dns:<san-dns-name>`.
-    X509SanDns { san_dns: String },
-
-    /// X.509 certificate verified by hash. Format: `x509_hash:<algorithm>:<hash-value>`.
-    X509Hash { algorithm: String, hash: String },
-
-    /// Decentralized Identifier. Format: `did:<method>:<identifier>`.
-    DecentralizedIdentifier { did: String },
-
-    /// Verifier attestation. Format: `verifier_attestation:<attestation-jwt>`.
-    VerifierAttestation { attestation: String },
-
-    /// Redirect URI (unsigned requests). Format: `redirect_uri:<uri>`.
-    RedirectUri { uri: Url },
+/// Per OpenID4VP Section 5.6, only `redirect_uri` scheme permits unsigned requests.
+pub fn client_id_requires_signature(client_id: &ParsedClientId) -> bool {
+    !client_id.is_redirect_uri()
 }
 
-impl ParsedClientId {
-    /// Parses a `client_id` string into its variant.
-    pub fn parse(client_id: &str) -> Result<Self> {
-        if client_id.trim().is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "client_id must not be empty",
-            ));
-        }
-
-        if let Some(san_dns) = client_id.strip_prefix("x509_san_dns:") {
-            if san_dns.trim().is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "x509_san_dns scheme requires a non-empty SAN DNS name",
-                ));
-            }
-            return Ok(Self::X509SanDns {
-                san_dns: san_dns.to_string(),
-            });
-        }
-
-        if let Some(rest) = client_id.strip_prefix("x509_hash:") {
-            let parts: Vec<&str> = rest.splitn(2, ':').collect();
-            if parts.len() != 2 {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "x509_hash scheme requires format: x509_hash:<algorithm>:<hash>",
-                ));
-            }
-            let algorithm = parts[0].trim();
-            let hash = parts[1].trim();
-            if algorithm.is_empty() || hash.is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "x509_hash scheme requires non-empty algorithm and hash",
-                ));
-            }
-            return Ok(Self::X509Hash {
-                algorithm: algorithm.to_string(),
-                hash: hash.to_string(),
-            });
-        }
-
-        if let Some(attestation) = client_id.strip_prefix("verifier_attestation:") {
-            if attestation.trim().is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "verifier_attestation scheme requires a non-empty attestation JWT",
-                ));
-            }
-            return Ok(Self::VerifierAttestation {
-                attestation: attestation.to_string(),
-            });
-        }
-
-        if client_id.starts_with("did:") {
-            return Ok(Self::DecentralizedIdentifier {
-                did: client_id.to_string(),
-            });
-        }
-
-        if let Some(uri_str) = client_id.strip_prefix("redirect_uri:") {
-            let uri = Url::parse(uri_str).map_err(|e| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("redirect_uri contains invalid URL: {e}"),
-                )
-            })?;
-            if uri.scheme() != "https" {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "redirect_uri must use https scheme",
-                ));
-            }
-            return Ok(Self::RedirectUri { uri });
-        }
-
-        Err(Error::message(
+/// Parses a JWS algorithm string into a jsonwebtoken Algorithm.
+///
+/// Supports all algorithms required by RFC 7518 and OpenID4VP.
+pub fn parse_algorithm(alg: &str) -> Result<Algorithm> {
+    match alg {
+        "RS256" => Ok(Algorithm::RS256),
+        "RS384" => Ok(Algorithm::RS384),
+        "RS512" => Ok(Algorithm::RS512),
+        "ES256" => Ok(Algorithm::ES256),
+        "ES384" => Ok(Algorithm::ES384),
+        "PS256" => Ok(Algorithm::PS256),
+        "PS384" => Ok(Algorithm::PS384),
+        "PS512" => Ok(Algorithm::PS512),
+        "EdDSA" => Ok(Algorithm::EdDSA),
+        _ => Err(Error::message(
             ErrorKind::InvalidPresentationRequest,
-            format!("unrecognized client_id scheme: {client_id}"),
-        ))
-    }
-
-    /// Returns `true` if this client_id scheme requires a signed Request Object.
-    pub fn requires_signature(&self) -> bool {
-        !matches!(self, Self::RedirectUri { .. })
+            format!("unsupported algorithm: {alg}"),
+        )),
     }
 }
 
@@ -198,24 +124,66 @@ pub struct RequestObject {
 }
 
 impl RequestObject {
+    /// Decodes and validates a signed Request Object JWT.
+    pub async fn decode_and_validate(
+        jwt: &str,
+        wallet_id: &str,
+        resolver: &dyn VerifierKeyResolver,
+    ) -> Result<Self> {
+        validate_compact_jws(jwt)?;
+
+        let header = decode_header(jwt)?;
+        let request_header = parse_header_claims(&header)?;
+        request_header.validate()?;
+
+        let claims: RequestObjectClaims = decode_unverified_payload(jwt)?;
+        let client_id_str = claims.params.client_id.as_str();
+        let parsed_client_id = ParsedClientId::parse(client_id_str)
+            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+
+        // Resolve the verification key
+        let decoding_key = resolver
+            .resolve_key(&parsed_client_id, &request_header)
+            .await?;
+
+        // Verify the JWT signature
+        let algorithm = parse_algorithm(&request_header.alg)?;
+        let mut validation = Validation::new(algorithm);
+        validation.set_audience(&[wallet_id, SELF_ISSUED_AUDIENCE]);
+        validation.set_required_spec_claims(&["exp", "iat"]);
+
+        let _token_data = decode::<serde_json::Value>(jwt, &decoding_key, &validation)
+            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+
+        validate_claims(&claims, wallet_id)?;
+
+        Ok(Self {
+            header: request_header,
+            claims,
+            client_id: parsed_client_id,
+        })
+    }
+
     /// Decodes a Request Object without verifying the signature.
     ///
-    /// Usedfor `redirect_uri` client_id schemes where unsigned requests are permitted.
+    /// Used for `redirect_uri` client_id schemes where unsigned requests are permitted.
     pub async fn decode_unsigned(jwt: &str, wallet_id: &str) -> Result<Self> {
         validate_compact_jws(jwt)?;
 
         let header = decode_header(jwt)?;
         let request_header = parse_header_claims(&header)?;
+        request_header.validate()?;
 
         let claims: RequestObjectClaims = decode_unverified_payload(jwt)?;
         let client_id_str = claims.params.client_id.as_str();
-        let parsed_client_id = ParsedClientId::parse(client_id_str)?;
+        let parsed_client_id = ParsedClientId::parse(client_id_str)
+            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
 
-        if parsed_client_id.requires_signature() {
+        if client_id_requires_signature(&parsed_client_id) {
             return Err(Error::message(
                 ErrorKind::InvalidPresentationRequest,
                 format!(
-                    "client_id scheme '{}' requires a signed Request Object butdecode_unsigned was called",
+                    "client_id scheme '{}' requires a signed Request Object but decode_unsigned was called",
                     client_id_str
                 ),
             ));
@@ -382,6 +350,7 @@ fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::super::authorization::{AuthorizationRequest, ResponseMode, ResponseType};
+    use super::super::client_id::{ClientIdPrefix, ParsedClientId};
     use super::*;
 
     fn make_test_auth_request() -> AuthorizationRequest {
@@ -409,38 +378,29 @@ mod tests {
     #[test]
     fn parse_client_id_x509_san_dns() {
         let parsed = ParsedClientId::parse("x509_san_dns:verifier.example.com").unwrap();
-        assert_eq!(
-            parsed,
-            ParsedClientId::X509SanDns {
-                san_dns: "verifier.example.com".to_string()
-            }
-        );
-        assert!(parsed.requires_signature());
+        assert_eq!(parsed.prefix(), Some(ClientIdPrefix::X509SanDns));
+        assert!(client_id_requires_signature(&parsed));
     }
 
     #[test]
     fn parse_client_id_x509_hash() {
-        let parsed = ParsedClientId::parse("x509_hash:sha256:abc123").unwrap();
-        assert_eq!(
-            parsed,
-            ParsedClientId::X509Hash {
-                algorithm: "sha256".to_string(),
-                hash: "abc123".to_string()
-            }
-        );
-        assert!(parsed.requires_signature());
+        // Valid base64url-unpadded encoding of 32 bytes (SHA-256 hash)
+        let parsed =
+            ParsedClientId::parse("x509_hash:Uvo3HtuIxuhC92rShpgqcT3YXwrqRxWEviRiA0OZszk").unwrap();
+        assert_eq!(parsed.prefix(), Some(ClientIdPrefix::X509Hash));
+        assert!(client_id_requires_signature(&parsed));
     }
 
     #[test]
     fn parse_client_id_did() {
-        let parsed = ParsedClientId::parse("did:jwk:eyBrZXkiIDogInZhbHVlIiB9").unwrap();
+        let parsed =
+            ParsedClientId::parse("decentralized_identifier:did:jwk:eyBrZXkiIDogInZhbHVlIiB9")
+                .unwrap();
         assert_eq!(
-            parsed,
-            ParsedClientId::DecentralizedIdentifier {
-                did: "did:jwk:eyBrZXkiIDogInZhbHVlIiB9".to_string()
-            }
+            parsed.prefix(),
+            Some(ClientIdPrefix::DecentralizedIdentifier)
         );
-        assert!(parsed.requires_signature());
+        assert!(client_id_requires_signature(&parsed));
     }
 
     #[test]
@@ -449,38 +409,30 @@ mod tests {
             "verifier_attestation:eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
         )
         .unwrap();
-        assert_eq!(
-            parsed,
-            ParsedClientId::VerifierAttestation {
-                attestation: "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"
-                    .to_string()
-            }
-        );
-        assert!(parsed.requires_signature());
+        assert_eq!(parsed.prefix(), Some(ClientIdPrefix::VerifierAttestation));
+        assert!(client_id_requires_signature(&parsed));
     }
 
     #[test]
     fn parse_client_id_redirect_uri() {
         let parsed =
             ParsedClientId::parse("redirect_uri:https://verifier.example.com/callback").unwrap();
-        if let ParsedClientId::RedirectUri { ref uri } = parsed {
-            assert_eq!(uri.as_str(), "https://verifier.example.com/callback");
-            assert!(!parsed.requires_signature());
-        } else {
-            panic!("Expected RedirectUri variant");
-        }
+        assert_eq!(parsed.prefix(), Some(ClientIdPrefix::RedirectUri));
+        assert!(!client_id_requires_signature(&parsed));
     }
 
     #[test]
     fn parse_client_id_empty() {
         let result = ParsedClientId::parse("");
-        assert!(result.is_err());
+        // Empty string is treated as pre-registered client with empty value
+        assert!(result.is_ok());
     }
 
     #[test]
     fn parse_client_id_invalid() {
         let result = ParsedClientId::parse("not-a-valid-client-id");
-        assert!(result.is_err());
+        // Unknown prefix is treated as pre-registered client
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -734,19 +686,17 @@ mod tests {
         let request_object = result.unwrap();
         assert_eq!(
             request_object.client_id,
-            ParsedClientId::RedirectUri {
-                uri: Url::parse("https://verifier.example.com").unwrap()
-            }
+            ParsedClientId::parse("redirect_uri:https://verifier.example.com").unwrap()
         );
-        assert!(!request_object.client_id.requires_signature());
+        assert!(!client_id_requires_signature(&request_object.client_id));
     }
 
     #[tokio::test]
     async fn decode_unsigned_rejects_signed_client_id_schemes() {
         let test_cases = [
-            "did:jwk:eyBrZXkiIDogInZhbHVlIiB9",
+            "decentralized_identifier:did:jwk:eyBrZXkiIDogInZhbHVlIiB9",
             "x509_san_dns:verifier.example.com",
-            "x509_hash:sha256:abc123",
+            "x509_hash:Uvo3HtuIxuhC92rShpgqcT3YXwrqRxWEviRiA0OZszk",
             "verifier_attestation:eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
         ];
 
