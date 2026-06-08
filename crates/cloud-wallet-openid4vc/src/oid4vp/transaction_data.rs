@@ -89,7 +89,7 @@ impl<'a> TransactionData<'a> {
         let decoded_bytes =
             base64ct::Base64UrlUnpadded::decode_vec(base64url_encoded).map_err(|e| {
                 Error::message(
-                    ErrorKind::InvalidPresentationRequest,
+                    ErrorKind::InvalidTransactionData,
                     format!("Invalid base64url encoding: {e}"),
                 )
             })?;
@@ -113,7 +113,7 @@ impl<'a> TransactionData<'a> {
                 let mut generic: GenericTransactionData = serde_json::from_slice(&decoded_bytes)
                     .map_err(|e| {
                         Error::message(
-                            ErrorKind::InvalidPresentationRequest,
+                            ErrorKind::InvalidTransactionData,
                             format!("Invalid transaction data JSON: {e}"),
                         )
                     })?;
@@ -144,7 +144,7 @@ impl<'a> TransactionData<'a> {
                 // Validate type is a supported transaction data type (Section 8.5)
                 if !data.data_type.is_supported() {
                     return Err(Error::message(
-                        ErrorKind::InvalidPresentationRequest,
+                        ErrorKind::InvalidTransactionData,
                         format!(
                             "Transaction data type '{}' is not supported",
                             data.data_type
@@ -155,7 +155,7 @@ impl<'a> TransactionData<'a> {
                 // Validate credential_ids is non-empty
                 if data.credential_ids.is_empty() {
                     return Err(Error::message(
-                        ErrorKind::InvalidPresentationRequest,
+                        ErrorKind::InvalidTransactionData,
                         "Transaction data 'credential_ids' must be a non-empty array",
                     ));
                 }
@@ -164,7 +164,7 @@ impl<'a> TransactionData<'a> {
                 for (i, id) in data.credential_ids.iter().enumerate() {
                     if id.trim().is_empty() {
                         return Err(Error::message(
-                            ErrorKind::InvalidPresentationRequest,
+                            ErrorKind::InvalidTransactionData,
                             format!("Transaction data 'credential_ids[{i}]' must not be empty"),
                         ));
                     }
@@ -175,7 +175,7 @@ impl<'a> TransactionData<'a> {
                     && algs.is_empty()
                 {
                     return Err(Error::message(
-                        ErrorKind::InvalidPresentationRequest,
+                        ErrorKind::InvalidTransactionData,
                         "Transaction data 'transaction_data_hashes_alg' must be a non-empty array when present",
                     ));
                 }
@@ -185,7 +185,7 @@ impl<'a> TransactionData<'a> {
                     for alg in algs {
                         if IanaHashAlgorithm::from_str(alg).is_err() {
                             return Err(Error::message(
-                                ErrorKind::InvalidPresentationRequest,
+                                ErrorKind::InvalidTransactionData,
                                 format!(
                                     "Unsupported hash algorithm in transaction_data_hashes_alg: {alg}"
                                 ),
@@ -199,7 +199,7 @@ impl<'a> TransactionData<'a> {
             } => {
                 // For non-openid4vp types, always reject (Section 8.5)
                 return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
+                    ErrorKind::InvalidTransactionData,
                     format!(
                         "Transaction data type '{}' is not supported",
                         transaction_type
@@ -216,7 +216,7 @@ impl<'a> TransactionData<'a> {
         // Parse the algorithm string to IanaHashAlgorithm
         let iana_alg = IanaHashAlgorithm::from_str(alg).map_err(|_| {
             Error::message(
-                ErrorKind::InvalidPresentationRequest,
+                ErrorKind::InvalidTransactionData,
                 format!("Unsupported hash algorithm: {alg}"),
             )
         })?;
@@ -433,7 +433,7 @@ mod tests {
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
+        assert_eq!(err.kind(), ErrorKind::InvalidTransactionData);
     }
 
     #[test]
@@ -494,7 +494,7 @@ mod tests {
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
+        assert_eq!(err.kind(), ErrorKind::InvalidTransactionData);
         let err_msg = format!("{err}");
         assert!(err_msg.contains("not supported"));
     }
@@ -516,7 +516,7 @@ mod tests {
         );
 
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
+        assert_eq!(err.kind(), ErrorKind::InvalidTransactionData);
     }
 
     #[test]
@@ -833,6 +833,9 @@ mod tests {
 
         // Should fail because openid4vp uses deny_unknown_fields
         assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidTransactionData);
     }
 
     #[test]

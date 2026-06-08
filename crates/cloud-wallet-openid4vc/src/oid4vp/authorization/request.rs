@@ -292,15 +292,21 @@ impl AuthorizationRequest {
     fn validate_transaction_entry(idx: usize, entry: &str, valid_cred_ids: &[&str]) -> Result<()> {
         // Use TransactionData::decode for complete validation
         let txn_data = TransactionData::decode(entry).map_err(|e| {
-            invalid_request(format!("'transaction_data[{idx}]' validation failed: {e}"))
+            Error::message(
+                ErrorKind::InvalidTransactionData,
+                format!("'transaction_data[{idx}]' validation failed: {e}"),
+            )
         })?;
 
         // Validate that all credential_ids reference known credentials from the DCQL query
         for cred_id in txn_data.credential_ids() {
             if !valid_cred_ids.contains(&cred_id.as_str()) {
-                return Err(invalid_request(format!(
-                    "'transaction_data[{idx}]' references unknown credential id '{cred_id}'"
-                )));
+                return Err(Error::message(
+                    ErrorKind::InvalidTransactionData,
+                    format!(
+                        "'transaction_data[{idx}]' references unknown credential id '{cred_id}'"
+                    ),
+                ));
             }
         }
 
