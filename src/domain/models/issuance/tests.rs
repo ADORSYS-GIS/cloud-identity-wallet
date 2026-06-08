@@ -575,12 +575,12 @@ fn build_signed_mdoc(
     doctype: &str,
     valid_from_str: &str,
     valid_until_str: &str,
-    device_key_x: &[u8],
-    device_key_y: &[u8],
+    device_key_xy: (&[u8], &[u8]),
     dsc_der: Vec<u8>,
     signing_key: &EcdsaKeyPair,
     tamper: bool,
 ) -> String {
+    let (device_key_x, device_key_y) = device_key_xy;
     // Build one item with a real SHA-256 digest.
     let item = Value::Map(vec![
         (Value::Text("digestID".into()), Value::Integer(0u64.into())),
@@ -760,8 +760,7 @@ async fn mdoc_credential_fields_are_populated_from_mso_validity_info() {
         "org.iso.18013.5.1.mDL",
         "2024-01-01T00:00:00Z",
         "9998-01-01T00:00:00Z",
-        &x_bytes,
-        &y_bytes,
+        (&x_bytes, &y_bytes),
         dsc_der,
         &signing_key,
         false,
@@ -1011,8 +1010,7 @@ async fn mdoc_invalid_issuer_signature_is_rejected_before_storage() {
         "org.iso.18013.5.1.mDL",
         "2024-01-01T00:00:00Z",
         "9998-01-01T00:00:00Z",
-        &x_bytes,
-        &y_bytes,
+        (&x_bytes, &y_bytes),
         dsc_der,
         &signing_key,
         true, // tamper = corrupt the COSE signature
@@ -1058,8 +1056,7 @@ async fn mdoc_device_key_mismatch_is_rejected_before_storage() {
         "org.iso.18013.5.1.mDL",
         "2024-01-01T00:00:00Z",
         "9998-01-01T00:00:00Z",
-        &wrong_x,
-        &wrong_y,
+        (&wrong_x, &wrong_y),
         dsc_der,
         &signing_key,
         false,
