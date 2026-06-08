@@ -1,3 +1,11 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git merge *)",
+      "Bash(git status *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  },
   "mcpServers": {}
 }
