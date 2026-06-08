@@ -1,6 +1,6 @@
 //! Digest integrity and issuer signature verification for ISO 18013-5 mDoc credentials.
 //!
-//! Implements [`verify_digests`] (MSO digest check) and [`verify_issuer_signature`]
+//! Implements verify_digests (MSO digest check) and verify_issuer_signature
 //! (COSE_Sign1 + certificate chain validation) as required by ISO/IEC 18013-5 §9.1.2.
 
 use ciborium::Value;
@@ -117,7 +117,7 @@ impl IacaTrustStore for StaticTrustStore {
 
 /// Information about the issuer extracted from a successfully verified `issuerAuth`.
 ///
-/// Returned by [`verify_issuer_signature`] after the full verification pipeline
+/// Returned by verify_issuer_signature after the full verification pipeline
 /// (chain validation, EKU check, signature check) succeeds.
 #[derive(Debug)]
 pub struct IssuerInfo {
