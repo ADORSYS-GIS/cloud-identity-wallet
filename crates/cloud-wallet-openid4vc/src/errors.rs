@@ -254,6 +254,10 @@ pub enum ErrorKind {
     #[error("Invalid presentation request")]
     InvalidPresentationRequest,
 
+    /// Transaction data failed validation per OpenID4VP §8.5.
+    #[error("Invalid transaction data")]
+    InvalidTransactionData,
+
     /// An error that doesn't fit into any other category.
     #[error("Other error")]
     Other,
