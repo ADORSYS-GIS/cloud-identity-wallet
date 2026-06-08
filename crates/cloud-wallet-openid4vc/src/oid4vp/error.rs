@@ -153,6 +153,12 @@ pub enum AuthorizationErrorCode {
     /// and [OpenID4VP §5.8](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.8).
     #[error("The request object is invalid or malformed")]
     InvalidRequestObject,
+    /// The transaction data is invalid, malformed, contains unknown fields,
+    /// has unsupported types, or references unknown credential IDs.
+    ///
+    /// Defined in [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5)
+    #[error("The transaction data is invalid")]
+    InvalidTransactionData,
 }
 
 #[cfg(test)]
