@@ -483,12 +483,11 @@ fn evaluate_credential_sets(
                 }
             }
         } else if is_required {
-            // Collect the credential query IDs that are referenced by this set
-            // and have no candidates.
-            for option in &set.options {
-                for cq_id in option {
-                    let is_empty = candidates.get(cq_id).is_none_or(|c| c.is_empty());
-                    if is_empty && !unsatisfied.contains(cq_id) {
+            // No OR branch satisfies this required set. Report the first
+            // branch as the deterministic minimum requirement that failed.
+            if let Some(first_option) = set.options.first() {
+                for cq_id in first_option {
+                    if !unsatisfied.contains(cq_id) {
                         unsatisfied.push(cq_id.clone());
                     }
                 }
