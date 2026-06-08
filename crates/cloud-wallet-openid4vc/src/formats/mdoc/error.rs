@@ -304,4 +304,64 @@ pub enum MdocError {
         /// The `docType` string from the outer document.
         document: String,
     },
+
+    /// The CBOR bytes in `deviceKeyInfo.deviceKey` could not be decoded as a valid COSE_Key.
+    ///
+    /// Covers: the bytes are not valid CBOR; the top-level value is not a map; a required
+    /// integer label (kty=1, crv=−1, x=−2, y=−3) is absent; or a label's value has the
+    /// wrong CBOR type (e.g. x is not a bstr).
+    ///
+    /// ISO/IEC 18013-5 §9.1.2.4 — `DeviceKeyInfo.deviceKey` structure.
+    /// RFC 8152 §13.1 — EC2 COSE_Key parameters.
+    #[error("malformed COSE_Key in deviceKeyInfo: {reason}")]
+    MalformedDeviceKey {
+        /// Human-readable description of the structural defect.
+        reason: String,
+    },
+
+    /// The COSE_Key `kty`/`crv` combination is not supported for device-key binding,
+    /// or the proof JWK carries an incompatible key type.
+    ///
+    /// Specific cases that trigger this variant:
+    /// - `kty` is not `2` (EC2) and not `1` (OKP).
+    /// - `kty=2` (EC2) but `crv` is not P-256 (1), P-384 (2), or P-521 (3).
+    /// - `kty=1` (OKP) but `crv` is not Ed25519 (6).
+    /// - `kty=2` (EC2) and the `y` parameter is a `bool` (compressed EC2 point); direct
+    ///   byte comparison requires the uncompressed form.
+    /// - The proof JWK `key` variant is not `Key::Ec` or `Key::Okp { crv: Ed25519 }`.
+    ///
+    /// RFC 8152 §13.1 (EC2), §13.2 (OKP).
+    /// ISO/IEC 18013-5 §9.1.5.2 Table 22 — permitted device-key curves.
+    #[error("unsupported device key type or curve")]
+    UnsupportedDeviceKeyType,
+
+    /// The curve identified in the COSE_Key does not match the curve in the proof JWK.
+    ///
+    /// Both keys must name the same curve; a mismatch means the credential was issued
+    /// for a different key type than the holder presented in their proof JWT.
+    ///
+    /// OID4VCI Appendix A.2 — holder binding via proof JWT.
+    #[error("device key curve mismatch: COSE key uses {cose_crv}, proof JWK uses {jwk_crv}")]
+    CurveMismatch {
+        /// Curve name from the COSE_Key `crv` parameter (e.g. `"P-256"`).
+        cose_crv: String,
+        /// Curve name from the proof JWK (e.g. `"P-384"`).
+        jwk_crv: String,
+    },
+
+    /// The public key embedded in the MSO `deviceKeyInfo` does not match the holder's
+    /// proof JWK.
+    ///
+    /// Both keys parsed correctly and their curves agree, but the constant-time comparison
+    /// of one or more coordinates (x, or x and y for EC2) failed. This indicates either a
+    /// key-substitution attack by the issuer or a logic error — the credential must be
+    /// rejected.
+    ///
+    /// Comparison is performed with `subtle::ConstantTimeEq` to prevent timing side channels.
+    /// Which coordinate failed is intentionally not reported.
+    ///
+    /// ISO/IEC 18013-5 §9.1.2.4 — `DeviceKeyInfo.deviceKey`.
+    /// OID4VCI Appendix A.2 — holder binding via proof JWT.
+    #[error("MSO device key does not match proof JWK")]
+    DeviceKeyMismatch,
 }

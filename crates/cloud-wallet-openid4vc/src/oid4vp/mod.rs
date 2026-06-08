@@ -10,5 +10,6 @@ pub mod error;
 pub mod metadata;
 pub mod presentation;
 pub mod selection;
+pub mod transaction_data;
 
 pub use error::*;

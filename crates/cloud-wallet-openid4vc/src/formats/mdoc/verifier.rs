@@ -11,6 +11,7 @@ use subtle::ConstantTimeEq as _;
 use cloud_wallet_crypto::digest::HashAlg;
 use cloud_wallet_crypto::ecdsa::VerifyingKey as EcdsaKey;
 use cloud_wallet_crypto::ed25519::VerifyingKey as Ed25519Key;
+use cloud_wallet_crypto::jwk::{Jwk, Key, OkpCurve};
 use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use super::cert_chain::{
@@ -336,4 +337,245 @@ fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Resul
         }
         _ => unreachable!("dispatch_verify received alg={alg} — not handled in read_cose_alg"),
     }
+}
+
+/// Verifies that the holder public key embedded in the MSO `deviceKeyInfo.deviceKey`
+/// matches the key presented in the OID4VCI proof JWT (ISO/IEC 18013-5 §9.1.2.4).
+///
+/// # Errors
+///
+/// - [`MdocError::MalformedDeviceKey`] — COSE_Key CBOR is invalid or missing required fields.
+/// - [`MdocError::UnsupportedDeviceKeyType`] — unsupported kty/crv, compressed EC2 y, or
+///   non-EC/non-OKP proof JWK.
+/// - [`MdocError::CurveMismatch`] — COSE curve differs from proof JWK curve.
+/// - [`MdocError::DeviceKeyMismatch`] — constant-time coordinate comparison failed.
+#[must_use = "device key binding failure must be handled"]
+pub fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result<()> {
+    let cose_key_val: Value =
+        ciborium::de::from_reader(parsed.device_key.as_slice()).map_err(|_| {
+            MdocError::MalformedDeviceKey {
+                reason: "invalid CBOR".to_owned(),
+            }
+        })?;
+
+    let entries = match cose_key_val {
+        Value::Map(m) => m,
+        _ => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "COSE_Key must be a CBOR map".to_owned(),
+            });
+        }
+    };
+
+    // RFC 7049 §3.1 forbids duplicate keys in CBOR maps. Reject to prevent
+    // split-key constructions where the same integer label appears twice.
+    // COSE_Keys have at most ~6 entries; the O(n²) scan avoids a heap allocation.
+    for i in 0..entries.len() {
+        if let Value::Integer(a) = &entries[i].0 {
+            for item in entries.iter().skip(i + 1) {
+                if let Value::Integer(b) = &item.0
+                    && i128::from(*a) == i128::from(*b)
+                {
+                    return Err(MdocError::MalformedDeviceKey {
+                        reason: "COSE_Key map contains duplicate integer label".to_owned(),
+                    });
+                }
+            }
+        }
+    }
+
+    // kty (label 1) — determines EC2 vs OKP dispatch.
+    let kty: i128 = match cose_key_get(&entries, 1) {
+        Some(Value::Integer(n)) => i128::from(*n),
+        Some(_) => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "kty (label 1) must be an integer".to_owned(),
+            });
+        }
+        None => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "missing kty (label 1)".to_owned(),
+            });
+        }
+    };
+
+    match kty {
+        2 => verify_ec2_binding(&entries, proof_jwk),
+        1 => verify_okp_binding(&entries, proof_jwk),
+        _ => Err(MdocError::UnsupportedDeviceKeyType),
+    }
+}
+
+/// EC2 device-key binding check (kty=2, ISO 18013-5 Table 22 NIST curves).
+fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
+    // crv (label -1): map integer to (curve name string, JWK Curve variant).
+    let (cose_crv_name, jwk_curve) = match cose_key_get(entries, -1) {
+        Some(Value::Integer(n)) => match i128::from(*n) {
+            1 => ("P-256", cloud_wallet_crypto::jwk::Curve::P256),
+            2 => ("P-384", cloud_wallet_crypto::jwk::Curve::P384),
+            3 => ("P-521", cloud_wallet_crypto::jwk::Curve::P521),
+            _ => return Err(MdocError::UnsupportedDeviceKeyType),
+        },
+        Some(_) => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "crv (label -1) must be an integer".to_owned(),
+            });
+        }
+        None => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "missing crv (label -1)".to_owned(),
+            });
+        }
+    };
+
+    // x (label -2): must be bytes.
+    let cose_x = match cose_key_get(entries, -2) {
+        Some(Value::Bytes(b)) => b.as_slice(),
+        Some(_) => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "x coordinate (label -2) must be bytes".to_owned(),
+            });
+        }
+        None => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "missing x coordinate (label -2)".to_owned(),
+            });
+        }
+    };
+
+    // y (label -3): bytes (uncompressed) or bool (compressed — explicitly unsupported).
+    let cose_y = match cose_key_get(entries, -3) {
+        Some(Value::Bytes(b)) => b.as_slice(),
+        // RFC 8152 §13.1 permits y as a bool for compressed EC2 points. We cannot
+        // compare compressed-only keys against the uncompressed JWK y without EC
+        // decompression. Reject explicitly rather than silently skipping.
+        Some(Value::Bool(_)) => return Err(MdocError::UnsupportedDeviceKeyType),
+        Some(_) => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "y coordinate (label -3) must be bytes or bool".to_owned(),
+            });
+        }
+        None => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "missing y coordinate (label -3)".to_owned(),
+            });
+        }
+    };
+
+    // Match proof JWK against Key::Ec.
+    let ec = match &proof_jwk.key {
+        Key::Ec(ec) => ec,
+        _ => return Err(MdocError::UnsupportedDeviceKeyType),
+    };
+
+    // Curve consistency check.
+    let jwk_crv_name = match ec.crv {
+        cloud_wallet_crypto::jwk::Curve::P256 => "P-256",
+        cloud_wallet_crypto::jwk::Curve::P384 => "P-384",
+        cloud_wallet_crypto::jwk::Curve::P521 => "P-521",
+        cloud_wallet_crypto::jwk::Curve::P256K1 => "secp256k1",
+        // Curve is #[non_exhaustive]; future variants are unsupported.
+        _ => return Err(MdocError::UnsupportedDeviceKeyType),
+    };
+    if ec.crv != jwk_curve {
+        return Err(MdocError::CurveMismatch {
+            cose_crv: cose_crv_name.to_owned(),
+            jwk_crv: jwk_crv_name.to_owned(),
+        });
+    }
+
+    // Validate coordinate byte lengths match the curve before ct_eq: subtle's
+    // ConstantTimeEq for &[u8] short-circuits (non-constant-time) on length
+    // mismatch; an equal-length gate here guarantees the comparison is always
+    // constant-time over the full coordinate.
+    let expected_coord_len: usize = match jwk_curve {
+        cloud_wallet_crypto::jwk::Curve::P256 => 32,
+        cloud_wallet_crypto::jwk::Curve::P384 => 48,
+        cloud_wallet_crypto::jwk::Curve::P521 => 66,
+        _ => unreachable!("jwk_curve was matched from a P-256/P-384/P-521 COSE crv"),
+    };
+    if cose_x.len() != expected_coord_len
+        || cose_y.len() != expected_coord_len
+        || ec.x.as_ref().len() != expected_coord_len
+        || ec.y.as_ref().len() != expected_coord_len
+    {
+        return Err(MdocError::MalformedDeviceKey {
+            reason: "coordinate length does not match curve".to_owned(),
+        });
+    }
+    // Both slices are guaranteed equal-length; ct_eq runs in constant time over all bytes.
+    let x_eq: bool = cose_x.ct_eq(ec.x.as_ref()).into();
+    let y_eq: bool = cose_y.ct_eq(ec.y.as_ref()).into();
+    if !x_eq || !y_eq {
+        return Err(MdocError::DeviceKeyMismatch);
+    }
+
+    Ok(())
+}
+
+/// OKP Ed25519 device-key binding check (kty=1, crv=6, x-only, RFC 8152 §13.2).
+fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
+    // crv (label -1): must be 6 (Ed25519). All other OKP curves are unsupported.
+    match cose_key_get(entries, -1) {
+        Some(Value::Integer(n)) => match i128::from(*n) {
+            6 => {} // Ed25519 — proceed
+            _ => return Err(MdocError::UnsupportedDeviceKeyType),
+        },
+        Some(_) => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "crv (label -1) must be an integer".to_owned(),
+            });
+        }
+        None => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "missing crv (label -1)".to_owned(),
+            });
+        }
+    }
+
+    // x (label -2): must be bytes. OKP has no y (RFC 8152 §13.2).
+    let cose_x = match cose_key_get(entries, -2) {
+        Some(Value::Bytes(b)) => b.as_slice(),
+        Some(_) => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "x (label -2) must be bytes".to_owned(),
+            });
+        }
+        None => {
+            return Err(MdocError::MalformedDeviceKey {
+                reason: "missing x (label -2)".to_owned(),
+            });
+        }
+    };
+
+    // Match proof JWK — must be OKP Ed25519.
+    let okp = match &proof_jwk.key {
+        Key::Okp(okp) if okp.crv == OkpCurve::Ed25519 => okp,
+        _ => return Err(MdocError::UnsupportedDeviceKeyType),
+    };
+
+    // Ed25519 x must be exactly 32 bytes; validate before ct_eq to ensure the
+    // constant-time property holds for equal-length slices.
+    if cose_x.len() != 32 || okp.x.as_ref().len() != 32 {
+        return Err(MdocError::MalformedDeviceKey {
+            reason: "Ed25519 x coordinate must be 32 bytes".to_owned(),
+        });
+    }
+    // Both slices are guaranteed 32 bytes; ct_eq runs in constant time over all bytes.
+    let x_eq: bool = cose_x.ct_eq(okp.x.as_ref()).into();
+    if !x_eq {
+        return Err(MdocError::DeviceKeyMismatch);
+    }
+
+    Ok(())
+}
+
+/// Returns the value associated with the given integer label in a COSE_Key map,
+/// or `None` if no entry with that label is present.
+#[inline]
+fn cose_key_get(entries: &[(Value, Value)], label: i64) -> Option<&Value> {
+    entries.iter().find_map(|(k, v)| match k {
+        Value::Integer(n) if i128::from(*n) == i128::from(label) => Some(v),
+        _ => None,
+    })
 }
