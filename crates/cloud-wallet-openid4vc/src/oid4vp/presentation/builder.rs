@@ -162,8 +162,8 @@ impl PresentationBuilder {
             return Err(PresentationBuilderError::NoCredentialsSelected);
         }
 
-let mut entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        
+        let mut entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
         for credential in self.credentials {
             let presentation = credential.to_presentation_string();
             entries
@@ -324,7 +324,9 @@ mod tests {
             "jwt.payload.signature",
         ));
 
-        let result = builder.build_vp_token(std::slice::from_ref(&query)).unwrap();
+        let result = builder
+            .build_vp_token(std::slice::from_ref(&query))
+            .unwrap();
 
         assert!(result.contains_key("test-credential"));
         assert_eq!(result["test-credential"].len(), 1);
@@ -349,7 +351,9 @@ mod tests {
                 "jwt2.payload.signature",
             ));
 
-        let result = builder.build_vp_token(std::slice::from_ref(&query)).unwrap();
+        let result = builder
+            .build_vp_token(std::slice::from_ref(&query))
+            .unwrap();
 
         assert_eq!(result["test-credential"].len(), 2);
     }
