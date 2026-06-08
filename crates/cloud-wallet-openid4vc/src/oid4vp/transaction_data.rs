@@ -3,28 +3,83 @@ use std::str::FromStr;
 
 use crate::errors::{Error, ErrorKind, Result};
 use crate::formats::sd_jwt::IanaHashAlgorithm;
-use crate::oid4vp::TransactionDataType;
 use base64ct::Encoding;
 use cloud_wallet_crypto::digest::HashAlg;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Transaction data as defined in OpenID4VP Section 8.4.
+/// Supported transaction data types per OpenID4VP Section 8.4.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionDataType {
+    /// OpenID4VP transaction data type.
+    #[serde(rename = "openid4vp")]
+    Openid4vp,
+    /// Extension point for other transaction data types.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl TransactionDataType {
+    /// Returns true if this is a supported transaction data type.
+    pub fn is_supported(&self) -> bool {
+        matches!(self, Self::Openid4vp)
+    }
+}
+
+impl std::fmt::Display for TransactionDataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Openid4vp => write!(f, "openid4vp"),
+            Self::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+/// OpenID4VP transaction data profile as defined in Appendix B.3.3.1.
+///
+/// This is the only supported transaction data type. It uses `deny_unknown_fields`
+/// to reject any unknown fields per Section 8.5.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransactionData<'a> {
+#[serde(deny_unknown_fields)]
+pub struct Openid4vpTransactionData {
     #[serde(rename = "type")]
-    pub transaction_type: TransactionDataType,
+    pub data_type: TransactionDataType,
 
     pub credential_ids: Vec<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_data_hashes_alg: Option<Vec<String>>,
+}
 
-    #[serde(flatten)]
-    pub additional_params: Value,
+/// Transaction data as defined in OpenID4VP Section 8.4.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TransactionData<'a> {
+    /// Supported OpenID4VP transaction data type with strict validation.
+    Openid4vp {
+        #[serde(flatten)]
+        data: Openid4vpTransactionData,
 
-    #[serde(skip)]
-    original_encoded: Cow<'a, str>,
+        #[serde(skip)]
+        original_encoded: Cow<'a, str>,
+    },
+
+    Other {
+        #[serde(rename = "type")]
+        transaction_type: String,
+
+        credential_ids: Vec<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transaction_data_hashes_alg: Option<Vec<String>>,
+
+        #[serde(flatten)]
+        additional_params: Value,
+
+        #[serde(skip)]
+        original_encoded: Cow<'a, str>,
+    },
 }
 
 impl<'a> TransactionData<'a> {
@@ -39,73 +94,117 @@ impl<'a> TransactionData<'a> {
                 )
             })?;
 
-        // Parse JSON with deny_unknown_fields to reject unknown fields for known types
-        let mut data: TransactionData = serde_json::from_slice(&decoded_bytes).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("Invalid transaction data JSON: {e}"),
-            )
-        })?;
+        // First, try to parse as the strict Openid4vpTransactionData type
+        // which has deny_unknown_fields
+        let parse_result: std::result::Result<Openid4vpTransactionData, _> =
+            serde_json::from_slice(&decoded_bytes);
+
+        let data = match parse_result {
+            Ok(openid4vp_data) => {
+                // Successfully parsed as openid4vp - wrap it
+                TransactionData::Openid4vp {
+                    data: openid4vp_data,
+                    original_encoded: Cow::Borrowed(base64url_encoded),
+                }
+            }
+            Err(_) => {
+                // Failed to parse as openid4vp (could be unknown fields or different type)
+                // Try to parse as generic/other type
+                let mut generic: GenericTransactionData = serde_json::from_slice(&decoded_bytes)
+                    .map_err(|e| {
+                        Error::message(
+                            ErrorKind::InvalidPresentationRequest,
+                            format!("Invalid transaction data JSON: {e}"),
+                        )
+                    })?;
+
+                // Determine the type - default to empty string if missing
+                let type_str = generic.transaction_type.clone();
+
+                TransactionData::Other {
+                    transaction_type: type_str,
+                    credential_ids: std::mem::take(&mut generic.credential_ids),
+                    transaction_data_hashes_alg: generic.transaction_data_hashes_alg.take(),
+                    additional_params: std::mem::take(&mut generic.additional_params),
+                    original_encoded: Cow::Borrowed(base64url_encoded),
+                }
+            }
+        };
 
         // Validate required fields
         data.validate()?;
-
-        // Store the original encoded string for hash computation (borrowed)
-        data.original_encoded = Cow::Borrowed(base64url_encoded);
 
         Ok(data)
     }
 
     /// Validates the transaction data structure.
     fn validate(&self) -> Result<()> {
-        // Validate type is a supported transaction data type (Section 8.5)
-        if !self.transaction_type.is_supported() {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!(
-                    "Transaction data type '{}' is not supported",
-                    self.transaction_type
-                ),
-            ));
-        }
-
-        // Validate credential_ids is non-empty
-        if self.credential_ids.is_empty() {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "Transaction data 'credential_ids' must be a non-empty array",
-            ));
-        }
-
-        // Validate each credential_id is non-empty
-        for (i, id) in self.credential_ids.iter().enumerate() {
-            if id.trim().is_empty() {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("Transaction data 'credential_ids[{i}]' must not be empty"),
-                ));
-            }
-        }
-
-        // Validate transaction_data_hashes_alg is non-empty if present
-        if let Some(ref algs) = self.transaction_data_hashes_alg
-            && algs.is_empty()
-        {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "Transaction data 'transaction_data_hashes_alg' must be a non-empty array when present",
-            ));
-        }
-
-        // Validate that hash algorithms are supported
-        if let Some(ref algs) = self.transaction_data_hashes_alg {
-            for alg in algs {
-                if IanaHashAlgorithm::from_str(alg).is_err() {
+        match self {
+            TransactionData::Openid4vp { data, .. } => {
+                // Validate type is a supported transaction data type (Section 8.5)
+                if !data.data_type.is_supported() {
                     return Err(Error::message(
                         ErrorKind::InvalidPresentationRequest,
-                        format!("Unsupported hash algorithm in transaction_data_hashes_alg: {alg}"),
+                        format!(
+                            "Transaction data type '{}' is not supported",
+                            data.data_type
+                        ),
                     ));
                 }
+
+                // Validate credential_ids is non-empty
+                if data.credential_ids.is_empty() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidPresentationRequest,
+                        "Transaction data 'credential_ids' must be a non-empty array",
+                    ));
+                }
+
+                // Validate each credential_id is non-empty
+                for (i, id) in data.credential_ids.iter().enumerate() {
+                    if id.trim().is_empty() {
+                        return Err(Error::message(
+                            ErrorKind::InvalidPresentationRequest,
+                            format!("Transaction data 'credential_ids[{i}]' must not be empty"),
+                        ));
+                    }
+                }
+
+                // Validate transaction_data_hashes_alg is non-empty if present
+                if let Some(ref algs) = data.transaction_data_hashes_alg
+                    && algs.is_empty()
+                {
+                    return Err(Error::message(
+                        ErrorKind::InvalidPresentationRequest,
+                        "Transaction data 'transaction_data_hashes_alg' must be a non-empty array when present",
+                    ));
+                }
+
+                // Validate that hash algorithms are supported
+                if let Some(ref algs) = data.transaction_data_hashes_alg {
+                    for alg in algs {
+                        if IanaHashAlgorithm::from_str(alg).is_err() {
+                            return Err(Error::message(
+                                ErrorKind::InvalidPresentationRequest,
+                                format!(
+                                    "Unsupported hash algorithm in transaction_data_hashes_alg: {alg}"
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            TransactionData::Other {
+                transaction_type, ..
+            } => {
+                // For non-openid4vp types, always reject (Section 8.5)
+                return Err(Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    format!(
+                        "Transaction data type '{}' is not supported",
+                        transaction_type
+                    ),
+                ));
             }
         }
 
@@ -123,24 +222,79 @@ impl<'a> TransactionData<'a> {
         })?;
 
         let hash_alg: HashAlg = iana_alg.into();
-        let digest = hash_alg.hash(self.original_encoded.as_bytes());
+        let original_encoded = self.original_encoded();
+        let digest = hash_alg.hash(original_encoded.as_bytes());
 
         Ok(base64ct::Base64UrlUnpadded::encode_string(digest.as_ref()))
     }
 
+    /// Returns the original encoded string for hash computation.
+    fn original_encoded(&self) -> &str {
+        match self {
+            TransactionData::Openid4vp {
+                original_encoded, ..
+            } => original_encoded.as_ref(),
+            TransactionData::Other {
+                original_encoded, ..
+            } => original_encoded.as_ref(),
+        }
+    }
+
     /// Checks if this transaction data applies to the given credential query ID.
     pub fn applies_to_credential(&self, credential_query_id: &str) -> bool {
-        self.credential_ids
+        self.credential_ids()
             .iter()
             .any(|id| id == credential_query_id)
     }
 
+    /// Returns the credential IDs for this transaction data.
+    pub fn credential_ids(&self) -> &[String] {
+        match self {
+            TransactionData::Openid4vp { data, .. } => &data.credential_ids,
+            TransactionData::Other { credential_ids, .. } => credential_ids,
+        }
+    }
+
     /// Returns the hash algorithms to use for this transaction data.
     pub fn hash_algorithms(&self) -> Vec<String> {
-        self.transaction_data_hashes_alg
-            .clone()
-            .unwrap_or_else(|| vec!["sha-256".to_string()])
+        match self {
+            TransactionData::Openid4vp { data, .. } => data
+                .transaction_data_hashes_alg
+                .clone()
+                .unwrap_or_else(|| vec!["sha-256".to_string()]),
+            TransactionData::Other {
+                transaction_data_hashes_alg,
+                ..
+            } => transaction_data_hashes_alg
+                .clone()
+                .unwrap_or_else(|| vec!["sha-256".to_string()]),
+        }
     }
+
+    /// Returns the transaction data type.
+    pub fn transaction_type(&self) -> &str {
+        match self {
+            TransactionData::Openid4vp { .. } => "openid4vp",
+            TransactionData::Other {
+                transaction_type, ..
+            } => transaction_type.as_str(),
+        }
+    }
+}
+
+/// Generic transaction data structure used for parsing before validation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct GenericTransactionData {
+    #[serde(rename = "type")]
+    transaction_type: String,
+
+    credential_ids: Vec<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transaction_data_hashes_alg: Option<Vec<String>>,
+
+    #[serde(flatten)]
+    additional_params: Value,
 }
 
 /// A collection of transaction data entries.
@@ -228,24 +382,30 @@ mod tests {
         base64ct::Base64UrlUnpadded::encode_string(json_str.as_bytes())
     }
 
+    fn unwrap_openid4vp<'a>(data: &'a TransactionData<'a>) -> &'a Openid4vpTransactionData {
+        match data {
+            TransactionData::Openid4vp { data, .. } => data,
+            _ => panic!("Expected Openid4vp variant"),
+        }
+    }
+
     #[test]
     fn test_decode_valid_base64url_transaction_data() {
         // Create a valid transaction data JSON with supported type
         let json = json!({
             "type": "openid4vp",
             "credential_ids": ["cred1", "cred2"],
-            "transaction_data_hashes_alg": ["sha-256"],
-            "amount": "100.00",
-            "currency": "EUR"
+            "transaction_data_hashes_alg": ["sha-256"]
         });
 
         let encoded = encode_json(&json);
         let data = TransactionData::decode(&encoded).unwrap();
 
-        assert_eq!(data.transaction_type, TransactionDataType::Openid4vp);
-        assert_eq!(data.credential_ids, vec!["cred1", "cred2"]);
+        let openid4vp_data = unwrap_openid4vp(&data);
+        assert_eq!(openid4vp_data.data_type, TransactionDataType::Openid4vp);
+        assert_eq!(openid4vp_data.credential_ids, vec!["cred1", "cred2"]);
         assert_eq!(
-            data.transaction_data_hashes_alg,
+            openid4vp_data.transaction_data_hashes_alg,
             Some(vec!["sha-256".to_string()])
         );
     }
@@ -261,9 +421,10 @@ mod tests {
         let encoded = encode_json(&json);
         let data = TransactionData::decode(&encoded).unwrap();
 
-        assert_eq!(data.transaction_type, TransactionDataType::Openid4vp);
-        assert_eq!(data.credential_ids, vec!["signing_cred"]);
-        assert!(data.transaction_data_hashes_alg.is_none());
+        let openid4vp_data = unwrap_openid4vp(&data);
+        assert_eq!(openid4vp_data.data_type, TransactionDataType::Openid4vp);
+        assert_eq!(openid4vp_data.credential_ids, vec!["signing_cred"]);
+        assert!(openid4vp_data.transaction_data_hashes_alg.is_none());
     }
 
     #[test]
@@ -340,6 +501,7 @@ mod tests {
 
     #[test]
     fn test_reject_unknown_fields_for_known_type() {
+        // Section 8.5: known transaction data types with unknown fields must produce invalid_transaction_data
         let json = json!({
             "type": "openid4vp",
             "credential_ids": ["cred1"],
@@ -348,7 +510,13 @@ mod tests {
 
         let encoded = encode_json(&json);
         let result = TransactionData::decode(&encoded);
-        assert!(result.is_ok());
+        assert!(
+            result.is_err(),
+            "Unknown fields should be rejected for openid4vp type"
+        );
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
     }
 
     #[test]
@@ -460,7 +628,7 @@ mod tests {
         assert_eq!(hash1, hash1_again);
 
         // The hash is computed over the original base64url string, not the decoded content.
-        assert_eq!(decoded1.original_encoded.as_ref(), encoded1);
+        assert_eq!(decoded1.original_encoded().as_ref(), encoded1);
 
         // Create a different physical encoding with extra whitespace
         let json_str_with_whitespace = r#"{ "type": "openid4vp", "credential_ids": ["cred1"] }"#;
@@ -636,8 +804,7 @@ mod tests {
     fn test_transaction_data_serde_roundtrip() {
         let json = json!({
             "type": "openid4vp",
-            "credential_ids": ["cred1"],
-            "amount": "100.00"
+            "credential_ids": ["cred1"]
         });
 
         let encoded = encode_json(&json);
@@ -648,31 +815,24 @@ mod tests {
 
         assert_eq!(serialized["type"], "openid4vp");
         assert_eq!(serialized["credential_ids"], json![["cred1"]]);
-        assert_eq!(serialized["amount"], "100.00");
     }
 
     #[test]
-    fn test_transaction_data_with_complex_additional_params() {
+    fn test_transaction_data_rejects_additional_fields() {
+        // Per Section 8.5, the openid4vp type must reject unknown fields
         let json = json!({
             "type": "openid4vp",
             "credential_ids": ["cred1"],
             "payee": {
-                "name": "Merchant XYZ",
-                "account": "DE123456789"
-            },
-            "items": [
-                {"description": "Item 1", "amount": "50.00"},
-                {"description": "Item 2", "amount": "50.00"}
-            ]
+                "name": "Merchant XYZ"
+            }
         });
 
         let encoded = encode_json(&json);
-        let data = TransactionData::decode(&encoded).unwrap();
+        let result = TransactionData::decode(&encoded);
 
-        // Check that additional params are preserved
-        let additional = &data.additional_params;
-        assert!(additional.get("payee").is_some());
-        assert!(additional.get("items").is_some());
+        // Should fail because openid4vp uses deny_unknown_fields
+        assert!(result.is_err());
     }
 
     #[test]
