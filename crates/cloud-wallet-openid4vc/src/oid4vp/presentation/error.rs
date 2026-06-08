@@ -6,7 +6,9 @@ pub enum PresentationBuilderError {
     NoCredentialsSelected,
     #[error("Credential query ID '{0}' not found in DCQL query")]
     QueryNotFound(String),
-    #[error("Format mismatch: credential format '{credential_format}' does not match query format '{query_format}'")]
+    #[error(
+        "Format mismatch: credential format '{credential_format}' does not match query format '{query_format}'"
+    )]
     FormatMismatch {
         credential_format: String,
         query_format: String,

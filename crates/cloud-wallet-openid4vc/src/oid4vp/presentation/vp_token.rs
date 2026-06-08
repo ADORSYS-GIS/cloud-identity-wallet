@@ -32,7 +32,11 @@ impl VpTokenBuilder {
         self
     }
 
-    pub fn add_entry(mut self, query_id: impl Into<String>, presentation: impl Into<String>) -> Self {
+    pub fn add_entry(
+        mut self,
+        query_id: impl Into<String>,
+        presentation: impl Into<String>,
+    ) -> Self {
         self.entries
             .entry(query_id.into())
             .or_insert_with(Vec::new)
@@ -165,9 +169,7 @@ mod tests {
 
     #[test]
     fn vp_token_builder_creates_valid_token() {
-        let result = VpTokenBuilder::new(create_test_entries())
-            .build()
-            .unwrap();
+        let result = VpTokenBuilder::new(create_test_entries()).build().unwrap();
 
         assert!(result.entries().contains_key("test-credential"));
         assert_eq!(result.entries()["test-credential"].len(), 1);
@@ -195,11 +197,10 @@ mod tests {
 
     #[test]
     fn vp_token_builder_add_presentations() {
-        let builder = VpTokenBuilder::new(BTreeMap::new())
-            .add_presentations(
-                "credential-1",
-                vec!["presentation-1".to_string(), "presentation-2".to_string()],
-            );
+        let builder = VpTokenBuilder::new(BTreeMap::new()).add_presentations(
+            "credential-1",
+            vec!["presentation-1".to_string(), "presentation-2".to_string()],
+        );
 
         assert_eq!(builder.entries()["credential-1"].len(), 2);
     }
@@ -225,10 +226,16 @@ mod tests {
     #[test]
     fn vp_token_builder_rejects_invalid_query_id() {
         let mut entries = BTreeMap::new();
-        entries.insert("invalid/query/id".to_string(), vec!["presentation".to_string()]);
+        entries.insert(
+            "invalid/query/id".to_string(),
+            vec!["presentation".to_string()],
+        );
 
         let result = VpTokenBuilder::new(entries).build();
-        assert!(matches!(result, Err(VpTokenBuilderError::InvalidQueryId(_))));
+        assert!(matches!(
+            result,
+            Err(VpTokenBuilderError::InvalidQueryId(_))
+        ));
     }
 
     #[test]
@@ -287,11 +294,10 @@ mod tests {
     #[test]
     fn nonce_embedding_verification() {
         let test_nonce = "unique-nonce-12345";
-        let builder = VpTokenBuilder::new(create_test_entries())
-            .with_nonce(test_nonce);
+        let builder = VpTokenBuilder::new(create_test_entries()).with_nonce(test_nonce);
 
         assert_eq!(builder.nonce(), Some(test_nonce));
-        
+
         let vp_token = builder.build().unwrap();
         assert!(vp_token.entries().contains_key("test-credential"));
     }
@@ -299,8 +305,7 @@ mod tests {
     #[test]
     fn audience_binding_verification() {
         let test_audience = "https://verifier.example.com";
-        let builder = VpTokenBuilder::new(create_test_entries())
-            .with_client_id(test_audience);
+        let builder = VpTokenBuilder::new(create_test_entries()).with_client_id(test_audience);
 
         assert_eq!(builder.client_id(), Some(test_audience));
     }

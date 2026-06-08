@@ -18,7 +18,11 @@ pub struct KeyBindingInput {
 }
 
 impl KeyBindingInput {
-    pub fn new(nonce: impl Into<String>, audience: impl Into<String>, sd_hash: impl Into<String>) -> Self {
+    pub fn new(
+        nonce: impl Into<String>,
+        audience: impl Into<String>,
+        sd_hash: impl Into<String>,
+    ) -> Self {
         Self {
             nonce: nonce.into(),
             audience: audience.into(),
@@ -81,12 +85,12 @@ pub fn compute_sd_hash(
         .into_iter()
         .chain(disclosures.iter().copied())
         .collect();
-    
+
     let combined = parts.join("~");
-    
+
     let hash_alg: cloud_wallet_crypto::digest::HashAlg = algorithm.into();
     let digest = hash_alg.hash(combined.as_bytes());
-    
+
     Ok(URL_SAFE_NO_PAD.encode(digest.as_ref()))
 }
 
@@ -97,7 +101,7 @@ pub fn build_key_binding_jwt_claims(
 ) -> BTreeMap<&'static str, serde_json::Value> {
     let input = KeyBindingInput::new(nonce, audience, sd_hash);
     let claims = input.into_claims();
-    
+
     let mut map = BTreeMap::new();
     map.insert("iat", serde_json::Value::Number(claims.iat.into()));
     map.insert("aud", serde_json::Value::String(claims.aud));
@@ -142,13 +146,10 @@ mod tests {
 
     #[test]
     fn key_binding_input_creates_valid_claims() {
-        let claims = KeyBindingInput::new(
-            "test-nonce",
-            "https://verifier.example.com",
-            "test-hash",
-        )
-        .with_issued_at(1234567890)
-        .into_claims();
+        let claims =
+            KeyBindingInput::new("test-nonce", "https://verifier.example.com", "test-hash")
+                .with_issued_at(1234567890)
+                .into_claims();
 
         assert_eq!(claims.iat, 1234567890);
         assert_eq!(claims.aud, "https://verifier.example.com");
@@ -158,15 +159,18 @@ mod tests {
 
     #[test]
     fn build_key_binding_jwt_claims_produces_correct_structure() {
-        let claims = build_key_binding_jwt_claims(
-            "test-nonce",
-            "https://verifier.example.com",
-            "test-hash",
-        );
+        let claims =
+            build_key_binding_jwt_claims("test-nonce", "https://verifier.example.com", "test-hash");
 
         assert_eq!(claims.get("nonce").unwrap().as_str().unwrap(), "test-nonce");
-        assert_eq!(claims.get("aud").unwrap().as_str().unwrap(), "https://verifier.example.com");
-        assert_eq!(claims.get("sd_hash").unwrap().as_str().unwrap(), "test-hash");
+        assert_eq!(
+            claims.get("aud").unwrap().as_str().unwrap(),
+            "https://verifier.example.com"
+        );
+        assert_eq!(
+            claims.get("sd_hash").unwrap().as_str().unwrap(),
+            "test-hash"
+        );
         assert!(claims.get("iat").unwrap().as_i64().is_some());
     }
 }
