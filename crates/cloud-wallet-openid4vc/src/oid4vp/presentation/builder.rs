@@ -150,7 +150,7 @@ impl PresentationBuilder {
             let presentation = credential.to_presentation_string();
             entries
                 .entry(credential.query_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(presentation);
         }
 
@@ -162,13 +162,13 @@ impl PresentationBuilder {
             return Err(PresentationBuilderError::NoCredentialsSelected);
         }
 
-        let mut entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
+let mut entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        
         for credential in self.credentials {
             let presentation = credential.to_presentation_string();
             entries
                 .entry(credential.query_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(presentation);
         }
 
@@ -324,7 +324,7 @@ mod tests {
             "jwt.payload.signature",
         ));
 
-        let result = builder.build_vp_token(&[query.clone()]).unwrap();
+        let result = builder.build_vp_token(std::slice::from_ref(&query)).unwrap();
 
         assert!(result.contains_key("test-credential"));
         assert_eq!(result["test-credential"].len(), 1);
@@ -349,7 +349,7 @@ mod tests {
                 "jwt2.payload.signature",
             ));
 
-        let result = builder.build_vp_token(&[query.clone()]).unwrap();
+        let result = builder.build_vp_token(std::slice::from_ref(&query)).unwrap();
 
         assert_eq!(result["test-credential"].len(), 2);
     }
@@ -366,7 +366,7 @@ mod tests {
             "mdoc-payload",
         ));
 
-        let result = builder.build_vp_token(&[query.clone()]);
+        let result = builder.build_vp_token(std::slice::from_ref(&query));
 
         assert!(matches!(
             result,

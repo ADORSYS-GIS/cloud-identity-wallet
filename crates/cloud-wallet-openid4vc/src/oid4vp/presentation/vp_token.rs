@@ -39,7 +39,7 @@ impl VpTokenBuilder {
     ) -> Self {
         self.entries
             .entry(query_id.into())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(presentation.into());
         self
     }
@@ -51,7 +51,7 @@ impl VpTokenBuilder {
     ) -> Self {
         self.entries
             .entry(query_id.into())
-            .or_insert_with(Vec::new)
+            .or_default()
             .extend(presentations);
         self
     }
@@ -91,20 +91,20 @@ impl VpTokenBuilder {
             .map(|(query_id, presentations)| {
                 let pres: Vec<Presentation> = presentations
                     .into_iter()
-                    .map(|s| Presentation::String(s))
+                    .map(Presentation::String)
                     .collect();
                 (query_id, pres)
             })
             .collect();
 
-        VpToken::new(entries).map_err(|e| VpTokenBuilderError::InvalidQueryId(e))
+        VpToken::new(entries).map_err(VpTokenBuilderError::InvalidQueryId)
     }
 
     pub fn build_string(self) -> Result<String> {
         let vp_token = self.build()?;
         let entries = vp_token.entries();
-        Ok(serde_json::to_string(entries)
-            .map_err(|e| VpTokenBuilderError::InvalidQueryId(e.to_string()))?)
+        serde_json::to_string(entries)
+            .map_err(|e| VpTokenBuilderError::InvalidQueryId(e.to_string()))
     }
 }
 
