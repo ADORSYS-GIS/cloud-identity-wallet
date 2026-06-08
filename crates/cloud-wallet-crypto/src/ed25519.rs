@@ -67,7 +67,7 @@
 //! ```
 
 use aws_lc_rs::signature::{self, Ed25519KeyPair, KeyPair as _};
-use pkcs8::{AlgorithmIdentifierRef, ObjectIdentifier, PrivateKeyInfo, SubjectPublicKeyInfoRef};
+use pkcs8::{AlgorithmIdentifierRef, ObjectIdentifier, PrivateKeyInfoRef, SubjectPublicKeyInfoRef};
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::utils::{key_gen_error, parse_error, serialize_error};
@@ -158,7 +158,7 @@ impl KeyPair {
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
         use aws_lc_rs::encoding::AsDer;
 
-        let key_info = PrivateKeyInfo::try_from(der)?;
+        let key_info = PrivateKeyInfoRef::try_from(der)?;
 
         // Verify this is an Ed25519 key
         if key_info.algorithm.oid != OID_ED25519 {
