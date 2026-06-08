@@ -36,7 +36,7 @@ pub enum ParsedClientId {
     /// Verifier attestation. Format: `verifier_attestation:<attestation-jwt>`.
     VerifierAttestation { attestation: String },
 
-    /// Redirect URI (unsigned requests). Format: HTTPS URL.
+    /// Redirect URI (unsigned requests). Format: `redirect_uri:<uri>`.
     RedirectUri { uri: Url },
 }
 
@@ -102,9 +102,19 @@ impl ParsedClientId {
             });
         }
 
-        if let Ok(uri) = Url::parse(client_id)
-            && uri.scheme() == "https"
-        {
+        if let Some(uri_str) = client_id.strip_prefix("redirect_uri:") {
+            let uri = Url::parse(uri_str).map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    format!("redirect_uri contains invalid URL: {e}"),
+                )
+            })?;
+            if uri.scheme() != "https" {
+                return Err(Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    "redirect_uri must use https scheme",
+                ));
+            }
             return Ok(Self::RedirectUri { uri });
         }
 
@@ -201,7 +211,17 @@ impl RequestObject {
         let client_id_str = claims.params.client_id.as_str();
         let parsed_client_id = ParsedClientId::parse(client_id_str)?;
 
-        validate_claims(&claims, wallet_id, client_id_str)?;
+        if parsed_client_id.requires_signature() {
+            return Err(Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                format!(
+                    "client_id scheme '{}' requires a signed Request Object butdecode_unsigned was called",
+                    client_id_str
+                ),
+            ));
+        }
+
+        validate_claims(&claims, wallet_id)?;
 
         Ok(Self {
             header: request_header,
@@ -304,7 +324,7 @@ fn decode_unverified_payload<T: for<'de> Deserialize<'de>>(jwt: &str) -> Result<
     })
 }
 
-fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str, client_id: &str) -> Result<()> {
+fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str) -> Result<()> {
     let aud_valid = match &claims.rfc7519.aud {
         Some(aud) => aud == wallet_id || aud == SELF_ISSUED_AUDIENCE,
         None => false,
@@ -316,15 +336,6 @@ fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str, client_id: &st
             format!(
                 "Request Object aud claim must be '{wallet_id}' or '{SELF_ISSUED_AUDIENCE}', got '{aud_msg}'"
             ),
-        ));
-    }
-
-    if let Some(ref iss) = claims.rfc7519.iss
-        && iss != client_id
-    {
-        return Err(Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            format!("Request Object iss claim '{iss}' does not match client_id '{client_id}'"),
         ));
     }
 
@@ -450,7 +461,8 @@ mod tests {
 
     #[test]
     fn parse_client_id_redirect_uri() {
-        let parsed = ParsedClientId::parse("https://verifier.example.com/callback").unwrap();
+        let parsed =
+            ParsedClientId::parse("redirect_uri:https://verifier.example.com/callback").unwrap();
         if let ParsedClientId::RedirectUri { ref uri } = parsed {
             assert_eq!(uri.as_str(), "https://verifier.example.com/callback");
             assert!(!parsed.requires_signature());
@@ -534,11 +546,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("aud claim"));
@@ -559,11 +567,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(
             result.is_ok(),
             "aud=https://self-issued.me/v2 should be valid"
@@ -571,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_claims_iss_mismatch() {
+    fn validate_claims_iss_ignored() {
         let claims = RequestObjectClaims {
             rfc7519: RFC7519Claims {
                 iss: Some("https://wrong-verifier.example.com".to_string()),
@@ -585,14 +589,11 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
+        let result = validate_claims(&claims, "https://wallet.example.com");
+        assert!(
+            result.is_ok(),
+            "iss claim should be ignored per OpenID4VP §5.8"
         );
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("iss claim"));
     }
 
     #[test]
@@ -610,11 +611,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("expired"));
@@ -635,11 +632,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("exp"));
@@ -660,11 +653,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("future"));
@@ -685,11 +674,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(result.is_ok());
     }
 
@@ -708,11 +693,7 @@ mod tests {
             params: make_test_auth_request(),
         };
 
-        let result = validate_claims(
-            &claims,
-            "https://wallet.example.com",
-            "https://verifier.example.com",
-        );
+        let result = validate_claims(&claims, "https://wallet.example.com");
         assert!(
             result.is_ok(),
             "missing iss should be allowed for unsigned requests"
@@ -742,7 +723,7 @@ mod tests {
     #[tokio::test]
     async fn decode_unsigned_valid() {
         let jwt = create_unsigned_jwt_payload(
-            "https://verifier.example.com",
+            "redirect_uri:https://verifier.example.com",
             "https://wallet.example.com",
         );
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
@@ -761,10 +742,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn decode_unsigned_rejects_signed_client_id_schemes() {
+        let test_cases = [
+            "did:jwk:eyBrZXkiIDogInZhbHVlIiB9",
+            "x509_san_dns:verifier.example.com",
+            "x509_hash:sha256:abc123",
+            "verifier_attestation:eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+        ];
+
+        for client_id in test_cases {
+            let jwt = create_unsigned_jwt_payload(client_id, "https://wallet.example.com");
+            let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+            assert!(
+                result.is_err(),
+                "decode_unsigned should reject client_id scheme '{}' which requires signature",
+                client_id
+            );
+            let err = result.unwrap_err();
+            assert!(
+                err.to_string().contains("requires a signed Request Object"),
+                "error message should mention signature requirement,got: {}",
+                err
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn decode_unsigned_missing_client_id() {
         let now = jsonwebtoken::get_current_timestamp() as i64;
         let payload = serde_json::json!({
-            "iss": "https://verifier.example.com",
+            "iss": "redirect_uri:https://verifier.example.com",
             "aud": "https://wallet.example.com",
             "exp": now + 300,
             "iat": now,
@@ -790,11 +797,11 @@ mod tests {
     async fn decode_unsigned_expired() {
         let now = jsonwebtoken::get_current_timestamp() as i64;
         let payload = serde_json::json!({
-            "iss": "https://verifier.example.com",
+            "iss": "redirect_uri:https://verifier.example.com",
             "aud": "https://wallet.example.com",
             "exp": now - 100,
             "iat": now - 200,
-            "client_id": "https://verifier.example.com",
+            "client_id": "redirect_uri:https://verifier.example.com",
             "response_type": "vp_token",
             "response_mode": "direct_post",
             "nonce": "test-nonce",
@@ -816,7 +823,7 @@ mod tests {
     #[tokio::test]
     async fn decode_unsigned_self_issued_audience() {
         let jwt = create_unsigned_jwt_payload(
-            "https://verifier.example.com",
+            "redirect_uri:https://verifier.example.com",
             "https://self-issued.me/v2",
         );
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
