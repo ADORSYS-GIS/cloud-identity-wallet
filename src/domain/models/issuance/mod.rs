@@ -700,23 +700,27 @@ impl IssuanceEngine {
                 // device key binding are all enforced together inside
                 // `verify_mdoc_for_issuance` so no check can be accidentally omitted.
                 let parsed = ParsedMdoc::parse(&raw_credential)?;
-                // Note: RSA-keyed tenants are incompatible with ISO 18013-5 device key
-                // binding (EC/OKP only); they will receive an UnsupportedKeyType error.
                 let signer = self.build_signer(tenant_id).await?;
                 // Use the time the credential was received (receipt_time) rather than
                 // the current wall clock so that temporal validation is deterministic
                 // for a given request and is testable with controlled time values.
-                let now = time::OffsetDateTime::from_unix_timestamp(
-                    receipt_time.unix_timestamp(),
-                )
-                .expect("receipt_time from UtcDateTime is always representable as OffsetDateTime");
-                verify_mdoc_for_issuance(
+                let now = receipt_time.to_offset(time::UtcOffset::UTC);
+                // Note: RSA-keyed tenants are incompatible with ISO 18013-5 device key
+                // binding (EC/OKP only); they will receive an UnsupportedKeyType error.
+                let issuer_info = verify_mdoc_for_issuance(
                     &parsed,
                     &mdoc_config.doctype,
                     self.iaca_trust_store(),
                     signer.proof_jwk(),
                     now,
-                )?
+                )?;
+                info!(
+                    // TODO: this will be stored later because it is needed for the presentation phase
+                    tenant_id = %tenant_id,
+                    issuer_subject = %issuer_info.issuer_subject,
+                    issuer_country = %issuer_info.issuer_country,
+                    "verified mdoc issuer chain"
+                );
                 credential_from_mdoc(tenant_id, issuer, mdoc_config, parsed, raw_credential)
             }
             other => Err(IssuanceError::credential_request(format!(
@@ -849,16 +853,8 @@ fn credential_from_mdoc(
     parsed: ParsedMdoc,
     raw_credential: String,
 ) -> Result<Credential> {
-    let issued_at =
-        time::UtcDateTime::from_unix_timestamp(parsed.signed_at.unix_timestamp()).map_err(|e| {
-            IssuanceError::credential_request(format!("mdoc signed_at timestamp out of range: {e}"))
-        })?;
-    let valid_until =
-        time::UtcDateTime::from_unix_timestamp(parsed.valid_until.unix_timestamp()).map_err(|e| {
-            IssuanceError::credential_request(format!(
-                "mdoc valid_until timestamp out of range: {e}"
-            ))
-        })?;
+    let issued_at = mdoc_utc_timestamp("signed_at", parsed.signed_at)?;
+    let valid_until = mdoc_utc_timestamp("valid_until", parsed.valid_until)?;
 
     Ok(Credential {
         id: Uuid::new_v4(),
@@ -875,6 +871,12 @@ fn credential_from_mdoc(
         status_location: None,
         status_index: None,
         raw_credential,
+    })
+}
+
+fn mdoc_utc_timestamp(field: &str, value: time::OffsetDateTime) -> Result<time::UtcDateTime> {
+    time::UtcDateTime::from_unix_timestamp(value.unix_timestamp()).map_err(|e| {
+        IssuanceError::credential_request(format!("mdoc {field} timestamp out of range: {e}"))
     })
 }
 

@@ -20,10 +20,7 @@ pub mod verifier;
 
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
-pub use verifier::{
-    IacaTrustStore, IssuerInfo, StaticTrustStore, verify_device_key_binding, verify_digests,
-    verify_issuer_signature, verify_mdoc_for_issuance,
-};
+pub use verifier::{IacaTrustStore, IssuerInfo, StaticTrustStore, verify_mdoc_for_issuance};
 
 use cloud_wallet_crypto::digest::HashAlg;
 

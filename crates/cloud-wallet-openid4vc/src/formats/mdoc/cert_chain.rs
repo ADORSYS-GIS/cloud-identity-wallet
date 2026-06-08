@@ -153,16 +153,13 @@ pub(super) fn check_dsc_eku(dsc: &X509Certificate<'_>) -> Result<()> {
 ///   extension is not marked critical.
 pub(super) fn check_dsc_key_usage(dsc: &X509Certificate<'_>) -> Result<()> {
     // Collect both the bit value and the criticality flag in one pass.
-    let key_usage_ext = dsc
-        .extensions()
-        .iter()
-        .find_map(|ext| {
-            if let ParsedExtension::KeyUsage(ku) = ext.parsed_extension() {
-                Some((ku.digital_signature(), ext.critical))
-            } else {
-                None
-            }
-        });
+    let key_usage_ext = dsc.extensions().iter().find_map(|ext| {
+        if let ParsedExtension::KeyUsage(ku) = ext.parsed_extension() {
+            Some((ku.digital_signature(), ext.critical))
+        } else {
+            None
+        }
+    });
 
     match key_usage_ext {
         // Extension absent or digitalSignature bit not set.

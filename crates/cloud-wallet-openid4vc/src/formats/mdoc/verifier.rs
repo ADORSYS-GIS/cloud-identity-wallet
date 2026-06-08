@@ -12,8 +12,8 @@ use cloud_wallet_crypto::digest::HashAlg;
 use cloud_wallet_crypto::ecdsa::VerifyingKey as EcdsaKey;
 use cloud_wallet_crypto::ed25519::VerifyingKey as Ed25519Key;
 use cloud_wallet_crypto::jwk::{Jwk, Key, OkpCurve};
-use x509_parser::prelude::{FromDer as _, X509Certificate};
 use time::OffsetDateTime;
+use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use super::cert_chain::{
     check_country_consistency, check_dsc_eku, check_dsc_key_usage, check_dsc_validity_period,
@@ -49,7 +49,7 @@ const ALG_BRAINPOOL_P512: i64 = -48;
 ///   namespace + `digestID`.
 /// - [`MdocError::DigestMismatch`] — the computed hash does not match the stored digest.
 #[must_use = "digest verification failure must be handled"]
-pub fn verify_digests(parsed: &ParsedMdoc) -> Result<()> {
+pub(crate) fn verify_digests(parsed: &ParsedMdoc) -> Result<()> {
     let alg = HashAlg::from(parsed.digest_algorithm);
 
     for (namespace, items) in &parsed.name_spaces {
@@ -168,7 +168,7 @@ pub struct IssuerInfo {
 /// Certificate revocation (CRL / OCSP) is not checked. A credential signed by a revoked
 /// DSC will pass all current checks.
 #[must_use = "issuer signature verification failure must be handled"]
-pub fn verify_issuer_signature(
+pub(crate) fn verify_issuer_signature(
     parsed: &ParsedMdoc,
     outer_doc_type: &str,
     trust_store: &dyn IacaTrustStore,
@@ -355,7 +355,7 @@ fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Resul
 /// - [`MdocError::CurveMismatch`] — COSE curve differs from proof JWK curve.
 /// - [`MdocError::DeviceKeyMismatch`] — constant-time coordinate comparison failed.
 #[must_use = "device key binding failure must be handled"]
-pub fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result<()> {
+pub(crate) fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result<()> {
     let cose_key_val: Value =
         ciborium::de::from_reader(parsed.device_key.as_slice()).map_err(|_| {
             MdocError::MalformedDeviceKey {
@@ -597,12 +597,12 @@ pub fn verify_mdoc_for_issuance(
     trust_store: &dyn IacaTrustStore,
     proof_jwk: &Jwk,
     now: OffsetDateTime,
-) -> Result<()> {
-    parsed.check_temporal_validity(now)?;       
-    verify_issuer_signature(parsed, outer_doc_type, trust_store)?;  
-    verify_digests(parsed)?;                     
+) -> Result<IssuerInfo> {
+    parsed.check_temporal_validity(now)?;
+    let issuer_info = verify_issuer_signature(parsed, outer_doc_type, trust_store)?;
+    verify_digests(parsed)?;
     verify_device_key_binding(parsed, proof_jwk)?;
-    Ok(())
+    Ok(issuer_info)
 }
 
 /// Returns the value associated with the given integer label in a COSE_Key map,

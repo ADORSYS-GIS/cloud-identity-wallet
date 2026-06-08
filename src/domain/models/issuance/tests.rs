@@ -108,10 +108,7 @@ fn make_engine(queue: RecordingTaskQueue) -> IssuanceEngine {
 /// registered tenant's UUID so negative-path mdoc tests can exercise the
 /// full `build_credential` path without hitting `TenantNotFound` before the
 /// verification under test.
-async fn make_mdoc_engine(
-    queue: RecordingTaskQueue,
-    iaca_der: Vec<u8>,
-) -> (IssuanceEngine, Uuid) {
+async fn make_mdoc_engine(queue: RecordingTaskQueue, iaca_der: Vec<u8>) -> (IssuanceEngine, Uuid) {
     let tenant_repo = MemoryTenantRepo::new();
     let res = tenant_repo
         .create(crate::domain::models::tenants::RegisterTenantRequest {
@@ -544,8 +541,8 @@ fn build_chain() -> (Vec<u8>, Vec<u8>, EcdsaKeyPair) {
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
     let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
-    let dsc_aws_key = EcdsaKeyPair::generate(Curve::P256)
-        .expect("aws-lc-rs DSC key generation must succeed");
+    let dsc_aws_key =
+        EcdsaKeyPair::generate(Curve::P256).expect("aws-lc-rs DSC key generation must succeed");
     let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
     let dsc_rcgen_key = CertKeyPair::from_der_and_sign_algo(
         &PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(dsc_pkcs8)),
@@ -553,17 +550,13 @@ fn build_chain() -> (Vec<u8>, Vec<u8>, EcdsaKeyPair) {
     )
     .expect("loading aws-lc-rs key into rcgen must succeed");
 
-    let mut dsc_params =
-        CertificateParams::new(vec!["DSC".to_string()]).expect("dsc params");
+    let mut dsc_params = CertificateParams::new(vec!["DSC".to_string()]).expect("dsc params");
     dsc_params.is_ca = IsCa::NoCa;
     // 396-day window — within the ISO 18013-5 Annex B 457-day maximum.
     // MSO signed/validFrom must fall within this window (use 2024-01-01).
-    dsc_params.not_before =
-        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).unwrap();
-    dsc_params.not_after =
-        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).unwrap();
-    dsc_params.extended_key_usages =
-        vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+    dsc_params.not_before = OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).unwrap();
+    dsc_params.not_after = OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).unwrap();
+    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
         .signed_by(&dsc_rcgen_key, &iaca_issuer)
@@ -611,8 +604,14 @@ fn build_signed_mdoc(
     let device_key = Value::Map(vec![
         (Value::Integer(1i64.into()), Value::Integer(2i64.into())), // kty: EC2
         (Value::Integer((-1i64).into()), Value::Integer(1i64.into())), // crv: P-256
-        (Value::Integer((-2i64).into()), Value::Bytes(device_key_x.to_vec())), // x
-        (Value::Integer((-3i64).into()), Value::Bytes(device_key_y.to_vec())), // y
+        (
+            Value::Integer((-2i64).into()),
+            Value::Bytes(device_key_x.to_vec()),
+        ), // x
+        (
+            Value::Integer((-3i64).into()),
+            Value::Bytes(device_key_y.to_vec()),
+        ), // y
     ]);
 
     let mso = Value::Map(vec![
@@ -731,7 +730,6 @@ fn mdoc_config(doctype: &str) -> CredentialConfiguration {
     }
 }
 
-
 #[tokio::test]
 async fn mdoc_credential_fields_are_populated_from_mso_validity_info() {
     // Arrange: build a real chain and use the tenant's P-256 key as the DeviceKey.
@@ -813,9 +811,12 @@ async fn mdoc_credential_fields_are_populated_from_mso_validity_info() {
     assert_eq!(
         credential.issued_at,
         time::UtcDateTime::from_unix_timestamp(
-            OffsetDateTime::parse("2024-01-01T00:00:00Z", &time::format_description::well_known::Rfc3339)
-                .unwrap()
-                .unix_timestamp()
+            OffsetDateTime::parse(
+                "2024-01-01T00:00:00Z",
+                &time::format_description::well_known::Rfc3339
+            )
+            .unwrap()
+            .unix_timestamp()
         )
         .unwrap()
     );
@@ -833,11 +834,18 @@ async fn mdoc_tampered_digest_is_rejected_before_storage() {
     // the real SHA-256 of the item bytes.
     let (iaca_der, dsc_der, signing_key) = build_chain();
 
-    // We need device key x/y for a valid-looking MSO; use a throwaway key.
-    let throwaway = EcdsaKeyPair::generate(Curve::P256).unwrap();
-    let throwaway_jwk = cloud_wallet_crypto::jwk::Jwk::try_from(&throwaway).unwrap();
-    let Key::Ec(ref ec) = throwaway_jwk.key else {
-        panic!("must be EC");
+    let (engine, tenant_id) = make_mdoc_engine(RecordingTaskQueue::default(), iaca_der).await;
+
+    // Embed the tenant's real proof JWK as the DeviceKey so that device-key
+    // binding succeeds and the only failing check is the digest check under
+    // test. A non-matching DeviceKey would independently trip
+    // `verify_device_key_binding`, masking whether `verify_digests` actually
+    // caught the tampering.
+    let tenant_key = engine.tenant_repo.find_key(tenant_id).await.unwrap();
+    let signer = CryptoSigner::from_ecdsa_der(tenant_key.der_bytes.expose()).unwrap();
+    let proof_jwk = signer.proof_jwk();
+    let Key::Ec(ref ec) = proof_jwk.key else {
+        panic!("test tenant must be EC-keyed (P-256)");
     };
     let x_bytes = ec.x.as_ref().to_vec();
     let y_bytes = ec.y.as_ref().to_vec();
@@ -853,13 +861,15 @@ async fn mdoc_tampered_digest_is_rejected_before_storage() {
             Value::Text("elementIdentifier".into()),
             Value::Text("family_name".into()),
         ),
-        (Value::Text("elementValue".into()), Value::Text("Doe".into())),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
     ]);
     let item_inner = cbor(&item);
     let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(item_inner)));
     let item_tag24_bytes = cbor(&item_tag24);
-    let item_tag24_val: Value =
-        ciborium::de::from_reader(item_tag24_bytes.as_slice()).unwrap();
+    let item_tag24_val: Value = ciborium::de::from_reader(item_tag24_bytes.as_slice()).unwrap();
 
     // Wrong digest: all zeros instead of the real SHA-256.
     let wrong_digest = vec![0u8; 32];
@@ -948,8 +958,6 @@ async fn mdoc_tampered_digest_is_rejected_before_storage() {
     ]);
     let raw = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
 
-    let (engine, tenant_id) =
-        make_mdoc_engine(RecordingTaskQueue::default(), iaca_der).await;
     let config = mdoc_config("org.iso.18013.5.1.mDL");
 
     // Act
@@ -963,8 +971,18 @@ async fn mdoc_tampered_digest_is_rejected_before_storage() {
         )
         .await;
 
-    // Assert
-    assert!(result.is_err(), "tampered digest must be rejected");
+    // Assert: must be rejected specifically by the digest check — not by an
+    // unrelated device-key mismatch, which the matching DeviceKey above rules out.
+    let err = result.unwrap_err();
+    let desc = err.error_description().unwrap_or("");
+    assert!(
+        desc.contains("digest mismatch"),
+        "tampered digest must be rejected by the digest check specifically; got: {desc}"
+    );
+    assert!(
+        !desc.contains("device key"),
+        "must not be masked by an unrelated device-key mismatch; got: {desc}"
+    );
 }
 
 #[tokio::test]
@@ -972,10 +990,19 @@ async fn mdoc_invalid_issuer_signature_is_rejected_before_storage() {
     // Arrange: valid structure + correct digests + real IACA chain,
     // but the COSE_Sign1 signature bytes are corrupted (tamper = true).
     let (iaca_der, dsc_der, signing_key) = build_chain();
-    let throwaway = EcdsaKeyPair::generate(Curve::P256).unwrap();
-    let throwaway_jwk = cloud_wallet_crypto::jwk::Jwk::try_from(&throwaway).unwrap();
-    let Key::Ec(ref ec) = throwaway_jwk.key else {
-        panic!("must be EC");
+
+    let (engine, tenant_id) = make_mdoc_engine(RecordingTaskQueue::default(), iaca_der).await;
+
+    // Embed the tenant's real proof JWK as the DeviceKey so that device-key
+    // binding succeeds and the only failing check is the issuer-signature check
+    // under test. A non-matching DeviceKey would independently trip
+    // `verify_device_key_binding`, masking whether `verify_issuer_signature`
+    // actually caught the corrupted signature.
+    let tenant_key = engine.tenant_repo.find_key(tenant_id).await.unwrap();
+    let signer = CryptoSigner::from_ecdsa_der(tenant_key.der_bytes.expose()).unwrap();
+    let proof_jwk = signer.proof_jwk();
+    let Key::Ec(ref ec) = proof_jwk.key else {
+        panic!("test tenant must be EC-keyed (P-256)");
     };
     let x_bytes = ec.x.as_ref().to_vec();
     let y_bytes = ec.y.as_ref().to_vec();
@@ -991,8 +1018,6 @@ async fn mdoc_invalid_issuer_signature_is_rejected_before_storage() {
         true, // tamper = corrupt the COSE signature
     );
 
-    let (engine, tenant_id) =
-        make_mdoc_engine(RecordingTaskQueue::default(), iaca_der).await;
     let config = mdoc_config("org.iso.18013.5.1.mDL");
 
     // Act
@@ -1006,10 +1031,17 @@ async fn mdoc_invalid_issuer_signature_is_rejected_before_storage() {
         )
         .await;
 
-    // Assert
+    // Assert: must be rejected specifically by the issuer-signature check — not
+    // by an unrelated device-key mismatch, which the matching DeviceKey above rules out.
+    let err = result.unwrap_err();
+    let desc = err.error_description().unwrap_or("");
     assert!(
-        result.is_err(),
-        "corrupted issuer signature must be rejected"
+        desc.contains("issuer signature verification failed"),
+        "corrupted issuer signature must be rejected by the signature check specifically; got: {desc}"
+    );
+    assert!(
+        !desc.contains("device key"),
+        "must not be masked by an unrelated device-key mismatch; got: {desc}"
     );
 }
 
@@ -1033,8 +1065,7 @@ async fn mdoc_device_key_mismatch_is_rejected_before_storage() {
         false,
     );
 
-    let (engine, tenant_id) =
-        make_mdoc_engine(RecordingTaskQueue::default(), iaca_der).await;
+    let (engine, tenant_id) = make_mdoc_engine(RecordingTaskQueue::default(), iaca_der).await;
     let config = mdoc_config("org.iso.18013.5.1.mDL");
 
     // Act: the registered tenant has a real P-256 key whose x/y coordinates are
@@ -1051,29 +1082,36 @@ async fn mdoc_device_key_mismatch_is_rejected_before_storage() {
         .await;
 
     // Assert
-    assert!(
-        result.is_err(),
-        "device key mismatch must be rejected"
-    );
+    assert!(result.is_err(), "device key mismatch must be rejected");
 }
 
 #[tokio::test]
-async fn ldp_vc_json_object_credential_is_accepted_by_store_credentials() {
+async fn ldp_vc_json_object_credential_is_converted_to_string_not_rejected_as_invalid_type() {
     // Arrange: an ldp_vc JSON object credential routed through store_credentials.
     //
-    // The Object arm in store_credentials converts it to a JSON string, then
-    // build_credential attempts to parse that string as an SD-JWT — which fails
-    // with a parse error.  The important invariant is that the error is NOT the
-    // "must be a string or a JSON object" fallback from the `_` arm.
+    // NOTE: this does NOT exercise ldp_vc issuance support — `build_credential`
+    // has no `LdpVc` arm, so the credential is still rejected, just later and
+    // with a more accurate error ("unsupported credential format 'ldp_vc'"
+    // instead of "must be a string or a JSON object"). What this test pins down
+    // is that the `v @ serde_json::Value::Object(_)` arm in `store_credentials`
+    // converts the object to a JSON string and lets it continue past the
+    // type check, rather than being rejected at that stage for having the
+    // wrong shape.
     //
     // If the `v @ serde_json::Value::Object(_)` arm were removed, the `_` arm
-    // would trigger and produce that message, causing the assertion below to fail
-    // and giving a regression signal.
+    // would trigger and produce the "must be a string or a JSON object" message,
+    // causing the assertion below to fail and giving a regression signal.
     use cloud_wallet_openid4vc::oid4vci::client::{IssuanceFlow, ResolvedOfferContext};
+    use cloud_wallet_openid4vc::oid4vci::credential::formats::{
+        CredentialFormatDetails, SdJwtVcCredentialConfiguration,
+    };
     use cloud_wallet_openid4vc::oid4vci::credential::offer::CredentialOffer;
-    use cloud_wallet_openid4vc::oid4vci::credential::{CredentialObject, ImmediateCredentialResponse};
-    use cloud_wallet_openid4vc::oid4vci::metadata::{AuthorizationServerMetadata, CredentialIssuerMetadata};
-    use cloud_wallet_openid4vc::oid4vci::credential::formats::{CredentialFormatDetails, SdJwtVcCredentialConfiguration};
+    use cloud_wallet_openid4vc::oid4vci::credential::{
+        CredentialObject, ImmediateCredentialResponse,
+    };
+    use cloud_wallet_openid4vc::oid4vci::metadata::{
+        AuthorizationServerMetadata, CredentialIssuerMetadata,
+    };
     use std::collections::HashMap;
 
     let issuer_url = Url::parse("https://issuer.example.com").unwrap();
@@ -1155,9 +1193,7 @@ async fn ldp_vc_json_object_credential_is_accepted_by_store_credentials() {
         "issuer": "https://issuer.example.com",
         "credentialSubject": { "id": "did:example:alice" }
     });
-    let immediate = ImmediateCredentialResponse::new(vec![
-        CredentialObject::new(json_cred),
-    ]);
+    let immediate = ImmediateCredentialResponse::new(vec![CredentialObject::new(json_cred)]);
 
     let engine = make_engine(RecordingTaskQueue::default());
     let mut credential_ids = vec![];
