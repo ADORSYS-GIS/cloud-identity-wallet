@@ -246,10 +246,10 @@ pub fn match_credential_query(
         return None;
     }
 
-    if let Some(ref authorities) = query.trusted_authorities {
-        if !matches_any_authority(authorities, credential) {
-            return None;
-        }
+    if let Some(ref authorities) = query.trusted_authorities
+        && !matches_any_authority(authorities, credential)
+    {
+        return None;
     }
 
     // Holder binding match. Per §6.1, absence defaults to true.
