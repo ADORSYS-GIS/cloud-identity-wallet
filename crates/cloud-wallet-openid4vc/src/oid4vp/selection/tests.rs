@@ -357,6 +357,25 @@ fn dcql_without_credential_sets_requires_every_credential_query() {
 }
 
 #[test]
+fn empty_wallet_reports_all_queries_unsatisfied() {
+    let query = DcqlQuery {
+        credentials: vec![
+            sd_jwt_query("pid", "https://example.com/pid"),
+            mdoc_query("mdl", "org.iso.18013.5.1.mDL"),
+        ],
+        credential_sets: None,
+    };
+
+    let result = match_dcql_query(&query, &[]);
+
+    assert!(!result.is_satisfied());
+    assert_eq!(result.unsatisfied_queries.len(), 2);
+    assert!(result.unsatisfied_queries.contains(&"pid".to_string()));
+    assert!(result.unsatisfied_queries.contains(&"mdl".to_string()));
+    assert!(result.select().is_empty());
+}
+
+#[test]
 fn credential_sets_use_first_satisfiable_required_option_and_skip_optional_by_default() {
     let query = DcqlQuery {
         credentials: vec![
