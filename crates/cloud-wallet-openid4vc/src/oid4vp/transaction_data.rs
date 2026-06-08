@@ -1,14 +1,19 @@
+use std::borrow::Cow;
+use std::str::FromStr;
+
 use crate::errors::{Error, ErrorKind, Result};
+use crate::formats::sd_jwt::IanaHashAlgorithm;
+use crate::oid4vp::TransactionDataType;
 use base64ct::Encoding;
+use cloud_wallet_crypto::digest::HashAlg;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 /// Transaction data as defined in OpenID4VP Section 8.4.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransactionData {
+pub struct TransactionData<'a> {
     #[serde(rename = "type")]
-    pub transaction_type: String,
+    pub transaction_type: TransactionDataType,
 
     pub credential_ids: Vec<String>,
 
@@ -19,12 +24,12 @@ pub struct TransactionData {
     pub additional_params: Value,
 
     #[serde(skip)]
-    original_encoded: Option<String>,
+    original_encoded: Cow<'a, str>,
 }
 
-impl TransactionData {
+impl<'a> TransactionData<'a> {
     /// Decodes a base64url-encoded transaction data JSON object.
-    pub fn decode(base64url_encoded: &str) -> Result<Self> {
+    pub fn decode(base64url_encoded: &'a str) -> Result<Self> {
         // Decode base64url (without padding)
         let decoded_bytes =
             base64ct::Base64UrlUnpadded::decode_vec(base64url_encoded).map_err(|e| {
@@ -34,7 +39,7 @@ impl TransactionData {
                 )
             })?;
 
-        // Parse JSON
+        // Parse JSON with deny_unknown_fields to reject unknown fields for known types
         let mut data: TransactionData = serde_json::from_slice(&decoded_bytes).map_err(|e| {
             Error::message(
                 ErrorKind::InvalidPresentationRequest,
@@ -45,19 +50,22 @@ impl TransactionData {
         // Validate required fields
         data.validate()?;
 
-        // Store the original encoded string for hash computation
-        data.original_encoded = Some(base64url_encoded.to_string());
+        // Store the original encoded string for hash computation (borrowed)
+        data.original_encoded = Cow::Borrowed(base64url_encoded);
 
         Ok(data)
     }
 
     /// Validates the transaction data structure.
     fn validate(&self) -> Result<()> {
-        // Validate type is non-empty
-        if self.transaction_type.trim().is_empty() {
+        // Validate type is a supported transaction data type (Section 8.5)
+        if !self.transaction_type.is_supported() {
             return Err(Error::message(
                 ErrorKind::InvalidPresentationRequest,
-                "Transaction data 'type' must not be empty",
+                format!(
+                    "Transaction data type '{}' is not supported",
+                    self.transaction_type
+                ),
             ));
         }
 
@@ -89,51 +97,42 @@ impl TransactionData {
             ));
         }
 
+        // Validate that hash algorithms are supported
+        if let Some(ref algs) = self.transaction_data_hashes_alg {
+            for alg in algs {
+                if IanaHashAlgorithm::from_str(alg).is_err() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidPresentationRequest,
+                        format!("Unsupported hash algorithm in transaction_data_hashes_alg: {alg}"),
+                    ));
+                }
+            }
+        }
+
         Ok(())
     }
 
     /// Computes a hash of the original base64url-encoded transaction data.
     pub fn compute_hash(&self, alg: &str) -> Result<String> {
-        let original_encoded = self.original_encoded.as_ref().ok_or_else(|| {
+        // Parse the algorithm string to IanaHashAlgorithm
+        let iana_alg = IanaHashAlgorithm::from_str(alg).map_err(|_| {
             Error::message(
                 ErrorKind::InvalidPresentationRequest,
-                "Cannot compute hash: original encoded data not available",
+                format!("Unsupported hash algorithm: {alg}"),
             )
         })?;
 
-        let hash_bytes = match alg.to_lowercase().as_str() {
-            "sha-256" => {
-                let mut hasher = Sha256::new();
-                hasher.update(original_encoded.as_bytes());
-                hasher.finalize().to_vec()
-            }
-            "sha-384" => {
-                use sha2::Sha384;
-                let mut hasher = Sha384::new();
-                hasher.update(original_encoded.as_bytes());
-                hasher.finalize().to_vec()
-            }
-            "sha-512" => {
-                use sha2::Sha512;
-                let mut hasher = Sha512::new();
-                hasher.update(original_encoded.as_bytes());
-                hasher.finalize().to_vec()
-            }
-            _ => {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("Unsupported hash algorithm: {alg}"),
-                ));
-            }
-        };
+        let hash_alg: HashAlg = iana_alg.into();
+        let digest = hash_alg.hash(self.original_encoded.as_bytes());
 
-        Ok(base64ct::Base64UrlUnpadded::encode_string(&hash_bytes))
+        Ok(base64ct::Base64UrlUnpadded::encode_string(digest.as_ref()))
     }
 
     /// Checks if this transaction data applies to the given credential query ID.
     pub fn applies_to_credential(&self, credential_query_id: &str) -> bool {
         self.credential_ids
-            .contains(&credential_query_id.to_string())
+            .iter()
+            .any(|id| id == credential_query_id)
     }
 
     /// Returns the hash algorithms to use for this transaction data.
@@ -146,12 +145,12 @@ impl TransactionData {
 
 /// A collection of transaction data entries.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TransactionDataSet {
-    /// The decoded transaction data entries along with their original encoded form.
-    entries: Vec<(String, TransactionData)>,
+pub struct TransactionDataSet<'a> {
+    /// The decoded transaction data entries.
+    entries: Vec<TransactionData<'a>>,
 }
 
-impl TransactionDataSet {
+impl<'a> TransactionDataSet<'a> {
     /// Creates an empty transaction data set.
     pub fn new() -> Self {
         Self {
@@ -160,39 +159,39 @@ impl TransactionDataSet {
     }
 
     /// Decodes all base64url-encoded transaction data strings.
-    pub fn decode_all(encoded_list: &[String]) -> Result<Self> {
+    pub fn decode_all(encoded_list: &'a [String]) -> Result<Self> {
         let mut entries = Vec::with_capacity(encoded_list.len());
 
         for encoded in encoded_list {
             let data = TransactionData::decode(encoded)?;
-            entries.push((encoded.clone(), data));
+            entries.push(data);
         }
 
         Ok(Self { entries })
     }
 
     /// Computes hashes for transaction data applicable to a specific credential.
-    pub fn hashes_for_credential(&self, credential_query_id: &str) -> Vec<String> {
+    /// Returns an error if any hash computation fails
+    pub fn hashes_for_credential(&self, credential_query_id: &str) -> Result<Vec<String>> {
         let mut hashes = Vec::new();
 
-        for (_encoded, data) in &self.entries {
+        for data in &self.entries {
             if data.applies_to_credential(credential_query_id) {
                 // Get the algorithms to use (default to sha-256 if not specified)
                 let algs = data.hash_algorithms();
 
                 // Compute hash with the first (primary) algorithm
                 // Per the spec, the wallet MUST use one of the specified algorithms
-                if let Ok(hash) = data.compute_hash(&algs[0]) {
-                    hashes.push(hash);
-                }
+                let hash = data.compute_hash(&algs[0])?;
+                hashes.push(hash);
             }
         }
 
-        hashes
+        Ok(hashes)
     }
 
     /// Returns all decoded transaction data entries.
-    pub fn entries(&self) -> &[(String, TransactionData)] {
+    pub fn entries(&self) -> &[TransactionData<'a>] {
         &self.entries
     }
 
@@ -207,14 +206,14 @@ impl TransactionDataSet {
     }
 }
 
-impl Default for TransactionDataSet {
+impl<'a> Default for TransactionDataSet<'a> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl From<Vec<(String, TransactionData)>> for TransactionDataSet {
-    fn from(entries: Vec<(String, TransactionData)>) -> Self {
+impl<'a> From<Vec<TransactionData<'a>>> for TransactionDataSet<'a> {
+    fn from(entries: Vec<TransactionData<'a>>) -> Self {
         Self { entries }
     }
 }
@@ -231,9 +230,9 @@ mod tests {
 
     #[test]
     fn test_decode_valid_base64url_transaction_data() {
-        // Create a valid transaction data JSON
+        // Create a valid transaction data JSON with supported type
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1", "cred2"],
             "transaction_data_hashes_alg": ["sha-256"],
             "amount": "100.00",
@@ -243,7 +242,7 @@ mod tests {
         let encoded = encode_json(&json);
         let data = TransactionData::decode(&encoded).unwrap();
 
-        assert_eq!(data.transaction_type, "payment");
+        assert_eq!(data.transaction_type, TransactionDataType::Openid4vp);
         assert_eq!(data.credential_ids, vec!["cred1", "cred2"]);
         assert_eq!(
             data.transaction_data_hashes_alg,
@@ -253,16 +252,16 @@ mod tests {
 
     #[test]
     fn test_decode_valid_without_optional_fields() {
-        // Minimal valid transaction data
+        // Minimal valid transaction data with supported type
         let json = json!({
-            "type": "document_signing",
+            "type": "openid4vp",
             "credential_ids": ["signing_cred"]
         });
 
         let encoded = encode_json(&json);
         let data = TransactionData::decode(&encoded).unwrap();
 
-        assert_eq!(data.transaction_type, "document_signing");
+        assert_eq!(data.transaction_type, TransactionDataType::Openid4vp);
         assert_eq!(data.credential_ids, vec!["signing_cred"]);
         assert!(data.transaction_data_hashes_alg.is_none());
     }
@@ -322,15 +321,34 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_empty_type() {
+    fn test_reject_unsupported_type() {
+        // Section 8.5: unsupported transaction data types should be rejected
         let json = json!({
-            "type": "",
+            "type": "unsupported_type",
             "credential_ids": ["cred1"]
         });
 
         let encoded = encode_json(&json);
         let result = TransactionData::decode(&encoded);
         assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidPresentationRequest);
+        let err_msg = format!("{err}");
+        assert!(err_msg.contains("not supported"));
+    }
+
+    #[test]
+    fn test_reject_unknown_fields_for_known_type() {
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"],
+            "unknown_field_not_in_schema": "value"
+        });
+
+        let encoded = encode_json(&json);
+        let result = TransactionData::decode(&encoded);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -360,10 +378,14 @@ mod tests {
 
     #[test]
     fn test_hash_computation_sha256() {
-        // Test hash computation
-        let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
+        // Test hash computation with supported type (openid4vp)
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"]
+        });
+        let encoded = encode_json(&json);
 
-        let data = TransactionData::decode(encoded).unwrap();
+        let data = TransactionData::decode(&encoded).unwrap();
         let hash = data.compute_hash("sha-256").unwrap();
 
         // Verify it's base64url encoded (no padding)
@@ -376,9 +398,13 @@ mod tests {
 
     #[test]
     fn test_hash_computation_sha384() {
-        let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"]
+        });
+        let encoded = encode_json(&json);
 
-        let data = TransactionData::decode(encoded).unwrap();
+        let data = TransactionData::decode(&encoded).unwrap();
         let hash = data.compute_hash("sha-384").unwrap();
 
         // SHA-384 produces 48 bytes = 64 base64url chars
@@ -387,9 +413,13 @@ mod tests {
 
     #[test]
     fn test_hash_computation_sha512() {
-        let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"]
+        });
+        let encoded = encode_json(&json);
 
-        let data = TransactionData::decode(encoded).unwrap();
+        let data = TransactionData::decode(&encoded).unwrap();
         let hash = data.compute_hash("sha-512").unwrap();
 
         // SHA-512 produces 64 bytes = 86 base64url chars
@@ -398,9 +428,13 @@ mod tests {
 
     #[test]
     fn test_hash_computation_unsupported_alg() {
-        let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"]
+        });
+        let encoded = encode_json(&json);
 
-        let data = TransactionData::decode(encoded).unwrap();
+        let data = TransactionData::decode(&encoded).unwrap();
         let result = data.compute_hash("md5");
         assert!(result.is_err());
     }
@@ -409,34 +443,46 @@ mod tests {
     fn test_hash_over_original_string() {
         // The hash must be computed over the original base64url string,
         // not the decoded content.
-        let encoded = "eyJ0eXBlIjoicGF5bWVudCIsImNyZWRlbnRpYWxfaWRzIjpbImNyZWQxIl19";
+        // Create two different base64url encodings of semantically equivalent content
+        // (same type and credential_ids, but different JSON whitespace/ordering)
+        let json1 = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"]
+        });
+        let encoded1 = encode_json(&json1);
 
-        // Decode the transaction data
-        let decoded = TransactionData::decode(encoded).unwrap();
-
-        // Compute hash - should use the original encoded string internally
-        let hash_from_encoded = decoded.compute_hash("sha-256").unwrap();
+        // Decode the first transaction data
+        let decoded1 = TransactionData::decode(&encoded1).unwrap();
+        let hash1 = decoded1.compute_hash("sha-256").unwrap();
 
         // Verify consistent output on same data
-        let hash2 = decoded.compute_hash("sha-256").unwrap();
-        assert_eq!(hash_from_encoded, hash2);
+        let hash1_again = decoded1.compute_hash("sha-256").unwrap();
+        assert_eq!(hash1, hash1_again);
 
-        // Create a different encoded representation of the same content
-        let re_encoded = encode_json(&serde_json::to_value(&decoded).unwrap());
-        let decoded2 = TransactionData::decode(&re_encoded).unwrap();
+        // The hash is computed over the original base64url string, not the decoded content.
+        assert_eq!(decoded1.original_encoded.as_ref(), encoded1);
 
-        // Compute hash of the re-encoded string
-        let hash_from_reencoded = decoded2.compute_hash("sha-256").unwrap();
+        // Create a different physical encoding with extra whitespace
+        let json_str_with_whitespace = r#"{ "type": "openid4vp", "credential_ids": ["cred1"] }"#;
+        let encoded2 =
+            base64ct::Base64UrlUnpadded::encode_string(json_str_with_whitespace.as_bytes());
+
+        // Decode the second transaction data
+        let decoded2 = TransactionData::decode(&encoded2).unwrap();
+        let hash2 = decoded2.compute_hash("sha-256").unwrap();
 
         // Hashes should be different because the original encoded strings are different
-        // (even though they decode to the same content)
-        assert_ne!(hash_from_encoded, hash_from_reencoded);
+        // (even though they decode to semantically equivalent content)
+        assert_ne!(
+            hash1, hash2,
+            "Hashes of different encoded strings should differ"
+        );
     }
 
     #[test]
     fn test_applies_to_credential() {
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1", "cred2"]
         });
 
@@ -451,7 +497,7 @@ mod tests {
     #[test]
     fn test_hash_algorithms_default() {
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"]
         });
 
@@ -465,7 +511,7 @@ mod tests {
     #[test]
     fn test_hash_algorithms_specified() {
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"],
             "transaction_data_hashes_alg": ["sha-384", "sha-512"]
         });
@@ -480,11 +526,11 @@ mod tests {
     #[test]
     fn test_transaction_data_set_decode_all() {
         let json1 = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"]
         });
         let json2 = json!({
-            "type": "signing",
+            "type": "openid4vp",
             "credential_ids": ["cred2"]
         });
 
@@ -506,7 +552,7 @@ mod tests {
     fn test_transaction_data_set_decode_all_error() {
         // One valid, one invalid
         let json1 = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"]
         });
         let encoded = vec![encode_json(&json1), "invalid-base64url!!!".to_string()];
@@ -518,15 +564,15 @@ mod tests {
     #[test]
     fn test_hashes_for_credential() {
         let json1 = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1", "cred2"]
         });
         let json2 = json!({
-            "type": "signing",
+            "type": "openid4vp",
             "credential_ids": ["cred2"]
         });
         let json3 = json!({
-            "type": "other",
+            "type": "openid4vp",
             "credential_ids": ["cred3"]
         });
 
@@ -538,26 +584,41 @@ mod tests {
         let data_set = TransactionDataSet::decode_all(&encoded).unwrap();
 
         // cred1 has 1 transaction
-        let hashes1 = data_set.hashes_for_credential("cred1");
+        let hashes1 = data_set.hashes_for_credential("cred1").unwrap();
         assert_eq!(hashes1.len(), 1);
 
         // cred2 has 2 transactions
-        let hashes2 = data_set.hashes_for_credential("cred2");
+        let hashes2 = data_set.hashes_for_credential("cred2").unwrap();
         assert_eq!(hashes2.len(), 2);
 
         // cred3 has 1 transaction
-        let hashes3 = data_set.hashes_for_credential("cred3");
+        let hashes3 = data_set.hashes_for_credential("cred3").unwrap();
         assert_eq!(hashes3.len(), 1);
 
         // cred4 has no transactions
-        let hashes4 = data_set.hashes_for_credential("cred4");
+        let hashes4 = data_set.hashes_for_credential("cred4").unwrap();
         assert!(hashes4.is_empty());
+    }
+
+    #[test]
+    fn test_hashes_for_credential_returns_error_on_invalid_alg() {
+        // Section 8.5: invalid transaction data should produce an error, not silently drop
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1"],
+            "transaction_data_hashes_alg": ["unsupported-alg"]
+        });
+
+        let encoded = vec![encode_json(&json)];
+        let result = TransactionDataSet::decode_all(&encoded);
+        // Should fail at decode time because unsupported-alg is not a valid IANA hash algorithm
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_hashes_for_credential_with_custom_alg() {
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"],
             "transaction_data_hashes_alg": ["sha-384"]
         });
@@ -565,7 +626,7 @@ mod tests {
         let encoded = vec![encode_json(&json)];
         let data_set = TransactionDataSet::decode_all(&encoded).unwrap();
 
-        let hashes = data_set.hashes_for_credential("cred1");
+        let hashes = data_set.hashes_for_credential("cred1").unwrap();
         assert_eq!(hashes.len(), 1);
         // SHA-384 produces 48 bytes = 64 base64url chars
         assert_eq!(hashes[0].len(), 64);
@@ -574,7 +635,7 @@ mod tests {
     #[test]
     fn test_transaction_data_serde_roundtrip() {
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"],
             "amount": "100.00"
         });
@@ -585,7 +646,7 @@ mod tests {
         // Serialize back to JSON
         let serialized = serde_json::to_value(&data).unwrap();
 
-        assert_eq!(serialized["type"], "payment");
+        assert_eq!(serialized["type"], "openid4vp");
         assert_eq!(serialized["credential_ids"], json![["cred1"]]);
         assert_eq!(serialized["amount"], "100.00");
     }
@@ -593,7 +654,7 @@ mod tests {
     #[test]
     fn test_transaction_data_with_complex_additional_params() {
         let json = json!({
-            "type": "payment",
+            "type": "openid4vp",
             "credential_ids": ["cred1"],
             "payee": {
                 "name": "Merchant XYZ",
@@ -612,5 +673,22 @@ mod tests {
         let additional = &data.additional_params;
         assert!(additional.get("payee").is_some());
         assert!(additional.get("items").is_some());
+    }
+
+    #[test]
+    fn test_applies_to_credential_no_allocation() {
+        // Verify that applies_to_credential does not allocate a new String
+        // This test ensures we use .iter().any() instead of .contains()
+        let json = json!({
+            "type": "openid4vp",
+            "credential_ids": ["cred1", "cred2", "cred3"]
+        });
+
+        let encoded = encode_json(&json);
+        let data = TransactionData::decode(&encoded).unwrap();
+
+        // This should not allocate a new String for comparison
+        assert!(data.applies_to_credential("cred2"));
+        assert!(!data.applies_to_credential("nonexistent"));
     }
 }
