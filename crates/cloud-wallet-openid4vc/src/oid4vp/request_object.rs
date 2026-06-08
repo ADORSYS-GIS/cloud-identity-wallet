@@ -5,7 +5,7 @@
 //! verifies the signature and validates claims.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, decode as decode_jwt};
+use jsonwebtoken::Header;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
@@ -175,73 +175,8 @@ pub struct RequestObjectClaims {
     #[serde(flatten)]
     pub rfc7519: RFC7519Claims,
 
-    /// OAuth 2.0 response_type.
-    #[serde(rename = "response_type")]
-    pub response_type: Option<String>,
-
-    /// OAuth 2.0 client_id.
-    #[serde(rename = "client_id")]
-    pub client_id: Option<String>,
-
-    /// OAuth 2.0 redirect_uri.
-    #[serde(rename = "redirect_uri")]
-    pub redirect_uri: Option<String>,
-
-    /// OAuth 2.0 scope.
-    #[serde(rename = "scope")]
-    pub scope: Option<String>,
-
-    /// OAuth 2.0 state.
-    #[serde(rename = "state")]
-    pub state: Option<String>,
-
-    /// OIDC nonce.
-    #[serde(rename = "nonce")]
-    pub nonce: Option<String>,
-
-    /// OID4VP response_mode.
-    #[serde(rename = "response_mode")]
-    pub response_mode: Option<String>,
-
-    /// OID4VP response_uri.
-    #[serde(rename = "response_uri")]
-    pub response_uri: Option<String>,
-
-    /// OID4VP request_uri.
-    #[serde(rename = "request_uri")]
-    pub request_uri: Option<String>,
-
-    /// OID4VP request_uri_method.
-    #[serde(rename = "request_uri_method")]
-    pub request_uri_method: Option<String>,
-
-    /// OID4VP dcql_query.
-    #[serde(rename = "dcql_query")]
-    pub dcql_query: Option<Value>,
-
-    /// OID4VP client_metadata.
-    #[serde(rename = "client_metadata")]
-    pub client_metadata: Option<Value>,
-
-    /// OID4VP client_metadata_uri.
-    #[serde(rename = "client_metadata_uri")]
-    pub client_metadata_uri: Option<String>,
-
-    /// OID4VP transaction_data.
-    #[serde(rename = "transaction_data")]
-    pub transaction_data: Option<Vec<String>>,
-
-    /// OID4VP verifier_info.
-    #[serde(rename = "verifier_info")]
-    pub verifier_info: Option<Vec<Value>>,
-
-    /// OID4VP expected_origins.
-    #[serde(rename = "expected_origins")]
-    pub expected_origins: Option<Vec<String>>,
-
-    /// Additional claims.
     #[serde(flatten)]
-    pub additional: serde_json::Map<String, Value>,
+    pub params: AuthorizationRequest,
 }
 
 /// A decoded and validated Request Object JWT.
@@ -250,59 +185,12 @@ pub struct RequestObject {
     pub header: RequestObjectHeader,
     pub claims: RequestObjectClaims,
     pub client_id: ParsedClientId,
-    raw: String,
 }
 
 impl RequestObject {
-    /// Decodes and validates a signed Request Object JWT.
-    ///
-    /// Steps:
-    /// 1. Extract header and validate `typ`/`alg`.
-    /// 2. Decode payload (unverified) to get `client_id`.
-    /// 3. Resolve verification key via `resolver`.
-    /// 4. Verify signature and decode claims.
-    /// 5. Validate `aud`, `iss`, `exp`, and `iat`.
-    pub async fn decode_and_validate(
-        jwt: &str,
-        wallet_id: &str,
-        resolver: &dyn VerifierKeyResolver,
-    ) -> Result<Self> {
-        validate_compact_jws(jwt)?;
-
-        let header = decode_header(jwt)?;
-        let request_header = parse_header_claims(&header)?;
-        request_header.validate()?;
-
-        let unverified_claims: RequestObjectClaims = decode_unverified_payload(jwt)?;
-        let client_id_str = unverified_claims.client_id.as_deref().ok_or_else(|| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "Request Object must contain 'client_id' claim",
-            )
-        })?;
-        let parsed_client_id = ParsedClientId::parse(client_id_str)?;
-
-        let decoding_key = resolver
-            .resolve_key(&parsed_client_id, &request_header)
-            .await
-            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
-
-        let algorithm = parse_algorithm(&request_header.alg)?;
-        let verified_claims = verify_and_decode(jwt, &decoding_key, algorithm)?;
-
-        validate_claims(&verified_claims, wallet_id, client_id_str)?;
-
-        Ok(Self {
-            header: request_header,
-            claims: verified_claims,
-            client_id: parsed_client_id,
-            raw: jwt.to_string(),
-        })
-    }
-
     /// Decodes a Request Object without verifying the signature.
     ///
-    /// Used for `redirect_uri` client_id schemes where unsigned requests are permitted.
+    /// Usedfor `redirect_uri` client_id schemes where unsigned requests are permitted.
     pub async fn decode_unsigned(jwt: &str, wallet_id: &str) -> Result<Self> {
         validate_compact_jws(jwt)?;
 
@@ -310,12 +198,7 @@ impl RequestObject {
         let request_header = parse_header_claims(&header)?;
 
         let claims: RequestObjectClaims = decode_unverified_payload(jwt)?;
-        let client_id_str = claims.client_id.as_deref().ok_or_else(|| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "Request Object must contain 'client_id' claim",
-            )
-        })?;
+        let client_id_str = claims.params.client_id.as_str();
         let parsed_client_id = ParsedClientId::parse(client_id_str)?;
 
         validate_claims(&claims, wallet_id, client_id_str)?;
@@ -324,38 +207,8 @@ impl RequestObject {
             header: request_header,
             claims,
             client_id: parsed_client_id,
-            raw: jwt.to_string(),
         })
     }
-
-    /// Returns the raw JWT string.
-    pub fn raw(&self) -> &str {
-        &self.raw
-    }
-
-    /// Converts this `RequestObject` into an `AuthorizationRequest`.
-    pub fn into_authorization_request(self) -> Result<AuthorizationRequest> {
-        let claims_value = serde_json::to_value(&self.claims)
-            .map_err(|e| Error::new(ErrorKind::InvalidPresentationRequest, e))?;
-
-        serde_json::from_value(claims_value).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("failed to parse AuthorizationRequest from Request Object: {e}"),
-            )
-        })
-    }
-}
-
-/// Trait for resolving verifier public keys.
-#[async_trait::async_trait]
-pub trait VerifierKeyResolver: Send + Sync {
-    /// Resolves the verification key for a verifier.
-    async fn resolve_key(
-        &self,
-        client_id: &ParsedClientId,
-        header: &RequestObjectHeader,
-    ) -> std::result::Result<DecodingKey, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 fn validate_compact_jws(raw: &str) -> Result<()> {
@@ -451,46 +304,6 @@ fn decode_unverified_payload<T: for<'de> Deserialize<'de>>(jwt: &str) -> Result<
     })
 }
 
-fn parse_algorithm(alg: &str) -> Result<Algorithm> {
-    let alg_lower = alg.to_lowercase();
-    match alg_lower.as_str() {
-        "rs256" => Ok(Algorithm::RS256),
-        "rs384" => Ok(Algorithm::RS384),
-        "rs512" => Ok(Algorithm::RS512),
-        "ps256" => Ok(Algorithm::PS256),
-        "ps384" => Ok(Algorithm::PS384),
-        "ps512" => Ok(Algorithm::PS512),
-        "es256" => Ok(Algorithm::ES256),
-        "es384" => Ok(Algorithm::ES384),
-        "eddsa" => Ok(Algorithm::EdDSA),
-        _ => Err(Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            format!("unsupported algorithm: {alg}"),
-        )),
-    }
-}
-
-fn verify_and_decode<T: for<'de> Deserialize<'de>>(
-    jwt: &str,
-    key: &DecodingKey,
-    algorithm: Algorithm,
-) -> Result<T> {
-    let mut validation = Validation::new(algorithm);
-    validation.required_spec_claims.clear();
-    validation.validate_exp = false;
-    validation.validate_nbf = false;
-    validation.validate_aud = false;
-
-    decode_jwt::<T>(jwt, key, &validation)
-        .map(|token| token.claims)
-        .map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("JWT signature verification failed: {e}"),
-            )
-        })
-}
-
 fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str, client_id: &str) -> Result<()> {
     let aud_valid = match &claims.rfc7519.aud {
         Some(aud) => aud == wallet_id || aud == SELF_ISSUED_AUDIENCE,
@@ -557,7 +370,30 @@ fn validate_claims(claims: &RequestObjectClaims, wallet_id: &str, client_id: &st
 
 #[cfg(test)]
 mod tests {
+    use super::super::authorization::{AuthorizationRequest, ResponseMode, ResponseType};
     use super::*;
+
+    fn make_test_auth_request() -> AuthorizationRequest {
+        AuthorizationRequest {
+            response_type: ResponseType::VpToken,
+            client_id: "https://verifier.example.com".to_string(),
+            redirect_uri: None,
+            scope: None,
+            state: None,
+            nonce: "test-nonce".to_string(),
+            response_mode: ResponseMode::DirectPost,
+            response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
+            request_uri: None,
+            request_uri_method: None,
+            dcql_query: None,
+            client_metadata: None,
+            client_metadata_uri: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
+            expected_origins: None,
+        }
+    }
 
     #[test]
     fn parse_client_id_x509_san_dns() {
@@ -684,20 +520,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_algorithm_supported() {
-        assert_eq!(parse_algorithm("RS256").unwrap(), Algorithm::RS256);
-        assert_eq!(parse_algorithm("ES256").unwrap(), Algorithm::ES256);
-        assert_eq!(parse_algorithm("EdDSA").unwrap(), Algorithm::EdDSA);
-        assert_eq!(parse_algorithm("PS256").unwrap(), Algorithm::PS256);
-    }
-
-    #[test]
-    fn parse_algorithm_unsupported() {
-        assert!(parse_algorithm("HS256").is_err());
-        assert!(parse_algorithm("unknown").is_err());
-    }
-
-    #[test]
     fn validate_claims_aud_mismatch() {
         let claims = RequestObjectClaims {
             rfc7519: RFC7519Claims {
@@ -709,23 +531,7 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -750,23 +556,7 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -792,23 +582,7 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -833,23 +607,7 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64 - 7200),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -874,23 +632,7 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -915,23 +657,7 @@ mod tests {
                 iat: Some((jsonwebtoken::get_current_timestamp() as i64) + 3600),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -956,30 +682,14 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
             &claims,
             "https://wallet.example.com",
             "https://verifier.example.com",
-            );
+        );
         assert!(result.is_ok());
     }
 
@@ -995,23 +705,7 @@ mod tests {
                 iat: Some(jsonwebtoken::get_current_timestamp() as i64),
                 jti: None,
             },
-            response_type: Some("vp_token".to_string()),
-            client_id: Some("https://verifier.example.com".to_string()),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: Some("test-nonce".to_string()),
-            response_mode: None,
-            response_uri: None,
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: None,
-            client_metadata: None,
-            client_metadata_uri: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-            additional: serde_json::Map::new(),
+            params: make_test_auth_request(),
         };
 
         let result = validate_claims(
@@ -1019,7 +713,10 @@ mod tests {
             "https://wallet.example.com",
             "https://verifier.example.com",
         );
-        assert!(result.is_ok(), "missing iss should be allowed for unsigned requests");
+        assert!(
+            result.is_ok(),
+            "missing iss should be allowed for unsigned requests"
+        );
     }
 
     fn create_unsigned_jwt_payload(client_id: &str, wallet_id: &str) -> String {
@@ -1031,10 +728,14 @@ mod tests {
             "iat": now,
             "client_id": client_id,
             "response_type": "vp_token",
-            "nonce": "test-nonce"
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid"
         });
         let payload_bytes = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
-        let header_bytes = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
+        let header_bytes =
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
         format!("{}.{}.signature", header_bytes, payload_bytes)
     }
 
@@ -1045,11 +746,17 @@ mod tests {
             "https://wallet.example.com",
         );
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
-        assert!(result.is_ok(), "decode_unsigned should succeed for valid unsigned request");
+        assert!(
+            result.is_ok(),
+            "decode_unsigned should succeed for valid unsigned request"
+        );
         let request_object = result.unwrap();
-        assert_eq!(request_object.client_id, ParsedClientId::RedirectUri {
-            uri: Url::parse("https://verifier.example.com").unwrap()
-        });
+        assert_eq!(
+            request_object.client_id,
+            ParsedClientId::RedirectUri {
+                uri: Url::parse("https://verifier.example.com").unwrap()
+            }
+        );
         assert!(!request_object.client_id.requires_signature());
     }
 
@@ -1062,24 +769,21 @@ mod tests {
             "exp": now + 300,
             "iat": now,
             "response_type": "vp_token",
-            "nonce": "test-nonce"
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid"
         });
         let payload_bytes = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
-        let header_bytes = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
+        let header_bytes =
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
         let jwt = format!("{}.{}.signature", header_bytes, payload_bytes);
 
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
-        assert!(result.is_err(), "decode_unsigned should fail when client_id is missing");
-    }
-
-    #[tokio::test]
-    async fn decode_unsigned_aud_mismatch() {
-        let jwt = create_unsigned_jwt_payload(
-            "https://verifier.example.com",
-            "https://wrong-wallet.example.com",
+        assert!(
+            result.is_err(),
+            "decode_unsigned should fail when client_id is missing"
         );
-        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
-        assert!(result.is_err(), "decode_unsigned should fail when aud does not match wallet_id");
     }
 
     #[tokio::test]
@@ -1092,14 +796,21 @@ mod tests {
             "iat": now - 200,
             "client_id": "https://verifier.example.com",
             "response_type": "vp_token",
-            "nonce": "test-nonce"
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid"
         });
         let payload_bytes = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
-        let header_bytes = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
+        let header_bytes =
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
         let jwt = format!("{}.{}.signature", header_bytes, payload_bytes);
 
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
-        assert!(result.is_err(), "decode_unsigned should fail when exp is in the past");
+        assert!(
+            result.is_err(),
+            "decode_unsigned should fail when exp is in the past"
+        );
     }
 
     #[tokio::test]
@@ -1109,6 +820,9 @@ mod tests {
             "https://self-issued.me/v2",
         );
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
-        assert!(result.is_ok(), "decode_unsigned should succeed with self-issued audience");
+        assert!(
+            result.is_ok(),
+            "decode_unsigned should succeed with self-issued audience"
+        );
     }
 }
