@@ -198,7 +198,6 @@ pub enum VerifierAttestationError {
     ValidationError(String),
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
