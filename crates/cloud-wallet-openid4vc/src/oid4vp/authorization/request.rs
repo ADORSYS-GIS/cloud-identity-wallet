@@ -9,6 +9,8 @@ use crate::errors::{Error, ErrorKind, Result};
 // Re-export DCQL types from the dcql module
 pub use super::super::dcql::DcqlQuery;
 
+use super::super::TransactionDataEntry;
+
 /// An OpenID4VP Authorization Request.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -541,48 +543,6 @@ impl VerifierAttestation {
         }
         Ok(())
     }
-}
-
-/// Supported transaction data types per OpenID4VP Section 8.4.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransactionDataType {
-    /// OpenID4VP transaction data type.
-    #[serde(rename = "openid4vp")]
-    Openid4vp,
-    /// Extension point for other transaction data types.
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl TransactionDataType {
-    /// Returns true if this is a supported transaction data type.
-    fn is_supported(&self) -> bool {
-        matches!(self, Self::Openid4vp)
-    }
-}
-
-impl std::fmt::Display for TransactionDataType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Openid4vp => write!(f, "openid4vp"),
-            Self::Other(s) => write!(f, "{s}"),
-        }
-    }
-}
-
-/// Transaction data entry as decoded from base64url.
-///
-/// Section 8.4 requires each entry to be base64url-decoded into a JSON object
-/// with at least `type` and a non-empty `credential_ids` array referencing DCQL credential IDs.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransactionDataEntry {
-    /// REQUIRED. The transaction data type.
-    #[serde(rename = "type")]
-    pub data_type: TransactionDataType,
-
-    pub credential_ids: Vec<String>,
 }
 
 impl TransactionDataEntry {
