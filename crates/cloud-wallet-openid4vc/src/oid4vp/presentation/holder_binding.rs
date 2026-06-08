@@ -2,21 +2,10 @@ use std::collections::BTreeMap;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
-use thiserror::Error;
 
 use crate::formats::sd_jwt::IanaHashAlgorithm;
 
-#[derive(Debug, Error)]
-pub enum HolderBindingProofError {
-    #[error("Failed to create key binding JWT: {0}")]
-    KeyBindingCreation(String),
-    #[error("Hash computation failed: {0}")]
-    HashComputation(String),
-    #[error("Holder key not available for binding")]
-    HolderKeyUnavailable,
-    #[error("Unsupported credential format for holder binding: {0}")]
-    UnsupportedFormat(String),
-}
+use super::error::HolderBindingProofError;
 
 pub type Result<T> = std::result::Result<T, HolderBindingProofError>;
 
@@ -139,12 +128,6 @@ impl MdocHolderBinding {
     pub fn new(device_signature: Vec<u8>) -> Self {
         Self { device_signature }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct PresentationResult {
-    pub presentation: String,
-    pub binding: Option<HolderBinding>,
 }
 
 #[derive(Debug, Clone)]
