@@ -9,5 +9,6 @@ pub mod dcql;
 pub mod error;
 pub mod metadata;
 pub mod request_object;
+pub mod selection;
 
 pub use error::*;
