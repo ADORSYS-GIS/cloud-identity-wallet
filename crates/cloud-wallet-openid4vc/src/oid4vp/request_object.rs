@@ -170,12 +170,15 @@ impl RequestObject {
             ));
         }
 
-        let typ = header_value.get("typ").and_then(|v| v.as_str()).ok_or_else(|| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "Request Object typ claim is missing",
-            )
-        })?;
+        let typ = header_value
+            .get("typ")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    "Request Object typ claim is missing",
+                )
+            })?;
         if typ.to_lowercase() != REQUEST_OBJECT_TYP.to_lowercase() {
             return Err(Error::message(
                 ErrorKind::InvalidPresentationRequest,
@@ -184,12 +187,17 @@ impl RequestObject {
         }
 
         let claims_json_bytes = URL_SAFE_NO_PAD
-            .decode(jwt.split('.').nth(1).ok_or_else(|| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "invalid JWT format: missing payload",
-                )
-            })?.as_bytes())
+            .decode(
+                jwt.split('.')
+                    .nth(1)
+                    .ok_or_else(|| {
+                        Error::message(
+                            ErrorKind::InvalidPresentationRequest,
+                            "invalid JWT format: missing payload",
+                        )
+                    })?
+                    .as_bytes(),
+            )
             .map_err(|e| {
                 Error::message(
                     ErrorKind::InvalidPresentationRequest,
@@ -197,12 +205,13 @@ impl RequestObject {
                 )
             })?;
 
-        let claims: RequestObjectClaims = serde_json::from_slice(&claims_json_bytes).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("failed to parse JWT payload claims: {e}"),
-            )
-        })?;
+        let claims: RequestObjectClaims =
+            serde_json::from_slice(&claims_json_bytes).map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    format!("failed to parse JWT payload claims: {e}"),
+                )
+            })?;
         let client_id_str = claims.params.client_id.as_str();
         let parsed_client_id = ParsedClientId::parse(client_id_str)
             .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
