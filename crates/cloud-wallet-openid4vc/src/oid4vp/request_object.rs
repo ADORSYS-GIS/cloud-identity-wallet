@@ -452,16 +452,17 @@ fn decode_unverified_payload<T: for<'de> Deserialize<'de>>(jwt: &str) -> Result<
 }
 
 fn parse_algorithm(alg: &str) -> Result<Algorithm> {
-    match alg.to_uppercase().as_str() {
-        "RS256" => Ok(Algorithm::RS256),
-        "RS384" => Ok(Algorithm::RS384),
-        "RS512" => Ok(Algorithm::RS512),
-        "PS256" => Ok(Algorithm::PS256),
-        "PS384" => Ok(Algorithm::PS384),
-        "PS512" => Ok(Algorithm::PS512),
-        "ES256" => Ok(Algorithm::ES256),
-        "ES384" => Ok(Algorithm::ES384),
-        "EDDSA" => Ok(Algorithm::EdDSA),
+    let alg_lower = alg.to_lowercase();
+    match alg_lower.as_str() {
+        "rs256" => Ok(Algorithm::RS256),
+        "rs384" => Ok(Algorithm::RS384),
+        "rs512" => Ok(Algorithm::RS512),
+        "ps256" => Ok(Algorithm::PS256),
+        "ps384" => Ok(Algorithm::PS384),
+        "ps512" => Ok(Algorithm::PS512),
+        "es256" => Ok(Algorithm::ES256),
+        "es384" => Ok(Algorithm::ES384),
+        "eddsa" => Ok(Algorithm::EdDSA),
         _ => Err(Error::message(
             ErrorKind::InvalidPresentationRequest,
             format!("unsupported algorithm: {alg}"),
@@ -614,8 +615,9 @@ mod tests {
     #[test]
     fn parse_client_id_redirect_uri() {
         let parsed = ParsedClientId::parse("https://verifier.example.com/callback").unwrap();
-        if let ParsedClientId::RedirectUri { uri } = parsed {
+        if let ParsedClientId::RedirectUri { ref uri } = parsed {
             assert_eq!(uri.as_str(), "https://verifier.example.com/callback");
+            assert!(!parsed.requires_signature());
         } else {
             panic!("Expected RedirectUri variant");
         }
@@ -977,7 +979,136 @@ mod tests {
             &claims,
             "https://wallet.example.com",
             "https://verifier.example.com",
-        );
+            );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_claims_missing_iss() {
+        let claims = RequestObjectClaims {
+            rfc7519: RFC7519Claims {
+                iss: None,
+                sub: None,
+                aud: Some("https://wallet.example.com".to_string()),
+                exp: Some((jsonwebtoken::get_current_timestamp() as i64) + 300),
+                nbf: None,
+                iat: Some(jsonwebtoken::get_current_timestamp() as i64),
+                jti: None,
+            },
+            response_type: Some("vp_token".to_string()),
+            client_id: Some("https://verifier.example.com".to_string()),
+            redirect_uri: None,
+            scope: None,
+            state: None,
+            nonce: Some("test-nonce".to_string()),
+            response_mode: None,
+            response_uri: None,
+            request_uri: None,
+            request_uri_method: None,
+            dcql_query: None,
+            client_metadata: None,
+            client_metadata_uri: None,
+            transaction_data: None,
+            verifier_info: None,
+            expected_origins: None,
+            additional: serde_json::Map::new(),
+        };
+
+        let result = validate_claims(
+            &claims,
+            "https://wallet.example.com",
+            "https://verifier.example.com",
+        );
+        assert!(result.is_ok(), "missing iss should be allowed for unsigned requests");
+    }
+
+    fn create_unsigned_jwt_payload(client_id: &str, wallet_id: &str) -> String {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let payload = serde_json::json!({
+            "iss": client_id,
+            "aud": wallet_id,
+            "exp": now + 300,
+            "iat": now,
+            "client_id": client_id,
+            "response_type": "vp_token",
+            "nonce": "test-nonce"
+        });
+        let payload_bytes = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let header_bytes = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
+        format!("{}.{}.signature", header_bytes, payload_bytes)
+    }
+
+    #[tokio::test]
+    async fn decode_unsigned_valid() {
+        let jwt = create_unsigned_jwt_payload(
+            "https://verifier.example.com",
+            "https://wallet.example.com",
+        );
+        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+        assert!(result.is_ok(), "decode_unsigned should succeed for valid unsigned request");
+        let request_object = result.unwrap();
+        assert_eq!(request_object.client_id, ParsedClientId::RedirectUri {
+            uri: Url::parse("https://verifier.example.com").unwrap()
+        });
+        assert!(!request_object.client_id.requires_signature());
+    }
+
+    #[tokio::test]
+    async fn decode_unsigned_missing_client_id() {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let payload = serde_json::json!({
+            "iss": "https://verifier.example.com",
+            "aud": "https://wallet.example.com",
+            "exp": now + 300,
+            "iat": now,
+            "response_type": "vp_token",
+            "nonce": "test-nonce"
+        });
+        let payload_bytes = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let header_bytes = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
+        let jwt = format!("{}.{}.signature", header_bytes, payload_bytes);
+
+        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+        assert!(result.is_err(), "decode_unsigned should fail when client_id is missing");
+    }
+
+    #[tokio::test]
+    async fn decode_unsigned_aud_mismatch() {
+        let jwt = create_unsigned_jwt_payload(
+            "https://verifier.example.com",
+            "https://wrong-wallet.example.com",
+        );
+        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+        assert!(result.is_err(), "decode_unsigned should fail when aud does not match wallet_id");
+    }
+
+    #[tokio::test]
+    async fn decode_unsigned_expired() {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let payload = serde_json::json!({
+            "iss": "https://verifier.example.com",
+            "aud": "https://wallet.example.com",
+            "exp": now - 100,
+            "iat": now - 200,
+            "client_id": "https://verifier.example.com",
+            "response_type": "vp_token",
+            "nonce": "test-nonce"
+        });
+        let payload_bytes = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let header_bytes = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#);
+        let jwt = format!("{}.{}.signature", header_bytes, payload_bytes);
+
+        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+        assert!(result.is_err(), "decode_unsigned should fail when exp is in the past");
+    }
+
+    #[tokio::test]
+    async fn decode_unsigned_self_issued_audience() {
+        let jwt = create_unsigned_jwt_payload(
+            "https://verifier.example.com",
+            "https://self-issued.me/v2",
+        );
+        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+        assert!(result.is_ok(), "decode_unsigned should succeed with self-issued audience");
     }
 }
