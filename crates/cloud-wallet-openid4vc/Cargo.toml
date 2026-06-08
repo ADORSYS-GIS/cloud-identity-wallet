@@ -28,6 +28,7 @@ subtle.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["parsing", "std"] }
 url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 validator = { version = "0.20", features = ["derive"] }
 webpki.workspace = true
 webpki-roots = "1"
