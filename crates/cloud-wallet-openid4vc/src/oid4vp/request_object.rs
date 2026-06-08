@@ -8,7 +8,8 @@ use super::authorization::AuthorizationRequest;
 use super::client_id::ParsedClientId;
 use crate::core::rfc7519::RFC7519Claims;
 use crate::errors::{Error, ErrorKind, Result};
-use jsonwebtoken::{DecodingKey, Header, Validation, dangerous, decode, decode_header};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, dangerous, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
@@ -114,26 +115,94 @@ impl RequestObject {
         })
     }
 
-    /// Decodes a Request Object without verifying the signature.
+    /// Decodes an unsecured Request Object (JWT with `alg: none`).
     ///
     /// Used for `redirect_uri` client_id schemes where unsigned requests are permitted.
+    /// This method ONLY accepts unsecured JWTs (alg: none) and will reject signed JWTs.
+    /// Signed JWTs must use `decode_and_validate` instead.
     pub async fn decode_unsigned(jwt: &str, wallet_id: &str) -> Result<Self> {
-        let header = decode_header(jwt).map_err(|e| {
+        let header_str = jwt.split('.').next().ok_or_else(|| {
+            Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                "invalid JWT format: missing header",
+            )
+        })?;
+
+        let header_json = URL_SAFE_NO_PAD.decode(header_str.as_bytes()).map_err(|e| {
             Error::message(
                 ErrorKind::InvalidPresentationRequest,
                 format!("failed to decode JWT header: {e}"),
             )
         })?;
-        validate_header(&header)?;
+        let header_json_str = String::from_utf8(header_json).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                format!("JWT header is not valid UTF-8: {e}"),
+            )
+        })?;
 
-        let claims: RequestObjectClaims = dangerous::insecure_decode::<RequestObjectClaims>(jwt)
+        let header_value: serde_json::Value =
+            serde_json::from_str(&header_json_str).map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    format!("failed to parse JWT header as JSON: {e}"),
+                )
+            })?;
+
+        let algo = header_value
+            .get("alg")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    "JWT header missing 'alg' field",
+                )
+            })?;
+
+        if algo.to_lowercase() != "none" {
+            return Err(Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                format!(
+                    "decode_unsigned requires unsecured JWT (alg: none), got alg: '{}'. \
+                     Signed JWTs must use decode_and_validate.",
+                    algo
+                ),
+            ));
+        }
+
+        let typ = header_value.get("typ").and_then(|v| v.as_str()).ok_or_else(|| {
+            Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                "Request Object typ claim is missing",
+            )
+        })?;
+        if typ.to_lowercase() != REQUEST_OBJECT_TYP.to_lowercase() {
+            return Err(Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                format!("Request Object typ must be '{REQUEST_OBJECT_TYP}', got '{typ}'"),
+            ));
+        }
+
+        let claims_json_bytes = URL_SAFE_NO_PAD
+            .decode(jwt.split('.').nth(1).ok_or_else(|| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    "invalid JWT format: missing payload",
+                )
+            })?.as_bytes())
             .map_err(|e| {
                 Error::message(
                     ErrorKind::InvalidPresentationRequest,
                     format!("failed to decode JWT payload: {e}"),
                 )
-            })?
-            .claims;
+            })?;
+
+        let claims: RequestObjectClaims = serde_json::from_slice(&claims_json_bytes).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                format!("failed to parse JWT payload claims: {e}"),
+            )
+        })?;
         let client_id_str = claims.params.client_id.as_str();
         let parsed_client_id = ParsedClientId::parse(client_id_str)
             .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
@@ -149,6 +218,12 @@ impl RequestObject {
         }
 
         validate_claims(&claims, wallet_id)?;
+
+        let header = Header {
+            typ: Some(typ.to_string()),
+            alg: Algorithm::HS256,
+            ..Default::default()
+        };
 
         Ok(Self {
             header,
@@ -486,7 +561,7 @@ mod tests {
         );
     }
 
-    fn create_unsigned_jwt_payload(client_id: &str, wallet_id: &str) -> String {
+    fn create_unsecured_jwt(client_id: &str, wallet_id: &str) -> String {
         let now = jsonwebtoken::get_current_timestamp() as i64;
         let payload = serde_json::json!({
             "iss": client_id,
@@ -500,9 +575,16 @@ mod tests {
             "response_uri": "https://verifier.example.com/response",
             "scope": "openid"
         });
-        let mut header = Header::new(Algorithm::HS256);
-        header.typ = Some("oauth-authz-req+jwt".to_string());
-        encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap()
+
+        let header_json = serde_json::json!({
+            "alg": "none",
+            "typ": "oauth-authz-req+jwt"
+        });
+
+        let header_b64 = URL_SAFE_NO_PAD.encode(header_json.to_string().as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+
+        format!("{}.{}.", header_b64, payload_b64)
     }
 
     fn create_signed_jwt(client_id: &str, wallet_id: &str) -> String {
@@ -541,7 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn decode_unsigned_valid() {
-        let jwt = create_unsigned_jwt_payload(
+        let jwt = create_unsecured_jwt(
             "redirect_uri:https://verifier.example.com",
             "https://wallet.example.com",
         );
@@ -568,7 +650,7 @@ mod tests {
         ];
 
         for client_id in test_cases {
-            let jwt = create_unsigned_jwt_payload(client_id, "https://wallet.example.com");
+            let jwt = create_unsecured_jwt(client_id, "https://wallet.example.com");
             let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
             assert!(
                 result.is_err(),
@@ -598,9 +680,13 @@ mod tests {
             "response_uri": "https://verifier.example.com/response",
             "scope": "openid"
         });
-        let mut header = Header::new(Algorithm::HS256);
-        header.typ = Some("oauth-authz-req+jwt".to_string());
-        let jwt = encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap();
+        let header_json = serde_json::json!({
+            "alg": "none",
+            "typ": "oauth-authz-req+jwt"
+        });
+        let header_b64 = URL_SAFE_NO_PAD.encode(header_json.to_string().as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        let jwt = format!("{}.{}.", header_b64, payload_b64);
 
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
         assert!(
@@ -625,9 +711,13 @@ mod tests {
                 "response_uri": "https://verifier.example.com/response",
                 "scope": "openid"
             });
-            let mut header = Header::new(Algorithm::HS256);
-            header.typ = Some("oauth-authz-req+jwt".to_string());
-            encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap()
+            let header_json = serde_json::json!({
+                "alg": "none",
+                "typ": "oauth-authz-req+jwt"
+            });
+            let header_b64 = URL_SAFE_NO_PAD.encode(header_json.to_string().as_bytes());
+            let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+            format!("{}.{}.", header_b64, payload_b64)
         };
 
         let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
@@ -639,7 +729,7 @@ mod tests {
 
     #[tokio::test]
     async fn decode_unsigned_self_issued_audience() {
-        let jwt = create_unsigned_jwt_payload(
+        let jwt = create_unsecured_jwt(
             "redirect_uri:https://verifier.example.com",
             "https://self-issued.me/v2",
         );
@@ -721,6 +811,26 @@ mod tests {
         assert!(
             result.is_ok(),
             "decode_and_validate should succeed with self-issued audience"
+        );
+    }
+
+    #[tokio::test]
+    async fn decode_unsigned_rejects_signed_jwt() {
+        let jwt = create_signed_jwt(
+            "redirect_uri:https://verifier.example.com",
+            "https://wallet.example.com",
+        );
+        let result = RequestObject::decode_unsigned(&jwt, "https://wallet.example.com").await;
+        assert!(
+            result.is_err(),
+            "decode_unsigned should reject signed JWT (alg != none)"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("alg: 'HS256'")
+                || err.to_string().contains("requires unsecured JWT"),
+            "error message should mention algorithm requirement, got: {}",
+            err
         );
     }
 }
