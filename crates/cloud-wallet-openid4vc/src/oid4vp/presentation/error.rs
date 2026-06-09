@@ -6,29 +6,8 @@ pub enum PresentationBuilderError {
     NoCredentialsSelected,
     #[error("Credential query ID '{0}' not found in DCQL query")]
     QueryNotFound(String),
-    #[error(
-        "Format mismatch: credential format '{credential_format}' does not match query format '{query_format}'"
-    )]
-    FormatMismatch {
-        credential_format: String,
-        query_format: String,
-    },
-    #[error("Holder binding proof error: {0}")]
-    HolderBindingProof(#[from] HolderBindingProofError),
     #[error("Failed to build VP token: {0}")]
     VpTokenBuild(String),
-}
-
-#[derive(Debug, Error)]
-pub enum HolderBindingProofError {
-    #[error("Failed to create key binding JWT: {0}")]
-    KeyBindingCreation(String),
-    #[error("Hash computation failed: {0}")]
-    HashComputation(String),
-    #[error("Holder key not available for binding")]
-    HolderKeyUnavailable,
-    #[error("Unsupported credential format for holder binding: {0}")]
-    UnsupportedFormat(String),
 }
 
 #[derive(Debug, Error)]
