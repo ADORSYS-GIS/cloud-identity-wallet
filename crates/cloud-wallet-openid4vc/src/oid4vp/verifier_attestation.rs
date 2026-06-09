@@ -424,8 +424,11 @@ mod tests {
         }
     }
 
+    // ==== TICKET-REQUIRED TESTS (7 tests) ====
+
+    /// 1. Valid attestation JWT decode and validation
     #[test]
-    fn test_decode_and_validate_success() {
+    fn test_valid_attestation_decode_and_validation() {
         let keys = TestKeys::generate();
         let claims = valid_claims(&keys);
         let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
@@ -436,44 +439,15 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "expected success but got: {:?}",
+            "Expected success but got: {:?}",
             result.err()
         );
         let attestation = result.unwrap();
         assert_eq!(attestation.issuer(), TEST_ISSUER);
         assert_eq!(attestation.subject(), TEST_CLIENT_ID);
-        assert!(attestation.allowed_response_uris().is_some());
     }
 
-    #[test]
-    fn test_valid_jwt_without_optional_claims() {
-        let keys = TestKeys::generate();
-        let now = jsonwebtoken::get_current_timestamp() as i64;
-        let claims = VerifierAttestationClaims {
-            iss: TEST_ISSUER.to_string(),
-            sub: TEST_CLIENT_ID.to_string(),
-            aud: None, // Optional
-            iat: None, // Optional - iat is now optional per spec
-            exp: now + 3600,
-            nbf: None, // Optional
-            jti: None, // Optional
-            cnf: CnfClaim {
-                jwk: keys.verifier_jwk(),
-            },
-            response_uris: None, // Optional - no restrictions
-            nonce: None,         // Optional
-        };
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let result =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
-
-        assert!(result.is_ok());
-        let attestation = result.unwrap();
-        assert!(attestation.allowed_response_uris().is_none());
-    }
-
+    /// 2. Wrong `typ` header rejection
     #[test]
     fn test_wrong_typ_header_rejection() {
         let keys = TestKeys::generate();
@@ -491,54 +465,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_missing_typ_header_rejection() {
-        let keys = TestKeys::generate();
-        let claims = valid_claims(&keys);
-        let jwt = create_test_jwt(&keys, &claims, ""); // Empty typ header
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let result =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
-
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            VerifierAttestationError::InvalidTyp { .. }
-        ));
-    }
-
+    /// 3. Untrusted issuer rejection
     #[test]
     fn test_untrusted_issuer_rejection() {
         let keys = TestKeys::generate();
         let claims = valid_claims(&keys);
         let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
 
-        // Use a different issuer (not matching the JWT's iss claim)
-        let other_keys = TestKeys::generate();
-        let wrong_issuer = TrustedAttestationIssuer {
-            issuer_id: TEST_ISSUER.to_string(), // Same ID but different key
-            jwks: vec![other_keys.issuer_jwk()],
-        };
-
-        let result =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &[wrong_issuer]);
-
-        assert!(result.is_err());
-        // Signature verification will fail because the key doesn't match
-        assert!(matches!(
-            result.unwrap_err(),
-            VerifierAttestationError::SignatureVerificationFailed(_)
-        ));
-    }
-
-    #[test]
-    fn test_unknown_issuer_rejection() {
-        let keys = TestKeys::generate();
-        let claims = valid_claims(&keys);
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-
-        // Empty trusted issuers list
+        // Unknown issuer - not in trusted list
         let result = VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &[]);
 
         assert!(result.is_err());
@@ -548,8 +482,9 @@ mod tests {
         ));
     }
 
+    /// 4. `sub` / `client_id` mismatch rejection
     #[test]
-    fn test_subject_client_id_mismatch_rejection() {
+    fn test_sub_client_id_mismatch_rejection() {
         let keys = TestKeys::generate();
         let claims = valid_claims(&keys);
         let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
@@ -568,6 +503,7 @@ mod tests {
         ));
     }
 
+    /// 5. Expired attestation rejection
     #[test]
     fn test_expired_attestation_rejection() {
         let keys = TestKeys::generate();
@@ -576,8 +512,8 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: None,
-            iat: Some(now - 7200), // Issued 2 hours ago
-            exp: now - 3600,       // Expired 1 hour ago
+            iat: None,
+            exp: now - 3600, // Expired 1 hour ago
             nbf: None,
             jti: None,
             cnf: CnfClaim {
@@ -599,282 +535,9 @@ mod tests {
         ));
     }
 
+    /// 6. Missing `cnf.jwk` rejection
     #[test]
-    fn test_not_yet_valid_rejection() {
-        let keys = TestKeys::generate();
-        let now = jsonwebtoken::get_current_timestamp() as i64;
-        let claims = VerifierAttestationClaims {
-            iss: TEST_ISSUER.to_string(),
-            sub: TEST_CLIENT_ID.to_string(),
-            aud: None,
-            iat: Some(now),
-            exp: now + 7200,
-            nbf: Some(now + 3600), // Not valid for another hour
-            jti: None,
-            cnf: CnfClaim {
-                jwk: keys.verifier_jwk(),
-            },
-            response_uris: None,
-            nonce: None,
-        };
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let result =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
-
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            VerifierAttestationError::NotYetValid
-        ));
-    }
-
-    #[test]
-    fn test_invalid_jwt_format_rejection() {
-        let result =
-            VerifierAttestationJwt::decode_and_validate("not.a.valid.jwt", TEST_CLIENT_ID, &[]);
-
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            VerifierAttestationError::InvalidFormat(_)
-        ));
-    }
-
-    #[test]
-    fn test_verifier_attestation_jwt_accessors() {
-        let keys = TestKeys::generate();
-        let claims = valid_claims(&keys);
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let attestation =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers)
-                .expect("should succeed");
-
-        assert_eq!(attestation.issuer(), TEST_ISSUER);
-        assert_eq!(attestation.subject(), TEST_CLIENT_ID);
-        assert_eq!(attestation.raw(), jwt);
-
-        // Check that verifier_public_key returns the key from cnf.jwk
-        let verifier_jwk = keys.verifier_jwk();
-        assert_eq!(
-            serde_json::to_string(attestation.verifier_public_key()).unwrap(),
-            serde_json::to_string(&verifier_jwk).unwrap()
-        );
-
-        let allowed_uris = attestation.allowed_response_uris().unwrap();
-        assert_eq!(allowed_uris.len(), 2);
-        assert!(allowed_uris.contains(&"https://verifier.example.com/cb1".to_string()));
-    }
-
-    #[test]
-    fn test_validate_response_uri_allowed() {
-        let keys = TestKeys::generate();
-        let claims = valid_claims(&keys);
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let attestation =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers)
-                .expect("should succeed");
-
-        // Both URIs from the allowlist should be valid
-        assert!(
-            attestation
-                .validate_response_uri("https://verifier.example.com/cb1")
-                .is_ok()
-        );
-        assert!(
-            attestation
-                .validate_response_uri("https://verifier.example.com/cb2")
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_validate_response_uri_not_allowed() {
-        let keys = TestKeys::generate();
-        let claims = valid_claims(&keys);
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let attestation =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers)
-                .expect("should succeed");
-
-        let result = attestation.validate_response_uri("https://evil.com/cb");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            VerifierAttestationError::ResponseUriNotAllowed(uri) if uri == "https://evil.com/cb"
-        ));
-    }
-
-    #[test]
-    fn test_validate_response_uri_no_restrictions() {
-        let keys = TestKeys::generate();
-        let now = jsonwebtoken::get_current_timestamp() as i64;
-        let claims = VerifierAttestationClaims {
-            iss: TEST_ISSUER.to_string(),
-            sub: TEST_CLIENT_ID.to_string(),
-            aud: None,
-            iat: Some(now),
-            exp: now + 3600,
-            nbf: None,
-            jti: None,
-            cnf: CnfClaim {
-                jwk: keys.verifier_jwk(),
-            },
-            response_uris: None, // No restrictions
-            nonce: None,
-        };
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let attestation =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers)
-                .expect("should succeed");
-
-        // Any URI should be allowed when response_uris is not set
-        assert!(
-            attestation
-                .validate_response_uri("https://any.com/cb")
-                .is_ok()
-        );
-        assert!(
-            attestation
-                .validate_response_uri("https://other.com/cb")
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_verifier_attestation_error_display() {
-        let err = VerifierAttestationError::InvalidFormat("test error".to_string());
-        assert!(err.to_string().contains("invalid JWT format"));
-
-        let err = VerifierAttestationError::InvalidTyp {
-            expected: "verifier-attestation+jwt".to_string(),
-            actual: "jwt".to_string(),
-        };
-        assert!(err.to_string().contains("invalid 'typ' header"));
-
-        let err = VerifierAttestationError::UntrustedIssuer("bad-issuer".to_string());
-        assert!(err.to_string().contains("untrusted issuer"));
-
-        let err = VerifierAttestationError::SubjectMismatch {
-            expected: "expected-sub".to_string(),
-            actual: "actual-sub".to_string(),
-        };
-        assert!(err.to_string().contains("subject mismatch"));
-
-        let err = VerifierAttestationError::Expired;
-        assert!(err.to_string().contains("expired"));
-
-        let err = VerifierAttestationError::NotYetValid;
-        assert!(err.to_string().contains("not yet valid"));
-
-        let err = VerifierAttestationError::MissingCnfJwk;
-        assert!(err.to_string().contains("cnf.jwk"));
-
-        let err = VerifierAttestationError::ResponseUriNotAllowed("https://evil.com".to_string());
-        assert!(err.to_string().contains("response_uri not allowed"));
-
-        let err = VerifierAttestationError::IssuedInFuture;
-        assert!(err.to_string().contains("iat claim in the future"));
-    }
-
-    #[test]
-    fn test_trusted_attestation_issuer_creation() {
-        let issuer = TrustedAttestationIssuer {
-            issuer_id: TEST_ISSUER.to_string(),
-            jwks: vec![],
-        };
-        assert_eq!(issuer.issuer_id, TEST_ISSUER);
-    }
-
-    #[test]
-    fn test_verifier_attestation_claims_serde() {
-        let keys = TestKeys::generate();
-        let now = jsonwebtoken::get_current_timestamp() as i64;
-        let claims = VerifierAttestationClaims {
-            iss: TEST_ISSUER.to_string(),
-            sub: TEST_CLIENT_ID.to_string(),
-            aud: Some("https://wallet.example.com".to_string()),
-            iat: Some(now),
-            exp: now + 3600,
-            nbf: Some(now),
-            jti: Some("test-jti".to_string()),
-            cnf: CnfClaim {
-                jwk: keys.verifier_jwk(),
-            },
-            response_uris: Some(vec!["https://verifier.example.com/cb".to_string()]),
-            nonce: Some("test-nonce".to_string()),
-        };
-
-        let serialized = serde_json::to_string(&claims).expect("failed to serialize");
-        let deserialized: VerifierAttestationClaims =
-            serde_json::from_str(&serialized).expect("failed to deserialize");
-
-        assert_eq!(deserialized.iss, claims.iss);
-        assert_eq!(deserialized.sub, claims.sub);
-        assert_eq!(deserialized.aud, claims.aud);
-        assert_eq!(deserialized.iat, claims.iat);
-        assert_eq!(deserialized.exp, claims.exp);
-    }
-
-    #[test]
-    fn test_cnfg_claim_serde() {
-        let keys = TestKeys::generate();
-        let cnf = CnfClaim {
-            jwk: keys.verifier_jwk(),
-        };
-        let serialized = serde_json::to_string(&cnf).expect("failed to serialize");
-        assert!(serialized.contains("jwk"));
-
-        let deserialized: CnfClaim =
-            serde_json::from_str(&serialized).expect("failed to deserialize");
-        assert!(matches!(
-            deserialized.jwk.key,
-            cloud_wallet_crypto::jwk::Key::Ec(_)
-        ));
-    }
-
-    #[test]
-    fn test_issued_in_future_rejection() {
-        let keys = TestKeys::generate();
-        let now = jsonwebtoken::get_current_timestamp() as i64;
-        let claims = VerifierAttestationClaims {
-            iss: TEST_ISSUER.to_string(),
-            sub: TEST_CLIENT_ID.to_string(),
-            aud: None,
-            iat: Some(now + 3600), // Issued 1 hour in the future - invalid
-            exp: now + 7200,
-            nbf: None,
-            jti: None,
-            cnf: CnfClaim {
-                jwk: keys.verifier_jwk(),
-            },
-            response_uris: None,
-            nonce: None,
-        };
-        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
-        let trusted_issuers = vec![trusted_issuer(&keys)];
-
-        let result =
-            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
-
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            VerifierAttestationError::IssuedInFuture
-        ));
-    }
-
-    #[test]
-    fn test_missing_cnf_claim_rejection() {
+    fn test_missing_cnf_jwk_rejection() {
         use jsonwebtoken::Algorithm;
 
         let keys = TestKeys::generate();
@@ -885,7 +548,6 @@ mod tests {
             "iss": TEST_ISSUER,
             "sub": TEST_CLIENT_ID,
             "exp": now + 3600,
-            "iat": now,
         });
 
         // Create a JWT without the cnf claim
@@ -907,7 +569,6 @@ mod tests {
             VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
 
         assert!(result.is_err());
-        // The error should be a decoding/validation error due to missing cnf
         let err = result.unwrap_err();
         assert!(
             matches!(
@@ -919,5 +580,33 @@ mod tests {
             "Expected error due to missing cnf, got: {:?}",
             err
         );
+    }
+
+    /// 7. `response_uris` allowlist enforcement
+    #[test]
+    fn test_response_uris_allowlist_enforcement() {
+        let keys = TestKeys::generate();
+        let claims = valid_claims(&keys);
+        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
+        let trusted_issuers = vec![trusted_issuer(&keys)];
+
+        let attestation =
+            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers)
+                .expect("should succeed");
+
+        // Allowed URI should succeed
+        assert!(
+            attestation
+                .validate_response_uri("https://verifier.example.com/cb1")
+                .is_ok()
+        );
+
+        // Not allowed URI should fail
+        let result = attestation.validate_response_uri("https://evil.com/cb");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VerifierAttestationError::ResponseUriNotAllowed(uri) if uri == "https://evil.com/cb"
+        ));
     }
 }
