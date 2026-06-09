@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::oid4vp::authorization::{AuthorizationRequest, Presentation, VpToken};
+use crate::oid4vp::authorization::{Presentation, VpToken};
 use crate::oid4vp::dcql::CredentialQuery;
 
 use super::error::PresentationBuilderError;
@@ -24,26 +24,20 @@ impl SelectedCredential {
 
 #[derive(Debug, Clone)]
 pub struct PresentationBuilder {
-    nonce: String,
-    client_id: String,
     credentials: Vec<SelectedCredential>,
 }
 
+impl Default for PresentationBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PresentationBuilder {
-    pub fn new(authorization_request: &AuthorizationRequest) -> Self {
+    pub fn new() -> Self {
         Self {
-            nonce: authorization_request.nonce.clone(),
-            client_id: authorization_request.client_id.clone(),
             credentials: Vec::new(),
         }
-    }
-
-    pub fn nonce(&self) -> &str {
-        &self.nonce
-    }
-
-    pub fn client_id(&self) -> &str {
-        &self.client_id
     }
 
     pub fn add_credential(mut self, credential: SelectedCredential) -> Self {
@@ -116,9 +110,7 @@ impl HolderBindingProof for super::holder_binding::HolderBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oid4vp::authorization::{ResponseMode, ResponseType};
     use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta, DcqlQuery};
-    use url::Url;
 
     fn create_test_query() -> CredentialQuery {
         CredentialQuery {
@@ -135,31 +127,6 @@ mod tests {
         }
     }
 
-    fn create_test_authorization_request() -> AuthorizationRequest {
-        AuthorizationRequest {
-            response_type: ResponseType::VpToken,
-            client_id: "https://verifier.example.com".to_string(),
-            redirect_uri: None,
-            scope: None,
-            state: None,
-            nonce: "test-nonce-123".to_string(),
-            response_mode: ResponseMode::DirectPost,
-            response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
-            request_uri: None,
-            request_uri_method: None,
-            dcql_query: Some(DcqlQuery {
-                credentials: vec![create_test_query()],
-                credential_sets: None,
-            }),
-            client_metadata: None,
-            client_metadata_uri: None,
-            request: None,
-            transaction_data: None,
-            verifier_info: None,
-            expected_origins: None,
-        }
-    }
-
     #[test]
     fn selected_credential_new() {
         let credential =
@@ -173,20 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn presentation_builder_stores_nonce_and_client_id() {
-        let request = create_test_authorization_request();
-        let builder = PresentationBuilder::new(&request);
-
-        assert_eq!(builder.nonce(), "test-nonce-123");
-        assert_eq!(builder.client_id(), "https://verifier.example.com");
-    }
-
-    #[test]
     fn build_vp_token_with_single_credential() {
-        let request = create_test_authorization_request();
         let query = create_test_query();
 
-        let builder = PresentationBuilder::new(&request).add_credential(SelectedCredential::new(
+        let builder = PresentationBuilder::new().add_credential(SelectedCredential::new(
             "test-credential",
             "jwt.payload.signature~",
         ));
@@ -201,10 +158,9 @@ mod tests {
 
     #[test]
     fn build_vp_token_with_multiple_credentials_same_query() {
-        let request = create_test_authorization_request();
         let query = create_test_query();
 
-        let builder = PresentationBuilder::new(&request)
+        let builder = PresentationBuilder::new()
             .add_credential(SelectedCredential::new(
                 "test-credential",
                 "jwt1.payload.signature~",
@@ -223,9 +179,7 @@ mod tests {
 
     #[test]
     fn build_vp_token_fails_on_unknown_query_id() {
-        let request = create_test_authorization_request();
-
-        let builder = PresentationBuilder::new(&request).add_credential(SelectedCredential::new(
+        let builder = PresentationBuilder::new().add_credential(SelectedCredential::new(
             "unknown-query-id",
             "jwt.payload.signature",
         ));
@@ -240,9 +194,7 @@ mod tests {
 
     #[test]
     fn build_vp_token_fails_on_empty_credentials() {
-        let request = create_test_authorization_request();
-
-        let builder = PresentationBuilder::new(&request);
+        let builder = PresentationBuilder::new();
 
         let result = builder.build_vp_token(&[]);
 

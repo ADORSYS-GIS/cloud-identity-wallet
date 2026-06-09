@@ -4,7 +4,6 @@ use super::{Error, Jwt, KEY_BINDING_JWT_COMPONENT};
 
 const KEY_BINDING_JWT_TYP: &str = "kb+jwt";
 
-/// Key Binding JWT carried by an SD-JWT presentation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyBindingJwt<'a> {
     jwt: Jwt<'a, KeyBindingClaims>,
