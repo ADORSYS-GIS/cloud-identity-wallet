@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::oid4vp::authorization::VpTokenError;
+
 #[derive(Debug, Error)]
 pub enum PresentationBuilderError {
     #[error("No credentials selected for presentation")]
@@ -8,16 +10,6 @@ pub enum PresentationBuilderError {
     QueryNotFound(String),
     #[error(transparent)]
     VpToken(#[from] VpTokenError),
-}
-
-#[derive(Debug, Error)]
-pub enum VpTokenError {
-    #[error("VP token must contain at least one credential query entry")]
-    Empty,
-    #[error("VP token entry '{query_id}' is not a valid DCQL credential query id")]
-    InvalidQueryId { query_id: String },
-    #[error("VP token entry '{query_id}' must contain at least one presentation")]
-    EmptyPresentationList { query_id: String },
     #[error(
         "VP token entry '{query_id}' contains multiple presentations but the credential query does not allow multiple"
     )]

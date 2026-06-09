@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::oid4vp::authorization::{Presentation, VpToken};
 use crate::oid4vp::dcql::CredentialQuery;
 
-use super::error::{PresentationBuilderError, VpTokenError};
+use super::error::PresentationBuilderError;
 
 pub type Result<T> = std::result::Result<T, PresentationBuilderError>;
 
@@ -87,41 +87,13 @@ impl PresentationBuilder {
                 .expect("query already validated");
             let allows_multiple = query.multiple.unwrap_or(false);
             if !allows_multiple && presentations.len() > 1 {
-                return Err(PresentationBuilderError::VpToken(
-                    VpTokenError::MultiplePresentationsNotAllowed {
-                        query_id: query_id.clone(),
-                    },
-                ));
+                return Err(PresentationBuilderError::MultiplePresentationsNotAllowed {
+                    query_id: query_id.clone(),
+                });
             }
         }
 
-        VpToken::new(entries).map_err(|e| {
-            if e.contains("at least one credential query entry") {
-                VpTokenError::Empty.into()
-            } else if e.contains("valid DCQL credential query id") {
-                VpTokenError::InvalidQueryId {
-                    query_id: extract_query_id(&e),
-                }
-                .into()
-            } else if e.contains("at least one presentation") {
-                VpTokenError::EmptyPresentationList {
-                    query_id: extract_query_id(&e),
-                }
-                .into()
-            } else {
-                VpTokenError::Empty.into()
-            }
-        })
-    }
-}
-
-fn extract_query_id(error_message: &str) -> String {
-    let start = error_message.find('\'').unwrap_or(0);
-    let end = error_message.rfind('\'').unwrap_or(error_message.len());
-    if start < end {
-        error_message[start + 1..end].to_string()
-    } else {
-        String::new()
+        VpToken::new(entries).map_err(|e| e.into())
     }
 }
 
@@ -241,7 +213,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(PresentationBuilderError::VpToken(VpTokenError::MultiplePresentationsNotAllowed { query_id }))
+            Err(PresentationBuilderError::MultiplePresentationsNotAllowed { query_id })
             if query_id == "test-credential"
         ));
     }
