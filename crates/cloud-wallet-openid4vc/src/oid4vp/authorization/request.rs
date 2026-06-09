@@ -1,411 +1,29 @@
+//! Authorization Request models for OpenID4VP.
+//!
+//! This module defines the data structures for OAuth 2.0 authorization requests
+//! as extended by OpenID4VP (Section 5).
+//!
+//! # Spec References
+//!
+//! - [OpenID4VP §5 Authorization Request](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-authorization-request)
+//! - [RFC 6749 §4.1.1 Authorization Request](https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.1)
+//! - [RFC 9101 JWT-Secured Authorization Request (JAR)](https://www.rfc-editor.org/rfc/rfc9101.html)
+
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use serde_with::skip_serializing_none;
 use url::Url;
 
 use crate::errors::{Error, ErrorKind, Result};
+use crate::oauth::authorization::OAuthAuthorizationRequest;
 
-// Re-export DCQL types from the dcql module
-pub use super::super::dcql::DcqlQuery;
-
+use super::super::dcql::DcqlQuery;
+use super::super::metadata::verifier::VerifierMetadata;
 use super::super::transaction_data::TransactionData;
 
-/// An OpenID4VP Authorization Request.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AuthorizationRequest {
-    pub response_type: ResponseType,
-
-    pub client_id: String,
-
-    pub redirect_uri: Option<Url>,
-
-    pub scope: Option<String>,
-
-    pub state: Option<String>,
-
-    pub nonce: String,
-
-    pub response_mode: ResponseMode,
-
-    pub response_uri: Option<Url>,
-
-    pub request_uri: Option<Url>,
-
-    pub request_uri_method: Option<RequestUriMethod>,
-
-    pub dcql_query: Option<DcqlQuery>,
-
-    pub client_metadata: Option<Value>,
-
-    pub client_metadata_uri: Option<Url>,
-
-    pub request: Option<String>,
-
-    pub transaction_data: Option<Vec<String>>,
-
-    pub verifier_info: Option<Vec<VerifierAttestation>>,
-
-    pub expected_origins: Option<Vec<String>>,
-}
-
-impl AuthorizationRequest {
-    /// Validates the authorization request according to OpenID4VP spec.
-    ///
-    /// This method orchestrates validation by delegating to focused
-    /// validation functions for each logical group of rules.
-    pub fn validate(&self) -> Result<()> {
-        self.validate_core_fields()?;
-        self.validate_request_uri_consistency()?;
-        self.validate_query_mechanism()?;
-        self.validate_response_routing()?;
-        self.validate_dc_api_origins()?;
-        self.validate_client_metadata()?;
-        self.validate_transaction_data()?;
-        self.validate_verifier_info()?;
-
-        Ok(())
-    }
-
-    /// Validates core required fields: response_type, client_id, nonce, and state.
-    fn validate_core_fields(&self) -> Result<()> {
-        // response_type must be vp_token or vp_token id_token
-        if !matches!(
-            self.response_type,
-            ResponseType::VpToken | ResponseType::VpTokenIdToken
-        ) {
-            return Err(invalid_request(
-                "'response_type' must be 'vp_token' or 'vp_token id_token'",
-            ));
-        }
-
-        // client_id MUST be present and non-empty (Section 5.2)
-        if self.client_id.trim().is_empty() {
-            return Err(invalid_request("'client_id' must not be empty"));
-        }
-
-        // nonce MUST be present and non-empty (Section 5.1)
-        if self.nonce.trim().is_empty() {
-            return Err(invalid_request("'nonce' must not be empty"));
-        }
-
-        // nonce MUST contain only unreserved URI characters per Section 5.2:
-        // A-Z, a-z, 0-9, -, ., _, ~
-        if !is_unreserved_chars(&self.nonce) {
-            return Err(invalid_request(
-                "'nonce' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
-            ));
-        }
-
-        // state, when present, is subject to the same character constraint (Section 5.2)
-        if let Some(ref state) = self.state
-            && !is_unreserved_chars(state)
-        {
-            return Err(invalid_request(
-                "'state' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validates request_uri_method consistency with request_uri presence.
-    fn validate_request_uri_consistency(&self) -> Result<()> {
-        // request_uri_method MUST NOT be present when request_uri is absent (Section 5.1)
-        if self.request_uri_method.is_some() && self.request_uri.is_none() {
-            return Err(invalid_request(
-                "'request_uri_method' MUST NOT be present when 'request_uri' is absent",
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validates the query mechanism: exactly one of scope or dcql_query must be present.
-    fn validate_query_mechanism(&self) -> Result<()> {
-        // XOR validation: exactly one of scope or dcql_query must be present (Section 5.1)
-        match (&self.scope, &self.dcql_query) {
-            (Some(_), Some(_)) => {
-                return Err(invalid_request(
-                    "'scope' and 'dcql_query' are mutually exclusive; provide only one",
-                ));
-            }
-            (None, None) => {
-                return Err(invalid_request(
-                    "either 'scope' or 'dcql_query' must be provided",
-                ));
-            }
-            _ => {}
-        }
-
-        // Validate dcql_query structure if present
-        if let Some(ref dcql) = self.dcql_query {
-            dcql.validate()?;
-        }
-
-        Ok(())
-    }
-
-    /// Validates responseuri/redirect_uri consistency for the response_mode.
-    fn validate_response_routing(&self) -> Result<()> {
-        // responseuri required for direct_post modes; redirect_uri must not be present
-        if self.response_mode.is_direct_post() {
-            if self.response_uri.is_none() {
-                return Err(invalid_request(
-                    "'response_uri' is required when 'response_mode' is 'direct_post' \
-                     or 'direct_post.jwt'",
-                ));
-            }
-            if self.redirect_uri.is_some() {
-                return Err(invalid_request(
-                    "'redirect_uri' must not be present when 'response_uri' is used",
-                ));
-            }
-        }
-
-        // response_uri and redirect_uri are mutually exclusive regardless of response_mode
-        if self.response_uri.is_some() && self.redirect_uri.is_some() {
-            return Err(invalid_request(
-                "'redirect_uri' must not be present when 'response_uri' is used",
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validates expected_origins for DC API response modes.
-    ///
-    /// Per Appendix A:
-    /// - Signed DC API requests (with `client_id` and `request` JWT): `expected_origins` is REQUIRED
-    ///   so the wallet can compare the invocation origin with the signed request.
-    /// - Unsigned DC API requests (without `client_id`): `expected_origins` is NOT required.
-    fn validate_dc_api_origins(&self) -> Result<()> {
-        // Only validate for signed DC API requests (have client_id and request JWT)
-        if self.response_mode.is_dc_api() && self.is_signed_dc_api_request() {
-            match &self.expected_origins {
-                None => {
-                    return Err(invalid_request(
-                        "'expected_origins' is required for signed DC API requests ('dc_api' or 'dc_api.jwt' with client_id and request JWT)",
-                    ));
-                }
-                Some(origins) if origins.is_empty() => {
-                    return Err(invalid_request(
-                        "'expected_origins' must be a non-empty array",
-                    ));
-                }
-                Some(origins) => {
-                    for (i, origin) in origins.iter().enumerate() {
-                        Self::validate_origin(i, origin)?;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Returns true if this is a signed DC API request (has both client_id and request JWT).
-    ///
-    /// Per Appendix A: signed requests include client_id and a request JWT,
-    /// while unsigned requests omit client_id.
-    fn is_signed_dc_api_request(&self) -> bool {
-        // Signed requests have a non-empty client_id and a request JWT
-        !self.client_id.trim().is_empty() && self.request.is_some()
-    }
-
-    /// Validates a single origin string is a valid origin tuple.
-    fn validate_origin(idx: usize, origin: &str) -> Result<()> {
-        // Parse as URL to validate structure
-        let url = Url::parse(origin).map_err(|e| {
-            invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' is not a valid URL: {e}"
-            ))
-        })?;
-
-        // Validate it's a valid origin (no path, query, or fragment)
-        // Origin = scheme + "://" + host + optional port
-        if url.path() != "/" && !url.path().is_empty() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must not contain a path"
-            )));
-        }
-        if url.query().is_some() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must not contain a query string"
-            )));
-        }
-        if url.fragment().is_some() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must not contain a fragment"
-            )));
-        }
-        // Must have a host
-        if url.host().is_none() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must have a host"
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Validates client_metadata and client_metadata_uri are mutually exclusive.
-    fn validate_client_metadata(&self) -> Result<()> {
-        // client_metadata and client_metadata_uri are mutually exclusive (Section 5.1)
-        if self.client_metadata.is_some() && self.client_metadata_uri.is_some() {
-            return Err(invalid_request(
-                "'client_metadata' and 'client_metadata_uri' are mutually exclusive",
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validates transaction_data entries if present.
-    fn validate_transaction_data(&self) -> Result<()> {
-        let Some(ref td) = self.transaction_data else {
-            return Ok(());
-        };
-
-        // transaction_data: non-empty array (Section 8.4)
-        if td.is_empty() {
-            return Err(invalid_request(
-                "'transaction_data' must be a non-empty array when present",
-            ));
-        }
-
-        // collect valid credential IDs for reference validation
-        let valid_cred_ids: Vec<&str> = self
-            .dcql_query
-            .as_ref()
-            .map(|q| q.credentials.iter().map(|c| c.id.as_str()).collect())
-            .unwrap_or_default();
-
-        for (i, entry) in td.iter().enumerate() {
-            Self::validate_transaction_entry(i, entry, &valid_cred_ids)?;
-        }
-
-        Ok(())
-    }
-
-    /// Validates a single transaction_data entry.
-    fn validate_transaction_entry(idx: usize, entry: &str, valid_cred_ids: &[&str]) -> Result<()> {
-        // Use TransactionData::decode for complete validation
-        let txn_data = TransactionData::decode(entry).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidTransactionData,
-                format!("'transaction_data[{idx}]' validation failed: {e}"),
-            )
-        })?;
-
-        // Validate that all credential_ids reference known credentials from the DCQL query
-        for cred_id in txn_data.credential_ids() {
-            if !valid_cred_ids.contains(&cred_id.as_str()) {
-                return Err(Error::message(
-                    ErrorKind::InvalidTransactionData,
-                    format!(
-                        "'transaction_data[{idx}]' references unknown credential id '{cred_id}'"
-                    ),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Validates verifier_info attestations if present.
-    fn validate_verifier_info(&self) -> Result<()> {
-        let Some(ref vi) = self.verifier_info else {
-            return Ok(());
-        };
-
-        // verifier_info: non-empty array (Section 5.1)
-        if vi.is_empty() {
-            return Err(invalid_request(
-                "'verifier_info' must be a non-empty array when present",
-            ));
-        }
-
-        // collect valid credential IDs for reference validation
-        let valid_cred_ids: Vec<&str> = self
-            .dcql_query
-            .as_ref()
-            .map(|q| q.credentials.iter().map(|c| c.id.as_str()).collect())
-            .unwrap_or_default();
-
-        for (i, att) in vi.iter().enumerate() {
-            att.validate(i, &valid_cred_ids)?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Checks that every character in `s` is an unreserved URI character per RFC 3986 / Section 5.2:
-/// A–Z, a–z, 0–9, `-`, `.`, `_`, `~`
-fn is_unreserved_chars(s: &str) -> bool {
-    s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
-}
-
-/// Deserializes an [`AuthorizationRequest`] and immediately validates it.
-impl<'de> Deserialize<'de> for AuthorizationRequest {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Raw {
-            response_type: ResponseType,
-            client_id: String,
-            redirect_uri: Option<Url>,
-            scope: Option<String>,
-            state: Option<String>,
-            nonce: String,
-            response_mode: ResponseMode,
-            response_uri: Option<Url>,
-            request_uri: Option<Url>,
-            request_uri_method: Option<RequestUriMethod>,
-            dcql_query: Option<DcqlQuery>,
-            client_metadata: Option<Value>,
-            client_metadata_uri: Option<Url>,
-            request: Option<String>,
-            transaction_data: Option<Vec<String>>,
-            verifier_info: Option<Vec<VerifierAttestation>>,
-            expected_origins: Option<Vec<String>>,
-        }
-
-        let raw = Raw::deserialize(deserializer)?;
-
-        // Section 5.1: request_uri_method MUST NOT be present when request_uri is absent.
-        // This is enforced in validate(); we preserve the raw value so validate() can
-        // produce a clear error rather than silently dropping it.
-        let request = Self {
-            response_type: raw.response_type,
-            client_id: raw.client_id,
-            redirect_uri: raw.redirect_uri,
-            scope: raw.scope,
-            state: raw.state,
-            nonce: raw.nonce,
-            response_mode: raw.response_mode,
-            response_uri: raw.response_uri,
-            request_uri: raw.request_uri,
-            request_uri_method: raw.request_uri_method,
-            dcql_query: raw.dcql_query,
-            client_metadata: raw.client_metadata,
-            client_metadata_uri: raw.client_metadata_uri,
-            request: raw.request,
-            transaction_data: raw.transaction_data,
-            verifier_info: raw.verifier_info,
-            expected_origins: raw.expected_origins,
-        };
-
-        request.validate().map_err(serde::de::Error::custom)?;
-        Ok(request)
-    }
-}
-
-fn invalid_request(message: impl Into<String>) -> Error {
-    Error::message(ErrorKind::InvalidPresentationRequest, message.into())
-}
-/// An OpenID4VP Authorization Request.
+/// The `response_type` parameter for OpenID4VP Authorization Requests.
+///
+/// Per [OpenID4VP §5.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-authorization-request),
+/// valid values are `vp_token` and `vp_token id_token`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResponseType {
     #[serde(rename = "vp_token")]
@@ -497,7 +115,7 @@ pub struct VerifierAttestation {
     pub format: String,
 
     /// REQUIRED. The attestation data (format-specific).
-    pub data: Value,
+    pub data: serde_json::Value,
 
     /// OPTIONAL. Non-empty array of DCQL credential query IDs this attestation relates to.
     pub credential_ids: Option<Vec<String>>,
@@ -528,13 +146,425 @@ impl VerifierAttestation {
     }
 }
 
+fn is_unreserved_chars(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+}
+
+fn invalid_request(message: impl Into<String>) -> Error {
+    Error::message(ErrorKind::InvalidPresentationRequest, message.into())
+}
+
+/// An OpenID4VP Authorization Request.
+///
+/// Compliant with [OpenID4VP §5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-authorization-request).
+///
+/// This struct flattens standard OAuth 2.0 authorization request parameters
+/// from [`OAuthAuthorizationRequest`] and adds OpenID4VP-specific extensions.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AuthorizationRequest {
+    /// REQUIRED. The response type: `vp_token` or `vp_token id_token`.
+    pub response_type: ResponseType,
+
+    /// REQUIRED. The nonce for replay protection.
+    ///
+    /// Per OpenID4VP §5.2, this MUST contain only unreserved URI characters.
+    pub nonce: String,
+
+    /// REQUIRED. The response mode for the authorization response.
+    pub response_mode: ResponseMode,
+
+    /// Standard OAuth 2.0 authorization request parameters.
+    #[serde(flatten)]
+    pub oauth: OAuthAuthorizationRequest,
+
+    /// OPTIONAL. Response URI for `direct_post` and `direct_post.jwt` modes.
+    ///
+    /// REQUIRED when `response_mode` is `direct_post` or `direct_post.jwt`.
+    pub response_uri: Option<Url>,
+
+    /// OPTIONAL. Request Object URI (JAR).
+    pub request_uri: Option<Url>,
+
+    /// OPTIONAL. Method for fetching the Request Object (`get` or `post`).
+    ///
+    /// MUST NOT be present when `request_uri` is absent.
+    pub request_uri_method: Option<RequestUriMethod>,
+
+    /// OPTIONAL. DCQL query for credential requirements.
+    ///
+    /// Mutually exclusive with `scope`.
+    pub dcql_query: Option<DcqlQuery>,
+
+    /// OPTIONAL. Client metadata as defined in OpenID Registration.
+    ///
+    /// Mutually exclusive with `client_metadata_uri`.
+    pub client_metadata: Option<VerifierMetadata>,
+
+    /// OPTIONAL. URI pointing to client metadata.
+    ///
+    /// Mutually exclusive with `client_metadata`.
+    pub client_metadata_uri: Option<Url>,
+
+    /// OPTIONAL. JWT-Secured Authorization Request object (JAR).
+    pub request: Option<String>,
+
+    /// OPTIONAL. Transaction data for user consent (Section 8.4).
+    pub transaction_data: Option<Vec<String>>,
+
+    /// OPTIONAL. Verifier attestations (non-empty array when present).
+    pub verifier_info: Option<Vec<VerifierAttestation>>,
+
+    /// OPTIONAL. Expected origins for DC API requests (Appendix A).
+    ///
+    /// REQUIRED for signed DC API requests.
+    pub expected_origins: Option<Vec<String>>,
+}
+
+impl AuthorizationRequest {
+    /// Validates the authorization request according to OpenID4VP spec.
+    ///
+    /// This method orchestrates validation by delegating to focused
+    /// validation functions for each logical group of rules.
+    pub fn validate(&self) -> Result<()> {
+        self.validate_core_fields()?;
+        self.validate_request_uri_consistency()?;
+        self.validate_query_mechanism()?;
+        self.validate_response_routing()?;
+        self.validate_dc_api_origins()?;
+        self.validate_client_metadata()?;
+        self.validate_transaction_data()?;
+        self.validate_verifier_info()?;
+
+        Ok(())
+    }
+
+    /// Validates core required fields: response_type, client_id, nonce, and state.
+    fn validate_core_fields(&self) -> Result<()> {
+        self.oauth.validate_client_id()?;
+
+        // response_type must be vp_token or vp_token id_token
+        if !matches!(
+            self.response_type,
+            ResponseType::VpToken | ResponseType::VpTokenIdToken
+        ) {
+            return Err(invalid_request(
+                "'response_type' must be 'vp_token' or 'vp_token id_token'",
+            ));
+        }
+
+        // nonce MUST be present and non-empty (Section 5.1)
+        if self.nonce.trim().is_empty() {
+            return Err(invalid_request("'nonce' must not be empty"));
+        }
+
+        // nonce MUST contain only unreserved URI characters per Section 5.2
+        if !is_unreserved_chars(&self.nonce) {
+            return Err(invalid_request(
+                "'nonce' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
+            ));
+        }
+
+        // state validation (unreserved characters)
+        self.oauth.validate_state_unreserved()?;
+
+        Ok(())
+    }
+
+    /// Validates request_uri_method consistency with request_uri presence.
+    fn validate_request_uri_consistency(&self) -> Result<()> {
+        // request_uri_method MUST NOT be present when request_uri is absent (Section 5.1)
+        if self.request_uri_method.is_some() && self.request_uri.is_none() {
+            return Err(invalid_request(
+                "'request_uri_method' MUST NOT be present when 'request_uri' is absent",
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validates the query mechanism: exactly one of scope or dcql_query must be present.
+    fn validate_query_mechanism(&self) -> Result<()> {
+        // XOR validation: exactly one of scope or dcql_query must be present (Section 5.1)
+        match (&self.oauth.scope, &self.dcql_query) {
+            (Some(_), Some(_)) => {
+                return Err(invalid_request(
+                    "'scope' and 'dcql_query' are mutually exclusive; provide only one",
+                ));
+            }
+            (None, None) => {
+                return Err(invalid_request(
+                    "either 'scope' or 'dcql_query' must be provided",
+                ));
+            }
+            _ => {}
+        }
+
+        // Validate dcql_query structure if present
+        if let Some(ref dcql) = self.dcql_query {
+            dcql.validate()?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates response_uri/redirect_uri consistency for the response_mode.
+    fn validate_response_routing(&self) -> Result<()> {
+        // response_uri required for direct_post modes; redirect_uri must not be present
+        if self.response_mode.is_direct_post() {
+            if self.response_uri.is_none() {
+                return Err(invalid_request(
+                    "'response_uri' is required when 'response_mode' is 'direct_post' \
+                     or 'direct_post.jwt'",
+                ));
+            }
+            if self.oauth.redirect_uri.is_some() {
+                return Err(invalid_request(
+                    "'redirect_uri' must not be present when 'response_uri' is used",
+                ));
+            }
+        }
+
+        // response_uri and redirect_uri are mutually exclusive regardless of response_mode
+        if self.response_uri.is_some() && self.oauth.redirect_uri.is_some() {
+            return Err(invalid_request(
+                "'redirect_uri' must not be present when 'response_uri' is used",
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validates expected_origins for DC API response modes.
+    fn validate_dc_api_origins(&self) -> Result<()> {
+        // Only validate for signed DC API requests (have client_id and request JWT)
+        if self.response_mode.is_dc_api() && self.is_signed_dc_api_request() {
+            match &self.expected_origins {
+                None => {
+                    return Err(invalid_request(
+                        "'expected_origins' is required for signed DC API requests ('dc_api' or 'dc_api.jwt' with client_id and request JWT)",
+                    ));
+                }
+                Some(origins) if origins.is_empty() => {
+                    return Err(invalid_request(
+                        "'expected_origins' must be a non-empty array",
+                    ));
+                }
+                Some(origins) => {
+                    for (i, origin) in origins.iter().enumerate() {
+                        Self::validate_origin(i, origin)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns true if this is a signed DC API request (has both client_id and request JWT).
+    fn is_signed_dc_api_request(&self) -> bool {
+        !self.oauth.client_id.trim().is_empty() && self.request.is_some()
+    }
+
+    /// Validates a single origin string is a valid origin tuple.
+    fn validate_origin(idx: usize, origin: &str) -> Result<()> {
+        // Parse as URL to validate structure
+        let url = Url::parse(origin).map_err(|e| {
+            invalid_request(format!(
+                "'expected_origins[{idx}]' '{origin}' is not a valid URL: {e}"
+            ))
+        })?;
+
+        // Validate it's a valid origin (no path, query, or fragment)
+        if url.path() != "/" && !url.path().is_empty() {
+            return Err(invalid_request(format!(
+                "'expected_origins[{idx}]' '{origin}' must not contain a path"
+            )));
+        }
+        if url.query().is_some() {
+            return Err(invalid_request(format!(
+                "'expected_origins[{idx}]' '{origin}' must not contain a query string"
+            )));
+        }
+        if url.fragment().is_some() {
+            return Err(invalid_request(format!(
+                "'expected_origins[{idx}]' '{origin}' must not contain a fragment"
+            )));
+        }
+        if url.host().is_none() {
+            return Err(invalid_request(format!(
+                "'expected_origins[{idx}]' '{origin}' must have a host"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validates client_metadata and client_metadata_uri are mutually exclusive.
+    fn validate_client_metadata(&self) -> Result<()> {
+        if self.client_metadata.is_some() && self.client_metadata_uri.is_some() {
+            return Err(invalid_request(
+                "'client_metadata' and 'client_metadata_uri' are mutually exclusive",
+            ));
+        }
+
+        // Validate client_metadata structure if present
+        if let Some(ref metadata) = self.client_metadata {
+            metadata.validate().map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidPresentationRequest,
+                    format!("'client_metadata' validation failed: {e}"),
+                )
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates transaction_data entries if present.
+    fn validate_transaction_data(&self) -> Result<()> {
+        let Some(ref td) = self.transaction_data else {
+            return Ok(());
+        };
+
+        // transaction_data: non-empty array (Section 8.4)
+        if td.is_empty() {
+            return Err(invalid_request(
+                "'transaction_data' must be a non-empty array when present",
+            ));
+        }
+
+        // collect valid credential IDs for reference validation
+        let valid_cred_ids: Vec<&str> = self
+            .dcql_query
+            .as_ref()
+            .map(|q| q.credentials.iter().map(|c| c.id.as_str()).collect())
+            .unwrap_or_default();
+
+        for (i, entry) in td.iter().enumerate() {
+            Self::validate_transaction_entry(i, entry, &valid_cred_ids)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates a single transaction_data entry.
+    fn validate_transaction_entry(idx: usize, entry: &str, valid_cred_ids: &[&str]) -> Result<()> {
+        // Use TransactionData::decode for complete validation
+        let txn_data = TransactionData::decode(entry).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidTransactionData,
+                format!("'transaction_data[{idx}]' validation failed: {e}"),
+            )
+        })?;
+
+        // Validate that all credential_ids reference known credentials from the DCQL query
+        for cred_id in txn_data.credential_ids() {
+            if !valid_cred_ids.contains(&cred_id.as_str()) {
+                return Err(Error::message(
+                    ErrorKind::InvalidTransactionData,
+                    format!(
+                        "'transaction_data[{idx}]' references unknown credential id '{cred_id}'"
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validates verifier_info attestations if present.
+    fn validate_verifier_info(&self) -> Result<()> {
+        let Some(ref vi) = self.verifier_info else {
+            return Ok(());
+        };
+
+        // verifier_info: non-empty array (Section 5.1)
+        if vi.is_empty() {
+            return Err(invalid_request(
+                "'verifier_info' must be a non-empty array when present",
+            ));
+        }
+
+        // collect valid credential IDs for reference validation
+        let valid_cred_ids: Vec<&str> = self
+            .dcql_query
+            .as_ref()
+            .map(|q| q.credentials.iter().map(|c| c.id.as_str()).collect())
+            .unwrap_or_default();
+
+        for (i, att) in vi.iter().enumerate() {
+            att.validate(i, &valid_cred_ids)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Deserializes an [`AuthorizationRequest`] and immediately validates it.
+impl<'de> Deserialize<'de> for AuthorizationRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            response_type: ResponseType,
+            nonce: String,
+            response_mode: ResponseMode,
+            client_id: String,
+            redirect_uri: Option<Url>,
+            scope: Option<String>,
+            state: Option<String>,
+            response_uri: Option<Url>,
+            request_uri: Option<Url>,
+            request_uri_method: Option<RequestUriMethod>,
+            dcql_query: Option<DcqlQuery>,
+            client_metadata: Option<VerifierMetadata>,
+            client_metadata_uri: Option<Url>,
+            request: Option<String>,
+            transaction_data: Option<Vec<String>>,
+            verifier_info: Option<Vec<VerifierAttestation>>,
+            expected_origins: Option<Vec<String>>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+
+        let request = Self {
+            response_type: raw.response_type,
+            nonce: raw.nonce,
+            response_mode: raw.response_mode,
+            oauth: OAuthAuthorizationRequest {
+                client_id: raw.client_id,
+                redirect_uri: raw.redirect_uri,
+                scope: raw.scope,
+                state: raw.state,
+                nonce: None,
+                code_challenge: None,
+                code_challenge_method: None,
+            },
+            response_uri: raw.response_uri,
+            request_uri: raw.request_uri,
+            request_uri_method: raw.request_uri_method,
+            dcql_query: raw.dcql_query,
+            client_metadata: raw.client_metadata,
+            client_metadata_uri: raw.client_metadata_uri,
+            request: raw.request,
+            transaction_data: raw.transaction_data,
+            verifier_info: raw.verifier_info,
+            expected_origins: raw.expected_origins,
+        };
+
+        request.validate().map_err(serde::de::Error::custom)?;
+        Ok(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::super::dcql::{CredentialFormat, CredentialMeta, CredentialQuery};
     use super::*;
+    use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta, CredentialQuery};
     use serde_json::json;
 
-    fn parse(v: Value) -> std::result::Result<AuthorizationRequest, serde_json::Error> {
+    fn parse(v: serde_json::Value) -> std::result::Result<AuthorizationRequest, serde_json::Error> {
         serde_json::from_value(v)
     }
 
@@ -557,7 +587,7 @@ mod tests {
         .expect("should parse");
 
         assert_eq!(req.response_type, ResponseType::VpToken);
-        assert_eq!(req.client_id, "https://verifier.example.com");
+        assert_eq!(req.oauth.client_id, "https://verifier.example.com");
         assert!(req.dcql_query.is_some());
     }
 
@@ -573,7 +603,7 @@ mod tests {
         }))
         .expect("should parse");
 
-        assert_eq!(req.scope.as_deref(), Some("openid"));
+        assert_eq!(req.oauth.scope.as_deref(), Some("openid"));
         assert!(req.dcql_query.is_none());
     }
 
@@ -591,7 +621,14 @@ mod tests {
             "request": "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9",
             "transaction_data": ["eyJ0eXBlIjoib3BlbmlkNHZwIiwiY3JlZGVudGlhbF9pZHMiOlsicGlkIl19"],
             "verifier_info": [{"format": "jwt_vc", "data": "eyJ0eXBlIjoidmVyaWZpZXIifQ"}],
-            "client_metadata": { "vp_formats": { "dc+sd-jwt": { "alg": ["ES256"] } } },
+            "client_metadata": {
+                "vp_formats_supported": {
+                    "dc+sd-jwt": {
+                        "sd-jwt_alg_values": ["ES256"],
+                        "kb-jwt_alg_values": ["ES256"]
+                    }
+                }
+            },
             "dcql_query": {
                 "credentials": [{
                     "id": "pid",
@@ -610,7 +647,7 @@ mod tests {
 
         assert_eq!(req.response_type, ResponseType::VpTokenIdToken);
         assert_eq!(req.response_mode, ResponseMode::DirectPostJwt);
-        assert_eq!(req.state.as_deref(), Some("xyz-state"));
+        assert_eq!(req.oauth.state.as_deref(), Some("xyz-state"));
         assert!(req.request.is_some());
         assert!(req.transaction_data.is_some());
         assert!(req.verifier_info.is_some());
@@ -661,19 +698,24 @@ mod tests {
         let deserialized: AuthorizationRequest =
             serde_json::from_str(&serialized).expect("should round-trip");
         assert_eq!(req.nonce, deserialized.nonce);
-        assert_eq!(req.client_id, deserialized.client_id);
+        assert_eq!(req.oauth.client_id, deserialized.oauth.client_id);
     }
 
     #[test]
     fn validate_constructed_request() {
         let req = AuthorizationRequest {
             response_type: ResponseType::VpToken,
-            client_id: "https://verifier.example.com".to_string(),
-            redirect_uri: None,
-            scope: None,
-            state: None,
             nonce: "fresh-nonce".to_string(),
             response_mode: ResponseMode::DirectPost,
+            oauth: OAuthAuthorizationRequest {
+                client_id: "https://verifier.example.com".to_string(),
+                redirect_uri: None,
+                scope: None,
+                state: None,
+                nonce: None,
+                code_challenge: None,
+                code_challenge_method: None,
+            },
             response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
             request_uri: None,
             request_uri_method: None,

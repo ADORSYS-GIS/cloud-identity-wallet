@@ -10,67 +10,60 @@
 //! - [RFC 7636 PKCE](https://www.rfc-editor.org/rfc/rfc7636.html)
 
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 use url::Url;
 
+use crate::oauth::authorization::OAuthAuthorizationRequest;
 use crate::oid4vci::authorization::AuthorizationDetails;
 use crate::utils::serialize_json_string;
-
-/// PKCE code challenge method.
-///
-/// Per [RFC 7636 §4.2], `S256` is REQUIRED and `plain` is OPTIONAL but NOT RECOMMENDED
-/// for production use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum CodeChallengeMethod {
-    /// SHA-256 code challenge (RFC 7636).
-    #[default]
-    S256,
-    /// Plain code challenge (RFC 7636). NOT RECOMMENDED for production use.
-    #[serde(rename = "plain")]
-    Plain,
-}
-
-impl std::fmt::Display for CodeChallengeMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::S256 => write!(f, "S256"),
-            Self::Plain => write!(f, "plain"),
-        }
-    }
-}
 
 /// An OAuth 2.0 Authorization Request for OID4VCI.
 ///
 /// Compliant with [OID4VCI §5.1](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-authorization-request).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// This struct flattens the standard OAuth 2.0 authorization request parameters
+/// from [`OAuthAuthorizationRequest`] and adds OID4VCI-specific extensions.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationRequest {
-    /// Fixed to `"code"` for the Authorization Code flow.
+    /// REQUIRED. The response type, fixed to `"code"` for Authorization Code flow.
     pub response_type: String,
-    /// REQUIRED. The client identifier for the wallet.
-    pub client_id: String,
-    /// OPTIONAL. The redirect URI where the AS sends the user after consent.
-    /// May be omitted if the client pre-registered a single redirect URI.
-    pub redirect_uri: Option<Url>,
-    /// OPTIONAL. State value to maintain state between request and callback.
-    pub state: Option<String>,
-    /// OPTIONAL. Scope values requesting Credential issuance (space-separated).
-    /// See [OID4VCI §5.1.2].
-    pub scope: Option<String>,
+
+    /// Standard OAuth 2.0 authorization request parameters.
+    #[serde(flatten)]
+    pub oauth: OAuthAuthorizationRequest,
+
     /// OAuth2 resource indicator.
     ///
     /// Must be set to credential_issuer when using the scope parameter and
     /// when the Credential Issuer metadata contains an authorization_servers property.
     pub resource: Option<Url>,
-    /// OPTIONAL. Processing context value originally received in a Credential Offer.
+
+    /// Processing context value originally received in a Credential Offer.
     /// Passed back to the Credential Issuer. See [OID4VCI §5.1.3].
     pub issuer_state: Option<String>,
-    /// OPTIONAL. RAR authorization details requesting specific Credentials.
+
+    /// RAR authorization details requesting specific Credentials.
     /// See [OID4VCI §5.1.1].
     #[serde(serialize_with = "serialize_json_string")]
     pub authorization_details: Option<Vec<AuthorizationDetails>>,
-    /// OPTIONAL. PKCE code challenge (base64url-encoded SHA-256 of the verifier).
-    pub code_challenge: Option<String>,
-    /// OPTIONAL. PKCE challenge method. Will always be `S256` when present.
-    pub code_challenge_method: Option<CodeChallengeMethod>,
+}
+
+impl AuthorizationRequest {
+    /// Validates the authorization request.
+    pub fn validate(&self) -> Result<(), crate::errors::Error> {
+        self.oauth.validate_client_id()?;
+
+        // response_type must be "code" for OID4VCI authorization code flow
+        if self.response_type.trim().is_empty() {
+            return Err(crate::errors::Error::message(
+                crate::errors::ErrorKind::InvalidAuthorizationRequest,
+                "'response_type' must not be empty",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// An OAuth 2.0 Pushed Authorization Request (PAR) as outlined in [OID4VCI §5.1.4].
@@ -82,4 +75,91 @@ pub struct PushedAuthorizationRequest {
     pub client_id: String,
     /// The request URI returned by the authorization server.
     pub request_uri: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn serializes_with_flattened_oauth_fields() {
+        let req = AuthorizationRequest {
+            response_type: "code".to_string(),
+            oauth: OAuthAuthorizationRequest {
+                client_id: "my-client".to_string(),
+                redirect_uri: Some(Url::parse("https://example.com/callback").unwrap()),
+                scope: Some("openid".to_string()),
+                state: Some("abc123".to_string()),
+                nonce: None,
+                code_challenge: Some("challenge123".to_string()),
+                code_challenge_method: Some(crate::oauth::CodeChallengeMethod::S256),
+            },
+            resource: None,
+            issuer_state: Some("issuer-state-xyz".to_string()),
+            authorization_details: None,
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+
+        assert_eq!(json["response_type"], "code");
+        assert_eq!(json["client_id"], "my-client");
+        assert_eq!(json["redirect_uri"], "https://example.com/callback");
+        assert_eq!(json["scope"], "openid");
+        assert_eq!(json["state"], "abc123");
+        assert_eq!(json["code_challenge"], "challenge123");
+        assert_eq!(json["code_challenge_method"], "S256");
+        assert_eq!(json["issuer_state"], "issuer-state-xyz");
+    }
+
+    #[test]
+    fn deserializes_with_flattened_oauth_fields() {
+        let json = json!({
+            "response_type": "code",
+            "client_id": "my-client",
+            "redirect_uri": "https://example.com/callback",
+            "scope": "openid",
+            "state": "abc123",
+            "code_challenge": "challenge123",
+            "code_challenge_method": "S256",
+            "resource": "https://issuer.example.com",
+            "issuer_state": "issuer-state-xyz"
+        });
+
+        let req: AuthorizationRequest = serde_json::from_value(json).unwrap();
+
+        assert_eq!(req.response_type, "code");
+        assert_eq!(req.oauth.client_id, "my-client");
+        assert_eq!(
+            req.oauth.redirect_uri.unwrap().as_str(),
+            "https://example.com/callback"
+        );
+        assert_eq!(req.oauth.scope.unwrap(), "openid");
+        assert_eq!(req.oauth.state.unwrap(), "abc123");
+        assert_eq!(req.oauth.code_challenge.unwrap(), "challenge123");
+        assert!(
+            req.resource
+                .unwrap()
+                .as_str()
+                .starts_with("https://issuer.example.com")
+        );
+        assert_eq!(req.issuer_state.unwrap(), "issuer-state-xyz");
+    }
+
+    #[test]
+    fn minimal_request() {
+        let json = json!({
+            "response_type": "code",
+            "client_id": "my-client"
+        });
+
+        let req: AuthorizationRequest = serde_json::from_value(json).unwrap();
+
+        assert_eq!(req.response_type, "code");
+        assert_eq!(req.oauth.client_id, "my-client");
+        assert!(req.oauth.redirect_uri.is_none());
+        assert!(req.resource.is_none());
+        assert!(req.issuer_state.is_none());
+        assert!(req.authorization_details.is_none());
+    }
 }
