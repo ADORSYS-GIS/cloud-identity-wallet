@@ -481,7 +481,9 @@ mod tests {
         );
 
         let err = VpToken::new(entries).unwrap_err();
-        assert!(matches!(err, VpTokenError::InvalidQueryId { query_id } if query_id == "credential/1"));
+        assert!(
+            matches!(err, VpTokenError::InvalidQueryId { query_id } if query_id == "credential/1")
+        );
     }
 
     #[test]
@@ -490,7 +492,9 @@ mod tests {
         entries.insert("my_credential".to_string(), Vec::new());
 
         let err = VpToken::new(entries).unwrap_err();
-        assert!(matches!(err, VpTokenError::EmptyPresentationList { query_id } if query_id == "my_credential"));
+        assert!(
+            matches!(err, VpTokenError::EmptyPresentationList { query_id } if query_id == "my_credential")
+        );
     }
 
     #[test]
