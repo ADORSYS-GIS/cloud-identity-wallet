@@ -355,7 +355,10 @@ fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Resul
 /// - [`MdocError::CurveMismatch`] — COSE curve differs from proof JWK curve.
 /// - [`MdocError::DeviceKeyMismatch`] — constant-time coordinate comparison failed.
 #[must_use = "device key binding failure must be handled"]
-pub(crate) fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result<()> {
+pub(crate) fn verify_device_key_binding(
+    parsed: &ParsedMdoc,
+    holder_binding_public_jwk: &Jwk,
+) -> Result<()> {
     let cose_key_val: Value =
         ciborium::de::from_reader(parsed.device_key.as_slice()).map_err(|_| {
             MdocError::MalformedDeviceKey {
@@ -405,14 +408,14 @@ pub(crate) fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) ->
     };
 
     match kty {
-        2 => verify_ec2_binding(&entries, proof_jwk),
-        1 => verify_okp_binding(&entries, proof_jwk),
+        2 => verify_ec2_binding(&entries, holder_binding_public_jwk),
+        1 => verify_okp_binding(&entries, holder_binding_public_jwk),
         _ => Err(MdocError::UnsupportedDeviceKeyType),
     }
 }
 
 /// EC2 device-key binding check (kty=2, ISO 18013-5 Table 22 NIST curves).
-fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
+fn verify_ec2_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jwk) -> Result<()> {
     // crv (label -1): map integer to (curve name string, JWK Curve variant).
     let (cose_crv_name, jwk_curve) = match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
@@ -468,7 +471,7 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     };
 
     // Match proof JWK against Key::Ec.
-    let ec = match &proof_jwk.key {
+    let ec = match &holder_binding_public_jwk.key {
         Key::Ec(ec) => ec,
         _ => return Err(MdocError::UnsupportedDeviceKeyType),
     };
@@ -519,7 +522,7 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
 }
 
 /// OKP Ed25519 device-key binding check (kty=1, crv=6, x-only, RFC 8152 §13.2).
-fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
+fn verify_okp_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jwk) -> Result<()> {
     // crv (label -1): must be 6 (Ed25519). All other OKP curves are unsupported.
     match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
@@ -554,7 +557,7 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     };
 
     // Match proof JWK — must be OKP Ed25519.
-    let okp = match &proof_jwk.key {
+    let okp = match &holder_binding_public_jwk.key {
         Key::Okp(okp) if okp.crv == OkpCurve::Ed25519 => okp,
         _ => return Err(MdocError::UnsupportedDeviceKeyType),
     };
@@ -585,7 +588,7 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
 /// * `outer_doc_type` — the `docType` string from the credential configuration,
 ///   matched against the MSO `docType` field.
 /// * `trust_store` — IACA root certificates accepted for this wallet deployment.
-/// * `proof_jwk` — the holder's public key from the OID4VCI proof JWT header.
+/// * `holder_binding_public_jwk` — the holder's public key from the OID4VCI proof JWT header.
 /// * `now` — the current time; use `OffsetDateTime::now_utc()` in production.
 ///
 /// # Errors
@@ -595,13 +598,13 @@ pub fn verify_mdoc_for_issuance(
     parsed: &ParsedMdoc,
     outer_doc_type: &str,
     trust_store: &dyn IacaTrustStore,
-    proof_jwk: &Jwk,
+    holder_binding_public_jwk: &Jwk,
     now: OffsetDateTime,
 ) -> Result<IssuerInfo> {
     parsed.check_temporal_validity(now)?;
     let issuer_info = verify_issuer_signature(parsed, outer_doc_type, trust_store)?;
     verify_digests(parsed)?;
-    verify_device_key_binding(parsed, proof_jwk)?;
+    verify_device_key_binding(parsed, holder_binding_public_jwk)?;
     Ok(issuer_info)
 }
 

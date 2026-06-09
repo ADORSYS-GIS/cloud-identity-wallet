@@ -701,6 +701,13 @@ impl IssuanceEngine {
                 // `verify_mdoc_for_issuance` so no check can be accidentally omitted.
                 let parsed = ParsedMdoc::parse(&raw_credential)?;
                 let signer = self.build_signer(tenant_id).await?;
+                // Assumption: tenant key material is immutable for the duration of
+                // an issuance flow. `build_signer` here produces the same key pair
+                // that was used to sign the credential request proof, so
+                // `holder_binding_public_jwk()` reflects the correct holder binding
+                // key. If mid-flow key rotation becomes possible, carry the proof
+                // public JWK from the credential request signer forward instead of
+                // rebuilding here.
                 // Use the time the credential was received (receipt_time) rather than
                 // the current wall clock so that temporal validation is deterministic
                 // for a given request and is testable with controlled time values.
@@ -711,7 +718,7 @@ impl IssuanceEngine {
                     &parsed,
                     &mdoc_config.doctype,
                     self.iaca_trust_store(),
-                    signer.proof_jwk(),
+                    signer.holder_binding_public_jwk(),
                     now,
                 )?;
                 info!(

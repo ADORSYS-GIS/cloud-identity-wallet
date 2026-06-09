@@ -749,8 +749,8 @@ async fn mdoc_credential_fields_are_populated_from_mso_validity_info() {
     // Extract the tenant's proof JWK so we can embed the matching DeviceKey in the MSO.
     let tenant_key = tenant_repo.find_key(tenant_id).await.unwrap();
     let signer = CryptoSigner::from_ecdsa_der(tenant_key.der_bytes.expose()).unwrap();
-    let proof_jwk = signer.proof_jwk();
-    let Key::Ec(ref ec) = proof_jwk.key else {
+    let holder_binding_public_jwk = signer.holder_binding_public_jwk();
+    let Key::Ec(ref ec) = holder_binding_public_jwk.key else {
         panic!("test tenant must be EC-keyed (P-256)");
     };
     let x_bytes = ec.x.as_ref().to_vec();
@@ -842,8 +842,8 @@ async fn mdoc_tampered_digest_is_rejected_before_storage() {
     // caught the tampering.
     let tenant_key = engine.tenant_repo.find_key(tenant_id).await.unwrap();
     let signer = CryptoSigner::from_ecdsa_der(tenant_key.der_bytes.expose()).unwrap();
-    let proof_jwk = signer.proof_jwk();
-    let Key::Ec(ref ec) = proof_jwk.key else {
+    let holder_binding_public_jwk = signer.holder_binding_public_jwk();
+    let Key::Ec(ref ec) = holder_binding_public_jwk.key else {
         panic!("test tenant must be EC-keyed (P-256)");
     };
     let x_bytes = ec.x.as_ref().to_vec();
@@ -999,8 +999,8 @@ async fn mdoc_invalid_issuer_signature_is_rejected_before_storage() {
     // actually caught the corrupted signature.
     let tenant_key = engine.tenant_repo.find_key(tenant_id).await.unwrap();
     let signer = CryptoSigner::from_ecdsa_der(tenant_key.der_bytes.expose()).unwrap();
-    let proof_jwk = signer.proof_jwk();
-    let Key::Ec(ref ec) = proof_jwk.key else {
+    let holder_binding_public_jwk = signer.holder_binding_public_jwk();
+    let Key::Ec(ref ec) = holder_binding_public_jwk.key else {
         panic!("test tenant must be EC-keyed (P-256)");
     };
     let x_bytes = ec.x.as_ref().to_vec();
