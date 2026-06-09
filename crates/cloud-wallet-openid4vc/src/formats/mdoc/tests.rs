@@ -79,13 +79,7 @@ fn build_issuer_signed_full(
     let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(item_bytes)));
 
     // MobileSecurityObject
-    // Dummy EC P-256 device key (COSE_Key structure)
-    let device_key = Value::Map(vec![
-        (Value::Integer(1i64.into()), Value::Integer(2i64.into())), // kty: EC2
-        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())), // crv: P-256
-        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])), // x
-        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])), // y
-    ]);
+    let device_key = dummy_device_key();
 
     let mso = Value::Map(vec![
         (
@@ -125,40 +119,13 @@ fn build_issuer_signed_full(
     ]);
 
     let mso_bytes = cbor(&mso);
-
-    // COSE_Sign1 ([protected_bstr, {}, payload_bstr, sig_bstr])
-    // coset v0.3.x expects the untagged array when deserialising via from_slice.
-    // Protected header: {1: -7} (alg: ES256) encoded as a bstr.
-    // CBOR of {1: -7}: a1 01 26
-    //   a1 = map(1), 01 = uint(1), 26 = nint(-7) [0x20 + (7-1) = 0x26]
-    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
-
-    // ISO 18013-5 §9.1.2: COSE payload must be MobileSecurityObjectBytes
-    // = #6.24(bstr .cbor MobileSecurityObject), not bare MSO bytes.
-    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
-
-    let cose_sign1 = Value::Array(vec![
-        Value::Bytes(protected_header_bytes), // protected header bstr
-        Value::Map(vec![]),                   // unprotected header {}
-        Value::Bytes(mso_payload), // MobileSecurityObjectBytes = #6.24(bstr .cbor MobileSecurityObject)
-        Value::Bytes(vec![0u8; 64]), // dummy 64-byte signature
-    ]);
-
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (
-            Value::Text("issuerAuth".into()),
-            Value::Tag(18, Box::new(cose_sign1)),
-        ),
-    ]);
-
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    // {1: -7} (ES256): a1 01 26
+    let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
+    let name_spaces = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Array(vec![item_tag24]),
+    )]);
+    issuer_signed_b64(name_spaces, issuer_auth)
 }
 
 #[test]
@@ -497,6 +464,103 @@ fn item_tag24_and_digest(
     (raw_tag24_bytes, digest.as_ref().to_vec())
 }
 
+// ── Shared CBOR / COSE fixture helpers ──────────────────────────────────────
+
+/// Dummy P-256 COSE_Key used where no device-key verification is performed.
+fn dummy_device_key() -> Value {
+    Value::Map(vec![
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),    // kty: EC2
+        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())), // crv: P-256
+        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])), // x
+        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])), // y
+    ])
+}
+
+/// A single-item nameSpaces map used by verifier-test fixtures.
+fn default_name_spaces() -> Value {
+    let item = Value::Map(vec![
+        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
+        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
+        (
+            Value::Text("elementIdentifier".into()),
+            Value::Text("family_name".into()),
+        ),
+        (
+            Value::Text("elementValue".into()),
+            Value::Text("Doe".into()),
+        ),
+    ]);
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Array(vec![item_tag24]),
+    )])
+}
+
+/// Assembles a real COSE_Sign1 (tag 18) over `mso_bytes` with the given protected
+/// header and x5chain value in the unprotected header (label 33). `sign_fn` computes
+/// the raw signature over the Sig_Structure bytes; pass `|_| vec![0u8; N]` for
+/// fixtures whose error fires before signature verification. Set `tamper = true`
+/// to flip one byte so the signature is cryptographically invalid while the CBOR
+/// structure remains intact.
+fn signed_cose1(
+    mso_bytes: Vec<u8>,
+    protected_header: Vec<u8>,
+    x5chain: Value,
+    sign_fn: impl Fn(&[u8]) -> Vec<u8>,
+    tamper: bool,
+) -> Value {
+    let tbs = cbor(&Value::Array(vec![
+        Value::Text("Signature1".into()),
+        Value::Bytes(protected_header.clone()),
+        Value::Bytes(vec![]), // external AAD = b""
+        Value::Bytes(mso_bytes.clone()),
+    ]));
+    let mut sig = sign_fn(&tbs);
+    if tamper {
+        sig[0] ^= 0xff;
+    }
+    let unprotected = Value::Map(vec![(Value::Integer(33.into()), x5chain)]);
+    Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header),
+            unprotected,
+            Value::Bytes(mso_bytes),
+            Value::Bytes(sig),
+        ])),
+    )
+}
+
+/// Assembles an unsigned COSE_Sign1 (tag 18) with an empty unprotected header and
+/// a 64-byte zero signature. The COSE payload is `#6.24(bstr .cbor mso_bytes)` per
+/// ISO 18013-5 §9.1.2. Used by parser-test fixtures where signature validity is
+/// irrelevant.
+fn dummy_cose1(mso_bytes: Vec<u8>, protected_header: Vec<u8>) -> Value {
+    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
+    Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected_header),
+            Value::Map(vec![]),          // empty unprotected header
+            Value::Bytes(mso_payload),
+            Value::Bytes(vec![0u8; 64]), // dummy signature
+        ])),
+    )
+}
+
+/// Encodes a complete `IssuerSigned` map with `nameSpaces` and `issuerAuth` as an
+/// unpadded base64url string.
+fn issuer_signed_b64(name_spaces: Value, issuer_auth: Value) -> String {
+    let issuer_signed = Value::Map(vec![
+        (Value::Text("nameSpaces".into()), name_spaces),
+        (Value::Text("issuerAuth".into()), issuer_auth),
+    ]);
+    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+}
+
+// ── Per-test fixture builders ────────────────────────────────────────────────
+
 /// Builds a complete `IssuerSigned` base64url string whose `valueDigests` entries
 /// are the real hashes (using `alg`) of the corresponding `#6.24` item encodings.
 ///
@@ -509,12 +573,7 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
     let item_tag24_val: Value =
         ciborium::de::from_reader(item_tag24_bytes.as_slice()).expect("round-trip must succeed");
 
-    let device_key = Value::Map(vec![
-        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
-        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
-        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])),
-        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])),
-    ]);
+    let device_key = dummy_device_key();
 
     let mso = Value::Map(vec![
         (Value::Text("version".into()), Value::Text("1.0".into())),
@@ -560,31 +619,12 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
     ]);
 
     let mso_bytes = cbor(&mso);
-    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
-    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
-
-    let cose_sign1 = Value::Array(vec![
-        Value::Bytes(protected_header_bytes),
-        Value::Map(vec![]),
-        Value::Bytes(mso_payload),
-        Value::Bytes(vec![0u8; 64]),
-    ]);
-
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24_val]),
-            )]),
-        ),
-        (
-            Value::Text("issuerAuth".into()),
-            Value::Tag(18, Box::new(cose_sign1)),
-        ),
-    ]);
-
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
+    let name_spaces = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Array(vec![item_tag24_val]),
+    )]);
+    issuer_signed_b64(name_spaces, issuer_auth)
 }
 
 /// Builds a complete `IssuerSigned` base64url string whose `valueDigests` entries
@@ -1024,13 +1064,7 @@ fn rejects_digest_id_out_of_range() {
 /// constructed with minimal but structurally valid values, so that parsing
 /// reaches `parse_name_spaces` before encountering the injected error.
 fn build_issuer_signed_with_ns(name_spaces_val: Value) -> String {
-    let device_key = Value::Map(vec![
-        (Value::Integer(1i64.into()), Value::Integer(2i64.into())), // kty: EC2
-        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())), // crv: P-256
-        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])), // x
-        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])), // y
-    ]);
-
+    let device_key = dummy_device_key();
     let mso = Value::Map(vec![
         (Value::Text("version".into()), Value::Text("1.0".into())),
         (
@@ -1073,28 +1107,9 @@ fn build_issuer_signed_with_ns(name_spaces_val: Value) -> String {
             ]),
         ),
     ]);
-
-    let mso_bytes = cbor(&mso);
-    // ISO 18013-5 §9.1.2: COSE payload = MobileSecurityObjectBytes = #6.24(bstr)
-    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
     // {1: -7} = alg: ES256
-    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
-    let cose_sign1 = Value::Array(vec![
-        Value::Bytes(protected_header_bytes),
-        Value::Map(vec![]),
-        Value::Bytes(mso_payload),
-        Value::Bytes(vec![0u8; 64]),
-    ]);
-
-    let issuer_signed = Value::Map(vec![
-        (Value::Text("nameSpaces".into()), name_spaces_val),
-        (
-            Value::Text("issuerAuth".into()),
-            Value::Tag(18, Box::new(cose_sign1)),
-        ),
-    ]);
-
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    let issuer_auth = dummy_cose1(cbor(&mso), vec![0xa1u8, 0x01, 0x26]);
+    issuer_signed_b64(name_spaces_val, issuer_auth)
 }
 
 #[test]
@@ -1453,73 +1468,15 @@ fn build_issuer_signed_with_issuer_auth(
     signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
     tamper: bool,
 ) -> String {
-    // {1: -7} (ES256), CBOR-encoded: a1 01 26
-    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
-
-    // RFC 9052 §4.4 Sig_Structure: ["Signature1", protected_bstr, external_aad, payload]
-    let tbs = cbor(&Value::Array(vec![
-        Value::Text("Signature1".into()),
-        Value::Bytes(protected_header_bytes.clone()),
-        Value::Bytes(vec![]), // external AAD = b""
-        Value::Bytes(mso_bytes.clone()),
-    ]));
-
-    let sig_bytes = signing_key
-        .sign_sha256(&tbs)
-        .expect("COSE signing must succeed");
-
-    // Flip one byte so signature verification fails while CBOR structure stays intact.
-    let final_sig: Vec<u8> = if tamper {
-        let mut corrupted = sig_bytes.to_vec();
-        corrupted[0] ^= 0xff;
-        corrupted
-    } else {
-        sig_bytes.to_vec()
-    };
-
-    // Label 33 must be an integer key so coset parses it as Label::Int(33).
-    let unprotected_map = Value::Map(vec![(
-        Value::Integer(33.into()),
+    // {1: -7} (ES256): a1 01 26
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x26],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-    )]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(final_sig),
-        ])),
+        |tbs| signing_key.sign_sha256(tbs).expect("COSE signing must succeed").to_vec(),
+        tamper,
     );
-
-    // Parser requires at least one namespace entry.
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-
-    let raw = cbor(&issuer_signed);
-    Base64UrlUnpadded::encode_string(&raw)
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 /// Returns the MSO payload bytes as they appear inside the COSE_Sign1 `payload` field:
@@ -1903,61 +1860,15 @@ fn build_issuer_signed_with_issuer_auth_es512(
     dsc_der: Vec<u8>,
     signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
 ) -> String {
-    // {1: -36} (ES512), CBOR-encoded: a1 01 38 23
-    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x38, 0x23];
-
-    let tbs = cbor(&Value::Array(vec![
-        Value::Text("Signature1".into()),
-        Value::Bytes(protected_header_bytes.clone()),
-        Value::Bytes(vec![]),
-        Value::Bytes(mso_bytes.clone()),
-    ]));
-
-    let sig_bytes = signing_key
-        .sign_sha512(&tbs)
-        .expect("ES512 COSE signing must succeed");
-
-    let unprotected_map = Value::Map(vec![(
-        Value::Integer(33.into()),
+    // {1: -36} (ES512): a1 01 38 23
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x38, 0x23],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-    )]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(sig_bytes.to_vec()),
-        ])),
+        |tbs| signing_key.sign_sha512(tbs).expect("ES512 COSE signing must succeed").to_vec(),
+        false,
     );
-
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-
-    let raw = cbor(&issuer_signed);
-    Base64UrlUnpadded::encode_string(&raw)
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 #[test]
@@ -2088,56 +1999,15 @@ fn build_issuer_signed_single_bstr_x5chain(
     dsc_der: Vec<u8>,
     signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
 ) -> String {
-    // {1: -7} (ES256)
-    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
-
-    let tbs = cbor(&Value::Array(vec![
-        Value::Text("Signature1".into()),
-        Value::Bytes(protected_header_bytes.clone()),
-        Value::Bytes(vec![]),
-        Value::Bytes(mso_bytes.clone()),
-    ]));
-    let sig_bytes = signing_key
-        .sign_sha256(&tbs)
-        .expect("COSE signing must succeed");
-
-    // Single bstr — no wrapping array.
-    let unprotected_map = Value::Map(vec![(Value::Integer(33.into()), Value::Bytes(dsc_der))]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(sig_bytes.to_vec()),
-        ])),
+    // {1: -7} (ES256): a1 01 26 — single bstr x5chain (no array wrapper)
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x26],
+        Value::Bytes(dsc_der),
+        |tbs| signing_key.sign_sha256(tbs).expect("COSE signing must succeed").to_vec(),
+        false,
     );
-
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 /// Builds an `IssuerSigned` with a multi-cert x5chain `[dsc, …]` (leaf-first).
@@ -2149,55 +2019,15 @@ fn build_issuer_signed_with_chain_x5chain(
     cert_chain: Vec<Vec<u8>>,
     signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
 ) -> String {
-    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x26];
-
-    let tbs = cbor(&Value::Array(vec![
-        Value::Text("Signature1".into()),
-        Value::Bytes(protected_header_bytes.clone()),
-        Value::Bytes(vec![]),
-        Value::Bytes(mso_bytes.clone()),
-    ]));
-    let sig_bytes = signing_key
-        .sign_sha256(&tbs)
-        .expect("COSE signing must succeed");
-
-    let chain_vals: Vec<Value> = cert_chain.into_iter().map(Value::Bytes).collect();
-    let unprotected_map = Value::Map(vec![(Value::Integer(33.into()), Value::Array(chain_vals))]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(sig_bytes.to_vec()),
-        ])),
+    let x5chain = Value::Array(cert_chain.into_iter().map(Value::Bytes).collect());
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x26],
+        x5chain,
+        |tbs| signing_key.sign_sha256(tbs).expect("COSE signing must succeed").to_vec(),
+        false,
     );
-
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 /// Builds an `IssuerSigned` with an arbitrary raw protected-header CBOR blob and
@@ -2208,48 +2038,14 @@ fn build_issuer_signed_with_custom_alg(
     dsc_der: Vec<u8>,
     protected_header_bytes: Vec<u8>,
 ) -> String {
-    // Dummy 64-byte signature — error fires in dispatch_verify before verification.
-    let dummy_sig = vec![0u8; 64];
-
-    let unprotected_map = Value::Map(vec![(
-        Value::Integer(33.into()),
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        protected_header_bytes,
         Value::Array(vec![Value::Bytes(dsc_der)]),
-    )]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(dummy_sig),
-        ])),
+        |_| vec![0u8; 64], // dummy sig — error fires before verification
+        false,
     );
-
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 /// Builds a three-tier certificate chain: IACA root → Intermediate CA → DSC.
@@ -2812,61 +2608,15 @@ fn build_issuer_signed_es384(
     dsc_der: Vec<u8>,
     signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
 ) -> String {
-    // {1: -35} (ES384), CBOR-encoded: a1 01 38 22
-    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x38, 0x22];
-
-    let tbs = cbor(&Value::Array(vec![
-        Value::Text("Signature1".into()),
-        Value::Bytes(protected_header_bytes.clone()),
-        Value::Bytes(vec![]),
-        Value::Bytes(mso_bytes.clone()),
-    ]));
-
-    let sig_bytes = signing_key
-        .sign_sha384(&tbs)
-        .expect("ES384 COSE signing must succeed");
-
-    let unprotected_map = Value::Map(vec![(
-        Value::Integer(33.into()),
+    // {1: -35} (ES384): a1 01 38 22
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x38, 0x22],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-    )]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(sig_bytes.to_vec()),
-        ])),
+        |tbs| signing_key.sign_sha384(tbs).expect("ES384 COSE signing must succeed").to_vec(),
+        false,
     );
-
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-
-    let raw = cbor(&issuer_signed);
-    Base64UrlUnpadded::encode_string(&raw)
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 #[test]
@@ -2955,59 +2705,15 @@ fn build_issuer_signed_ed25519(
     dsc_der: Vec<u8>,
     signing_key: &cloud_wallet_crypto::ed25519::KeyPair,
 ) -> String {
-    // {1: -8} (EdDSA), CBOR-encoded: a1 01 27
-    let protected_header_bytes: Vec<u8> = vec![0xa1, 0x01, 0x27];
-
-    let tbs = cbor(&Value::Array(vec![
-        Value::Text("Signature1".into()),
-        Value::Bytes(protected_header_bytes.clone()),
-        Value::Bytes(vec![]),
-        Value::Bytes(mso_bytes.clone()),
-    ]));
-
-    let sig_bytes = signing_key.sign(&tbs);
-
-    let unprotected_map = Value::Map(vec![(
-        Value::Integer(33.into()),
+    // {1: -8} (EdDSA): a1 01 27
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x27],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-    )]);
-
-    let cose_sign1 = Value::Tag(
-        18,
-        Box::new(Value::Array(vec![
-            Value::Bytes(protected_header_bytes),
-            unprotected_map,
-            Value::Bytes(mso_bytes),
-            Value::Bytes(sig_bytes.to_vec()),
-        ])),
+        |tbs| signing_key.sign(tbs).to_vec(),
+        false,
     );
-
-    let item = Value::Map(vec![
-        (Value::Text("digestID".into()), Value::Integer(0u64.into())),
-        (Value::Text("random".into()), Value::Bytes(vec![0u8; 16])),
-        (
-            Value::Text("elementIdentifier".into()),
-            Value::Text("family_name".into()),
-        ),
-        (
-            Value::Text("elementValue".into()),
-            Value::Text("Doe".into()),
-        ),
-    ]);
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![item_tag24]),
-            )]),
-        ),
-        (Value::Text("issuerAuth".into()), cose_sign1),
-    ]);
-
-    let raw = cbor(&issuer_signed);
-    Base64UrlUnpadded::encode_string(&raw)
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
 #[test]
