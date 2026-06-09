@@ -10,7 +10,7 @@ use crate::core::rfc7519::RFC7519Claims;
 use crate::errors::{Error, ErrorKind, Result};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, dangerous, decode, decode_header};
+use jsonwebtoken::{DecodingKey, Header, Validation, dangerous, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
@@ -43,10 +43,19 @@ pub struct RequestObjectClaims {
     pub params: AuthorizationRequest,
 }
 
+/// JWT header for a Request Object, supporting both signed and unsigned (alg: none) algorithms.
+#[derive(Debug, Clone)]
+pub enum RequestObjectHeader {
+    /// Signed JWT with the algorithm specified in the header.
+    Signed(Box<Header>),
+    /// Unsigned JWT with alg: none.
+    Unsigned { typ: String },
+}
+
 /// A decoded and validated Request Object JWT.
 #[derive(Debug, Clone)]
 pub struct RequestObject {
-    pub header: Header,
+    pub header: RequestObjectHeader,
     pub claims: RequestObjectClaims,
     pub client_id: ParsedClientId,
 }
@@ -66,7 +75,7 @@ impl RequestObject {
         })?;
         validate_header(&header)?;
 
-        let claims: RequestObjectClaims = dangerous::insecure_decode::<RequestObjectClaims>(jwt)
+        let claims_unverified: RequestObjectClaims = dangerous::insecure_decode::<RequestObjectClaims>(jwt)
             .map_err(|e| {
                 Error::message(
                     ErrorKind::InvalidPresentationRequest,
@@ -74,7 +83,7 @@ impl RequestObject {
                 )
             })?
             .claims;
-        let client_id_str = claims.params.client_id.as_str();
+        let client_id_str = claims_unverified.params.client_id.as_str();
         let parsed_client_id = ParsedClientId::parse(client_id_str)
             .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
 
@@ -85,14 +94,14 @@ impl RequestObject {
         validation.set_audience(&[wallet_id, SELF_ISSUED_AUDIENCE]);
         validation.set_required_spec_claims(&["exp", "iat"]);
 
-        let _token_data = decode::<serde_json::Value>(jwt, &decoding_key, &validation)
+        let token_data = decode::<RequestObjectClaims>(jwt, &decoding_key, &validation)
             .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
 
-        validate_claims(&claims, wallet_id)?;
+        validate_claims(&token_data.claims, wallet_id)?;
 
         Ok(Self {
-            header,
-            claims,
+            header: RequestObjectHeader::Signed(Box::new(header)),
+            claims: token_data.claims,
             client_id: parsed_client_id,
         })
     }
@@ -210,14 +219,10 @@ impl RequestObject {
 
         validate_claims(&claims, wallet_id)?;
 
-        let header = Header {
-            typ: Some(typ.to_string()),
-            alg: Algorithm::HS256,
-            ..Default::default()
-        };
-
         Ok(Self {
-            header,
+            header: RequestObjectHeader::Unsigned {
+                typ: typ.to_string(),
+            },
             claims,
             client_id: parsed_client_id,
         })
