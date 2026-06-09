@@ -75,14 +75,15 @@ impl RequestObject {
         })?;
         validate_header(&header)?;
 
-        let claims_unverified: RequestObjectClaims = dangerous::insecure_decode::<RequestObjectClaims>(jwt)
-            .map_err(|e| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("failed to decode JWT payload: {e}"),
-                )
-            })?
-            .claims;
+        let claims_unverified: RequestObjectClaims =
+            dangerous::insecure_decode::<RequestObjectClaims>(jwt)
+                .map_err(|e| {
+                    Error::message(
+                        ErrorKind::InvalidPresentationRequest,
+                        format!("failed to decode JWT payload: {e}"),
+                    )
+                })?
+                .claims;
         let client_id_str = claims_unverified.params.client_id.as_str();
         let parsed_client_id = ParsedClientId::parse(client_id_str)
             .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
