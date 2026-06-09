@@ -6,8 +6,15 @@ pub enum PresentationBuilderError {
     NoCredentialsSelected,
     #[error("Credential query ID '{0}' not found in DCQL query")]
     QueryNotFound(String),
-    #[error("Failed to build VP token: {0}")]
-    VpTokenBuild(String),
+    #[error(
+        "Format mismatch: credential format '{credential_format}' does not match query format '{query_format}'"
+    )]
+    FormatMismatch {
+        credential_format: String,
+        query_format: String,
+    },
+    #[error("Invalid VP token: {0}")]
+    InvalidVpToken(String),
 }
 
 #[derive(Debug, Error)]

@@ -1,22 +1,60 @@
 use std::collections::BTreeMap;
 
 use crate::oid4vp::authorization::{AuthorizationRequest, Presentation, VpToken};
-use crate::oid4vp::dcql::CredentialQuery;
+use crate::oid4vp::dcql::{CredentialFormat, CredentialQuery};
+use crate::oid4vp::presentation::vp_token::VpTokenBuilder;
+use crate::oid4vp::selection::CredentialCandidate;
 
 use super::error::PresentationBuilderError;
 
 pub type Result<T> = std::result::Result<T, PresentationBuilderError>;
 
+/// A credential selected for presentation with its pre-built presentation string.
+///
+/// This struct wraps a [`CredentialCandidate`] from the DCQL matching engine
+/// and adds the format-specific presentation string that will be sent to the verifier.
+///
+/// The presentation string is built by format-specific code (e.g., SD-JWT presentation
+/// builder) before being passed here, ensuring all cryptographic binding proofs
+/// and selective disclosures are already incorporated.
 #[derive(Debug, Clone)]
 pub struct SelectedCredential {
-    pub query_id: String,
+    /// The credential query ID this presentation satisfies.
+    pub credential_query_id: String,
+    /// The wallet credential identifier (mirrors [`CredentialCandidate::credential_id`]).
+    pub credential_id: String,
+    /// The DCQL credential format.
+    pub format: CredentialFormat,
+    /// The complete presentation string (e.g., SD-JWT compact presentation with disclosures and KB-JWT).
     pub presentation: String,
 }
 
 impl SelectedCredential {
-    pub fn new(query_id: impl Into<String>, presentation: impl Into<String>) -> Self {
+    /// Creates a new selected credential for presentation.
+    pub fn new(
+        credential_query_id: impl Into<String>,
+        credential_id: impl Into<String>,
+        format: CredentialFormat,
+        presentation: impl Into<String>,
+    ) -> Self {
         Self {
-            query_id: query_id.into(),
+            credential_query_id: credential_query_id.into(),
+            credential_id: credential_id.into(),
+            format,
+            presentation: presentation.into(),
+        }
+    }
+
+    /// Creates a selected credential from a [`CredentialCandidate`] with a pre-built presentation.
+    pub fn from_candidate(
+        candidate: CredentialCandidate,
+        format: CredentialFormat,
+        presentation: impl Into<String>,
+    ) -> Self {
+        Self {
+            credential_query_id: candidate.credential_query_id,
+            credential_id: candidate.credential_id,
+            format,
             presentation: presentation.into(),
         }
     }
@@ -34,6 +72,14 @@ impl PresentationBuilder {
         Self {
             nonce: authorization_request.nonce.clone(),
             client_id: authorization_request.client_id.clone(),
+            credentials: Vec::new(),
+        }
+    }
+
+    pub fn from_parts(nonce: impl Into<String>, client_id: impl Into<String>) -> Self {
+        Self {
+            nonce: nonce.into(),
+            client_id: client_id.into(),
             credentials: Vec::new(),
         }
     }
@@ -56,60 +102,79 @@ impl PresentationBuilder {
         self
     }
 
-    pub fn build_vp_token(self, credential_queries: &[CredentialQuery]) -> Result<VpToken> {
+    pub fn build_vp_token(
+        self,
+        credential_queries: &[CredentialQuery],
+    ) -> Result<VpToken> {
         if self.credentials.is_empty() {
             return Err(PresentationBuilderError::NoCredentialsSelected);
         }
 
         for credential in &self.credentials {
-            credential_queries
+            let query = credential_queries
                 .iter()
-                .find(|q| q.id == credential.query_id)
+                .find(|q| q.id == credential.credential_query_id)
                 .ok_or_else(|| {
-                    PresentationBuilderError::QueryNotFound(credential.query_id.clone())
+                    PresentationBuilderError::QueryNotFound(credential.credential_query_id.clone())
                 })?;
+
+            let query_format = format!("{}", query.format);
+            let credential_format = format!("{}", credential.format);
+
+            if query_format != credential_format {
+                return Err(PresentationBuilderError::FormatMismatch {
+                    credential_format,
+                    query_format,
+                });
+            }
         }
 
         let mut entries: BTreeMap<String, Vec<Presentation>> = BTreeMap::new();
 
         for credential in self.credentials {
             entries
-                .entry(credential.query_id)
+                .entry(credential.credential_query_id)
                 .or_default()
                 .push(Presentation::String(credential.presentation));
         }
 
-        VpToken::new(entries).map_err(PresentationBuilderError::VpTokenBuild)
+        VpToken::new(entries).map_err(PresentationBuilderError::InvalidVpToken)
+    }
+
+    pub fn build(self) -> Result<PresentationBuilderOutput> {
+        if self.credentials.is_empty() {
+            return Err(PresentationBuilderError::NoCredentialsSelected);
+        }
+
+        let mut entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        for credential in self.credentials {
+            entries
+                .entry(credential.credential_query_id)
+                .or_default()
+                .push(credential.presentation);
+        }
+
+        Ok(PresentationBuilderOutput {
+            entries,
+            nonce: self.nonce,
+            client_id: self.client_id,
+        })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HolderBindingFormat {
-    KeyBindingJwt,
-    MdocDeviceSignature,
+#[derive(Debug, Clone)]
+pub struct PresentationBuilderOutput {
+    pub entries: BTreeMap<String, Vec<String>>,
+    pub nonce: String,
+    pub client_id: String,
 }
 
-impl std::fmt::Display for HolderBindingFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::KeyBindingJwt => write!(f, "kb+jwt"),
-            Self::MdocDeviceSignature => write!(f, "mso_mdoc"),
-        }
-    }
-}
-
-pub trait HolderBindingProof {
-    fn format(&self) -> HolderBindingFormat;
-}
-
-impl HolderBindingProof for super::holder_binding::HolderBinding {
-    fn format(&self) -> HolderBindingFormat {
-        match self {
-            super::holder_binding::HolderBinding::SdJwt(_) => HolderBindingFormat::KeyBindingJwt,
-            super::holder_binding::HolderBinding::Mdoc(_) => {
-                HolderBindingFormat::MdocDeviceSignature
-            }
-        }
+impl PresentationBuilderOutput {
+    pub fn into_vp_token_builder(self) -> VpTokenBuilder {
+        VpTokenBuilder::new(self.entries)
+            .with_nonce(self.nonce)
+            .with_client_id(self.client_id)
     }
 }
 
@@ -117,8 +182,7 @@ impl HolderBindingProof for super::holder_binding::HolderBinding {
 mod tests {
     use super::*;
     use crate::oid4vp::authorization::{ResponseMode, ResponseType};
-    use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta, DcqlQuery};
-    use url::Url;
+    use crate::oid4vp::dcql::{CredentialMeta, DcqlQuery};
 
     fn create_test_query() -> CredentialQuery {
         CredentialQuery {
@@ -136,6 +200,8 @@ mod tests {
     }
 
     fn create_test_authorization_request() -> AuthorizationRequest {
+        use url::Url;
+
         AuthorizationRequest {
             response_type: ResponseType::VpToken,
             client_id: "https://verifier.example.com".to_string(),
@@ -161,24 +227,35 @@ mod tests {
     }
 
     #[test]
-    fn selected_credential_new() {
-        let credential =
-            SelectedCredential::new("test-credential", "eyJhbGciOiJFUzI1NiJ9.payload.signature~");
-
-        assert_eq!(credential.query_id, "test-credential");
-        assert_eq!(
-            credential.presentation,
-            "eyJhbGciOiJFUzI1NiJ9.payload.signature~"
-        );
-    }
-
-    #[test]
-    fn presentation_builder_stores_nonce_and_client_id() {
+    fn presentation_builder_creates_output_with_nonce_and_client_id() {
         let request = create_test_authorization_request();
         let builder = PresentationBuilder::new(&request);
 
         assert_eq!(builder.nonce(), "test-nonce-123");
         assert_eq!(builder.client_id(), "https://verifier.example.com");
+    }
+
+    #[test]
+    fn presentation_builder_from_parts() {
+        let builder =
+            PresentationBuilder::from_parts("custom-nonce", "https://custom-verifier.example.com");
+
+        assert_eq!(builder.nonce(), "custom-nonce");
+        assert_eq!(builder.client_id(), "https://custom-verifier.example.com");
+    }
+
+    #[test]
+    fn selected_credential_stores_presentation() {
+        let credential = SelectedCredential::new(
+            "test-credential",
+            "credential-uuid-123",
+            CredentialFormat::DcSdJwt,
+            "eyJhbGciOiJFUzI1NiJ9.payload.signature~",
+        );
+
+        assert_eq!(credential.credential_query_id, "test-credential");
+        assert_eq!(credential.credential_id, "credential-uuid-123");
+        assert_eq!(credential.presentation, "eyJhbGciOiJFUzI1NiJ9.payload.signature~");
     }
 
     #[test]
@@ -188,6 +265,8 @@ mod tests {
 
         let builder = PresentationBuilder::new(&request).add_credential(SelectedCredential::new(
             "test-credential",
+            "credential-uuid-123",
+            CredentialFormat::DcSdJwt,
             "jwt.payload.signature~",
         ));
 
@@ -207,10 +286,14 @@ mod tests {
         let builder = PresentationBuilder::new(&request)
             .add_credential(SelectedCredential::new(
                 "test-credential",
+                "credential-uuid-1",
+                CredentialFormat::DcSdJwt,
                 "jwt1.payload.signature~",
             ))
             .add_credential(SelectedCredential::new(
                 "test-credential",
+                "credential-uuid-2",
+                CredentialFormat::DcSdJwt,
                 "jwt2.payload.signature~",
             ));
 
@@ -222,12 +305,34 @@ mod tests {
     }
 
     #[test]
+    fn build_vp_token_fails_on_format_mismatch() {
+        let request = create_test_authorization_request();
+        let query = create_test_query();
+
+        let builder = PresentationBuilder::new(&request).add_credential(SelectedCredential::new(
+            "test-credential",
+            "credential-uuid-123",
+            CredentialFormat::MsoMdoc,
+            "mdoc-payload",
+        ));
+
+        let result = builder.build_vp_token(std::slice::from_ref(&query));
+
+        assert!(matches!(
+            result,
+            Err(PresentationBuilderError::FormatMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn build_vp_token_fails_on_unknown_query_id() {
         let request = create_test_authorization_request();
 
         let builder = PresentationBuilder::new(&request).add_credential(SelectedCredential::new(
             "unknown-query-id",
-            "jwt.payload.signature",
+            "credential-uuid-123",
+            CredentialFormat::DcSdJwt,
+            "jwt.payload.signature~",
         ));
 
         let result = builder.build_vp_token(&[]);
@@ -239,41 +344,21 @@ mod tests {
     }
 
     #[test]
-    fn build_vp_token_fails_on_empty_credentials() {
+    fn build_output_creates_vp_token_builder() {
         let request = create_test_authorization_request();
 
-        let builder = PresentationBuilder::new(&request);
+        let output = PresentationBuilder::new(&request)
+            .add_credential(SelectedCredential::new(
+                "test-credential",
+                "credential-uuid-123",
+                CredentialFormat::DcSdJwt,
+                "jwt.payload.signature~",
+            ))
+            .build()
+            .unwrap();
 
-        let result = builder.build_vp_token(&[]);
-
-        assert!(matches!(
-            result,
-            Err(PresentationBuilderError::NoCredentialsSelected)
-        ));
-    }
-
-    #[test]
-    fn holder_binding_format_display() {
-        assert_eq!(HolderBindingFormat::KeyBindingJwt.to_string(), "kb+jwt");
-        assert_eq!(
-            HolderBindingFormat::MdocDeviceSignature.to_string(),
-            "mso_mdoc"
-        );
-    }
-
-    #[test]
-    fn holder_binding_proof_trait_for_sd_jwt() {
-        use crate::oid4vp::presentation::{HolderBinding, SdJwtHolderBinding};
-
-        let binding = HolderBinding::SdJwt(SdJwtHolderBinding::new("key.binding.jwt"));
-        assert_eq!(binding.format(), HolderBindingFormat::KeyBindingJwt);
-    }
-
-    #[test]
-    fn holder_binding_proof_trait_for_mdoc() {
-        use crate::oid4vp::presentation::{HolderBinding, MdocHolderBinding};
-
-        let binding = HolderBinding::Mdoc(MdocHolderBinding::new(vec![1, 2, 3]));
-        assert_eq!(binding.format(), HolderBindingFormat::MdocDeviceSignature);
+        assert_eq!(output.nonce, "test-nonce-123");
+        assert_eq!(output.client_id, "https://verifier.example.com");
+        assert!(output.entries.contains_key("test-credential"));
     }
 }

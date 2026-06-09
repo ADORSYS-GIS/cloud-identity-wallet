@@ -6,10 +6,18 @@ use super::error::VpTokenBuilderError;
 
 pub type Result<T> = std::result::Result<T, VpTokenBuilderError>;
 
+/// Builder for constructing VP tokens from presentation strings.
+///
+/// Per Section 8.1 of OpenID4VP, the VP token is a JSON object keyed by credential
+/// query IDs, where each value is an array of presentation strings.
 #[derive(Debug, Clone)]
 pub struct VpTokenBuilder {
     entries: BTreeMap<String, Vec<String>>,
+    /// Nonce from the authorization request. Metadata-only: not serialized in vp_token.
+    /// Used by upper layers to construct holder binding proofs (e.g., KB-JWT nonce claim).
     nonce: Option<String>,
+    /// Client ID from the authorization request. Metadata-only: not serialized in vp_token.
+    /// Used by upper layers as the audience for holder binding proofs.
     client_id: Option<String>,
 }
 
@@ -118,7 +126,9 @@ fn is_valid_dcql_query_id(query_id: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct VpTokenResponse {
     pub vp_token: VpToken,
+    /// Nonce from the authorization request. Metadata-only.
     pub nonce: Option<String>,
+    /// Client ID from the authorization request. Metadata-only.
     pub client_id: Option<String>,
 }
 
@@ -292,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn nonce_embedding_verification() {
+    fn nonce_stored_as_metadata() {
         let test_nonce = "unique-nonce-12345";
         let builder = VpTokenBuilder::new(create_test_entries()).with_nonce(test_nonce);
 
@@ -303,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn audience_binding_verification() {
+    fn client_id_stored_as_metadata() {
         let test_audience = "https://verifier.example.com";
         let builder = VpTokenBuilder::new(create_test_entries()).with_client_id(test_audience);
 
