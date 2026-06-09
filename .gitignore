@@ -24,4 +24,4 @@ target/
 implementation_plans/
 
 # Kilo config (may contain secrets)
-.kilo/
+.kilo/**
