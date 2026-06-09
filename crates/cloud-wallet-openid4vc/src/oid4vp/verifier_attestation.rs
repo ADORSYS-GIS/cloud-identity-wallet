@@ -17,7 +17,7 @@ pub struct VerifierAttestationClaims {
 
     pub aud: Option<String>,
 
-    pub iat: i64,
+    pub iat: Option<i64>,
 
     pub exp: i64,
 
@@ -223,6 +223,13 @@ impl VerifierAttestationJwt {
             return Err(VerifierAttestationError::NotYetValid);
         }
 
+        // Check issued-at if present (iat should not be in the future)
+        if let Some(iat) = claims.iat
+            && iat > now
+        {
+            return Err(VerifierAttestationError::IssuedInFuture);
+        }
+
         Ok(())
     }
 
@@ -285,7 +292,6 @@ impl VerifierAttestationJwt {
     }
 
     /// Returns the Verifier's public key from the `cnf.jwk` claim.
-
     pub fn verifier_public_key(&self) -> &Jwk {
         &self.claims.cnf.jwk
     }
@@ -396,7 +402,7 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: Some("https://wallet.example.com".to_string()),
-            iat: now,
+            iat: Some(now),
             exp: now + 3600, // Valid for 1 hour
             nbf: None,
             jti: Some("test-jti".to_string()),
@@ -447,7 +453,7 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: None, // Optional
-            iat: now,
+            iat: None, // Optional - iat is now optional per spec
             exp: now + 3600,
             nbf: None, // Optional
             jti: None, // Optional
@@ -570,8 +576,8 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: None,
-            iat: now - 7200, // Issued 2 hours ago
-            exp: now - 3600, // Expired 1 hour ago
+            iat: Some(now - 7200), // Issued 2 hours ago
+            exp: now - 3600,       // Expired 1 hour ago
             nbf: None,
             jti: None,
             cnf: CnfClaim {
@@ -601,7 +607,7 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: None,
-            iat: now,
+            iat: Some(now),
             exp: now + 7200,
             nbf: Some(now + 3600), // Not valid for another hour
             jti: None,
@@ -714,7 +720,7 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: None,
-            iat: now,
+            iat: Some(now),
             exp: now + 3600,
             nbf: None,
             jti: None,
@@ -775,6 +781,9 @@ mod tests {
 
         let err = VerifierAttestationError::ResponseUriNotAllowed("https://evil.com".to_string());
         assert!(err.to_string().contains("response_uri not allowed"));
+
+        let err = VerifierAttestationError::IssuedInFuture;
+        assert!(err.to_string().contains("iat claim in the future"));
     }
 
     #[test]
@@ -794,7 +803,7 @@ mod tests {
             iss: TEST_ISSUER.to_string(),
             sub: TEST_CLIENT_ID.to_string(),
             aud: Some("https://wallet.example.com".to_string()),
-            iat: now,
+            iat: Some(now),
             exp: now + 3600,
             nbf: Some(now),
             jti: Some("test-jti".to_string()),
@@ -831,5 +840,84 @@ mod tests {
             deserialized.jwk.key,
             cloud_wallet_crypto::jwk::Key::Ec(_)
         ));
+    }
+
+    #[test]
+    fn test_issued_in_future_rejection() {
+        let keys = TestKeys::generate();
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let claims = VerifierAttestationClaims {
+            iss: TEST_ISSUER.to_string(),
+            sub: TEST_CLIENT_ID.to_string(),
+            aud: None,
+            iat: Some(now + 3600), // Issued 1 hour in the future - invalid
+            exp: now + 7200,
+            nbf: None,
+            jti: None,
+            cnf: CnfClaim {
+                jwk: keys.verifier_jwk(),
+            },
+            response_uris: None,
+            nonce: None,
+        };
+        let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP);
+        let trusted_issuers = vec![trusted_issuer(&keys)];
+
+        let result =
+            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VerifierAttestationError::IssuedInFuture
+        ));
+    }
+
+    #[test]
+    fn test_missing_cnf_claim_rejection() {
+        use jsonwebtoken::Algorithm;
+
+        let keys = TestKeys::generate();
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+
+        // Create claims without cnf by manually constructing the JWT payload
+        let claims_without_cnf = serde_json::json!({
+            "iss": TEST_ISSUER,
+            "sub": TEST_CLIENT_ID,
+            "exp": now + 3600,
+            "iat": now,
+        });
+
+        // Create a JWT without the cnf claim
+        let header = jsonwebtoken::Header {
+            typ: Some(VerifierAttestationJwt::EXPECTED_TYP.to_string()),
+            alg: Algorithm::ES256,
+            kid: None,
+            ..Default::default()
+        };
+
+        let encoding_key = keys.issuer_encoding_key();
+        let jwt = jsonwebtoken::encode(&header, &claims_without_cnf, &encoding_key)
+            .expect("failed to encode JWT");
+
+        let trusted_issuers = vec![trusted_issuer(&keys)];
+
+        // Attempt to decode and validate - should fail due to missing cnf
+        let result =
+            VerifierAttestationJwt::decode_and_validate(&jwt, TEST_CLIENT_ID, &trusted_issuers);
+
+        assert!(result.is_err());
+        // The error should be a decoding/validation error due to missing cnf
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                VerifierAttestationError::DecodingFailed(_)
+                    | VerifierAttestationError::MissingCnf(_)
+                    | VerifierAttestationError::MissingCnfJwk
+            ),
+            "Expected error due to missing cnf, got: {:?}",
+            err
+        );
     }
 }

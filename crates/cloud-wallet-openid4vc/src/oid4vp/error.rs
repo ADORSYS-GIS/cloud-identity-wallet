@@ -173,6 +173,10 @@ pub enum VerifierAttestationError {
     #[error("attestation JWT is not yet valid")]
     NotYetValid,
 
+    /// The attestation JWT has an `iat` claim in the future.
+    #[error("attestation JWT has iat claim in the future")]
+    IssuedInFuture,
+
     /// The `cnf` claim is missing or invalid.
     #[error("missing or invalid 'cnf' claim: {0}")]
     MissingCnf(String),
