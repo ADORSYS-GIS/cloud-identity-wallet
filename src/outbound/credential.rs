@@ -332,7 +332,7 @@ impl CredentialRepo for SqlCredentialRepo {
         }
 
         let (sql, values, expire_ts) = builder.build();
-        let mut query = sqlx::query_as::<_, DisplayMetadataRecord>(&sql);
+        let mut query = sqlx::query_as::<_, DisplayMetadataRecord>(sqlx::AssertSqlSafe(sql));
 
         for value in values {
             query = query.bind(value);
@@ -541,7 +541,7 @@ async fn upsert_display_metadata(
     Ok(())
 }
 
-fn upsert_display_metadata_sql(driver: &Driver) -> &str {
+fn upsert_display_metadata_sql(driver: &Driver) -> &'static str {
     match driver {
         Driver::MySql => UPSERT_DISPLAY_METADATA_MYSQL.for_driver(driver),
         Driver::Postgres | Driver::Sqlite => UPSERT_DISPLAY_METADATA_ON_CONFLICT.for_driver(driver),
