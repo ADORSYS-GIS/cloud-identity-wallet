@@ -387,7 +387,7 @@ mod tests {
             "scope": "openid",
         });
         let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"oauth-authz-req+jwt"}"#);
-        let payload_b64 = URL_SAFE_NO_PAD.encode(&payload.to_string().as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         format!("{}.{}.", header_b64, payload_b64)
     }
 
@@ -562,8 +562,8 @@ mod tests {
             "scope": "openid",
         });
         let header_json = serde_json::json!({"alg":"none","typ":"oauth-authz-req+jwt"});
-        let header_b64 = URL_SAFE_NO_PAD.encode(&header_json.to_string().as_bytes());
-        let payload_b64 = URL_SAFE_NO_PAD.encode(&payload.to_string().as_bytes());
+        let header_b64 = URL_SAFE_NO_PAD.encode(header_json.to_string().as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         let jwt = format!("{}.{}.", header_b64, payload_b64);
         let result = RequestObject::decode_unsigned(
             &jwt,
@@ -602,7 +602,7 @@ mod tests {
             "scope": "openid",
         });
         let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"wrong-type"}"#);
-        let payload_b64 = URL_SAFE_NO_PAD.encode(&payload.to_string().as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         let jwt = format!("{}.{}.", header_b64, payload_b64);
         let result = RequestObject::decode_unsigned(
             &jwt,
