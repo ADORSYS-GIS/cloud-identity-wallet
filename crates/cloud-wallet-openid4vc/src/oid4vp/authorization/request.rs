@@ -1,4 +1,3 @@
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
@@ -8,6 +7,8 @@ use crate::errors::{Error, ErrorKind, Result};
 
 // Re-export DCQL types from the dcql module
 pub use super::super::dcql::DcqlQuery;
+
+use super::super::transaction_data::TransactionData;
 
 /// An OpenID4VP Authorization Request.
 #[skip_serializing_none]
@@ -289,34 +290,25 @@ impl AuthorizationRequest {
 
     /// Validates a single transaction_data entry.
     fn validate_transaction_entry(idx: usize, entry: &str, valid_cred_ids: &[&str]) -> Result<()> {
-        // Must be a valid base64url-encoded string
-        if !is_base64url(entry) {
-            return Err(invalid_request(format!(
-                "'transaction_data[{idx}]' must be a valid base64url-encoded string"
-            )));
+        // Use TransactionData::decode for complete validation
+        let txn_data = TransactionData::decode(entry).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidTransactionData,
+                format!("'transaction_data[{idx}]' validation failed: {e}"),
+            )
+        })?;
+
+        // Validate that all credential_ids reference known credentials from the DCQL query
+        for cred_id in txn_data.credential_ids() {
+            if !valid_cred_ids.contains(&cred_id.as_str()) {
+                return Err(Error::message(
+                    ErrorKind::InvalidTransactionData,
+                    format!(
+                        "'transaction_data[{idx}]' references unknown credential id '{cred_id}'"
+                    ),
+                ));
+            }
         }
-
-        // Decode and validate the JSON structure
-        let decoded = URL_SAFE_NO_PAD.decode(entry.as_bytes()).map_err(|e| {
-            invalid_request(format!(
-                "'transaction_data[{idx}]' is not valid base64url: {e}"
-            ))
-        })?;
-
-        let json_str = String::from_utf8(decoded).map_err(|e| {
-            invalid_request(format!(
-                "'transaction_data[{idx}]' does not decode to valid UTF-8: {e}"
-            ))
-        })?;
-
-        let entry_data: TransactionDataEntry = serde_json::from_str(&json_str).map_err(|e| {
-            invalid_request(format!(
-                "'transaction_data[{idx}]' does not decode to valid TransactionDataEntry JSON: {e}"
-            ))
-        })?;
-
-        // Validate the entry structure
-        entry_data.validate(idx, valid_cred_ids)?;
 
         Ok(())
     }
@@ -354,13 +346,6 @@ impl AuthorizationRequest {
 fn is_unreserved_chars(s: &str) -> bool {
     s.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
-}
-
-/// Validates that a string is a valid base64url-encoded value (no padding, URL-safe alphabet).
-fn is_base64url(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Deserializes an [`AuthorizationRequest`] and immediately validates it.
@@ -537,73 +522,6 @@ impl VerifierAttestation {
                         "'verifier_info[{idx}].credential_ids' references unknown credential id '{id_ref}'"
                     )));
                 }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Supported transaction data types per OpenID4VP Section 8.4.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransactionDataType {
-    /// OpenID4VP transaction data type.
-    #[serde(rename = "openid4vp")]
-    Openid4vp,
-    /// Extension point for other transaction data types.
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl TransactionDataType {
-    /// Returns true if this is a supported transaction data type.
-    fn is_supported(&self) -> bool {
-        matches!(self, Self::Openid4vp)
-    }
-}
-
-impl std::fmt::Display for TransactionDataType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Openid4vp => write!(f, "openid4vp"),
-            Self::Other(s) => write!(f, "{s}"),
-        }
-    }
-}
-
-/// Transaction data entry as decoded from base64url.
-///
-/// Section 8.4 requires each entry to be base64url-decoded into a JSON object
-/// with at least `type` and a non-empty `credential_ids` array referencing DCQL credential IDs.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransactionDataEntry {
-    /// REQUIRED. The transaction data type.
-    #[serde(rename = "type")]
-    pub data_type: TransactionDataType,
-
-    pub credential_ids: Vec<String>,
-}
-
-impl TransactionDataEntry {
-    fn validate(&self, idx: usize, valid_credential_ids: &[&str]) -> Result<()> {
-        // Section 8.4: wallet must return invalid_transaction_data for unsupported types
-        if !self.data_type.is_supported() {
-            return Err(invalid_request(format!(
-                "'transaction_data[{idx}].type' '{}' is not a supported transaction data type",
-                self.data_type
-            )));
-        }
-        if self.credential_ids.is_empty() {
-            return Err(invalid_request(format!(
-                "'transaction_data[{idx}].credential_ids' must be a non-empty array"
-            )));
-        }
-        for (ci, id_ref) in self.credential_ids.iter().enumerate() {
-            if !valid_credential_ids.contains(&id_ref.as_str()) {
-                return Err(invalid_request(format!(
-                    "'transaction_data[{idx}].credential_ids[{ci}]' references unknown credential id '{id_ref}'"
-                )));
             }
         }
         Ok(())

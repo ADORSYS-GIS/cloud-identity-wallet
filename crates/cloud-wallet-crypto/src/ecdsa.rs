@@ -101,7 +101,7 @@ mod tests;
 use aws_lc_rs::signature::{self, KeyPair as _};
 use color_eyre::eyre::eyre;
 use pkcs8::{
-    self, AlgorithmIdentifierRef, ObjectIdentifier, PrivateKeyInfo, SubjectPublicKeyInfoRef,
+    self, AlgorithmIdentifierRef, ObjectIdentifier, PrivateKeyInfoRef, SubjectPublicKeyInfoRef,
 };
 
 use crate::digest::HashAlg;
@@ -327,7 +327,7 @@ impl KeyPair {
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
         use aws_lc_rs::encoding::AsDer;
 
-        let key_info = PrivateKeyInfo::try_from(der)?;
+        let key_info = PrivateKeyInfoRef::try_from(der)?;
         let curve = extract_ec_curve(&key_info)?;
 
         let spki_der = {
@@ -999,7 +999,7 @@ trait AlgIdentifier {
     fn algorithm(&self) -> AlgorithmIdentifierRef<'_>;
 }
 
-impl<'a> AlgIdentifier for PrivateKeyInfo<'a> {
+impl<'a> AlgIdentifier for PrivateKeyInfoRef<'a> {
     fn algorithm(&self) -> AlgorithmIdentifierRef<'_> {
         self.algorithm
     }
