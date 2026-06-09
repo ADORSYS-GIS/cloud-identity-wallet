@@ -424,8 +424,6 @@ mod tests {
         }
     }
 
-    // ==== TICKET-REQUIRED TESTS (7 tests) ====
-
     /// 1. Valid attestation JWT decode and validation
     #[test]
     fn test_valid_attestation_decode_and_validation() {
