@@ -13,7 +13,7 @@ pub use disclosure::Disclosure;
 pub use error::{DisclosureError, Error, ProcessingError};
 pub use hash::IanaHashAlgorithm;
 pub use jwt::Jwt;
-pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
+pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt, compute_sd_hash};
 pub use metadata::IssuerMetadataError;
 pub use verification::{VerificationError, X5cTrustAnchors};
 
