@@ -207,6 +207,14 @@ pub enum VerifierAttestationError {
     /// An error occurred during validation.
     #[error("validation error: {0}")]
     ValidationError(String),
+
+    /// The specified key ID (kid) is not found in the issuer's JWKS.
+    #[error("unknown key ID: '{0}'")]
+    UnknownKeyId(String),
+
+    /// The JWK is not a valid public key type for signature verification.
+    #[error("invalid key type for signature verification: {0}")]
+    InvalidKeyType(String),
 }
 
 #[cfg(test)]
