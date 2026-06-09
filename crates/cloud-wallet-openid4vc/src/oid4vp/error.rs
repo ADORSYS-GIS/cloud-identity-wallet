@@ -153,6 +153,70 @@ pub enum AuthorizationErrorCode {
     InvalidTransactionData,
 }
 
+/// Error type for Verifier Attestation JWT validation failures.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum VerifierAttestationError {
+    /// The JWT format is invalid or malformed.
+    #[error("invalid JWT format: {0}")]
+    InvalidFormat(String),
+
+    /// The `typ` header parameter is missing or has an unexpected value.
+    #[error("invalid 'typ' header: expected '{expected}', got '{actual}")]
+    InvalidTyp { expected: String, actual: String },
+
+    /// The issuer is not in the list of trusted attestation issuers.
+    #[error("untrusted issuer: '{0}'")]
+    UntrustedIssuer(String),
+
+    /// The `sub` claim does not match the expected client_id.
+    #[error("subject mismatch: expected '{expected}', got '{actual}'")]
+    SubjectMismatch { expected: String, actual: String },
+
+    /// The attestation JWT has expired.
+    #[error("attestation JWT has expired")]
+    Expired,
+
+    /// The attestation JWT is not yet valid (nbf claim is in the future).
+    #[error("attestation JWT is not yet valid")]
+    NotYetValid,
+
+    /// The attestation JWT has an `iat` claim in the future.
+    #[error("attestation JWT has iat claim in the future")]
+    IssuedInFuture,
+
+    /// The `cnf` claim is missing or invalid.
+    #[error("missing or invalid 'cnf' claim: {0}")]
+    MissingCnf(String),
+
+    /// The `cnf.jwk` claim is missing (required for Verifier's public key).
+    #[error("missing 'cnf.jwk' claim")]
+    MissingCnfJwk,
+
+    /// The `response_uri` is not in the allowed list (`response_uris` claim).
+    #[error("response_uri not allowed: '{0}'")]
+    ResponseUriNotAllowed(String),
+
+    /// JWT signature verification failed.
+    #[error("signature verification failed: {0}")]
+    SignatureVerificationFailed(String),
+
+    /// The JWT claims could not be decoded.
+    #[error("failed to decode JWT claims: {0}")]
+    DecodingFailed(String),
+
+    /// An error occurred during validation.
+    #[error("validation error: {0}")]
+    ValidationError(String),
+
+    /// The specified key ID (kid) is not found in the issuer's JWKS.
+    #[error("unknown key ID: '{0}'")]
+    UnknownKeyId(String),
+
+    /// The JWK is not a valid public key type for signature verification.
+    #[error("invalid key type for signature verification: {0}")]
+    InvalidKeyType(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
