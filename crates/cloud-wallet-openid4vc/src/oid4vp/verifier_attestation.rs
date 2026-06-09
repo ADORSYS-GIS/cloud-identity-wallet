@@ -27,8 +27,10 @@ pub struct VerifierAttestationClaims {
 
     pub cnf: CnfClaim,
 
-    /// Authorized response URI for this verifier.
-    pub response_uri: Option<Vec<String>>,
+    /// Authorized redirect URIs for this verifier.
+    /// The Wallet must compare the Authorization Request `redirect_uri` or `response_uri`
+    /// against this allowlist as defined in OpenID4VP Section 12.
+    pub redirect_uris: Option<Vec<String>>,
 
     pub nonce: Option<String>,
 }
@@ -319,16 +321,17 @@ impl VerifierAttestationJwt {
         Ok(())
     }
 
-    /// Validates that a response_uri is in the allowed list.
-    pub fn validate_response_uri(
-        &self,
-        response_uri: &str,
-    ) -> Result<(), VerifierAttestationError> {
-        if let Some(ref allowed_uris) = self.claims.response_uri {
+    /// Validates that a redirect_uri or response_uri is in the allowed list.
+    ///
+    /// Per OpenID4VP Section 13.3, the `response_uri` value follows the same
+    /// permission rules as `redirect_uri`. The attestation JWT contains a
+    /// `redirect_uris` allowlist that the request URI must match against.
+    pub fn validate_redirect_uri(&self, uri: &str) -> Result<(), VerifierAttestationError> {
+        if let Some(ref allowed_uris) = self.claims.redirect_uris {
             let allowed_set: HashSet<&str> = allowed_uris.iter().map(String::as_str).collect();
-            if !allowed_set.contains(response_uri) {
+            if !allowed_set.contains(uri) {
                 return Err(VerifierAttestationError::ResponseUriNotAllowed(
-                    response_uri.to_string(),
+                    uri.to_string(),
                 ));
             }
         }
@@ -360,9 +363,9 @@ impl VerifierAttestationJwt {
         &self.raw
     }
 
-    /// Returns the list of allowed response URIs, if specified.
-    pub fn allowed_response_uri(&self) -> Option<&[String]> {
-        self.claims.response_uri.as_deref()
+    /// Returns the list of allowed redirect URIs, if specified.
+    pub fn allowed_redirect_uris(&self) -> Option<&[String]> {
+        self.claims.redirect_uris.as_deref()
     }
 }
 
@@ -469,7 +472,7 @@ mod tests {
             cnf: CnfClaim {
                 jwk: keys.verifier_jwk(),
             },
-            response_uri: Some(vec![
+            redirect_uris: Some(vec![
                 "https://verifier.example.com/cb1".to_string(),
                 "https://verifier.example.com/cb2".to_string(),
             ]),
@@ -587,7 +590,7 @@ mod tests {
             cnf: CnfClaim {
                 jwk: keys.verifier_jwk(),
             },
-            response_uri: None,
+            redirect_uris: None,
             nonce: None,
         };
         let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP, None);
@@ -650,9 +653,9 @@ mod tests {
         );
     }
 
-    /// 7. `response_uri` allowlist enforcement
+    /// 7. `redirect_uris` allowlist enforcement
     #[test]
-    fn test_response_uri_allowlist_enforcement() {
+    fn test_redirect_uris_allowlist_enforcement() {
         let keys = TestKeys::generate();
         let claims = valid_claims(&keys);
         let jwt = create_test_jwt(&keys, &claims, VerifierAttestationJwt::EXPECTED_TYP, None);
@@ -665,12 +668,12 @@ mod tests {
         // Allowed URI should succeed
         assert!(
             attestation
-                .validate_response_uri("https://verifier.example.com/cb1")
+                .validate_redirect_uri("https://verifier.example.com/cb1")
                 .is_ok()
         );
 
         // Not allowed URI should fail
-        let result = attestation.validate_response_uri("https://evil.com/cb");
+        let result = attestation.validate_redirect_uri("https://evil.com/cb");
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -728,7 +731,7 @@ mod tests {
             nbf: None,
             jti: None,
             cnf: CnfClaim { jwk: symmetric_jwk },
-            response_uri: None,
+            redirect_uris: None,
             nonce: None,
         };
 
@@ -764,7 +767,7 @@ mod tests {
             nbf: None,
             jti: None,
             cnf: CnfClaim { jwk: wrong_use_jwk },
-            response_uri: None,
+            redirect_uris: None,
             nonce: None,
         };
 
@@ -800,7 +803,7 @@ mod tests {
             nbf: None,
             jti: None,
             cnf: CnfClaim { jwk: wrong_ops_jwk },
-            response_uri: None,
+            redirect_uris: None,
             nonce: None,
         };
 
