@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::oid4vp::authorization::{Presentation, VpToken};
 use crate::oid4vp::dcql::CredentialQuery;
 
-use super::error::PresentationBuilderError;
+use super::error::{PresentationBuilderError, VpTokenError};
 
 pub type Result<T> = std::result::Result<T, PresentationBuilderError>;
 
@@ -80,7 +80,48 @@ impl PresentationBuilder {
                 .push(credential.presentation);
         }
 
-        VpToken::new(entries).map_err(PresentationBuilderError::VpTokenBuild)
+        for (query_id, presentations) in &entries {
+            let query = credential_queries
+                .iter()
+                .find(|q| &q.id == query_id)
+                .expect("query already validated");
+            let allows_multiple = query.multiple.unwrap_or(false);
+            if !allows_multiple && presentations.len() > 1 {
+                return Err(PresentationBuilderError::VpToken(
+                    VpTokenError::MultiplePresentationsNotAllowed {
+                        query_id: query_id.clone(),
+                    },
+                ));
+            }
+        }
+
+        VpToken::new(entries).map_err(|e| {
+            if e.contains("at least one credential query entry") {
+                VpTokenError::Empty.into()
+            } else if e.contains("valid DCQL credential query id") {
+                VpTokenError::InvalidQueryId {
+                    query_id: extract_query_id(&e),
+                }
+                .into()
+            } else if e.contains("at least one presentation") {
+                VpTokenError::EmptyPresentationList {
+                    query_id: extract_query_id(&e),
+                }
+                .into()
+            } else {
+                VpTokenError::Empty.into()
+            }
+        })
+    }
+}
+
+fn extract_query_id(error_message: &str) -> String {
+    let start = error_message.find('\'').unwrap_or(0);
+    let end = error_message.rfind('\'').unwrap_or(error_message.len());
+    if start < end {
+        error_message[start + 1..end].to_string()
+    } else {
+        String::new()
     }
 }
 
@@ -94,6 +135,21 @@ mod tests {
             id: "test-credential".to_string(),
             format: CredentialFormat::DcSdJwt,
             multiple: None,
+            meta: CredentialMeta::SdJwt {
+                vct_values: vec!["https://example.com/credential".to_string()],
+            },
+            claims: None,
+            claim_sets: None,
+            trusted_authorities: None,
+            require_cryptographic_holder_binding: None,
+        }
+    }
+
+    fn create_test_query_with_multiple() -> CredentialQuery {
+        CredentialQuery {
+            id: "test-credential".to_string(),
+            format: CredentialFormat::DcSdJwt,
+            multiple: Some(true),
             meta: CredentialMeta::SdJwt {
                 vct_values: vec!["https://example.com/credential".to_string()],
             },
@@ -148,7 +204,7 @@ mod tests {
 
     #[test]
     fn build_vp_token_with_multiple_credentials_same_query() {
-        let query = create_test_query();
+        let query = create_test_query_with_multiple();
 
         let builder = PresentationBuilder::new()
             .add_credential(SelectedCredential::string(
@@ -165,6 +221,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.entries()["test-credential"].len(), 2);
+    }
+
+    #[test]
+    fn build_vp_token_fails_on_multiple_credentials_without_multiple_flag() {
+        let query = create_test_query();
+
+        let builder = PresentationBuilder::new()
+            .add_credential(SelectedCredential::string(
+                "test-credential",
+                "jwt1.payload.signature~",
+            ))
+            .add_credential(SelectedCredential::string(
+                "test-credential",
+                "jwt2.payload.signature~",
+            ));
+
+        let result = builder.build_vp_token(std::slice::from_ref(&query));
+
+        assert!(matches!(
+            result,
+            Err(PresentationBuilderError::VpToken(VpTokenError::MultiplePresentationsNotAllowed { query_id }))
+            if query_id == "test-credential"
+        ));
     }
 
     #[test]
