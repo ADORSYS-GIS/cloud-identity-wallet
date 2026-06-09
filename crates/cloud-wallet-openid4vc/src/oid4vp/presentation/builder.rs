@@ -10,14 +10,21 @@ pub type Result<T> = std::result::Result<T, PresentationBuilderError>;
 #[derive(Debug, Clone)]
 pub struct SelectedCredential {
     pub query_id: String,
-    pub presentation: String,
+    pub presentation: Presentation,
 }
 
 impl SelectedCredential {
-    pub fn new(query_id: impl Into<String>, presentation: impl Into<String>) -> Self {
+    pub fn new(query_id: impl Into<String>, presentation: Presentation) -> Self {
         Self {
             query_id: query_id.into(),
-            presentation: presentation.into(),
+            presentation,
+        }
+    }
+
+    pub fn string(query_id: impl Into<String>, presentation: impl Into<String>) -> Self {
+        Self {
+            query_id: query_id.into(),
+            presentation: Presentation::String(presentation.into()),
         }
     }
 }
@@ -70,47 +77,17 @@ impl PresentationBuilder {
             entries
                 .entry(credential.query_id)
                 .or_default()
-                .push(Presentation::String(credential.presentation));
+                .push(credential.presentation);
         }
 
         VpToken::new(entries).map_err(PresentationBuilderError::VpTokenBuild)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HolderBindingFormat {
-    KeyBindingJwt,
-    MdocDeviceSignature,
-}
-
-impl std::fmt::Display for HolderBindingFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::KeyBindingJwt => write!(f, "kb+jwt"),
-            Self::MdocDeviceSignature => write!(f, "mso_mdoc"),
-        }
-    }
-}
-
-pub trait HolderBindingProof {
-    fn format(&self) -> HolderBindingFormat;
-}
-
-impl HolderBindingProof for super::holder_binding::HolderBinding {
-    fn format(&self) -> HolderBindingFormat {
-        match self {
-            super::holder_binding::HolderBinding::SdJwt(_) => HolderBindingFormat::KeyBindingJwt,
-            super::holder_binding::HolderBinding::Mdoc(_) => {
-                HolderBindingFormat::MdocDeviceSignature
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta, DcqlQuery};
+    use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta};
 
     fn create_test_query() -> CredentialQuery {
         CredentialQuery {
@@ -129,13 +106,26 @@ mod tests {
 
     #[test]
     fn selected_credential_new() {
-        let credential =
-            SelectedCredential::new("test-credential", "eyJhbGciOiJFUzI1NiJ9.payload.signature~");
+        let credential = SelectedCredential::new(
+            "test-credential",
+            Presentation::String("jwt.payload.signature~".to_string()),
+        );
 
         assert_eq!(credential.query_id, "test-credential");
         assert_eq!(
             credential.presentation,
-            "eyJhbGciOiJFUzI1NiJ9.payload.signature~"
+            Presentation::String("jwt.payload.signature~".to_string())
+        );
+    }
+
+    #[test]
+    fn selected_credential_string_convenience() {
+        let credential = SelectedCredential::string("test-credential", "jwt.payload.signature~");
+
+        assert_eq!(credential.query_id, "test-credential");
+        assert_eq!(
+            credential.presentation,
+            Presentation::String("jwt.payload.signature~".to_string())
         );
     }
 
@@ -143,7 +133,7 @@ mod tests {
     fn build_vp_token_with_single_credential() {
         let query = create_test_query();
 
-        let builder = PresentationBuilder::new().add_credential(SelectedCredential::new(
+        let builder = PresentationBuilder::new().add_credential(SelectedCredential::string(
             "test-credential",
             "jwt.payload.signature~",
         ));
@@ -161,11 +151,11 @@ mod tests {
         let query = create_test_query();
 
         let builder = PresentationBuilder::new()
-            .add_credential(SelectedCredential::new(
+            .add_credential(SelectedCredential::string(
                 "test-credential",
                 "jwt1.payload.signature~",
             ))
-            .add_credential(SelectedCredential::new(
+            .add_credential(SelectedCredential::string(
                 "test-credential",
                 "jwt2.payload.signature~",
             ));
@@ -179,7 +169,7 @@ mod tests {
 
     #[test]
     fn build_vp_token_fails_on_unknown_query_id() {
-        let builder = PresentationBuilder::new().add_credential(SelectedCredential::new(
+        let builder = PresentationBuilder::new().add_credential(SelectedCredential::string(
             "unknown-query-id",
             "jwt.payload.signature",
         ));
@@ -205,27 +195,22 @@ mod tests {
     }
 
     #[test]
-    fn holder_binding_format_display() {
-        assert_eq!(HolderBindingFormat::KeyBindingJwt.to_string(), "kb+jwt");
-        assert_eq!(
-            HolderBindingFormat::MdocDeviceSignature.to_string(),
-            "mso_mdoc"
-        );
-    }
+    fn build_vp_token_with_object_presentation() {
+        let query = create_test_query();
 
-    #[test]
-    fn holder_binding_proof_trait_for_sd_jwt() {
-        use crate::oid4vp::presentation::{HolderBinding, SdJwtHolderBinding};
+        let mut presentation = serde_json::Map::new();
+        presentation.insert("format".to_string(), serde_json::json!("ldp_vp"));
 
-        let binding = HolderBinding::SdJwt(SdJwtHolderBinding::new("key.binding.jwt"));
-        assert_eq!(binding.format(), HolderBindingFormat::KeyBindingJwt);
-    }
+        let builder = PresentationBuilder::new().add_credential(SelectedCredential::new(
+            "test-credential",
+            Presentation::Object(presentation.clone()),
+        ));
 
-    #[test]
-    fn holder_binding_proof_trait_for_mdoc() {
-        use crate::oid4vp::presentation::{HolderBinding, MdocHolderBinding};
+        let result = builder
+            .build_vp_token(std::slice::from_ref(&query))
+            .unwrap();
 
-        let binding = HolderBinding::Mdoc(MdocHolderBinding::new(vec![1, 2, 3]));
-        assert_eq!(binding.format(), HolderBindingFormat::MdocDeviceSignature);
+        assert!(result.entries().contains_key("test-credential"));
+        assert_eq!(result.entries()["test-credential"].len(), 1);
     }
 }
