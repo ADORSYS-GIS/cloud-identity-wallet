@@ -21,7 +21,7 @@ pub enum PresentationBuilderError {
 /// Errors that can occur during holder binding proof creation.
 ///
 /// Used by all credential formats (SD-JWT VC, mdoc, etc.) that implement
-/// the [`PresentationCreator`](super::PresentationCreator) trait.
+/// the [`PresentationFactory`](super::PresentationFactory) trait.
 #[derive(Debug, Error)]
 pub enum ProofError {
     /// Proof signing failed (e.g., cryptographic signing error).
