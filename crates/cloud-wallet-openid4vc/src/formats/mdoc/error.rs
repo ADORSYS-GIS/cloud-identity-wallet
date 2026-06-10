@@ -7,10 +7,10 @@ pub type Result<T> = std::result::Result<T, MdocError>;
 
 /// Errors that can occur while parsing or verifying an mDoc document.
 ///
-/// Returned by [`ParsedMdoc::parse`] and [`verify_digests`].
+/// Returned by [`ParsedMdoc::parse`] and verify_digests.
 ///
 /// [`ParsedMdoc::parse`]: crate::formats::mdoc::ParsedMdoc::parse
-/// [`verify_digests`]: crate::formats::mdoc::verifier::verify_digests
+/// verify_digests crate::formats::mdoc::verifier::verify_digests
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum MdocError {
@@ -231,6 +231,18 @@ pub enum MdocError {
          (ISO 18013-5 Annex B Table B.3)"
     )]
     MissingDigitalSignatureKeyUsage,
+
+    /// The Document Signer Certificate has a Key Usage extension whose `digitalSignature`
+    /// bit is set but the extension is not marked critical.
+    ///
+    /// ISO 18013-5 Annex B Table B.3 requires the Key Usage extension to be critical so
+    /// that relying parties cannot ignore it. A non-critical extension is treated as a
+    /// structural violation distinct from the extension being absent.
+    #[error(
+        "document signer certificate Key Usage extension must be critical \
+         (ISO 18013-5 Annex B Table B.3)"
+    )]
+    NonCriticalKeyUsage,
 
     /// The certificate chain could not be validated against a trusted IACA root.
     ///
