@@ -243,6 +243,18 @@ pub enum RequestUriError {
     /// Failed to serialize wallet metadata.
     #[error("failed to serialize wallet metadata: {0}")]
     Serialization(String),
+
+    /// The wallet_nonce in the response does not match the expected value.
+    #[error("wallet_nonce mismatch: expected '{expected}', got '{actual}'")]
+    WalletNonceMismatch { expected: String, actual: String },
+
+    /// Validation error occurred.
+    #[error("validation error: {0}")]
+    ValidationError(String),
+
+    /// Failed to decode data.
+    #[error("decoding failed: {0}")]
+    DecodingFailed(String),
 }
 
 #[cfg(test)]

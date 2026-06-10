@@ -1,7 +1,7 @@
 use crate::oid4vp::RequestUriError;
 use crate::oid4vp::authorization::RequestUriMethod;
-use crate::oid4vp::error::AuthorizationErrorResponse;
 use crate::oid4vp::metadata::wallet::WalletPresentationMetadata;
+use base64::Engine;
 use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use reqwest_middleware::ClientWithMiddleware;
@@ -14,39 +14,26 @@ pub const OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE: &str = "application/oauth-authz-req+
 /// Content type for form-urlencoded requests.
 pub const FORM_URLENCODED_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 
-/// Response from the Request URI endpoint.
+/// Response from the Request URI endpoint containing the Request Object JWT.
 ///
 /// Per [OpenID4VP Section 5.10.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.1),
 /// a successful response returns the Request Object as a JWT with content type
 /// `application/oauth-authz-req+jwt`.
-///
-/// Per [OpenID4VP Section 5.10.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.2),
-/// an error response returns an OAuth 2.0 error with content type `application/json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RequestUriResponse {
-    /// Successful response containing the Request Object JWT.
-    Success(String),
-    /// Error response containing the authorization error.
-    Error(AuthorizationErrorResponse),
+pub struct RequestUriResponse {
+    /// The Request Object as a JWT string.
+    pub jwt: String,
 }
 
 impl RequestUriResponse {
-    /// Returns the JWT if the response is successful, or an error if it's an authorization error.
-    pub fn into_jwt(self) -> Result<String, AuthorizationErrorResponse> {
-        match self {
-            RequestUriResponse::Success(jwt) => Ok(jwt),
-            RequestUriResponse::Error(err) => Err(err),
-        }
+    /// Creates a new RequestUriResponse with the given JWT.
+    pub fn new(jwt: impl Into<String>) -> Self {
+        Self { jwt: jwt.into() }
     }
 
-    /// Returns true if this is a successful response.
-    pub fn is_success(&self) -> bool {
-        matches!(self, RequestUriResponse::Success(_))
-    }
-
-    /// Returns true if this is an error response.
-    pub fn is_error(&self) -> bool {
-        matches!(self, RequestUriResponse::Error(_))
+    /// Returns the JWT string.
+    pub fn into_jwt(self) -> String {
+        self.jwt
     }
 }
 
@@ -54,13 +41,10 @@ impl RequestUriResponse {
 ///
 /// Per [OpenID4VP Section 5.10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10),
 /// the POST body includes:
-/// - `client_id`: REQUIRED. The client_id of the Wallet
 /// - `wallet_metadata`: OPTIONAL. JSON-encoded wallet capabilities
 /// - `wallet_nonce`: OPTIONAL. Nonce for replay attack mitigation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RequestUriPostParams {
-    /// The client_id of the Wallet (REQUIRED per Section 5.10).
-    client_id: String,
     /// JSON-encoded wallet metadata (optional per Section 5.10).
     #[serde(skip_serializing_if = "Option::is_none")]
     wallet_metadata: Option<String>,
@@ -70,10 +54,14 @@ struct RequestUriPostParams {
 }
 
 /// Resolves a Request URI using HTTP GET.
+///
+/// Per [OpenID4VP Section 5.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.1),
+/// sends an HTTP GET request to the `request_uri` endpoint and returns the
+/// Request Object JWT on success.
 pub async fn resolve_request_uri_get(
     client: &ClientWithMiddleware,
     uri: &Url,
-) -> Result<RequestUriResponse, RequestUriError> {
+) -> Result<String, RequestUriError> {
     validate_https_scheme(uri)?;
 
     let response = client
@@ -90,30 +78,28 @@ pub async fn resolve_request_uri_get(
 ///
 /// Per [OpenID4VP Section 5.10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10),
 /// the Wallet sends an HTTP POST request to the `request_uri` endpoint with:
-/// - `client_id`: REQUIRED. The client_id of the Wallet
 /// - `wallet_metadata`: OPTIONAL. JSON-encoded wallet capabilities
 /// - `wallet_nonce`: OPTIONAL. Nonce for replay attack mitigation
+///
+/// Per Section 5.10.1, if a `wallet_nonce` was sent in the request, the Wallet
+/// MUST validate that the returned Request Object contains the same nonce in
+/// the `wallet_nonce` claim.
 pub async fn resolve_request_uri_post(
     client: &ClientWithMiddleware,
     uri: &Url,
-    client_id: &str,
-    wallet_metadata: Option<&WalletPresentationMetadata>,
+    wallet_metadata: &WalletPresentationMetadata,
     wallet_nonce: Option<&str>,
-) -> Result<RequestUriResponse, RequestUriError> {
+) -> Result<String, RequestUriError> {
     validate_https_scheme(uri)?;
 
-    // Serialize wallet metadata to JSON if provided
-    let wallet_metadata_json = wallet_metadata
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|e| {
-            RequestUriError::Serialization(format!("failed to serialize wallet_metadata: {e}"))
-        })?;
+    // Serialize wallet metadata to JSON
+    let wallet_metadata_json = serde_json::to_string(wallet_metadata).map_err(|e| {
+        RequestUriError::Serialization(format!("failed to serialize wallet_metadata: {e}"))
+    })?;
 
     // Build POST parameters
     let params = RequestUriPostParams {
-        client_id: client_id.to_string(),
-        wallet_metadata: wallet_metadata_json,
+        wallet_metadata: Some(wallet_metadata_json),
         wallet_nonce: wallet_nonce.map(String::from),
     };
 
@@ -131,36 +117,87 @@ pub async fn resolve_request_uri_post(
         .await
         .map_err(|e| RequestUriError::Transport(e.to_string()))?;
 
-    handle_response(response).await
+    let jwt = handle_response(response).await?;
+
+    // If a wallet_nonce was sent, validate it in the response
+    if let Some(expected_nonce) = wallet_nonce {
+        validate_wallet_nonce(&jwt, expected_nonce)?;
+    }
+
+    Ok(jwt)
 }
 
 /// Resolves a Request URI using the specified method.
+///
+/// Dispatches to GET or POST based on the `method` parameter. Defaults to GET
+/// if the method is not specified differently.
 pub async fn resolve_request_uri(
     client: &ClientWithMiddleware,
     uri: &Url,
     method: RequestUriMethod,
-    client_id: Option<&str>,
-    wallet_metadata: Option<&WalletPresentationMetadata>,
-    wallet_nonce: Option<&str>,
-) -> Result<RequestUriResponse, RequestUriError> {
+    wallet_metadata: &Option<WalletPresentationMetadata>,
+) -> Result<String, RequestUriError> {
     match method {
         RequestUriMethod::Get => resolve_request_uri_get(client, uri).await,
         RequestUriMethod::Post => {
-            let cid = client_id.ok_or_else(|| {
-                RequestUriError::Serialization(
-                    "client_id is required for POST method per Section 5.10".to_string(),
+            // For POST, wallet_metadata is required per the spec workflow
+            let metadata = wallet_metadata.as_ref().ok_or_else(|| {
+                RequestUriError::ValidationError(
+                    "wallet_metadata is required for POST method".to_string(),
                 )
             })?;
-            resolve_request_uri_post(client, uri, cid, wallet_metadata, wallet_nonce).await
+
+            resolve_request_uri_post_without_nonce(client, uri, metadata).await
         }
     }
 }
 
+/// Internal POST implementation without nonce validation for use by resolve_request_uri.
+/// This is needed because resolve_request_uri doesn't have access to the wallet_nonce parameter
+/// per the ticket specification.
+async fn resolve_request_uri_post_without_nonce(
+    client: &ClientWithMiddleware,
+    uri: &Url,
+    wallet_metadata: &WalletPresentationMetadata,
+) -> Result<String, RequestUriError> {
+    validate_https_scheme(uri)?;
+
+    let wallet_metadata_json = serde_json::to_string(wallet_metadata).map_err(|e| {
+        RequestUriError::Serialization(format!("failed to serialize wallet_metadata: {e}"))
+    })?;
+
+    let params = RequestUriPostParams {
+        wallet_metadata: Some(wallet_metadata_json),
+        wallet_nonce: None,
+    };
+
+    let form_body = serde_urlencoded::to_string(&params).map_err(|e| {
+        RequestUriError::Serialization(format!("failed to serialize form parameters: {e}"))
+    })?;
+
+    let response = client
+        .post(uri.as_str())
+        .header(CONTENT_TYPE, FORM_URLENCODED_CONTENT_TYPE)
+        .header(ACCEPT, OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE)
+        .body(form_body)
+        .send()
+        .await
+        .map_err(|e| RequestUriError::Transport(e.to_string()))?;
+
+    handle_response(response).await
+}
+
 /// Validates that the URL uses HTTPS scheme.
+///
+/// Per [OpenID4VP Section 5.10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10),
+/// the POST request "MUST use the HTTP POST method with the https scheme".
 fn validate_https_scheme(uri: &Url) -> Result<(), RequestUriError> {
-    // Allow HTTP for localhost in tests
-    if uri.scheme() == "http" && is_localhost(uri) {
-        return Ok(());
+    #[cfg(test)]
+    {
+        // Allow HTTP for localhost in tests
+        if uri.scheme() == "http" && is_localhost(uri) {
+            return Ok(());
+        }
     }
     if uri.scheme() != "https" {
         return Err(RequestUriError::InvalidScheme);
@@ -169,6 +206,7 @@ fn validate_https_scheme(uri: &Url) -> Result<(), RequestUriError> {
 }
 
 /// Check if the URL is for a localhost/loopback address (for testing).
+#[cfg(test)]
 fn is_localhost(uri: &Url) -> bool {
     let host = uri.host_str().unwrap_or("");
     host == "localhost" || host == "127.0.0.1" || host == "::1" || host.starts_with("127.")
@@ -176,11 +214,12 @@ fn is_localhost(uri: &Url) -> bool {
 
 /// Handles the HTTP response, validating status code and content type.
 ///
+/// Per [OpenID4VP Section 5.10.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.2),
+/// if the Verifier responds with any HTTP error response, the Wallet MUST
+/// terminate the process. This function returns an error for any non-200 status.
+///
 /// Returns the JWT string on success (HTTP 200 with correct content type).
-/// Returns `AuthorizationError` variant if the Verifier returns an OAuth 2.0 error response.
-async fn handle_response(
-    response: reqwest::Response,
-) -> Result<RequestUriResponse, RequestUriError> {
+async fn handle_response(response: reqwest::Response) -> Result<String, RequestUriError> {
     let status = response.status();
 
     // Extract content type before consuming response
@@ -201,13 +240,8 @@ async fn handle_response(
         .await
         .map_err(|e| RequestUriError::Transport(format!("failed to read response body: {e}")))?;
 
-    // Handle non-success status codes
+    // Per Section 5.10.2: HTTP error responses MUST terminate the process
     if status != StatusCode::OK {
-        // Try to parse as authorization error response
-        if let Ok(auth_error) = serde_json::from_str::<AuthorizationErrorResponse>(&body) {
-            return Ok(RequestUriResponse::Error(auth_error));
-        }
-
         return Err(RequestUriError::HttpError {
             status: status.as_u16(),
             body,
@@ -222,7 +256,54 @@ async fn handle_response(
         });
     }
 
-    Ok(RequestUriResponse::Success(body.trim().to_string()))
+    Ok(body.trim().to_string())
+}
+
+/// Validates that the wallet_nonce claim in the JWT matches the expected value.
+///
+/// Per [OpenID4VP Section 5.10.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.1),
+/// if the Wallet passed a wallet_nonce in the POST request, the Wallet MUST
+/// validate whether the request object contains the respective nonce value
+/// in a wallet_nonce claim.
+fn validate_wallet_nonce(jwt: &str, expected_nonce: &str) -> Result<(), RequestUriError> {
+    // Parse the JWT payload (middle segment)
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() < 2 {
+        return Err(RequestUriError::DecodingFailed(
+            "invalid JWT format: expected at least 2 segments".to_string(),
+        ));
+    }
+
+    // Decode the payload (base64url encoded)
+    let payload_b64 = parts[1];
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .map_err(|e| {
+            RequestUriError::DecodingFailed(format!("failed to decode JWT payload: {e}"))
+        })?;
+
+    // Parse as JSON
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        RequestUriError::DecodingFailed(format!("failed to parse JWT payload: {e}"))
+    })?;
+
+    // Extract the wallet_nonce claim
+    let actual_nonce = payload
+        .get("wallet_nonce")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RequestUriError::WalletNonceMismatch {
+            expected: expected_nonce.to_string(),
+            actual: "missing".to_string(),
+        })?;
+
+    if actual_nonce != expected_nonce {
+        return Err(RequestUriError::WalletNonceMismatch {
+            expected: expected_nonce.to_string(),
+            actual: actual_nonce.to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -292,19 +373,42 @@ mod tests {
         WalletPresentationMetadata::new(as_metadata, vp_formats)
     }
 
-    fn create_test_jwt() -> String {
-        // A dummy JWT for testing (header.payload.signature)
-        "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJ4NTA5X3Nhbl9kbnM6Y2xpZW50LmV4YW1wbGUub3JnIiwicmVzcG9uc2VfdHlwZSI6InZwX3Rva2VuIiwibm9uY2UiOiJ0ZXN0LW5vbmNlIn0.signature".to_string()
+    /// Create a test JWT with a wallet_nonce claim in the payload.
+    fn create_test_jwt_with_nonce(nonce: &str) -> String {
+        // Header: {"alg":"ES256","typ":"oauth-authz-req+jwt"}
+        let header = "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ";
+        // Payload with the specified nonce
+        let payload_obj = json!({
+            "client_id": "x509_san_dns:client.example.org",
+            "response_type": "vp_token",
+            "wallet_nonce": nonce
+        });
+        let payload_bytes = serde_json::to_vec(&payload_obj).unwrap();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_bytes);
+        let signature = "signature";
+        format!("{}.{}.{}", header, payload, signature)
+    }
+
+    /// Create a test JWT without a wallet_nonce claim.
+    fn create_test_jwt_without_nonce() -> String {
+        // Header: {"alg":"ES256","typ":"oauth-authz-req+jwt"}
+        let header = "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ";
+        // Payload without wallet_nonce
+        let payload_obj = json!({
+            "client_id": "x509_san_dns:client.example.org",
+            "response_type": "vp_token"
+        });
+        let payload_bytes = serde_json::to_vec(&payload_obj).unwrap();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_bytes);
+        let signature = "signature";
+        format!("{}.{}.{}", header, payload, signature)
     }
 
     #[tokio::test]
     async fn test_resolve_request_uri_get_success() {
         let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
+        let jwt = create_test_jwt_without_nonce();
 
-        // Build HTTP response directly with proper content-type
-        // Wiremock's ResponseTemplate sets text/plain for string bodies, so we use
-        // a custom response transform
         let mock_response = ResponseTemplate::new(200)
             .set_body_bytes(jwt.clone().into_bytes())
             .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE);
@@ -321,9 +425,7 @@ mod tests {
         let result = resolve_request_uri_get(&client, &uri).await;
 
         assert!(result.is_ok(), "Expected Ok but got {:?}", result);
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
+        assert_eq!(result.unwrap(), jwt);
     }
 
     #[tokio::test]
@@ -335,7 +437,7 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("Content-Type", "application/json")
-                    .set_body_string(create_test_jwt()),
+                    .set_body_string(create_test_jwt_without_nonce()),
             )
             .mount(&mock_server)
             .await;
@@ -353,7 +455,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_request_uri_get_http_error() {
+    async fn test_resolve_request_uri_get_http_error_terminates() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -366,6 +468,7 @@ mod tests {
 
         let result = resolve_request_uri_get(&client, &uri).await;
 
+        // Per Section 5.10.2, HTTP errors MUST terminate (return Err)
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -390,45 +493,9 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_request_uri_post_success() {
         let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
         let wallet_metadata = create_test_wallet_metadata();
         let wallet_nonce = "test-nonce-123";
-        let client_id = "wallet.example.com";
-
-        Mock::given(method("POST"))
-            .and(path("/request"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_bytes(jwt.clone().into_bytes())
-                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let client = create_test_client();
-        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
-
-        let result = resolve_request_uri_post(
-            &client,
-            &uri,
-            client_id,
-            Some(&wallet_metadata),
-            Some(wallet_nonce),
-        )
-        .await;
-
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
-    }
-
-    #[tokio::test]
-    async fn test_resolve_request_uri_post_without_nonce() {
-        let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
-        let wallet_metadata = create_test_wallet_metadata();
-        let client_id = "wallet.example.com";
+        let jwt = create_test_jwt_with_nonce(wallet_nonce);
 
         Mock::given(method("POST"))
             .and(path("/request"))
@@ -444,25 +511,109 @@ mod tests {
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
         let result =
-            resolve_request_uri_post(&client, &uri, client_id, Some(&wallet_metadata), None).await;
+            resolve_request_uri_post(&client, &uri, &wallet_metadata, Some(wallet_nonce)).await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
+        assert_eq!(result.unwrap(), jwt);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_uri_post_without_nonce() {
+        let mock_server = MockServer::start().await;
+        let wallet_metadata = create_test_wallet_metadata();
+        let jwt = create_test_jwt_without_nonce();
+
+        Mock::given(method("POST"))
+            .and(path("/request"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jwt.clone().into_bytes())
+                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client();
+        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
+
+        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), jwt);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_uri_post_nonce_mismatch() {
+        let mock_server = MockServer::start().await;
+        let wallet_metadata = create_test_wallet_metadata();
+        let sent_nonce = "sent-nonce-123";
+        let returned_nonce = "different-nonce";
+        let jwt = create_test_jwt_with_nonce(returned_nonce);
+
+        Mock::given(method("POST"))
+            .and(path("/request"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jwt.clone().into_bytes())
+                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client();
+        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
+
+        let result =
+            resolve_request_uri_post(&client, &uri, &wallet_metadata, Some(sent_nonce)).await;
+
+        // Should fail because nonce doesn't match
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestUriError::WalletNonceMismatch { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_uri_post_missing_nonce_claim() {
+        let mock_server = MockServer::start().await;
+        let wallet_metadata = create_test_wallet_metadata();
+        let jwt = create_test_jwt_without_nonce();
+
+        Mock::given(method("POST"))
+            .and(path("/request"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jwt.clone().into_bytes())
+                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client();
+        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
+
+        let result =
+            resolve_request_uri_post(&client, &uri, &wallet_metadata, Some("expected-nonce")).await;
+
+        // Should fail because wallet_nonce claim is missing
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestUriError::WalletNonceMismatch { .. }
+        ));
     }
 
     #[tokio::test]
     async fn test_resolve_request_uri_post_invalid_content_type() {
         let mock_server = MockServer::start().await;
         let wallet_metadata = create_test_wallet_metadata();
-        let client_id = "wallet.example.com";
 
         Mock::given(method("POST"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("Content-Type", "text/plain")
-                    .set_body_string(create_test_jwt()),
+                    .set_body_string(create_test_jwt_without_nonce()),
             )
             .mount(&mock_server)
             .await;
@@ -470,8 +621,7 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result =
-            resolve_request_uri_post(&client, &uri, client_id, Some(&wallet_metadata), None).await;
+        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -481,10 +631,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_request_uri_post_http_error() {
+    async fn test_resolve_request_uri_post_http_error_terminates() {
         let mock_server = MockServer::start().await;
         let wallet_metadata = create_test_wallet_metadata();
-        let client_id = "wallet.example.com";
 
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(400).set_body_string("Bad Request"))
@@ -494,9 +643,9 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result =
-            resolve_request_uri_post(&client, &uri, client_id, Some(&wallet_metadata), None).await;
+        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
 
+        // Per Section 5.10.2, HTTP errors MUST terminate (return Err)
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -505,45 +654,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_request_uri_post_authorization_error() {
-        let mock_server = MockServer::start().await;
-        let wallet_metadata = create_test_wallet_metadata();
-        let client_id = "wallet.example.com";
-        let error_response = json!({
-            "error": "invalid_request",
-            "error_description": "Missing required parameter"
-        });
-
-        Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(400)
-                    .insert_header("Content-Type", "application/json")
-                    .set_body_string(error_response.to_string()),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let client = create_test_client();
-        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
-
-        let result =
-            resolve_request_uri_post(&client, &uri, client_id, Some(&wallet_metadata), None).await;
-
-        // Authorization errors are now returned as Ok(RequestUriResponse::Error)
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_error());
-    }
-
-    #[tokio::test]
     async fn test_resolve_request_uri_post_invalid_scheme() {
         let client = create_test_client();
         let uri = Url::parse("http://example.com/request").unwrap();
         let wallet_metadata = create_test_wallet_metadata();
-        let client_id = "wallet.example.com";
 
-        let result =
-            resolve_request_uri_post(&client, &uri, client_id, Some(&wallet_metadata), None).await;
+        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -555,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_request_uri_dispatch_get() {
         let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
+        let jwt = create_test_jwt_without_nonce();
 
         Mock::given(method("GET"))
             .and(path("/request"))
@@ -570,21 +686,17 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result =
-            resolve_request_uri(&client, &uri, RequestUriMethod::Get, None, None, None).await;
+        let result = resolve_request_uri(&client, &uri, RequestUriMethod::Get, &None).await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
+        assert_eq!(result.unwrap(), jwt);
     }
 
     #[tokio::test]
     async fn test_resolve_request_uri_dispatch_post() {
         let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
         let wallet_metadata = create_test_wallet_metadata();
-        let client_id = "wallet.example.com";
+        let jwt = create_test_jwt_without_nonce();
 
         Mock::given(method("POST"))
             .and(path("/request"))
@@ -603,61 +715,26 @@ mod tests {
             &client,
             &uri,
             RequestUriMethod::Post,
-            Some(client_id),
-            Some(&wallet_metadata),
-            None,
+            &Some(wallet_metadata),
         )
         .await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
+        assert_eq!(result.unwrap(), jwt);
     }
 
     #[tokio::test]
-    async fn test_resolve_request_uri_post_missing_client_id() {
+    async fn test_resolve_request_uri_post_missing_wallet_metadata() {
         let client = create_test_client();
         let uri = Url::parse("https://example.com/request").unwrap();
 
-        let result =
-            resolve_request_uri(&client, &uri, RequestUriMethod::Post, None, None, None).await;
+        let result = resolve_request_uri(&client, &uri, RequestUriMethod::Post, &None).await;
 
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            RequestUriError::Serialization(_)
+            RequestUriError::ValidationError(_)
         ));
-    }
-
-    #[tokio::test]
-    async fn test_resolve_request_uri_post_minimal_with_only_client_id() {
-        // Per Section 5.10, only client_id is REQUIRED
-        // wallet_metadata and wallet_nonce are OPTIONAL
-        let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
-        let client_id = "wallet.example.com";
-
-        Mock::given(method("POST"))
-            .and(path("/request"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_bytes(jwt.clone().into_bytes())
-                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let client = create_test_client();
-        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
-
-        // POST with only client_id (no wallet_metadata, no wallet_nonce)
-        let result = resolve_request_uri_post(&client, &uri, client_id, None, None).await;
-
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
     }
 
     #[test]
@@ -716,15 +793,13 @@ mod tests {
 
         // Body is returned as-is; JWT validation happens at higher layer
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), body_content);
+        assert_eq!(result.unwrap(), body_content);
     }
 
     #[tokio::test]
     async fn test_content_type_with_charset() {
         let mock_server = MockServer::start().await;
-        let jwt = create_test_jwt();
+        let jwt = create_test_jwt_without_nonce();
 
         Mock::given(method("GET"))
             .and(path("/request"))
@@ -745,28 +820,53 @@ mod tests {
         let result = resolve_request_uri_get(&client, &uri).await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert!(response.is_success());
-        assert_eq!(response.into_jwt().unwrap(), jwt);
+        assert_eq!(result.unwrap(), jwt);
     }
 
     #[test]
-    fn test_request_uri_error_display() {
-        let error = RequestUriError::InvalidScheme;
-        assert!(error.to_string().contains("HTTPS"));
+    fn test_request_uri_response_struct() {
+        let jwt = "test.jwt.string";
+        let response = RequestUriResponse::new(jwt);
+        assert_eq!(response.jwt, jwt);
+        assert_eq!(response.into_jwt(), jwt);
+    }
 
-        let error = RequestUriError::InvalidContentType {
-            expected: "expected-type".to_string(),
-            actual: "actual-type".to_string(),
-        };
-        assert!(error.to_string().contains("expected-type"));
-        assert!(error.to_string().contains("actual-type"));
+    #[test]
+    fn test_validate_wallet_nonce_success() {
+        let nonce = "test-nonce-123";
+        let jwt = create_test_jwt_with_nonce(nonce);
+        assert!(validate_wallet_nonce(&jwt, nonce).is_ok());
+    }
 
-        let error = RequestUriError::HttpError {
-            status: 500,
-            body: "error body".to_string(),
-        };
-        assert!(error.to_string().contains("500"));
-        assert!(error.to_string().contains("error body"));
+    #[test]
+    fn test_validate_wallet_nonce_mismatch() {
+        let jwt = create_test_jwt_with_nonce("actual-nonce");
+        let result = validate_wallet_nonce(&jwt, "expected-nonce");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestUriError::WalletNonceMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_wallet_nonce_missing() {
+        let jwt = create_test_jwt_without_nonce();
+        let result = validate_wallet_nonce(&jwt, "expected-nonce");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestUriError::WalletNonceMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_wallet_nonce_invalid_jwt() {
+        let result = validate_wallet_nonce("invalid-jwt", "nonce");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestUriError::DecodingFailed(_)
+        ));
     }
 }
