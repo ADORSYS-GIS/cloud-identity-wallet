@@ -58,7 +58,6 @@ fn build_issuer_signed_full(
     mso_version: &str,
     item_random: Option<Vec<u8>>,
 ) -> String {
-    // IssuerSignedItem
     let item = {
         let mut fields = vec![(Value::Text("digestID".into()), Value::Integer(0u64.into()))];
         if let Some(random_bytes) = item_random {
@@ -74,52 +73,14 @@ fn build_issuer_signed_full(
         ));
         Value::Map(fields)
     };
-    let item_bytes = cbor(&item);
-    // #6.24(bstr) IssuerSignedItemBytes
-    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(item_bytes)));
-
-    // MobileSecurityObject
-    let device_key = dummy_device_key();
-
-    let mso = Value::Map(vec![
-        (
-            Value::Text("version".into()),
-            Value::Text(mso_version.into()),
-        ),
-        (
-            Value::Text("digestAlgorithm".into()),
-            Value::Text(digest_algorithm.into()),
-        ),
-        (Value::Text("valueDigests".into()), value_digests),
-        (
-            Value::Text("deviceKeyInfo".into()),
-            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
-        ),
-        (
-            Value::Text("docType".into()),
-            Value::Text("org.iso.18013.5.1.mDL".into()),
-        ),
-        (
-            Value::Text("validityInfo".into()),
-            Value::Map(vec![
-                (
-                    Value::Text("signed".into()),
-                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validFrom".into()),
-                    Value::Tag(0, Box::new(Value::Text(valid_from_str.into()))),
-                ),
-                (
-                    Value::Text("validUntil".into()),
-                    Value::Tag(0, Box::new(Value::Text(valid_until_str.into()))),
-                ),
-            ]),
-        ),
-    ]);
-
-    let mso_bytes = cbor(&mso);
-    // {1: -7} (ES256): a1 01 26
+    let item_tag24 = Value::Tag(24, Box::new(Value::Bytes(cbor(&item))));
+    let mso_bytes = build_mso(
+        mso_version,
+        digest_algorithm,
+        value_digests,
+        valid_from_str,
+        valid_until_str,
+    );
     let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
     let name_spaces = Value::Map(vec![(
         Value::Text("org.iso.18013.5.1".into()),
@@ -469,7 +430,7 @@ fn item_tag24_and_digest(
 /// Dummy P-256 COSE_Key used where no device-key verification is performed.
 fn dummy_device_key() -> Value {
     Value::Map(vec![
-        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),    // kty: EC2
+        (Value::Integer(1i64.into()), Value::Integer(2i64.into())), // kty: EC2
         (Value::Integer((-1i64).into()), Value::Integer(1i64.into())), // crv: P-256
         (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])), // x
         (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])), // y
@@ -542,7 +503,7 @@ fn dummy_cose1(mso_bytes: Vec<u8>, protected_header: Vec<u8>) -> Value {
         18,
         Box::new(Value::Array(vec![
             Value::Bytes(protected_header),
-            Value::Map(vec![]),          // empty unprotected header
+            Value::Map(vec![]), // empty unprotected header
             Value::Bytes(mso_payload),
             Value::Bytes(vec![0u8; 64]), // dummy signature
         ])),
@@ -559,41 +520,28 @@ fn issuer_signed_b64(name_spaces: Value, issuer_auth: Value) -> String {
     Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
 }
 
-// ── Per-test fixture builders ────────────────────────────────────────────────
-
-/// Builds a complete `IssuerSigned` base64url string whose `valueDigests` entries
-/// are the real hashes (using `alg`) of the corresponding `#6.24` item encodings.
+/// Builds the raw CBOR bytes of a `MobileSecurityObject` map.
 ///
-/// The single item has `digestID = 0`, `elementIdentifier = "family_name"`,
-/// `elementValue = "Doe"`.
-fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> String {
-    let (item_tag24_bytes, digest_bytes) = item_tag24_and_digest(0, "family_name", "Doe", alg);
-
-    // Reconstruct the #6.24 value for embedding in nameSpaces.
-    let item_tag24_val: Value =
-        ciborium::de::from_reader(item_tag24_bytes.as_slice()).expect("round-trip must succeed");
-
-    let device_key = dummy_device_key();
-
+/// Hardcodes: `docType = "org.iso.18013.5.1.mDL"`, `deviceKey = dummy_device_key()`,
+/// `signed = "1999-01-01T00:00:00Z"`. Pass the result directly to `dummy_cose1` or
+/// `signed_cose1` as `mso_bytes`.
+fn build_mso(
+    version: &str,
+    digest_alg: &str,
+    value_digests: Value,
+    valid_from: &str,
+    valid_until: &str,
+) -> Vec<u8> {
     let mso = Value::Map(vec![
-        (Value::Text("version".into()), Value::Text("1.0".into())),
+        (Value::Text("version".into()), Value::Text(version.into())),
         (
             Value::Text("digestAlgorithm".into()),
-            Value::Text(alg_str.into()),
+            Value::Text(digest_alg.into()),
         ),
-        (
-            Value::Text("valueDigests".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Map(vec![(
-                    Value::Integer(0u64.into()),
-                    Value::Bytes(digest_bytes),
-                )]),
-            )]),
-        ),
+        (Value::Text("valueDigests".into()), value_digests),
         (
             Value::Text("deviceKeyInfo".into()),
-            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
+            Value::Map(vec![(Value::Text("deviceKey".into()), dummy_device_key())]),
         ),
         (
             Value::Text("docType".into()),
@@ -608,17 +556,43 @@ fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> 
                 ),
                 (
                     Value::Text("validFrom".into()),
-                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
+                    Value::Tag(0, Box::new(Value::Text(valid_from.into()))),
                 ),
                 (
                     Value::Text("validUntil".into()),
-                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
+                    Value::Tag(0, Box::new(Value::Text(valid_until.into()))),
                 ),
             ]),
         ),
     ]);
+    cbor(&mso)
+}
 
-    let mso_bytes = cbor(&mso);
+// ── Per-test fixture builders ────────────────────────────────────────────────
+
+/// Builds a complete `IssuerSigned` base64url string whose `valueDigests` entries
+/// are the real hashes (using `alg`) of the corresponding `#6.24` item encodings.
+///
+/// The single item has `digestID = 0`, `elementIdentifier = "family_name"`,
+/// `elementValue = "Doe"`.
+fn build_issuer_signed_with_correct_digests_for(alg: HashAlg, alg_str: &str) -> String {
+    let (item_tag24_bytes, digest_bytes) = item_tag24_and_digest(0, "family_name", "Doe", alg);
+    let item_tag24_val: Value =
+        ciborium::de::from_reader(item_tag24_bytes.as_slice()).expect("round-trip must succeed");
+    let value_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![(
+            Value::Integer(0u64.into()),
+            Value::Bytes(digest_bytes),
+        )]),
+    )]);
+    let mso_bytes = build_mso(
+        "1.0",
+        alg_str,
+        value_digests,
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+    );
     let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
     let name_spaces = Value::Map(vec![(
         Value::Text("org.iso.18013.5.1".into()),
@@ -646,83 +620,30 @@ fn build_two_item_mdoc() -> String {
     let alg = HashAlg::Sha256;
     let (bytes0, digest0) = item_tag24_and_digest(0, "family_name", "Doe", alg);
     let (bytes1, digest1) = item_tag24_and_digest(1, "given_name", "John", alg);
-
     let val0: Value =
         ciborium::de::from_reader(bytes0.as_slice()).expect("round-trip must succeed");
     let val1: Value =
         ciborium::de::from_reader(bytes1.as_slice()).expect("round-trip must succeed");
-
-    let device_key = Value::Map(vec![
-        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
-        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
-        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])),
-        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])),
-    ]);
-    let mso = Value::Map(vec![
-        (Value::Text("version".into()), Value::Text("1.0".into())),
-        (
-            Value::Text("digestAlgorithm".into()),
-            Value::Text("SHA-256".into()),
-        ),
-        (
-            Value::Text("valueDigests".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Map(vec![
-                    (Value::Integer(0u64.into()), Value::Bytes(digest0)),
-                    (Value::Integer(1u64.into()), Value::Bytes(digest1)),
-                ]),
-            )]),
-        ),
-        (
-            Value::Text("deviceKeyInfo".into()),
-            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
-        ),
-        (
-            Value::Text("docType".into()),
-            Value::Text("org.iso.18013.5.1.mDL".into()),
-        ),
-        (
-            Value::Text("validityInfo".into()),
-            Value::Map(vec![
-                (
-                    Value::Text("signed".into()),
-                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validFrom".into()),
-                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validUntil".into()),
-                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
-                ),
-            ]),
-        ),
-    ]);
-    let mso_bytes = cbor(&mso);
-    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
-    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
-    let cose_sign1 = Value::Array(vec![
-        Value::Bytes(protected_header_bytes),
-        Value::Map(vec![]),
-        Value::Bytes(mso_payload),
-        Value::Bytes(vec![0u8; 64]),
-    ]);
-    let issuer_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Array(vec![val0, val1]),
-            )]),
-        ),
-        (
-            Value::Text("issuerAuth".into()),
-            Value::Tag(18, Box::new(cose_sign1)),
-        ),
-    ]);
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    let value_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![
+            (Value::Integer(0u64.into()), Value::Bytes(digest0)),
+            (Value::Integer(1u64.into()), Value::Bytes(digest1)),
+        ]),
+    )]);
+    let mso_bytes = build_mso(
+        "1.0",
+        "SHA-256",
+        value_digests,
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+    );
+    let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
+    let name_spaces = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Array(vec![val0, val1]),
+    )]);
+    issuer_signed_b64(name_spaces, issuer_auth)
 }
 
 /// Builds an `IssuerSigned` with one item in each of two namespaces, both with correct
@@ -735,98 +656,45 @@ fn build_two_namespace_mdoc() -> String {
     let alg = HashAlg::Sha256;
     let (bytes_ns1, digest_ns1) = item_tag24_and_digest(0, "family_name", "Doe", alg);
     let (bytes_ns2, digest_ns2) = item_tag24_and_digest(0, "domestic_driving_privileges", "A", alg);
-
     let val_ns1: Value =
         ciborium::de::from_reader(bytes_ns1.as_slice()).expect("round-trip must succeed");
     let val_ns2: Value =
         ciborium::de::from_reader(bytes_ns2.as_slice()).expect("round-trip must succeed");
-
-    let device_key = Value::Map(vec![
-        (Value::Integer(1i64.into()), Value::Integer(2i64.into())),
-        (Value::Integer((-1i64).into()), Value::Integer(1i64.into())),
-        (Value::Integer((-2i64).into()), Value::Bytes(vec![0u8; 32])),
-        (Value::Integer((-3i64).into()), Value::Bytes(vec![0u8; 32])),
-    ]);
-    let mso = Value::Map(vec![
-        (Value::Text("version".into()), Value::Text("1.0".into())),
+    let value_digests = Value::Map(vec![
         (
-            Value::Text("digestAlgorithm".into()),
-            Value::Text("SHA-256".into()),
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(digest_ns1),
+            )]),
         ),
         (
-            Value::Text("valueDigests".into()),
-            Value::Map(vec![
-                (
-                    Value::Text("org.iso.18013.5.1".into()),
-                    Value::Map(vec![(
-                        Value::Integer(0u64.into()),
-                        Value::Bytes(digest_ns1),
-                    )]),
-                ),
-                (
-                    Value::Text("org.iso.18013.5.1.US".into()),
-                    Value::Map(vec![(
-                        Value::Integer(0u64.into()),
-                        Value::Bytes(digest_ns2),
-                    )]),
-                ),
-            ]),
-        ),
-        (
-            Value::Text("deviceKeyInfo".into()),
-            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
-        ),
-        (
-            Value::Text("docType".into()),
-            Value::Text("org.iso.18013.5.1.mDL".into()),
-        ),
-        (
-            Value::Text("validityInfo".into()),
-            Value::Map(vec![
-                (
-                    Value::Text("signed".into()),
-                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validFrom".into()),
-                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validUntil".into()),
-                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
-                ),
-            ]),
+            Value::Text("org.iso.18013.5.1.US".into()),
+            Value::Map(vec![(
+                Value::Integer(0u64.into()),
+                Value::Bytes(digest_ns2),
+            )]),
         ),
     ]);
-    let mso_bytes = cbor(&mso);
-    let mso_payload = cbor(&Value::Tag(24, Box::new(Value::Bytes(mso_bytes))));
-    let protected_header_bytes = vec![0xa1u8, 0x01, 0x26];
-    let cose_sign1 = Value::Array(vec![
-        Value::Bytes(protected_header_bytes),
-        Value::Map(vec![]),
-        Value::Bytes(mso_payload),
-        Value::Bytes(vec![0u8; 64]),
-    ]);
-    let issuer_signed = Value::Map(vec![
+    let mso_bytes = build_mso(
+        "1.0",
+        "SHA-256",
+        value_digests,
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+    );
+    let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
+    let name_spaces = Value::Map(vec![
         (
-            Value::Text("nameSpaces".into()),
-            Value::Map(vec![
-                (
-                    Value::Text("org.iso.18013.5.1".into()),
-                    Value::Array(vec![val_ns1]),
-                ),
-                (
-                    Value::Text("org.iso.18013.5.1.US".into()),
-                    Value::Array(vec![val_ns2]),
-                ),
-            ]),
+            Value::Text("org.iso.18013.5.1".into()),
+            Value::Array(vec![val_ns1]),
         ),
         (
-            Value::Text("issuerAuth".into()),
-            Value::Tag(18, Box::new(cose_sign1)),
+            Value::Text("org.iso.18013.5.1.US".into()),
+            Value::Array(vec![val_ns2]),
         ),
     ]);
-    Base64UrlUnpadded::encode_string(&cbor(&issuer_signed))
+    issuer_signed_b64(name_spaces, issuer_auth)
 }
 
 #[test]
@@ -1064,51 +932,21 @@ fn rejects_digest_id_out_of_range() {
 /// constructed with minimal but structurally valid values, so that parsing
 /// reaches `parse_name_spaces` before encountering the injected error.
 fn build_issuer_signed_with_ns(name_spaces_val: Value) -> String {
-    let device_key = dummy_device_key();
-    let mso = Value::Map(vec![
-        (Value::Text("version".into()), Value::Text("1.0".into())),
-        (
-            Value::Text("digestAlgorithm".into()),
-            Value::Text("SHA-256".into()),
-        ),
-        (
-            Value::Text("valueDigests".into()),
-            Value::Map(vec![(
-                Value::Text("org.iso.18013.5.1".into()),
-                Value::Map(vec![(
-                    Value::Integer(0u64.into()),
-                    Value::Bytes(vec![0u8; 32]),
-                )]),
-            )]),
-        ),
-        (
-            Value::Text("deviceKeyInfo".into()),
-            Value::Map(vec![(Value::Text("deviceKey".into()), device_key)]),
-        ),
-        (
-            Value::Text("docType".into()),
-            Value::Text("org.iso.18013.5.1.mDL".into()),
-        ),
-        (
-            Value::Text("validityInfo".into()),
-            Value::Map(vec![
-                (
-                    Value::Text("signed".into()),
-                    Value::Tag(0, Box::new(Value::Text("1999-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validFrom".into()),
-                    Value::Tag(0, Box::new(Value::Text("2020-01-01T00:00:00Z".into()))),
-                ),
-                (
-                    Value::Text("validUntil".into()),
-                    Value::Tag(0, Box::new(Value::Text("9998-01-01T00:00:00Z".into()))),
-                ),
-            ]),
-        ),
-    ]);
-    // {1: -7} = alg: ES256
-    let issuer_auth = dummy_cose1(cbor(&mso), vec![0xa1u8, 0x01, 0x26]);
+    let value_digests = Value::Map(vec![(
+        Value::Text("org.iso.18013.5.1".into()),
+        Value::Map(vec![(
+            Value::Integer(0u64.into()),
+            Value::Bytes(vec![0u8; 32]),
+        )]),
+    )]);
+    let mso_bytes = build_mso(
+        "1.0",
+        "SHA-256",
+        value_digests,
+        "2020-01-01T00:00:00Z",
+        "9998-01-01T00:00:00Z",
+    );
+    let issuer_auth = dummy_cose1(mso_bytes, vec![0xa1u8, 0x01, 0x26]);
     issuer_signed_b64(name_spaces_val, issuer_auth)
 }
 
@@ -1473,7 +1311,12 @@ fn build_issuer_signed_with_issuer_auth(
         mso_bytes,
         vec![0xa1, 0x01, 0x26],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-        |tbs| signing_key.sign_sha256(tbs).expect("COSE signing must succeed").to_vec(),
+        |tbs| {
+            signing_key
+                .sign_sha256(tbs)
+                .expect("COSE signing must succeed")
+                .to_vec()
+        },
         tamper,
     );
     issuer_signed_b64(default_name_spaces(), issuer_auth)
@@ -1865,7 +1708,12 @@ fn build_issuer_signed_with_issuer_auth_es512(
         mso_bytes,
         vec![0xa1, 0x01, 0x38, 0x23],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-        |tbs| signing_key.sign_sha512(tbs).expect("ES512 COSE signing must succeed").to_vec(),
+        |tbs| {
+            signing_key
+                .sign_sha512(tbs)
+                .expect("ES512 COSE signing must succeed")
+                .to_vec()
+        },
         false,
     );
     issuer_signed_b64(default_name_spaces(), issuer_auth)
@@ -2004,7 +1852,12 @@ fn build_issuer_signed_single_bstr_x5chain(
         mso_bytes,
         vec![0xa1, 0x01, 0x26],
         Value::Bytes(dsc_der),
-        |tbs| signing_key.sign_sha256(tbs).expect("COSE signing must succeed").to_vec(),
+        |tbs| {
+            signing_key
+                .sign_sha256(tbs)
+                .expect("COSE signing must succeed")
+                .to_vec()
+        },
         false,
     );
     issuer_signed_b64(default_name_spaces(), issuer_auth)
@@ -2024,7 +1877,12 @@ fn build_issuer_signed_with_chain_x5chain(
         mso_bytes,
         vec![0xa1, 0x01, 0x26],
         x5chain,
-        |tbs| signing_key.sign_sha256(tbs).expect("COSE signing must succeed").to_vec(),
+        |tbs| {
+            signing_key
+                .sign_sha256(tbs)
+                .expect("COSE signing must succeed")
+                .to_vec()
+        },
         false,
     );
     issuer_signed_b64(default_name_spaces(), issuer_auth)
@@ -2613,7 +2471,12 @@ fn build_issuer_signed_es384(
         mso_bytes,
         vec![0xa1, 0x01, 0x38, 0x22],
         Value::Array(vec![Value::Bytes(dsc_der)]),
-        |tbs| signing_key.sign_sha384(tbs).expect("ES384 COSE signing must succeed").to_vec(),
+        |tbs| {
+            signing_key
+                .sign_sha384(tbs)
+                .expect("ES384 COSE signing must succeed")
+                .to_vec()
+        },
         false,
     );
     issuer_signed_b64(default_name_spaces(), issuer_auth)
@@ -3050,7 +2913,7 @@ fn verify_device_key_binding_rejects_incompatible_jwk_type() {
 
     // Assert
     assert!(
-        matches!(err, MdocError::UnsupportedDeviceKeyType),
+        matches!(err, MdocError::UnsupportedDeviceKeyType { .. }),
         "expected UnsupportedDeviceKeyType, got: {err:?}"
     );
 }
@@ -3081,7 +2944,7 @@ fn verify_device_key_binding_rejects_unknown_curve() {
 
     // Assert
     assert!(
-        matches!(err, MdocError::UnsupportedDeviceKeyType),
+        matches!(err, MdocError::UnsupportedDeviceKeyType { .. }),
         "expected UnsupportedDeviceKeyType, got: {err:?}"
     );
 }
@@ -3175,7 +3038,7 @@ fn verify_device_key_binding_rejects_compressed_ec2_y() {
 
     // Assert
     assert!(
-        matches!(err, MdocError::UnsupportedDeviceKeyType),
+        matches!(err, MdocError::UnsupportedDeviceKeyType { .. }),
         "expected UnsupportedDeviceKeyType, got: {err:?}"
     );
 }
@@ -3242,7 +3105,7 @@ fn verify_device_key_binding_rejects_okp_x25519_cose_crv() {
 
     // Assert
     assert!(
-        matches!(err, MdocError::UnsupportedDeviceKeyType),
+        matches!(err, MdocError::UnsupportedDeviceKeyType { .. }),
         "expected UnsupportedDeviceKeyType, got: {err:?}"
     );
 }
