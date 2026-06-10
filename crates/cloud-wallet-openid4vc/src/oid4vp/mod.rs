@@ -9,7 +9,6 @@ pub mod dcql;
 pub mod error;
 pub mod metadata;
 pub mod presentation;
-pub mod request_uri;
 pub mod selection;
 pub mod transaction_data;
 pub mod verifier_attestation;

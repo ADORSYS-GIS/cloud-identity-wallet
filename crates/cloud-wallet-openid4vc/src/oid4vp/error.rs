@@ -232,6 +232,18 @@ pub enum RequestUriError {
     #[error("HTTP error: status={status}, body={body}")]
     HttpError { status: u16, body: String },
 
+    /// The Verifier returned an authorization error response as defined in
+    /// [OpenID4VP Section 5.10.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.2).
+    ///
+    /// This variant is returned when the Verifier responds with a structured
+    /// authorization error (e.g., `invalid_request`, `access_denied`) that
+    /// could be parsed according to the spec.
+    #[error("authorization error: {error} (HTTP {status})")]
+    AuthorizationError {
+        error: AuthorizationErrorResponse,
+        status: u16,
+    },
+
     /// The request URI is malformed or cannot be parsed.
     #[error("invalid request URI: {0}")]
     InvalidUrl(String),
@@ -245,6 +257,15 @@ pub enum RequestUriError {
     Serialization(String),
 
     /// The wallet_nonce in the response does not match the expected value.
+    ///
+    /// **DEPRECATED**: Per OpenID4VP Section 5.10.1, wallet_nonce validation
+    /// MUST happen after the Request Object has been signature-verified or
+    /// decrypted. This error is kept for backward compatibility but new code
+    /// should validate the nonce after Request Object processing.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Validate wallet_nonce after Request Object signature verification instead"
+    )]
     #[error("wallet_nonce mismatch: expected '{expected}', got '{actual}'")]
     WalletNonceMismatch { expected: String, actual: String },
 
