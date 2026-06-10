@@ -21,6 +21,7 @@ target/
 
 # Kilocode
 .kilocode
+.kilo
 implementation_plans/
 
 # Kilo config (may contain secrets)
