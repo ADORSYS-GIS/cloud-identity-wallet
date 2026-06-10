@@ -46,6 +46,14 @@ pub struct RequestObjectClaims {
     pub params: AuthorizationRequest,
 }
 
+/// Minimal claims needed before signature verification to derive the audience
+/// for dynamic discovery. This avoids deserializing the embedded
+/// `AuthorizationRequest` on untrusted payload data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct MinimalRequestObjectClaims {
+    iss: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestObject {
     pub header: Header,
@@ -81,8 +89,11 @@ impl RequestObject {
             .await
             .map_err(|e| RequestObjectError::KeyResolutionFailed(e.to_string()))?;
 
-        let claims_unverified: RequestObjectClaims =
-            dangerous::insecure_decode::<RequestObjectClaims>(jwt)
+        // Decode only the minimal JWT claims needed to build the Validation rules
+        // before signature verification. This avoids deserializing the full
+        // AuthorizationRequest (which runs validation) on untrusted payload data.
+        let minimal_claims: MinimalRequestObjectClaims =
+            dangerous::insecure_decode::<MinimalRequestObjectClaims>(jwt)
                 .map_err(|e| RequestObjectError::InvalidFormat(format!("malformed JWT: {e}")))?
                 .claims;
 
@@ -93,7 +104,7 @@ impl RequestObject {
                 validation.set_audience(&[SELF_ISSUED_AUDIENCE]);
             }
             DiscoveryMode::Dynamic => {
-                let iss = claims_unverified.rfc7519.iss.as_deref().ok_or_else(|| {
+                let iss = minimal_claims.iss.as_deref().ok_or_else(|| {
                     RequestObjectError::InvalidClaims(
                         "missing required claim: iss (required for dynamic discovery)".to_string(),
                     )
@@ -103,8 +114,32 @@ impl RequestObject {
         }
         validation.set_required_spec_claims(&["exp"]);
 
-        let token_data = decode::<RequestObjectClaims>(jwt, &decoding_key, &validation)
-            .map_err(|e| RequestObjectError::SignatureVerificationFailed(e.to_string()))?;
+        let token_data =
+            decode::<RequestObjectClaims>(jwt, &decoding_key, &validation).map_err(|e| match e
+                .kind()
+            {
+                jsonwebtoken::errors::ErrorKind::InvalidSignature
+                | jsonwebtoken::errors::ErrorKind::InvalidKeyFormat
+                | jsonwebtoken::errors::ErrorKind::InvalidEcdsaKey
+                | jsonwebtoken::errors::ErrorKind::InvalidEddsaKey
+                | jsonwebtoken::errors::ErrorKind::InvalidRsaKey(_)
+                | jsonwebtoken::errors::ErrorKind::RsaFailedSigning
+                | jsonwebtoken::errors::ErrorKind::Signing(_)
+                | jsonwebtoken::errors::ErrorKind::InvalidAlgorithm
+                | jsonwebtoken::errors::ErrorKind::Provider(_) => {
+                    RequestObjectError::SignatureVerificationFailed(e.to_string())
+                }
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature
+                | jsonwebtoken::errors::ErrorKind::InvalidIssuer
+                | jsonwebtoken::errors::ErrorKind::InvalidAudience
+                | jsonwebtoken::errors::ErrorKind::InvalidSubject
+                | jsonwebtoken::errors::ErrorKind::ImmatureSignature
+                | jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(_)
+                | jsonwebtoken::errors::ErrorKind::InvalidClaimFormat(_) => {
+                    RequestObjectError::InvalidClaims(e.to_string())
+                }
+                _ => RequestObjectError::InvalidFormat(format!("malformed JWT: {e}")),
+            })?;
 
         // Validate that the Request Object client_id matches the outer client_id
         let request_object_client_id_str = token_data.claims.params.client_id.as_str();
@@ -554,6 +589,128 @@ mod tests {
             result.is_ok(),
             "should succeed without iat: {:?}",
             result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_request_object_maps_to_invalid_claims() {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let client_id = "redirect_uri:https://verifier.example.com";
+        let payload = serde_json::json!({
+            "iss": client_id,
+            "aud": client_id,
+            "exp": now - 1,
+            "iat": now - 100,
+            "client_id": client_id,
+            "response_type": "vp_token",
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid",
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some(REQUEST_OBJECT_TYP.to_string());
+        let jwt = encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap();
+        let resolver = MockResolver {
+            key: DecodingKey::from_secret(TEST_SECRET),
+        };
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
+        assert!(
+            matches!(result.unwrap_err(), RequestObjectError::InvalidClaims(_)),
+            "expected InvalidClaims for expired token"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_signature_maps_to_signature_verification_failed() {
+        let client_id = "redirect_uri:https://verifier.example.com";
+        let jwt = create_signed_jwt(client_id, client_id);
+        let resolver = MockResolver {
+            key: DecodingKey::from_secret(b"wrong-secret"),
+        };
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                RequestObjectError::SignatureVerificationFailed(_)
+            ),
+            "expected SignatureVerificationFailed for invalid signature"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_nbf_maps_to_invalid_claims() {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let client_id = "redirect_uri:https://verifier.example.com";
+        let payload = serde_json::json!({
+            "iss": client_id,
+            "aud": client_id,
+            "exp": now + 3600,
+            "nbf": now + 300,
+            "iat": now,
+            "client_id": client_id,
+            "response_type": "vp_token",
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid",
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some(REQUEST_OBJECT_TYP.to_string());
+        let jwt = encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap();
+        let resolver = MockResolver {
+            key: DecodingKey::from_secret(TEST_SECRET),
+        };
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
+        assert!(
+            matches!(result.unwrap_err(), RequestObjectError::InvalidClaims(_)),
+            "expected InvalidClaims for invalid nbf"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_authorization_request_after_valid_signature_maps_to_invalid_format() {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let client_id = "redirect_uri:https://verifier.example.com";
+        // Both scope and dcql_query are present, which violates the XOR rule in
+        // AuthorizationRequest::validate(). Because that validation is invoked
+        // inside Deserialize, decode::<RequestObjectClaims> will fail with a Json
+        // error which we map to InvalidFormat.
+        let payload = serde_json::json!({
+            "iss": client_id,
+            "aud": client_id,
+            "exp": now + 300,
+            "client_id": client_id,
+            "response_type": "vp_token",
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid",
+            "dcql_query": {
+                "credentials": [{
+                    "id": "test-cred",
+                    "format": "ldp_vc"
+                }]
+            },
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some(REQUEST_OBJECT_TYP.to_string());
+        let jwt = encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap();
+        let resolver = MockResolver {
+            key: DecodingKey::from_secret(TEST_SECRET),
+        };
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
+        assert!(
+            matches!(result.unwrap_err(), RequestObjectError::InvalidFormat(_)),
+            "expected InvalidFormat for malformed AuthorizationRequest payload"
         );
     }
 }
