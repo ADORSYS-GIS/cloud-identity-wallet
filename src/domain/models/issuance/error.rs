@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::fmt;
 
+use cloud_wallet_openid4vc::formats::mdoc::MdocError;
 use cloud_wallet_openid4vc::formats::sd_jwt::Error as SdJwtError;
 use cloud_wallet_openid4vc::oid4vci::client::ClientError;
 use serde::{Deserialize, Serialize};
@@ -290,6 +291,12 @@ impl From<CredentialError> for IssuanceError {
 impl From<SdJwtError> for IssuanceError {
     fn from(err: SdJwtError) -> Self {
         Self::credential_request(format!("invalid SD-JWT VC: {err}")).with_source(err)
+    }
+}
+
+impl From<MdocError> for IssuanceError {
+    fn from(err: MdocError) -> Self {
+        Self::credential_request(format!("invalid mdoc credential: {err}")).with_source(err)
     }
 }
 

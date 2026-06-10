@@ -3144,7 +3144,7 @@ fn verify_device_key_binding_passes_matching_p256_key() {
         ),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(x_bytes),
@@ -3155,7 +3155,7 @@ fn verify_device_key_binding_passes_matching_p256_key() {
     };
 
     // Act
-    let result = verify_device_key_binding(&parsed, &proof_jwk);
+    let result = verify_device_key_binding(&parsed, &holder_binding_public_jwk);
 
     // Assert
     assert!(
@@ -3174,7 +3174,7 @@ fn verify_device_key_binding_rejects_mismatched_x_coordinate() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![9u8; 32]), // different x
@@ -3185,8 +3185,8 @@ fn verify_device_key_binding_rejects_mismatched_x_coordinate() {
     };
 
     // Act
-    let err =
-        verify_device_key_binding(&parsed, &proof_jwk).expect_err("mismatched x must be rejected");
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
+        .expect_err("mismatched x must be rejected");
 
     // Assert
     assert!(
@@ -3205,7 +3205,7 @@ fn verify_device_key_binding_rejects_mismatched_y_coordinate() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![1u8; 32]),
@@ -3216,8 +3216,8 @@ fn verify_device_key_binding_rejects_mismatched_y_coordinate() {
     };
 
     // Act
-    let err =
-        verify_device_key_binding(&parsed, &proof_jwk).expect_err("mismatched y must be rejected");
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
+        .expect_err("mismatched y must be rejected");
 
     // Assert
     assert!(
@@ -3236,7 +3236,7 @@ fn verify_device_key_binding_rejects_different_key_entirely() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![3u8; 32]),
@@ -3247,7 +3247,7 @@ fn verify_device_key_binding_rejects_different_key_entirely() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("completely different key must be rejected");
 
     // Assert
@@ -3268,7 +3268,7 @@ fn verify_device_key_binding_rejects_curve_mismatch() {
     ]);
     let parsed = parsed_with_device_key(cose_key);
     // JWK claims P-256 — curve mismatch.
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![1u8; 32]),
@@ -3279,7 +3279,7 @@ fn verify_device_key_binding_rejects_curve_mismatch() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("curve mismatch must be rejected");
 
     // Assert
@@ -3298,7 +3298,7 @@ fn verify_device_key_binding_rejects_malformed_cose_key() {
     ))
     .expect("base mdoc must parse");
     parsed.device_key = vec![0xffu8]; // 0xff is not valid initial CBOR
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![0u8; 32]),
@@ -3309,7 +3309,7 @@ fn verify_device_key_binding_rejects_malformed_cose_key() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("malformed COSE_Key bytes must be rejected");
 
     // Assert
@@ -3329,7 +3329,7 @@ fn verify_device_key_binding_rejects_incompatible_jwk_type() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Okp(Okp {
             crv: OkpCurve::X25519,
             x: B64::new(vec![1u8; 32]),
@@ -3339,7 +3339,7 @@ fn verify_device_key_binding_rejects_incompatible_jwk_type() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("EC2 COSE_Key against non-EC proof JWK must be rejected");
 
     // Assert
@@ -3359,7 +3359,7 @@ fn verify_device_key_binding_rejects_unknown_curve() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![1u8; 32]),
@@ -3370,7 +3370,7 @@ fn verify_device_key_binding_rejects_unknown_curve() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("unknown COSE_Key curve must be rejected");
 
     // Assert
@@ -3393,7 +3393,7 @@ fn verify_device_key_binding_passes_matching_ed25519_key() {
         ),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Okp(Okp {
             crv: OkpCurve::Ed25519,
             x: B64::new(x_bytes),
@@ -3403,7 +3403,7 @@ fn verify_device_key_binding_passes_matching_ed25519_key() {
     };
 
     // Act
-    let result = verify_device_key_binding(&parsed, &proof_jwk);
+    let result = verify_device_key_binding(&parsed, &holder_binding_public_jwk);
 
     // Assert
     assert!(
@@ -3421,7 +3421,7 @@ fn verify_device_key_binding_rejects_mismatched_ed25519_x() {
         (Value::Integer((-2i64).into()), Value::Bytes(vec![5u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Okp(Okp {
             crv: OkpCurve::Ed25519,
             x: B64::new(vec![9u8; 32]), // different x
@@ -3431,7 +3431,7 @@ fn verify_device_key_binding_rejects_mismatched_ed25519_x() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("mismatched Ed25519 x must be rejected");
 
     // Assert
@@ -3453,7 +3453,7 @@ fn verify_device_key_binding_rejects_compressed_ec2_y() {
         (Value::Integer((-3i64).into()), Value::Bool(true)), // compressed y
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![1u8; 32]),
@@ -3464,7 +3464,7 @@ fn verify_device_key_binding_rejects_compressed_ec2_y() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("compressed y (bool) must be rejected");
 
     // Assert
@@ -3492,7 +3492,7 @@ fn verify_device_key_binding_passes_matching_p384_key() {
         ),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P384,
             x: B64::new(x_bytes),
@@ -3503,7 +3503,7 @@ fn verify_device_key_binding_passes_matching_p384_key() {
     };
 
     // Act
-    let result = verify_device_key_binding(&parsed, &proof_jwk);
+    let result = verify_device_key_binding(&parsed, &holder_binding_public_jwk);
 
     // Assert
     assert!(
@@ -3521,7 +3521,7 @@ fn verify_device_key_binding_rejects_okp_x25519_cose_crv() {
         (Value::Integer((-2i64).into()), Value::Bytes(vec![5u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Okp(Okp {
             crv: OkpCurve::Ed25519,
             x: B64::new(vec![5u8; 32]),
@@ -3531,7 +3531,7 @@ fn verify_device_key_binding_rejects_okp_x25519_cose_crv() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("OKP X25519 COSE crv must be rejected");
 
     // Assert
@@ -3559,7 +3559,7 @@ fn verify_device_key_binding_passes_matching_p521_key() {
         ),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P521,
             x: B64::new(x_bytes),
@@ -3570,7 +3570,7 @@ fn verify_device_key_binding_passes_matching_p521_key() {
     };
 
     // Act
-    let result = verify_device_key_binding(&parsed, &proof_jwk);
+    let result = verify_device_key_binding(&parsed, &holder_binding_public_jwk);
 
     // Assert
     assert!(
@@ -3592,7 +3592,7 @@ fn verify_device_key_binding_rejects_duplicate_cose_key_label() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![1u8; 32]),
@@ -3603,7 +3603,7 @@ fn verify_device_key_binding_rejects_duplicate_cose_key_label() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("duplicate COSE_Key label must be rejected");
 
     // Assert
@@ -3625,7 +3625,7 @@ fn verify_device_key_binding_rejects_ec2_coordinate_wrong_length() {
         (Value::Integer((-3i64).into()), Value::Bytes(vec![2u8; 32])),
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Ec(Ec {
             crv: Curve::P256,
             x: B64::new(vec![1u8; 32]),
@@ -3636,7 +3636,7 @@ fn verify_device_key_binding_rejects_ec2_coordinate_wrong_length() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("EC2 coordinate with wrong length must be rejected");
 
     // Assert
@@ -3657,7 +3657,7 @@ fn verify_device_key_binding_rejects_ed25519_x_wrong_length() {
         (Value::Integer((-2i64).into()), Value::Bytes(vec![5u8; 31])), // x: 31 bytes (wrong)
     ]);
     let parsed = parsed_with_device_key(cose_key);
-    let proof_jwk = Jwk {
+    let holder_binding_public_jwk = Jwk {
         key: Key::Okp(Okp {
             crv: OkpCurve::Ed25519,
             x: B64::new(vec![5u8; 32]),
@@ -3667,7 +3667,7 @@ fn verify_device_key_binding_rejects_ed25519_x_wrong_length() {
     };
 
     // Act
-    let err = verify_device_key_binding(&parsed, &proof_jwk)
+    let err = verify_device_key_binding(&parsed, &holder_binding_public_jwk)
         .expect_err("Ed25519 x with wrong length must be rejected");
 
     // Assert
