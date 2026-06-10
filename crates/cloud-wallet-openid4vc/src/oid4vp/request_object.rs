@@ -7,9 +7,8 @@
 use super::authorization::AuthorizationRequest;
 use super::client_id::ParsedClientId;
 use crate::core::rfc7519::RFC7519Claims;
-use crate::errors::{Error, ErrorKind, Result};
+use crate::oid4vp::error::RequestObjectError;
 
-use base64ct::{Base64UrlUnpadded, Encoding};
 use jsonwebtoken::{DecodingKey, Header, Validation, dangerous, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -31,7 +30,7 @@ pub enum DiscoveryMode {
 #[async_trait::async_trait]
 pub trait VerifierKeyResolver: Send + Sync {
     async fn resolve_key(&self, client_id: &ParsedClientId, header: &Header)
-    -> Result<DecodingKey>;
+    -> crate::errors::Result<DecodingKey>;
 }
 
 #[skip_serializing_none]
@@ -57,43 +56,13 @@ impl RequestObject {
         outer_client_id: &str,
         discovery_mode: DiscoveryMode,
         resolver: &dyn VerifierKeyResolver,
-    ) -> Result<Self> {
-        let jwt_parts: Vec<&str> = jwt.split('.').collect();
-        if jwt_parts.len() != 3 {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "malformed JWT: expected 3 segments",
-            ));
-        }
-
-        let header_json_bytes = Base64UrlUnpadded::decode_vec(jwt_parts[0]).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("malformed JWT: failed to decode header: {e}"),
-            )
-        })?;
-        let header_json: serde_json::Value =
-            serde_json::from_slice(&header_json_bytes).map_err(|e| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("malformed JWT: failed to parse header: {e}"),
-                )
-            })?;
-
-        let is_unsigned = header_json.get("alg").and_then(|v| v.as_str()) == Some("none");
-
-        if is_unsigned {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "unsigned Request Objects are not allowed",
-            ));
-        }
-
+    ) -> std::result::Result<Self, RequestObjectError> {
         let header = decode_header(jwt).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("malformed JWT: failed to decode header: {e}"),
-            )
+            if e.to_string().contains("none") {
+                RequestObjectError::Unsigned
+            } else {
+                RequestObjectError::InvalidFormat(format!("malformed JWT: {e}"))
+            }
         })?;
         validate_header(&header)?;
 
@@ -102,20 +71,16 @@ impl RequestObject {
         // trusted source for verifier identity; the Request Object client_id claim
         // is only checked for equality after decode.
         let outer_parsed_client_id = ParsedClientId::parse(outer_client_id)
-            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+            .map_err(|e| RequestObjectError::InvalidClientId(e.to_string()))?;
 
         let decoding_key = resolver
             .resolve_key(&outer_parsed_client_id, &header)
-            .await?;
+            .await
+            .map_err(|e| RequestObjectError::KeyResolutionFailed(e.to_string()))?;
 
         let claims_unverified: RequestObjectClaims =
             dangerous::insecure_decode::<RequestObjectClaims>(jwt)
-                .map_err(|e| {
-                    Error::message(
-                        ErrorKind::InvalidPresentationRequest,
-                        format!("malformed JWT: {e}"),
-                    )
-                })?
+                .map_err(|e| RequestObjectError::InvalidFormat(format!("malformed JWT: {e}")))?
                 .claims;
 
         let algorithm = header.alg;
@@ -126,9 +91,8 @@ impl RequestObject {
             }
             DiscoveryMode::Dynamic => {
                 let iss = claims_unverified.rfc7519.iss.as_deref().ok_or_else(|| {
-                    Error::message(
-                        ErrorKind::InvalidPresentationRequest,
-                        "missing required claim: iss (required for dynamic discovery)",
+                    RequestObjectError::InvalidClaims(
+                        "missing required claim: iss (required for dynamic discovery)".to_string(),
                     )
                 })?;
                 validation.set_audience(&[iss]);
@@ -137,17 +101,14 @@ impl RequestObject {
         validation.set_required_spec_claims(&["exp"]);
 
         let token_data = decode::<RequestObjectClaims>(jwt, &decoding_key, &validation)
-            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+            .map_err(|e| RequestObjectError::SignatureVerificationFailed(e.to_string()))?;
 
         // Validate that the Request Object client_id matches the outer client_id
         let request_object_client_id_str = token_data.claims.params.client_id.as_str();
         if outer_client_id != request_object_client_id_str {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!(
-                    "Request Object client_id '{request_object_client_id_str}' does not match outer client_id '{outer_client_id}'"
-                ),
-            ));
+            return Err(RequestObjectError::InvalidClientId(format!(
+                "Request Object client_id '{request_object_client_id_str}' does not match outer client_id '{outer_client_id}'"
+            )));
         }
 
         validate_claims(&token_data.claims, discovery_mode)?;
@@ -155,7 +116,7 @@ impl RequestObject {
             .claims
             .params
             .validate()
-            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+            .map_err(|e| RequestObjectError::InvalidClaims(e.to_string()))?;
 
         Ok(Self {
             header,
@@ -165,62 +126,48 @@ impl RequestObject {
     }
 }
 
-fn validate_header(header: &Header) -> Result<()> {
+fn validate_header(header: &Header) -> std::result::Result<(), RequestObjectError> {
     let typ = header.typ.as_deref().ok_or_else(|| {
-        Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            "unsupported JOSE header: missing typ",
-        )
+        RequestObjectError::InvalidHeader("missing typ".to_string())
     })?;
     // Per RFC 9101, `typ` MUST be "oauth-authz-req+jwt" (exact case-sensitive value). RFC 7515
     // Section 4.1.9 recommends case-sensitive matching for registered `typ` values.
     if typ != REQUEST_OBJECT_TYP {
-        return Err(Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            format!("unsupported JOSE header: typ must be '{REQUEST_OBJECT_TYP}', got '{typ}'"),
-        ));
+        return Err(RequestObjectError::InvalidHeader(format!(
+            "typ must be '{REQUEST_OBJECT_TYP}', got '{typ}'"
+        )));
     }
     Ok(())
 }
 
-fn validate_claims(claims: &RequestObjectClaims, discovery_mode: DiscoveryMode) -> Result<()> {
+fn validate_claims(
+    claims: &RequestObjectClaims,
+    discovery_mode: DiscoveryMode,
+) -> std::result::Result<(), RequestObjectError> {
     match discovery_mode {
         DiscoveryMode::Static => {
             let aud = claims.rfc7519.aud.as_deref().ok_or_else(|| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "missing required claim: aud",
-                )
+                RequestObjectError::InvalidClaims("missing required claim: aud".to_string())
             })?;
             if aud != SELF_ISSUED_AUDIENCE {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!(
-                        "invalid aud for static discovery: expected '{SELF_ISSUED_AUDIENCE}', got '{aud}'"
-                    ),
-                ));
+                return Err(RequestObjectError::InvalidClaims(format!(
+                    "invalid aud for static discovery: expected '{SELF_ISSUED_AUDIENCE}', got '{aud}'"
+                )));
             }
         }
         DiscoveryMode::Dynamic => {
             let iss = claims.rfc7519.iss.as_deref().ok_or_else(|| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "missing required claim: iss (required for dynamic discovery)",
+                RequestObjectError::InvalidClaims(
+                    "missing required claim: iss (required for dynamic discovery)".to_string(),
                 )
             })?;
             let aud = claims.rfc7519.aud.as_deref().ok_or_else(|| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "missing required claim: aud",
-                )
+                RequestObjectError::InvalidClaims("missing required claim: aud".to_string())
             })?;
             if aud != iss {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!(
-                        "invalid aud for dynamic discovery: expected '{iss}' (must equal iss), got '{aud}'"
-                    ),
-                ));
+                return Err(RequestObjectError::InvalidClaims(format!(
+                    "invalid aud for dynamic discovery: expected '{iss}' (must equal iss), got '{aud}'"
+                )));
             }
         }
     }
@@ -229,15 +176,13 @@ fn validate_claims(claims: &RequestObjectClaims, discovery_mode: DiscoveryMode) 
 
     match claims.rfc7519.exp {
         Some(exp) if exp <= now => {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "expired Request Object",
+            return Err(RequestObjectError::InvalidClaims(
+                "expired Request Object".to_string(),
             ));
         }
         None => {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "missing required claim: exp",
+            return Err(RequestObjectError::InvalidClaims(
+                "missing required claim: exp".to_string(),
             ));
         }
         _ => {}
@@ -245,17 +190,15 @@ fn validate_claims(claims: &RequestObjectClaims, discovery_mode: DiscoveryMode) 
 
     if let Some(nbf) = claims.rfc7519.nbf {
         if nbf > now {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "invalid nbf: token not yet active",
+            return Err(RequestObjectError::InvalidClaims(
+                "invalid nbf: token not yet active".to_string(),
             ));
         }
         if let Some(exp) = claims.rfc7519.exp
             && nbf > exp
         {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "invalid nbf: not-before time is after expiration time",
+            return Err(RequestObjectError::InvalidClaims(
+                "invalid nbf: not-before time is after expiration time".to_string(),
             ));
         }
     }
@@ -266,6 +209,7 @@ fn validate_claims(claims: &RequestObjectClaims, discovery_mode: DiscoveryMode) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64ct::{Base64UrlUnpadded, Encoding};
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, encode};
 
     const TEST_SECRET: &[u8] = b"test-secret";
@@ -299,7 +243,7 @@ mod tests {
             &self,
             _client_id: &ParsedClientId,
             _header: &Header,
-        ) -> Result<DecodingKey> {
+        ) -> crate::errors::Result<DecodingKey> {
             Ok(self.key.clone())
         }
     }
@@ -499,7 +443,7 @@ mod tests {
             RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
                 .await;
         assert!(result.is_err(), "should fail for unsupported typ");
-        assert!(result.unwrap_err().to_string().contains("typ"));
+        assert!(matches!(result.unwrap_err(), RequestObjectError::InvalidHeader(_)));
     }
 
     #[tokio::test]
@@ -532,7 +476,7 @@ mod tests {
             RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
                 .await;
         assert!(result.is_err(), "should fail for unsigned request object");
-        assert!(result.unwrap_err().to_string().contains("unsigned"));
+        assert!(matches!(result.unwrap_err(), RequestObjectError::Unsigned));
     }
 
     #[tokio::test]
@@ -569,7 +513,7 @@ mod tests {
             result.is_err(),
             "should fail when Request Object client_id does not match outer client_id"
         );
-        assert!(result.unwrap_err().to_string().contains("client_id"));
+        assert!(matches!(result.unwrap_err(), RequestObjectError::InvalidClientId(_)));
     }
 
     #[tokio::test]

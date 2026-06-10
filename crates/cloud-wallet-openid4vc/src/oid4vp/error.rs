@@ -161,6 +161,45 @@ pub enum AuthorizationErrorCode {
     InvalidTransactionData,
 }
 
+/// Error type for Request Object JWT validation failures.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum RequestObjectError {
+    /// The JWT format is invalid or malformed.
+    #[error("malformed JWT: {0}")]
+    InvalidFormat(String),
+
+    /// Unsigned (alg: none) Request Objects are not allowed.
+    #[error("unsigned Request Objects are not allowed")]
+    Unsigned,
+
+    /// The `typ` header parameter is missing or has an unexpected value.
+    #[error("unsupported JOSE header: {0}")]
+    InvalidHeader(String),
+
+    /// The Request Object `client_id` does not match the outer client_id.
+    #[error("invalid client_id: {0}")]
+    InvalidClientId(String),
+
+    /// Required claims are missing or invalid.
+    #[error("invalid claims: {0}")]
+    InvalidClaims(String),
+
+    /// JWT signature verification failed.
+    #[error("signature verification failed: {0}")]
+    SignatureVerificationFailed(String),
+
+    /// Failed to resolve the verifier's public key.
+    #[error("failed to resolve verifier key: {0}")]
+    KeyResolutionFailed(String),
+}
+
+impl From<RequestObjectError> for AuthorizationErrorResponse {
+    fn from(err: RequestObjectError) -> Self {
+        AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequestObject)
+            .with_description(err.to_string())
+    }
+}
+
 /// Error type for Verifier Attestation JWT validation failures.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum VerifierAttestationError {
