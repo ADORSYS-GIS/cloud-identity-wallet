@@ -715,6 +715,7 @@ mod tests {
         let presentation =
             SdJwtPresentation::builder(raw, "https://verifier.example.com", "test-nonce")
                 .requested_claims(vec![ClaimPathPointer::from_strings(["given_name"])])
+                .signer(test_signer)
                 .build()
                 .create_presentation()
                 .unwrap();
@@ -860,7 +861,6 @@ mod tests {
         let err = SdJwtPresentation::builder(raw, "https://verifier.example.com", "nonce")
             .requested_claims(vec![ClaimPathPointer::from_strings(["given_name"])])
             .transaction_data(vec!["hash1"], Some("sha-256"))
-            .signer(test_signer)
             .build()
             .create_presentation()
             .unwrap_err();
