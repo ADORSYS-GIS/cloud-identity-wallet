@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use thiserror::Error;
 
 use crate::oid4vp::authorization::VpTokenError;
@@ -17,8 +19,11 @@ pub enum PresentationBuilderError {
 }
 
 /// Errors that can occur during holder binding proof creation.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum HolderBindingProofError {
+///
+/// Used by all credential formats (SD-JWT VC, mdoc, etc.) that implement
+/// the [`PresentationCreator`](super::PresentationCreator) trait.
+#[derive(Debug, Error)]
+pub enum ProofError {
     /// Proof signing failed (e.g., cryptographic signing error).
     #[error("holder binding proof signing failed: {0}")]
     SigningFailed(String),
@@ -30,5 +35,14 @@ pub enum HolderBindingProofError {
     UnsupportedAlgorithm(String),
     /// Missing required field for proof creation.
     #[error("missing required field: {0}")]
-    MissingRequiredField(String),
+    MissingRequiredField(Cow<'static, str>),
+    /// Invalid proof input.
+    #[error("invalid proof input: {0}")]
+    InvalidInput(Cow<'static, str>),
+    /// SD-JWT parsing or disclosure processing failed.
+    #[error("SD-JWT processing failed: {0}")]
+    SdJwt(#[from] crate::formats::sd_jwt::Error),
+    /// JSON serialization error during proof construction.
+    #[error("serialization error: {0}")]
+    Serialization(String),
 }
