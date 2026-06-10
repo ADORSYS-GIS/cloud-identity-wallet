@@ -109,7 +109,6 @@ impl OidClient {
             .timeout(config.timeout)
             .tls_backend_rustls()
             .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
             .tls_danger_accept_invalid_hostnames(config.accept_untrusted_hosts);
 
         if config.accept_untrusted_hosts {
