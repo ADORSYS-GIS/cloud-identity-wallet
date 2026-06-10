@@ -217,6 +217,34 @@ pub enum VerifierAttestationError {
     InvalidKeyType(String),
 }
 
+/// Errors returned during Request URI resolution.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum RequestUriError {
+    /// The request URI uses an invalid scheme (non-HTTPS).
+    #[error("request URI must use HTTPS scheme")]
+    InvalidScheme,
+
+    /// The response content type is invalid or missing.
+    #[error("invalid content type: expected '{expected}', got '{actual}'")]
+    InvalidContentType { expected: String, actual: String },
+
+    /// The Verifier returned an HTTP error response.
+    #[error("HTTP error: status={status}, body={body}")]
+    HttpError { status: u16, body: String },
+
+    /// The request URI is malformed or cannot be parsed.
+    #[error("invalid request URI: {0}")]
+    InvalidUrl(String),
+
+    /// A network or transport error occurred.
+    #[error("transport error: {0}")]
+    Transport(String),
+
+    /// Failed to serialize wallet metadata.
+    #[error("failed to serialize wallet metadata: {0}")]
+    Serialization(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
