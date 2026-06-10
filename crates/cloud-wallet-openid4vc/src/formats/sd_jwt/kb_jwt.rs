@@ -98,8 +98,8 @@ impl KeyBindingClaims {
         hashes: impl IntoIterator<Item = impl Into<String>>,
         alg: Option<impl Into<String>>,
     ) -> Self {
-        self.transaction_data_hashes = Some(hashes.into_iter().map(|h| h.into()).collect());
-        self.transaction_data_hashes_alg = alg.map(|a| a.into());
+        self.transaction_data_hashes = Some(hashes.into_iter().map(Into::into).collect());
+        self.transaction_data_hashes_alg = alg.map(Into::into);
         self
     }
 }
