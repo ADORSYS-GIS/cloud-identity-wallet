@@ -277,10 +277,7 @@ fn select_disclosures<'a>(
         }
     }
 
-    let issuer_payload = serde_json::to_value(sd_jwt.jwt().claims()).map_err(|e| {
-        ProofError::Serialization(format!("failed to serialize issuer claims: {e}"))
-    })?;
-
+    let issuer_payload = serde_json::to_value(sd_jwt.jwt().claims())?;
     let mut selected_indexes: HashSet<usize> = HashSet::new();
 
     for path in requested_claims {

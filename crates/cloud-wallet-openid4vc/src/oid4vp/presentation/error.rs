@@ -39,10 +39,19 @@ pub enum ProofError {
     /// Invalid proof input.
     #[error("invalid proof input: {0}")]
     InvalidInput(Cow<'static, str>),
-    /// SD-JWT parsing or disclosure processing failed.
-    #[error("SD-JWT processing failed: {0}")]
-    SdJwt(#[from] crate::formats::sd_jwt::Error),
-    /// JSON serialization error during proof construction.
-    #[error("serialization error: {0}")]
-    Serialization(String),
+    /// Format-specific processing error (e.g. SD-JWT, mdoc).
+    #[error(transparent)]
+    Format(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<crate::formats::sd_jwt::Error> for ProofError {
+    fn from(value: crate::formats::sd_jwt::Error) -> Self {
+        Self::Format(Box::new(value))
+    }
+}
+
+impl From<serde_json::Error> for ProofError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Format(Box::new(value))
+    }
 }
