@@ -2,7 +2,10 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest_middleware::ClientWithMiddleware;
 use url::Url;
 
-use crate::oid4vp::{authorization::{AuthorizationResponse, DirectPostResponse}, response_mode::error::DirectPostError};
+use crate::oid4vp::{
+    authorization::{AuthorizationResponse, DirectPostResponse},
+    response_mode::error::DirectPostError,
+};
 
 const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 
