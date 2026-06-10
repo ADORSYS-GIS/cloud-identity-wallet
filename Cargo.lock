@@ -963,6 +963,8 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "base64ct",
+ "ciborium",
  "cloud-wallet-crypto",
  "cloud-wallet-kms",
  "cloud-wallet-openid4vc",

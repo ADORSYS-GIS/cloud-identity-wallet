@@ -1,4 +1,5 @@
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
+use cloud_wallet_openid4vc::formats::mdoc::StaticTrustStore;
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 
 use crate::config::Config;
@@ -41,7 +42,11 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         tenant_repo,
         session_store,
         preferred_display_locales,
-    );
+    )
+    // TODO: load IACA root certificates from configuration for mdoc verification.
+    // The empty store is the fail-closed default: all mdoc credentials are rejected
+    // until IACA roots are supplied.
+    .with_iaca_trust_store(StaticTrustStore::new(vec![]));
     Ok(engine)
 }
 
