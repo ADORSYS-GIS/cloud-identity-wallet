@@ -42,9 +42,9 @@ impl std::fmt::Display for CodeChallengeMethod {
 /// OAuth 2.0 base authorization request parameters shared across OID4VCI and OID4VP.
 ///
 /// These parameters are defined by:
-/// - [RFC 6749 §4.1.1]: client_id, redirect_uri, scope, state
-/// - [RFC 7636]: code_challenge, code_challenge_method
-/// - [OpenID Connect Core]: nonce
+/// - RFC 6749 §4.1.1: `client_id`, `redirect_uri`, `scope`, `state`
+/// - RFC 7636: `code_challenge`, `code_challenge_method`
+/// - OpenID Connect Core: `nonce` (for replay protection)
 ///
 /// Note: `response_type` is NOT included here because its valid values are protocol-specific:
 /// - OAuth 2.0 Authorization Code flow: "code"
