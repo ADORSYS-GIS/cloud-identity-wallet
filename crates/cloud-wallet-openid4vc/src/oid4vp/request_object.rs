@@ -29,8 +29,11 @@ pub enum DiscoveryMode {
 
 #[async_trait::async_trait]
 pub trait VerifierKeyResolver: Send + Sync {
-    async fn resolve_key(&self, client_id: &ParsedClientId, header: &Header)
-    -> crate::errors::Result<DecodingKey>;
+    async fn resolve_key(
+        &self,
+        client_id: &ParsedClientId,
+        header: &Header,
+    ) -> crate::errors::Result<DecodingKey>;
 }
 
 #[skip_serializing_none]
@@ -127,9 +130,10 @@ impl RequestObject {
 }
 
 fn validate_header(header: &Header) -> std::result::Result<(), RequestObjectError> {
-    let typ = header.typ.as_deref().ok_or_else(|| {
-        RequestObjectError::InvalidHeader("missing typ".to_string())
-    })?;
+    let typ = header
+        .typ
+        .as_deref()
+        .ok_or_else(|| RequestObjectError::InvalidHeader("missing typ".to_string()))?;
     // Per RFC 9101, `typ` MUST be "oauth-authz-req+jwt" (exact case-sensitive value). RFC 7515
     // Section 4.1.9 recommends case-sensitive matching for registered `typ` values.
     if typ != REQUEST_OBJECT_TYP {
@@ -443,7 +447,10 @@ mod tests {
             RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
                 .await;
         assert!(result.is_err(), "should fail for unsupported typ");
-        assert!(matches!(result.unwrap_err(), RequestObjectError::InvalidHeader(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestObjectError::InvalidHeader(_)
+        ));
     }
 
     #[tokio::test]
@@ -513,7 +520,10 @@ mod tests {
             result.is_err(),
             "should fail when Request Object client_id does not match outer client_id"
         );
-        assert!(matches!(result.unwrap_err(), RequestObjectError::InvalidClientId(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            RequestObjectError::InvalidClientId(_)
+        ));
     }
 
     #[tokio::test]
