@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Serialize, Serializer};
 use serde_with::skip_serializing_none;
+use thiserror::Error;
 use url::Url;
 
 use crate::oid4vp::AuthorizationErrorCode;
@@ -15,6 +16,20 @@ pub enum Presentation {
 
     /// A JSON object presentation, such as a JSON-based verifiable presentation.
     Object(serde_json::Map<String, serde_json::Value>),
+}
+
+/// Errors that can occur when creating a VP token.
+#[derive(Debug, Error)]
+pub enum VpTokenError {
+    /// VP token must contain at least one credential query entry.
+    #[error("VP token must contain at least one credential query entry")]
+    Empty,
+    /// VP token entry has an invalid DCQL credential query identifier.
+    #[error("VP token entry '{query_id}' is not a valid DCQL credential query id")]
+    InvalidQueryId { query_id: String },
+    /// VP token entry has an empty presentation list.
+    #[error("VP token entry '{query_id}' must contain at least one presentation")]
+    EmptyPresentationList { query_id: String },
 }
 
 /// A VP token returned in an OpenID4VP authorization response.
@@ -36,22 +51,22 @@ impl VpToken {
     /// - The entries map is empty
     /// - Any query ID is not a valid DCQL credential query identifier
     /// - Any presentation array is empty
-    pub fn new(entries: BTreeMap<String, Vec<Presentation>>) -> Result<Self, String> {
+    pub fn new(entries: BTreeMap<String, Vec<Presentation>>) -> Result<Self, VpTokenError> {
         if entries.is_empty() {
-            return Err("vp_token must contain at least one credential query entry".to_string());
+            return Err(VpTokenError::Empty);
         }
 
         for (query_id, presentations) in &entries {
             if !is_valid_dcql_query_id(query_id) {
-                return Err(format!(
-                    "vp_token entry '{query_id}' is not a valid DCQL credential query id"
-                ));
+                return Err(VpTokenError::InvalidQueryId {
+                    query_id: query_id.clone(),
+                });
             }
 
             if presentations.is_empty() {
-                return Err(format!(
-                    "vp_token entry '{query_id}' must contain at least one presentation"
-                ));
+                return Err(VpTokenError::EmptyPresentationList {
+                    query_id: query_id.clone(),
+                });
             }
         }
 
@@ -454,10 +469,7 @@ mod tests {
     #[test]
     fn rejects_empty_vp_token_at_construction() {
         let err = VpToken::new(BTreeMap::new()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("at least one credential query entry")
-        );
+        assert!(matches!(err, VpTokenError::Empty));
     }
 
     #[test]
@@ -469,7 +481,9 @@ mod tests {
         );
 
         let err = VpToken::new(entries).unwrap_err();
-        assert!(err.to_string().contains("valid DCQL credential query id"));
+        assert!(
+            matches!(err, VpTokenError::InvalidQueryId { query_id } if query_id == "credential/1")
+        );
     }
 
     #[test]
@@ -478,7 +492,9 @@ mod tests {
         entries.insert("my_credential".to_string(), Vec::new());
 
         let err = VpToken::new(entries).unwrap_err();
-        assert!(err.to_string().contains("at least one presentation"));
+        assert!(
+            matches!(err, VpTokenError::EmptyPresentationList { query_id } if query_id == "my_credential")
+        );
     }
 
     #[test]

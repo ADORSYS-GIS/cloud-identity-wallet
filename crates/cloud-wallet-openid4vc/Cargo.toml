@@ -7,9 +7,10 @@ license.workspace = true
 [dependencies]
 cloud-wallet-crypto = { path = "../cloud-wallet-crypto", features = ["jwk"] }
 
+async-trait.workspace = true
 base64.workspace = true
 base64ct = { workspace = true, features = ["alloc"] }
-ciborium = "0.2"
+ciborium.workspace = true
 color-eyre.workspace = true
 coset = "0.4"
 csscolorparser = { version = "0.8", features = ["serde"] }

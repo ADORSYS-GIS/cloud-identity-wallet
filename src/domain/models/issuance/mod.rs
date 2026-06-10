@@ -17,9 +17,14 @@ pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 
 use std::{sync::Arc, time::Duration};
 
+use cloud_wallet_openid4vc::formats::mdoc::{
+    IacaTrustStore, ParsedMdoc, StaticTrustStore, verify_mdoc_for_issuance,
+};
 use cloud_wallet_openid4vc::formats::sd_jwt::{SdJwt, SdJwtClaims, StatusClaim, X5cTrustAnchors};
 use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
-use cloud_wallet_openid4vc::oid4vci::credential::formats::CredentialFormatDetails;
+use cloud_wallet_openid4vc::oid4vci::credential::formats::{
+    CredentialFormatDetails, MsoMdocCredentialConfiguration,
+};
 use cloud_wallet_openid4vc::oid4vci::credential::{
     CredentialResponse, DeferredCredentialResult, ImmediateCredentialResponse,
 };
@@ -72,6 +77,7 @@ pub struct IssuanceEngine {
     worker_notify: Arc<Notify>,
     preferred_display_locales: Arc<Vec<String>>,
     x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
+    iaca_trust_store: Arc<dyn IacaTrustStore>,
 }
 
 impl Clone for IssuanceEngine {
@@ -87,6 +93,7 @@ impl Clone for IssuanceEngine {
             worker_notify: Arc::clone(&self.worker_notify),
             preferred_display_locales: Arc::clone(&self.preferred_display_locales),
             x5c_trust_anchors: Arc::clone(&self.x5c_trust_anchors),
+            iaca_trust_store: Arc::clone(&self.iaca_trust_store),
         }
     }
 }
@@ -109,6 +116,10 @@ impl std::fmt::Debug for IssuanceEngine {
             )
             .field("worker_count", &self.worker_count())
             .field("preferred_display_locales", &self.preferred_display_locales)
+            .field(
+                "iaca_trust_store",
+                &std::any::type_name::<dyn IacaTrustStore>(),
+            )
             .finish()
     }
 }
@@ -181,6 +192,9 @@ impl IssuanceEngine {
             worker_notify: Arc::new(Notify::new()),
             preferred_display_locales: Arc::new(preferred_display_locales),
             x5c_trust_anchors: Arc::default(),
+            // Fail-closed default: no mdoc credentials are accepted until IACA roots
+            // are configured via `with_iaca_trust_store`.
+            iaca_trust_store: Arc::new(StaticTrustStore::new(vec![])),
         };
 
         engine.start_worker_count(session_store.clone(), worker_count)
@@ -192,6 +206,19 @@ impl IssuanceEngine {
     pub fn with_x5c_trust_anchors(mut self, trust_anchors: Vec<TrustAnchor<'static>>) -> Self {
         self.x5c_trust_anchors = Arc::new(trust_anchors);
         self
+    }
+
+    /// Configure the IACA trust store used for ISO 18013-5 mdoc issuer signature verification.
+    ///
+    /// The default (fail-closed) store rejects all mdoc credentials. Supply the IACA root
+    /// DER certificates for each issuing authority whose credentials this wallet should accept.
+    pub fn with_iaca_trust_store(mut self, store: impl IacaTrustStore + 'static) -> Self {
+        self.iaca_trust_store = Arc::new(store);
+        self
+    }
+
+    fn iaca_trust_store(&self) -> &dyn IacaTrustStore {
+        self.iaca_trust_store.as_ref()
     }
 
     /// Return the number of worker currently attached to this engine.
@@ -509,9 +536,15 @@ impl IssuanceEngine {
         for cred_obj in immediate.credentials {
             let raw = match cred_obj.credential {
                 serde_json::Value::String(s) => s,
+                // OID4VCI §7.3: ldp_vc credentials are JSON objects, not strings.
+                v @ serde_json::Value::Object(_) => serde_json::to_string(&v).map_err(|e| {
+                    IssuanceError::credential_request(format!(
+                        "failed to serialize JSON credential: {e}"
+                    ))
+                })?,
                 _ => {
                     return Err(IssuanceError::credential_request(
-                        "the received credential is not a string",
+                        "credential must be a string or a JSON object",
                     ));
                 }
             };
@@ -661,6 +694,42 @@ impl IssuanceEngine {
                 }
                 credential_from_sd_jwt(tenant_id, issuer, claims, raw_credential, receipt_time)
             }
+            CredentialFormatDetails::MsoMdoc(mdoc_config) => {
+                // Structural parse (ISO 18013-5 §9.3.1). Temporal validity, digest
+                // integrity, issuer certificate chain + COSE_Sign1 signature, and
+                // device key binding are all enforced together inside
+                // `verify_mdoc_for_issuance` so no check can be accidentally omitted.
+                let parsed = ParsedMdoc::parse(&raw_credential)?;
+                let signer = self.build_signer(tenant_id).await?;
+                // Assumption: tenant key material is immutable for the duration of
+                // an issuance flow. `build_signer` here produces the same key pair
+                // that was used to sign the credential request proof, so
+                // `holder_binding_public_jwk()` reflects the correct holder binding
+                // key. If mid-flow key rotation becomes possible, carry the proof
+                // public JWK from the credential request signer forward instead of
+                // rebuilding here.
+                // Use the time the credential was received (receipt_time) rather than
+                // the current wall clock so that temporal validation is deterministic
+                // for a given request and is testable with controlled time values.
+                let now = receipt_time.to_offset(time::UtcOffset::UTC);
+                // Note: RSA-keyed tenants are incompatible with ISO 18013-5 device key
+                // binding (EC/OKP only); they will receive an UnsupportedKeyType error.
+                let issuer_info = verify_mdoc_for_issuance(
+                    &parsed,
+                    &mdoc_config.doctype,
+                    self.iaca_trust_store(),
+                    signer.holder_binding_public_jwk(),
+                    now,
+                )?;
+                info!(
+                    // TODO: this will be stored later because it is needed for the presentation phase
+                    tenant_id = %tenant_id,
+                    issuer_subject = %issuer_info.issuer_subject,
+                    issuer_country = %issuer_info.issuer_country,
+                    "verified mdoc issuer chain"
+                );
+                credential_from_mdoc(tenant_id, issuer, mdoc_config, parsed, raw_credential)
+            }
             other => Err(IssuanceError::credential_request(format!(
                 "unsupported credential format '{}'",
                 other.format_str()
@@ -773,6 +842,48 @@ fn credential_from_sd_jwt(
         status_location,
         status_index,
         raw_credential,
+    })
+}
+
+/// Build a [`Credential`] from a verified and parsed mDoc.
+///
+/// `issued_at` is taken from the MSO `signed` field (the moment the issuer
+/// produced the signature), which is the closest equivalent to the JWT `iat`
+/// claim.  ISO 18013-5 also defines `validFrom`; for credentials where
+/// `signed` < `validFrom` (post-dated mDocs) the stored `issued_at` will
+/// precede the credential's activation time.  This is consistent with how
+/// SD-JWT VC uses `iat` and is acceptable for wallet display purposes.
+fn credential_from_mdoc(
+    tenant_id: Uuid,
+    issuer: &str,
+    mdoc_config: &MsoMdocCredentialConfiguration,
+    parsed: ParsedMdoc,
+    raw_credential: String,
+) -> Result<Credential> {
+    let issued_at = mdoc_utc_timestamp("signed_at", parsed.signed_at)?;
+    let valid_until = mdoc_utc_timestamp("valid_until", parsed.valid_until)?;
+
+    Ok(Credential {
+        id: Uuid::new_v4(),
+        tenant_id,
+        issuer: issuer.to_owned(),
+        subject: None,
+        credential_types: vec![mdoc_config.doctype.clone()],
+        format: CredentialFormat::Mdoc,
+        external_id: None,
+        status: CredentialStatus::Active,
+        issued_at,
+        valid_until: Some(valid_until),
+        is_revoked: false,
+        status_location: None,
+        status_index: None,
+        raw_credential,
+    })
+}
+
+fn mdoc_utc_timestamp(field: &str, value: time::OffsetDateTime) -> Result<time::UtcDateTime> {
+    time::UtcDateTime::from_unix_timestamp(value.unix_timestamp()).map_err(|e| {
+        IssuanceError::credential_request(format!("mdoc {field} timestamp out of range: {e}"))
     })
 }
 
