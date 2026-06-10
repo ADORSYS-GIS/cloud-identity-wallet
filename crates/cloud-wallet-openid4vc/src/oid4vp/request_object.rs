@@ -16,7 +16,6 @@ use serde_with::skip_serializing_none;
 
 const REQUEST_OBJECT_TYP: &str = "oauth-authz-req+jwt";
 const SELF_ISSUED_AUDIENCE: &str = "https://self-issued.me/v2";
-const MAX_IAT_AGE_SECONDS: i64 = 60 * 60;
 
 /// Discovery mode for audience validation.
 ///
@@ -33,10 +32,6 @@ pub enum DiscoveryMode {
 pub trait VerifierKeyResolver: Send + Sync {
     async fn resolve_key(&self, client_id: &ParsedClientId, header: &Header)
     -> Result<DecodingKey>;
-}
-
-pub fn client_id_requires_signature(client_id: &ParsedClientId) -> bool {
-    !client_id.is_redirect_uri()
 }
 
 #[skip_serializing_none]
@@ -59,10 +54,9 @@ pub struct RequestObject {
 impl RequestObject {
     pub async fn decode_and_validate(
         jwt: &str,
-        outer_client_id: Option<&str>,
+        outer_client_id: &str,
         discovery_mode: DiscoveryMode,
         resolver: &dyn VerifierKeyResolver,
-        allow_unsigned: bool,
     ) -> Result<Self> {
         let jwt_parts: Vec<&str> = jwt.split('.').collect();
         if jwt_parts.len() != 3 {
@@ -89,69 +83,10 @@ impl RequestObject {
         let is_unsigned = header_json.get("alg").and_then(|v| v.as_str()) == Some("none");
 
         if is_unsigned {
-            if !allow_unsigned {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "unsigned Request Objects are not allowed",
-                ));
-            }
-
-            let payload_json_bytes = Base64UrlUnpadded::decode_vec(jwt_parts[1]).map_err(|e| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("malformed JWT: failed to decode payload: {e}"),
-                )
-            })?;
-            let claims: RequestObjectClaims =
-                serde_json::from_slice(&payload_json_bytes).map_err(|e| {
-                    Error::message(
-                        ErrorKind::InvalidPresentationRequest,
-                        format!("malformed JWT: {e}"),
-                    )
-                })?;
-
-            let header = Header {
-                typ: header_json
-                    .get("typ")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                ..Default::default()
-            };
-            validate_header(&header)?;
-
-            let client_id_str = claims.params.client_id.as_str();
-            let parsed_client_id = ParsedClientId::parse(client_id_str).map_err(|e| {
-                Error::message(ErrorKind::InvalidPresentationRequest, e.to_string())
-            })?;
-
-            if let Some(outer) = outer_client_id
-                && outer != client_id_str
-            {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!(
-                        "Request Object client_id '{client_id_str}' does not match outer client_id '{outer}'"
-                    ),
-                ));
-            }
-
-            if client_id_requires_signature(&parsed_client_id) {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "signature required for this client_id type",
-                ));
-            }
-
-            validate_claims(&claims, discovery_mode)?;
-            claims.params.validate().map_err(|e| {
-                Error::message(ErrorKind::InvalidPresentationRequest, e.to_string())
-            })?;
-
-            return Ok(Self {
-                header,
-                claims,
-                client_id: parsed_client_id,
-            });
+            return Err(Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                "unsigned Request Objects are not allowed",
+            ));
         }
 
         let header = decode_header(jwt).map_err(|e| {
@@ -162,6 +97,17 @@ impl RequestObject {
         })?;
         validate_header(&header)?;
 
+        // Parse the outer client_id first and use it for key resolution.
+        // Per the updated ticket, the outer Authorization Request client_id is the
+        // trusted source for verifier identity; the Request Object client_id claim
+        // is only checked for equality after decode.
+        let outer_parsed_client_id = ParsedClientId::parse(outer_client_id)
+            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+
+        let decoding_key = resolver
+            .resolve_key(&outer_parsed_client_id, &header)
+            .await?;
+
         let claims_unverified: RequestObjectClaims =
             dangerous::insecure_decode::<RequestObjectClaims>(jwt)
                 .map_err(|e| {
@@ -171,23 +117,6 @@ impl RequestObject {
                     )
                 })?
                 .claims;
-
-        let client_id_str = claims_unverified.params.client_id.as_str();
-        let parsed_client_id = ParsedClientId::parse(client_id_str)
-            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
-
-        if let Some(outer) = outer_client_id
-            && outer != client_id_str
-        {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!(
-                    "Request Object client_id '{client_id_str}' does not match outer client_id '{outer}'"
-                ),
-            ));
-        }
-
-        let decoding_key = resolver.resolve_key(&parsed_client_id, &header).await?;
 
         let algorithm = header.alg;
         let mut validation = Validation::new(algorithm);
@@ -205,10 +134,21 @@ impl RequestObject {
                 validation.set_audience(&[iss]);
             }
         }
-        validation.set_required_spec_claims(&["exp", "iat"]);
+        validation.set_required_spec_claims(&["exp"]);
 
         let token_data = decode::<RequestObjectClaims>(jwt, &decoding_key, &validation)
             .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e.to_string()))?;
+
+        // Validate that the Request Object client_id matches the outer client_id
+        let request_object_client_id_str = token_data.claims.params.client_id.as_str();
+        if outer_client_id != request_object_client_id_str {
+            return Err(Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                format!(
+                    "Request Object client_id '{request_object_client_id_str}' does not match outer client_id '{outer_client_id}'"
+                ),
+            ));
+        }
 
         validate_claims(&token_data.claims, discovery_mode)?;
         token_data
@@ -220,7 +160,7 @@ impl RequestObject {
         Ok(Self {
             header,
             claims: token_data.claims,
-            client_id: parsed_client_id,
+            client_id: outer_parsed_client_id,
         })
     }
 }
@@ -285,17 +225,6 @@ fn validate_claims(claims: &RequestObjectClaims, discovery_mode: DiscoveryMode) 
         }
     }
 
-    // Validate iss matches client_id per RFC 9101 Section 5 and OpenID4VP Section 5.8
-    if let Some(iss) = &claims.rfc7519.iss {
-        let client_id = &claims.params.client_id;
-        if iss != client_id {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("iss claim '{iss}' does not match client_id '{client_id}'"),
-            ));
-        }
-    }
-
     let now: i64 = jsonwebtoken::get_current_timestamp() as i64;
 
     match claims.rfc7519.exp {
@@ -331,29 +260,6 @@ fn validate_claims(claims: &RequestObjectClaims, discovery_mode: DiscoveryMode) 
         }
     }
 
-    match claims.rfc7519.iat {
-        Some(iat) => {
-            if iat < now.saturating_sub(MAX_IAT_AGE_SECONDS) {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "invalid iat: too old",
-                ));
-            }
-            if iat > now {
-                return Err(Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    "invalid iat: in the future",
-                ));
-            }
-        }
-        None => {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "missing required claim: iat",
-            ));
-        }
-    }
-
     Ok(())
 }
 
@@ -383,29 +289,6 @@ mod tests {
         encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap()
     }
 
-    fn create_unsigned_jwt(client_id: &str, aud: &str) -> String {
-        let now = jsonwebtoken::get_current_timestamp() as i64;
-        let header = serde_json::json!({
-            "alg": "none",
-            "typ": REQUEST_OBJECT_TYP,
-        });
-        let payload = serde_json::json!({
-            "iss": client_id,
-            "aud": aud,
-            "exp": now + 300,
-            "iat": now,
-            "client_id": client_id,
-            "response_type": "vp_token",
-            "response_mode": "direct_post",
-            "nonce": "test-nonce",
-            "response_uri": "https://verifier.example.com/response",
-            "scope": "openid",
-        });
-        let header_b64 = Base64UrlUnpadded::encode_string(header.to_string().as_bytes());
-        let payload_b64 = Base64UrlUnpadded::encode_string(payload.to_string().as_bytes());
-        format!("{header_b64}.{payload_b64}.")
-    }
-
     struct MockResolver {
         key: DecodingKey,
     }
@@ -428,14 +311,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(result.is_ok(), "should succeed: {:?}", result.err());
     }
 
@@ -446,14 +324,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Static,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Static, &resolver)
+                .await;
         assert!(result.is_ok(), "should succeed: {:?}", result.err());
     }
 
@@ -464,14 +337,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(b"wrong-secret"),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(result.is_err(), "should fail with invalid signature");
     }
 
@@ -496,14 +364,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(result.is_err(), "should fail for expired");
     }
 
@@ -529,14 +392,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(result.is_err(), "should fail for invalid nbf");
     }
 
@@ -547,14 +405,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Static,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Static, &resolver)
+                .await;
         assert!(
             result.is_err(),
             "should fail for invalid aud in static mode"
@@ -568,14 +421,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(
             result.is_err(),
             "should fail for invalid aud in dynamic mode"
@@ -602,14 +450,9 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(
             result.is_err(),
             "should fail for missing iss in dynamic mode"
@@ -623,10 +466,9 @@ mod tests {
         };
         let result = RequestObject::decode_and_validate(
             "not-a-jwt",
-            None,
+            "redirect_uri:https://verifier.example.com",
             DiscoveryMode::Dynamic,
             &resolver,
-            false,
         )
         .await;
         assert!(result.is_err(), "should fail for malformed JWT");
@@ -653,51 +495,57 @@ mod tests {
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            false,
-        )
-        .await;
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
         assert!(result.is_err(), "should fail for unsupported typ");
         assert!(result.unwrap_err().to_string().contains("typ"));
     }
 
     #[tokio::test]
-    async fn valid_unsigned_request_object() {
+    async fn unsigned_request_object_rejected() {
         let client_id = "redirect_uri:https://verifier.example.com";
-        let jwt = create_unsigned_jwt(client_id, client_id);
+        let header = serde_json::json!({
+            "alg": "none",
+            "typ": REQUEST_OBJECT_TYP,
+        });
+        let payload = serde_json::json!({
+            "iss": client_id,
+            "aud": client_id,
+            "exp": jsonwebtoken::get_current_timestamp() as i64 + 300,
+            "iat": jsonwebtoken::get_current_timestamp() as i64,
+            "client_id": client_id,
+            "response_type": "vp_token",
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid",
+        });
+        let header_b64 = Base64UrlUnpadded::encode_string(header.to_string().as_bytes());
+        let payload_b64 = Base64UrlUnpadded::encode_string(payload.to_string().as_bytes());
+        let jwt = format!("{header_b64}.{payload_b64}.");
+
         let resolver = MockResolver {
             key: DecodingKey::from_secret(TEST_SECRET),
         };
-        let result = RequestObject::decode_and_validate(
-            &jwt,
-            Some(client_id),
-            DiscoveryMode::Dynamic,
-            &resolver,
-            true,
-        )
-        .await;
-        assert!(
-            result.is_ok(),
-            "should succeed for unsigned: {:?}",
-            result.err()
-        );
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
+        assert!(result.is_err(), "should fail for unsigned request object");
+        assert!(result.unwrap_err().to_string().contains("unsigned"));
     }
 
     #[tokio::test]
-    async fn invalid_iss_mismatch() {
+    async fn mismatched_client_id() {
         let now = jsonwebtoken::get_current_timestamp() as i64;
-        let client_id = "redirect_uri:https://verifier.example.com";
+        let outer_client_id = "redirect_uri:https://verifier.example.com";
         let wrong_iss = "redirect_uri:https://other-verifier.example.com";
         let payload = serde_json::json!({
             "iss": wrong_iss,
             "aud": wrong_iss,
             "exp": now + 300,
             "iat": now,
-            "client_id": client_id,
+            "client_id": wrong_iss,
             "response_type": "vp_token",
             "response_mode": "direct_post",
             "nonce": "test-nonce",
@@ -712,16 +560,46 @@ mod tests {
         };
         let result = RequestObject::decode_and_validate(
             &jwt,
-            Some(client_id),
+            outer_client_id,
             DiscoveryMode::Dynamic,
             &resolver,
-            false,
         )
         .await;
         assert!(
             result.is_err(),
-            "should fail when iss does not match client_id"
+            "should fail when Request Object client_id does not match outer client_id"
         );
-        assert!(result.unwrap_err().to_string().contains("iss"));
+        assert!(result.unwrap_err().to_string().contains("client_id"));
+    }
+
+    #[tokio::test]
+    async fn valid_without_iat() {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        let client_id = "redirect_uri:https://verifier.example.com";
+        let payload = serde_json::json!({
+            "iss": client_id,
+            "aud": client_id,
+            "exp": now + 300,
+            "client_id": client_id,
+            "response_type": "vp_token",
+            "response_mode": "direct_post",
+            "nonce": "test-nonce",
+            "response_uri": "https://verifier.example.com/response",
+            "scope": "openid",
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.typ = Some(REQUEST_OBJECT_TYP.to_string());
+        let jwt = encode(&header, &payload, &EncodingKey::from_secret(TEST_SECRET)).unwrap();
+        let resolver = MockResolver {
+            key: DecodingKey::from_secret(TEST_SECRET),
+        };
+        let result =
+            RequestObject::decode_and_validate(&jwt, client_id, DiscoveryMode::Dynamic, &resolver)
+                .await;
+        assert!(
+            result.is_ok(),
+            "should succeed without iat: {:?}",
+            result.err()
+        );
     }
 }
