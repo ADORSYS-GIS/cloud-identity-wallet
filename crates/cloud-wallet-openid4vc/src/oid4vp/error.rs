@@ -145,12 +145,59 @@ pub enum AuthorizationErrorCode {
     #[error("The wallet is unavailable")]
     WalletUnavailable,
 
+    /// The Request Object JWT is invalid or malformed.
+    ///
+    /// This error is returned when the Request Object JWT signature
+    /// verification fails, the JWT is expired, or required claims are missing.
+    /// Defined in [RFC 9101 §5](https://datatracker.ietf.org/doc/html/rfc9101#section-5)
+    /// and [OpenID4VP §5.8](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.8).
+    #[error("The request object is invalid or malformed")]
+    InvalidRequestObject,
     /// The transaction data is invalid, malformed, contains unknown fields,
     /// has unsupported types, or references unknown credential IDs.
     ///
     /// Defined in [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5)
     #[error("The transaction data is invalid")]
     InvalidTransactionData,
+}
+
+/// Error type for Request Object JWT validation failures.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum RequestObjectError {
+    /// The JWT format is invalid or malformed.
+    #[error("malformed JWT: {0}")]
+    InvalidFormat(String),
+
+    /// Unsigned (alg: none) Request Objects are not allowed.
+    #[error("unsigned Request Objects are not allowed")]
+    Unsigned,
+
+    /// The `typ` header parameter is missing or has an unexpected value.
+    #[error("unsupported JOSE header: {0}")]
+    InvalidHeader(String),
+
+    /// The Request Object `client_id` does not match the outer client_id.
+    #[error("invalid client_id: {0}")]
+    InvalidClientId(String),
+
+    /// Required claims are missing or invalid.
+    #[error("invalid claims: {0}")]
+    InvalidClaims(String),
+
+    /// JWT signature verification failed.
+    #[error("signature verification failed: {0}")]
+    SignatureVerificationFailed(String),
+
+    /// Failed to resolve the verifier's public key.
+    #[error("failed to resolve verifier key: {0}")]
+    KeyResolutionFailed(String),
+}
+
+impl From<RequestObjectError> for AuthorizationErrorResponse {
+    fn from(err: RequestObjectError) -> Self {
+        AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequestObject)
+            .with_description(err.to_string())
+    }
 }
 
 /// Error type for Verifier Attestation JWT validation failures.
@@ -404,6 +451,17 @@ mod tests {
         assert_eq!(
             error.error_description,
             Some("Unsupported input descriptor format".to_string())
+        );
+    }
+
+    #[test]
+    fn test_invalid_request_object_error() {
+        let error = AuthorizationErrorResponse::new(AuthorizationErrorCode::InvalidRequestObject)
+            .with_description("Request Object signature verification failed");
+        assert_eq!(error.error, AuthorizationErrorCode::InvalidRequestObject);
+        assert_eq!(
+            error.error_description,
+            Some("Request Object signature verification failed".to_string())
         );
     }
 }
