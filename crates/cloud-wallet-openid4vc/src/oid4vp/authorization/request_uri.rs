@@ -10,28 +10,6 @@ use url::Url;
 /// Content type for the Request Object response as defined in RFC 9101 and OpenID4VP.
 pub const OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE: &str = "application/oauth-authz-req+jwt";
 
-/// Response from the Request URI endpoint containing the Request Object JWT.
-///
-/// Per [OpenID4VP Section 5.10.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.1),
-/// a successful response returns the Request Object as a JWT with content type
-/// `application/oauth-authz-req+jwt`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestUriResponse {
-    pub jwt: String,
-}
-
-impl RequestUriResponse {
-    /// Creates a new RequestUriResponse with the given JWT.
-    pub fn new(jwt: impl Into<String>) -> Self {
-        Self { jwt: jwt.into() }
-    }
-
-    /// Returns the JWT string.
-    pub fn into_jwt(self) -> String {
-        self.jwt
-    }
-}
-
 /// Result from Request URI resolution, including the JWT and context for later validation.
 ///
 /// Per [OpenID4VP Section 5.10.1](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.1),
@@ -109,7 +87,7 @@ pub async fn resolve_request_uri_get(
     Ok(RequestUriResult::new(jwt, None))
 }
 
-/// Resolves a Request URI using HTTP POST with wallet metadata.
+/// Resolves a Request URI using HTTP POST with optional wallet metadata and nonce.
 ///
 /// Per [OpenID4VP Section 5.10](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10),
 /// the Wallet sends an HTTP POST request to the `request_uri` endpoint with:
@@ -118,19 +96,21 @@ pub async fn resolve_request_uri_get(
 pub async fn resolve_request_uri_post(
     client: &ClientWithMiddleware,
     uri: &Url,
-    wallet_metadata: &WalletPresentationMetadata,
+    wallet_metadata: Option<&WalletPresentationMetadata>,
     wallet_nonce: Option<&str>,
 ) -> Result<RequestUriResult, RequestUriError> {
     validate_https_scheme(uri)?;
 
-    // Serialize wallet metadata to JSON
-    let wallet_metadata_json = serde_json::to_string(wallet_metadata).map_err(|e| {
-        RequestUriError::Serialization(format!("failed to serialize wallet_metadata: {e}"))
-    })?;
+    // Serialize wallet metadata to JSON if provided
+    let wallet_metadata_json = wallet_metadata
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| {
+            RequestUriError::Serialization(format!("failed to serialize wallet_metadata: {e}"))
+        })?;
 
     // Build POST parameters using native reqwest form encoding
-    let params =
-        RequestUriPostParams::new(Some(wallet_metadata_json), wallet_nonce.map(String::from));
+    let params = RequestUriPostParams::new(wallet_metadata_json, wallet_nonce.map(String::from));
 
     let response = client
         .post(uri.as_str())
@@ -154,25 +134,13 @@ pub async fn resolve_request_uri(
     client: &ClientWithMiddleware,
     uri: &Url,
     method: Option<RequestUriMethod>,
-    wallet_metadata: &Option<WalletPresentationMetadata>,
+    wallet_metadata: Option<&WalletPresentationMetadata>,
     wallet_nonce: Option<&str>,
 ) -> Result<RequestUriResult, RequestUriError> {
     match method.unwrap_or_default() {
         RequestUriMethod::Get => resolve_request_uri_get(client, uri).await,
         RequestUriMethod::Post => {
-            // For POST, wallet_metadata is required per the spec workflow
-            let metadata =
-                wallet_metadata
-                    .as_ref()
-                    .ok_or_else(|| RequestUriError::AuthorizationError {
-                        error: AuthorizationErrorResponse::new(
-                            crate::oid4vp::AuthorizationErrorCode::InvalidRequest,
-                        )
-                        .with_description("wallet_metadata is required for POST method"),
-                        status: 400,
-                    })?;
-
-            resolve_request_uri_post(client, uri, metadata, wallet_nonce).await
+            resolve_request_uri_post(client, uri, wallet_metadata, wallet_nonce).await
         }
     }
 }
@@ -226,7 +194,9 @@ async fn handle_response(response: reqwest::Response) -> Result<String, RequestU
         .await
         .map_err(|e| RequestUriError::Transport(format!("failed to read response body: {e}")))?;
 
-    // Per Section 5.10.2: HTTP error responses MUST terminate the process
+    // Per Section 5.10.2: HTTP error responses MUST terminate the process.
+    // As a diagnostic convenience, we attempt to parse a structured error response
+    // (similar to OAuth 2.0 error format), but this is not defined by the spec.
     if status != StatusCode::OK {
         if let Ok(error_response) = serde_json::from_str::<AuthorizationErrorResponse>(&body) {
             return Err(RequestUriError::AuthorizationError {
@@ -242,8 +212,8 @@ async fn handle_response(response: reqwest::Response) -> Result<String, RequestU
         });
     }
 
-    // Validate content type for successful responses
-    if content_type != OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE {
+    // Validate content type for successful responses (case-insensitive per RFC 7231)
+    if !content_type.eq_ignore_ascii_case(OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE) {
         return Err(RequestUriError::InvalidContentType {
             expected: OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE.to_string(),
             actual: content_type,
@@ -414,7 +384,8 @@ mod tests {
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
         let result =
-            resolve_request_uri_post(&client, &uri, &wallet_metadata, Some(wallet_nonce)).await;
+            resolve_request_uri_post(&client, &uri, Some(&wallet_metadata), Some(wallet_nonce))
+                .await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -441,7 +412,7 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
+        let result = resolve_request_uri_post(&client, &uri, Some(&wallet_metadata), None).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -463,7 +434,7 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
+        let result = resolve_request_uri_post(&client, &uri, Some(&wallet_metadata), None).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -473,7 +444,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_request_uri_post_authorization_error_response() {
-        // Per Section 5.10.2, the Verifier may return an AuthorizationErrorResponse
+        // Test that we can parse a structured error response as a diagnostic convenience
+        // (Section 5.10.2 requires termination but doesn't define the response format)
         let mock_server = MockServer::start().await;
         let wallet_metadata = create_test_wallet_metadata();
 
@@ -495,7 +467,7 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result = resolve_request_uri_post(&client, &uri, &wallet_metadata, None).await;
+        let result = resolve_request_uri_post(&client, &uri, Some(&wallet_metadata), None).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             RequestUriError::AuthorizationError { error, status } => {
@@ -535,7 +507,7 @@ mod tests {
             &client,
             &uri,
             Some(RequestUriMethod::Post),
-            &Some(wallet_metadata),
+            Some(&wallet_metadata),
             Some(wallet_nonce),
         )
         .await;
@@ -547,28 +519,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_request_uri_post_missing_wallet_metadata() {
+    async fn test_resolve_request_uri_post_without_wallet_metadata() {
+        // Per spec Section 5.10, wallet_metadata is OPTIONAL for POST
+        let mock_server = MockServer::start().await;
+        let wallet_nonce = "test-nonce-789";
+        let jwt = create_test_jwt_with_nonce(wallet_nonce);
+
+        Mock::given(method("POST"))
+            .and(path("/request"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jwt.clone().into_bytes())
+                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
+            )
+            .mount(&mock_server)
+            .await;
+
         let client = create_test_client();
-        let uri = Url::parse("https://example.com/request").unwrap();
+        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
-        let result =
-            resolve_request_uri(&client, &uri, Some(RequestUriMethod::Post), &None, None).await;
+        // POST without wallet_metadata should succeed per the spec
+        let result = resolve_request_uri_post(&client, &uri, None, Some(wallet_nonce)).await;
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RequestUriError::AuthorizationError { error, status } => {
-                assert_eq!(status, 400);
-                assert_eq!(
-                    error.error,
-                    crate::oid4vp::AuthorizationErrorCode::InvalidRequest
-                );
-                assert_eq!(
-                    error.error_description,
-                    Some("wallet_metadata is required for POST method".to_string())
-                );
-            }
-            other => panic!("Expected AuthorizationError, got {:?}", other),
-        }
+        assert!(result.is_ok(), "Expected Ok but got {:?}", result);
+        let result = result.unwrap();
+        assert_eq!(result.jwt, jwt);
+        assert_eq!(result.expected_wallet_nonce, Some(wallet_nonce.to_string()));
     }
 
     #[tokio::test]
@@ -591,7 +567,7 @@ mod tests {
         let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
 
         // Pass None for method - should default to GET
-        let result = resolve_request_uri(&client, &uri, None, &None, None).await;
+        let result = resolve_request_uri(&client, &uri, None, None, None).await;
 
         assert!(result.is_ok(), "Expected Ok but got {:?}", result);
         let result = result.unwrap();

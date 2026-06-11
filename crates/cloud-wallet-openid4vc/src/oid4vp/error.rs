@@ -232,21 +232,15 @@ pub enum RequestUriError {
     #[error("HTTP error: status={status}, body={body}")]
     HttpError { status: u16, body: String },
 
-    /// The Verifier returned an authorization error response as defined in
-    /// [OpenID4VP Section 5.10.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.2).
+    /// The Verifier returned an HTTP error response with a body that could be
+    /// parsed as a structured authorization error (similar to OAuth 2.0 format).
     ///
-    /// This variant is returned when the Verifier responds with a structured
-    /// authorization error (e.g., `invalid_request`, `access_denied`) that
-    /// could be parsed according to the spec.
+    /// [OpenID4VP Section 5.10.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10.2)
     #[error("authorization error: {error} (HTTP {status})")]
     AuthorizationError {
         error: AuthorizationErrorResponse,
         status: u16,
     },
-
-    /// The request URI is malformed or cannot be parsed.
-    #[error("invalid request URI: {0}")]
-    InvalidUrl(String),
 
     /// A network or transport error occurred.
     #[error("transport error: {0}")]
@@ -255,14 +249,6 @@ pub enum RequestUriError {
     /// Failed to serialize wallet metadata.
     #[error("failed to serialize wallet metadata: {0}")]
     Serialization(String),
-
-    /// Validation error occurred.
-    #[error("validation error: {0}")]
-    ValidationError(String),
-
-    /// Failed to decode data.
-    #[error("decoding failed: {0}")]
-    DecodingFailed(String),
 }
 
 #[cfg(test)]
