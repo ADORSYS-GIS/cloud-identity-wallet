@@ -1973,19 +1973,20 @@ components:
           oneOf:
             - type: string
               enum:
-                - pre_registered
-                - did_resolution
+                - pre-registered
+                - decentralized_identifier
                 - redirect_uri
                 - verifier_attestation
                 - x509_san_dns
+                - x509_san_uri
                 - x509_hash
                 - openid_federation
             - type: "null"
           description: |
             How verification was performed per OID4VP §5.9.3 client identifier
-            schemes: `pre_registered`, `did_resolution`, `redirect_uri`,
-            `verifier_attestation`, `x509_san_dns`, `x509_hash`, `openid_federation`,
-            or `null` if unverified.
+            schemes: `pre-registered`, `decentralized_identifier`, `redirect_uri`,
+            `verifier_attestation`, `x509_san_dns`, `x509_san_uri`, `x509_hash`,
+            `openid_federation`, or `null` if unverified.
           example: "x509_san_dns"
 
     CredentialMatch:
@@ -2111,6 +2112,7 @@ components:
 
     PresentationConsentAcceptRequest:
       type: object
+      additionalProperties: false
       required:
         - accepted
         - selected_credentials
@@ -2138,6 +2140,7 @@ components:
 
     PresentationConsentRejectRequest:
       type: object
+      additionalProperties: false
       required:
         - accepted
       properties:
