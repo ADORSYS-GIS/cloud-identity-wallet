@@ -265,10 +265,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(
-            err,
-            DirectPostError::RedirectNotFollowed { status: 302 }
-        );
+        assert_eq!(err, DirectPostError::RedirectNotFollowed { status: 302 });
     }
 
     #[tokio::test]
