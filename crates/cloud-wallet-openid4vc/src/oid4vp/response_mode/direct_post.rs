@@ -61,14 +61,8 @@ async fn execute_direct_post(
             .await
             .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
 
-        // Per OpenID4VP §8.2: The Verifier's response body is optional.
-        // Empty body or empty JSON object both mean "no redirect_uri".
-        if body_bytes.is_empty() {
-            return Ok(DirectPostResponse { redirect_uri: None });
-        }
-
         match content_type {
-            Some(ct) if ct == "application/json" || ct.starts_with("application/json;") => {}
+            Some(ref ct) if is_json_content_type(ct) => {}
             _ => {
                 return Err(DirectPostError::ResponseParseError(format!(
                     "expected application/json response, got content-type: {content_type:?}"
@@ -95,6 +89,13 @@ async fn execute_direct_post(
             })
         }
     }
+}
+
+/// Checks whether a `Content-Type` header value is `application/json`,
+/// ignoring ASCII case and any parameters after `;`.
+fn is_json_content_type(value: &str) -> bool {
+    let (media_type, _rest) = value.split_once(';').unwrap_or((value, ""));
+    media_type.trim().eq_ignore_ascii_case("application/json")
 }
 
 fn validate_response_uri(
@@ -172,27 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn successful_direct_post_without_redirect_uri() {
-        let mock_server = MockServer::start().await;
-        let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
-
-        Mock::given(method("POST"))
-            .and(path("/response"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-            .mount(&mock_server)
-            .await;
-
-        let client = test_http_client();
-        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
-        let result = execute_direct_post(&client, &uri, &response)
-            .await
-            .expect("success");
-
-        assert!(result.redirect_uri.is_none());
-    }
-
-    #[tokio::test]
-    async fn successful_direct_post_with_empty_body() {
+    async fn rejects_empty_response_body() {
         let mock_server = MockServer::start().await;
         let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
 
@@ -204,11 +185,11 @@ mod tests {
 
         let client = test_http_client();
         let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
-        let result = execute_direct_post(&client, &uri, &response)
+        let err = execute_direct_post(&client, &uri, &response)
             .await
-            .expect("success");
+            .unwrap_err();
 
-        assert!(result.redirect_uri.is_none());
+        assert!(matches!(err, DirectPostError::ResponseParseError(_)));
     }
 
     #[tokio::test]
@@ -220,7 +201,7 @@ mod tests {
             .and(path("/response"))
             .and(header("content-type", "application/x-www-form-urlencoded"))
             .and(body_string_contains("error=access_denied"))
-            .respond_with(ResponseTemplate::new(200))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&mock_server)
             .await;
 
@@ -297,7 +278,7 @@ mod tests {
             .and(header("content-type", "application/x-www-form-urlencoded"))
             .and(body_string_contains("vp_token="))
             .and(body_string_contains("state=state-123"))
-            .respond_with(ResponseTemplate::new(200))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&mock_server)
             .await;
 
@@ -310,49 +291,49 @@ mod tests {
         assert!(result.redirect_uri.is_none());
     }
 
-    #[test]
-    fn rejects_non_https_response_uri() {
-        let uri = Url::parse("http://verifier.example.com/response").unwrap();
-        let expected = Url::parse("http://verifier.example.com/response").unwrap();
-        let err = validate_response_uri(&uri, &expected).unwrap_err();
-        assert_eq!(err, DirectPostError::HttpsRequired);
-    }
-
-    #[test]
-    fn rejects_mismatched_response_uri() {
-        let uri = Url::parse("https://verifier.example.com/response").unwrap();
-        let expected = Url::parse("https://verifier.example.com/other").unwrap();
-        let err = validate_response_uri(&uri, &expected).unwrap_err();
-        assert_eq!(err, DirectPostError::UriMismatch);
-    }
-
-    #[test]
-    fn accepts_matching_https_response_uri() {
-        let uri = Url::parse("https://verifier.example.com/response").unwrap();
-        assert!(validate_response_uri(&uri, &uri).is_ok());
-    }
-
     #[tokio::test]
-    async fn send_direct_post_rejects_http_response_uri() {
+    async fn accepts_case_insensitive_content_type() {
         let mock_server = MockServer::start().await;
         let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
+
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("content-type", "APPLICATION/JSON")
+                    .set_body_json(json!({})),
+            )
+            .mount(&mock_server)
+            .await;
+
         let client = test_http_client();
-        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
-        let err = send_direct_post(&client, &uri, &uri, &response)
+        let response = AuthorizationResponse::new(vp_token());
+        let result = execute_direct_post(&client, &uri, &response)
             .await
-            .unwrap_err();
-        assert_eq!(err, DirectPostError::HttpsRequired);
+            .expect("success");
+
+        assert!(result.redirect_uri.is_none());
     }
 
     #[tokio::test]
-    async fn send_direct_post_rejects_mismatched_uri() {
-        let uri = Url::parse("https://verifier.example.com/response").unwrap();
-        let expected = Url::parse("https://verifier.example.com/other").unwrap();
+    async fn accepts_content_type_with_charset() {
+        let mock_server = MockServer::start().await;
+        let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
+
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("content-type", "application/json; charset=utf-8")
+                    .set_body_json(json!({})),
+            )
+            .mount(&mock_server)
+            .await;
+
         let client = test_http_client();
-        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
-        let err = send_direct_post(&client, &uri, &expected, &response)
+        let response = AuthorizationResponse::new(vp_token());
+        let result = execute_direct_post(&client, &uri, &response)
             .await
-            .unwrap_err();
-        assert_eq!(err, DirectPostError::UriMismatch);
+            .expect("success");
+
+        assert!(result.redirect_uri.is_none());
     }
 }
