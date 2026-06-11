@@ -86,7 +86,7 @@ async fn execute_direct_post(
                 status,
                 body: body_text,
             })
-        } else if status >= 300 && status < 400 {
+        } else if (300..400).contains(&status) {
             Err(DirectPostError::RedirectNotFollowed { status })
         } else {
             Err(DirectPostError::HttpClientError {
