@@ -1,4 +1,3 @@
-use reqwest::header::CONTENT_TYPE;
 use reqwest_middleware::ClientWithMiddleware;
 use url::Url;
 
@@ -6,18 +5,6 @@ use crate::oid4vp::{
     authorization::{AuthorizationResponse, DirectPostResponse},
     response_mode::error::DirectPostError,
 };
-
-const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
-
-/// Result of a `direct_post` submission to the Verifier's `response_uri`.
-///
-/// The Verifier may optionally return a `redirect_uri` that the Wallet can use
-/// to redirect the user back after processing the response.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DirectPostResult {
-    /// Optional redirect URI from the Verifier's response.
-    pub redirect_uri: Option<Url>,
-}
 
 /// Sends an Authorization Response via `direct_post` to the Verifier's `response_uri`.
 ///
@@ -27,10 +14,13 @@ pub struct DirectPostResult {
 ///
 /// # Security
 ///
+/// **CRITICAL**: The `http_client` MUST be configured with `.redirect(Policy::none())`.
+/// This function does not verify the client configuration - passing a client that
+/// follows redirects will create an SSRF vulnerability.
+///
 /// - `response_uri` is validated to use HTTPS.
 /// - `response_uri` is validated against `expected_response_uri` from the
 ///   original Authorization Request to prevent SSRF.
-/// - The HTTP client MUST be configured not to follow redirects.
 ///
 /// [OpenID4VP §8.2]: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.2
 pub async fn send_direct_post(
@@ -38,7 +28,7 @@ pub async fn send_direct_post(
     response_uri: &Url,
     expected_response_uri: &Url,
     response: &AuthorizationResponse,
-) -> Result<DirectPostResult, DirectPostError> {
+) -> Result<DirectPostResponse, DirectPostError> {
     validate_response_uri(response_uri, expected_response_uri)?;
     execute_direct_post(http_client, response_uri, response).await
 }
@@ -47,43 +37,63 @@ async fn execute_direct_post(
     http_client: &ClientWithMiddleware,
     response_uri: &Url,
     response: &AuthorizationResponse,
-) -> Result<DirectPostResult, DirectPostError> {
-    let body = serde_urlencoded::to_string(response.as_direct_post_form())
-        .map_err(|e| DirectPostError::HttpRequestFailed(format!("serialization failed: {e}")))?;
+) -> Result<DirectPostResponse, DirectPostError> {
+    let form = response.as_direct_post_form();
 
     let http_response = http_client
         .post(response_uri.as_str())
-        .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
-        .body(body)
+        .form(&form)
         .send()
         .await
         .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
 
     let status = http_response.status();
 
-    if status.is_success() {
-        let body_text = http_response
-            .text()
+    if status == reqwest::StatusCode::OK {
+        let content_type = http_response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let body_bytes = http_response
+            .bytes()
             .await
             .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
 
-        if body_text.trim().is_empty() {
-            return Ok(DirectPostResult { redirect_uri: None });
+        // Per OpenID4VP §8.2: The Verifier's response body is optional.
+        // Empty body or empty JSON object both mean "no redirect_uri".
+        if body_bytes.is_empty() {
+            return Ok(DirectPostResponse { redirect_uri: None });
         }
 
-        let parsed: DirectPostResponse = serde_json::from_str(&body_text)
-            .map_err(|e| DirectPostError::ResponseParseError(e.to_string()))?;
+        match content_type {
+            Some(ct) if ct == "application/json" || ct.starts_with("application/json;") => {}
+            _ => {
+                return Err(DirectPostError::ResponseParseError(format!(
+                    "expected application/json response, got content-type: {content_type:?}"
+                )));
+            }
+        }
 
-        Ok(DirectPostResult {
-            redirect_uri: parsed.redirect_uri,
-        })
+        let parsed: DirectPostResponse = serde_json::from_slice(&body_bytes)
+            .map_err(|e| DirectPostError::ResponseParseError(e.to_string()))?;
+        Ok(parsed)
     } else {
         let body_text = http_response.text().await.unwrap_or_default();
+        let status = status.as_u16();
 
-        Err(DirectPostError::HttpError {
-            status: status.as_u16(),
-            body: body_text,
-        })
+        if status >= 500 {
+            Err(DirectPostError::HttpServerError {
+                status,
+                body: body_text,
+            })
+        } else {
+            Err(DirectPostError::HttpClientError {
+                status,
+                body: body_text,
+            })
+        }
     }
 }
 
@@ -242,7 +252,7 @@ mod tests {
 
         assert_eq!(
             err,
-            DirectPostError::HttpError {
+            DirectPostError::HttpServerError {
                 status: 500,
                 body: "internal error".to_string(),
             }
@@ -270,7 +280,7 @@ mod tests {
 
         assert_eq!(
             err,
-            DirectPostError::HttpError {
+            DirectPostError::HttpClientError {
                 status: 302,
                 body: "".to_string(),
             }
@@ -320,5 +330,29 @@ mod tests {
     fn accepts_matching_https_response_uri() {
         let uri = Url::parse("https://verifier.example.com/response").unwrap();
         assert!(validate_response_uri(&uri, &uri).is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_direct_post_rejects_http_response_uri() {
+        let mock_server = MockServer::start().await;
+        let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
+        let client = test_http_client();
+        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
+        let err = send_direct_post(&client, &uri, &uri, &response)
+            .await
+            .unwrap_err();
+        assert_eq!(err, DirectPostError::HttpsRequired);
+    }
+
+    #[tokio::test]
+    async fn send_direct_post_rejects_mismatched_uri() {
+        let uri = Url::parse("https://verifier.example.com/response").unwrap();
+        let expected = Url::parse("https://verifier.example.com/other").unwrap();
+        let client = test_http_client();
+        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
+        let err = send_direct_post(&client, &uri, &expected, &response)
+            .await
+            .unwrap_err();
+        assert_eq!(err, DirectPostError::UriMismatch);
     }
 }
