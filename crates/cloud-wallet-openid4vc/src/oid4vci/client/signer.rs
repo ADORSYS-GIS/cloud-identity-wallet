@@ -126,6 +126,7 @@ pub struct CryptoSigner {
     key: KeyMaterial,
     algorithm: Algorithm,
     header_b64: String,
+    holder_binding_public_jwk: Jwk,
 }
 
 #[derive(Debug)]
@@ -140,11 +141,12 @@ impl CryptoSigner {
     pub fn from_ecdsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Ecdsa(ecdsa::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
-        let header_b64 = build_header_b64(algorithm, &key)?;
+        let (header_b64, holder_binding_public_jwk) = build_header_b64(algorithm, &key)?;
         Ok(Self {
             key,
             algorithm,
             header_b64,
+            holder_binding_public_jwk,
         })
     }
 
@@ -152,11 +154,12 @@ impl CryptoSigner {
     pub fn from_ed25519_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Ed25519(ed25519::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
-        let header_b64 = build_header_b64(algorithm, &key)?;
+        let (header_b64, holder_binding_public_jwk) = build_header_b64(algorithm, &key)?;
         Ok(Self {
             key,
             algorithm,
             header_b64,
+            holder_binding_public_jwk,
         })
     }
 
@@ -164,12 +167,21 @@ impl CryptoSigner {
     pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Rsa(rsa::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
-        let header_b64 = build_header_b64(algorithm, &key)?;
+        let (header_b64, holder_binding_public_jwk) = build_header_b64(algorithm, &key)?;
         Ok(Self {
             key,
             algorithm,
             header_b64,
+            holder_binding_public_jwk,
         })
+    }
+
+    /// Returns the holder's public JWK embedded in the proof JWT header.
+    ///
+    /// Use this to obtain the holder binding key for mdoc device-key binding
+    /// verification via `verify_device_key_binding`.
+    pub fn holder_binding_public_jwk(&self) -> &Jwk {
+        &self.holder_binding_public_jwk
     }
 
     /// Encode to a JWT with the given claims.
@@ -252,8 +264,11 @@ impl KeyMaterial {
     }
 }
 
-/// Builds the base64url-encoded JWT header.
-fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<String> {
+/// Builds the base64url-encoded JWT header and returns it alongside the public JWK.
+///
+/// The JWK is constructed once here so it can be stored on [`CryptoSigner`]
+/// and later retrieved via [`CryptoSigner::holder_binding_public_jwk`] without re-deriving it.
+fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<(String, Jwk)> {
     // Build minimal JWK from key material
     let jwk = match key {
         KeyMaterial::Ecdsa(keypair) => Jwk::try_from(keypair)?,
@@ -265,12 +280,13 @@ fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<String> {
         alg,
         typ: OPENID4VCI_PROOF_JWT_TYP,
         kid: None,
-        jwk: Some(jwk),
+        jwk: Some(jwk.clone()),
         x5c: None,
         attestation: None,
         trust_chain: None,
     };
-    base64_encode_type(&header)
+    let encoded = base64_encode_type(&header)?;
+    Ok((encoded, jwk))
 }
 
 fn base64_encode_type<T: Serialize>(value: &T) -> Result<String> {

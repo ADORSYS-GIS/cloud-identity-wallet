@@ -1,6 +1,6 @@
 //! Digest integrity and issuer signature verification for ISO 18013-5 mDoc credentials.
 //!
-//! Implements [`verify_digests`] (MSO digest check) and [`verify_issuer_signature`]
+//! Implements verify_digests (MSO digest check) and verify_issuer_signature
 //! (COSE_Sign1 + certificate chain validation) as required by ISO/IEC 18013-5 §9.1.2.
 
 use ciborium::Value;
@@ -12,6 +12,7 @@ use cloud_wallet_crypto::digest::HashAlg;
 use cloud_wallet_crypto::ecdsa::VerifyingKey as EcdsaKey;
 use cloud_wallet_crypto::ed25519::VerifyingKey as Ed25519Key;
 use cloud_wallet_crypto::jwk::{Jwk, Key, OkpCurve};
+use time::OffsetDateTime;
 use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use super::cert_chain::{
@@ -48,7 +49,7 @@ const ALG_BRAINPOOL_P512: i64 = -48;
 ///   namespace + `digestID`.
 /// - [`MdocError::DigestMismatch`] — the computed hash does not match the stored digest.
 #[must_use = "digest verification failure must be handled"]
-pub fn verify_digests(parsed: &ParsedMdoc) -> Result<()> {
+pub(crate) fn verify_digests(parsed: &ParsedMdoc) -> Result<()> {
     let alg = HashAlg::from(parsed.digest_algorithm);
 
     for (namespace, items) in &parsed.name_spaces {
@@ -116,7 +117,7 @@ impl IacaTrustStore for StaticTrustStore {
 
 /// Information about the issuer extracted from a successfully verified `issuerAuth`.
 ///
-/// Returned by [`verify_issuer_signature`] after the full verification pipeline
+/// Returned by verify_issuer_signature after the full verification pipeline
 /// (chain validation, EKU check, signature check) succeeds.
 #[derive(Debug)]
 pub struct IssuerInfo {
@@ -154,6 +155,10 @@ pub struct IssuerInfo {
 ///   root appears in the chain, or the DSC validity period exceeds 457 days.
 /// - [`MdocError::CountryMismatch`] — DSC and IACA have different country codes.
 /// - [`MdocError::MissingDocSignerEku`] — DSC does not carry OID 1.0.18013.5.1.2.
+/// - [`MdocError::MissingDigitalSignatureKeyUsage`] — DSC Key Usage extension is absent or
+///   `digitalSignature` bit is not set.
+/// - [`MdocError::NonCriticalKeyUsage`] — DSC Key Usage extension is present and bit is set
+///   but the extension is not marked critical.
 /// - [`MdocError::DocTypeMismatch`] — outer `docType` differs from MSO `docType`.
 /// - [`MdocError::SignedOutsideDscValidity`] — MSO `signed` is outside DSC validity.
 /// - [`MdocError::InvalidIssuerSignature`] — signature does not verify.
@@ -163,7 +168,7 @@ pub struct IssuerInfo {
 /// Certificate revocation (CRL / OCSP) is not checked. A credential signed by a revoked
 /// DSC will pass all current checks.
 #[must_use = "issuer signature verification failure must be handled"]
-pub fn verify_issuer_signature(
+pub(crate) fn verify_issuer_signature(
     parsed: &ParsedMdoc,
     outer_doc_type: &str,
     trust_store: &dyn IacaTrustStore,
@@ -350,7 +355,10 @@ fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Resul
 /// - [`MdocError::CurveMismatch`] — COSE curve differs from proof JWK curve.
 /// - [`MdocError::DeviceKeyMismatch`] — constant-time coordinate comparison failed.
 #[must_use = "device key binding failure must be handled"]
-pub fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result<()> {
+pub(crate) fn verify_device_key_binding(
+    parsed: &ParsedMdoc,
+    holder_binding_public_jwk: &Jwk,
+) -> Result<()> {
     let cose_key_val: Value =
         ciborium::de::from_reader(parsed.device_key.as_slice()).map_err(|_| {
             MdocError::MalformedDeviceKey {
@@ -400,14 +408,14 @@ pub fn verify_device_key_binding(parsed: &ParsedMdoc, proof_jwk: &Jwk) -> Result
     };
 
     match kty {
-        2 => verify_ec2_binding(&entries, proof_jwk),
-        1 => verify_okp_binding(&entries, proof_jwk),
+        2 => verify_ec2_binding(&entries, holder_binding_public_jwk),
+        1 => verify_okp_binding(&entries, holder_binding_public_jwk),
         _ => Err(MdocError::UnsupportedDeviceKeyType),
     }
 }
 
 /// EC2 device-key binding check (kty=2, ISO 18013-5 Table 22 NIST curves).
-fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
+fn verify_ec2_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jwk) -> Result<()> {
     // crv (label -1): map integer to (curve name string, JWK Curve variant).
     let (cose_crv_name, jwk_curve) = match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
@@ -463,7 +471,7 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     };
 
     // Match proof JWK against Key::Ec.
-    let ec = match &proof_jwk.key {
+    let ec = match &holder_binding_public_jwk.key {
         Key::Ec(ec) => ec,
         _ => return Err(MdocError::UnsupportedDeviceKeyType),
     };
@@ -514,7 +522,7 @@ fn verify_ec2_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
 }
 
 /// OKP Ed25519 device-key binding check (kty=1, crv=6, x-only, RFC 8152 §13.2).
-fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()> {
+fn verify_okp_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jwk) -> Result<()> {
     // crv (label -1): must be 6 (Ed25519). All other OKP curves are unsupported.
     match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
@@ -549,7 +557,7 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     };
 
     // Match proof JWK — must be OKP Ed25519.
-    let okp = match &proof_jwk.key {
+    let okp = match &holder_binding_public_jwk.key {
         Key::Okp(okp) if okp.crv == OkpCurve::Ed25519 => okp,
         _ => return Err(MdocError::UnsupportedDeviceKeyType),
     };
@@ -568,6 +576,36 @@ fn verify_okp_binding(entries: &[(Value, Value)], proof_jwk: &Jwk) -> Result<()>
     }
 
     Ok(())
+}
+
+/// Runs the full ISO 18013-5 §9.1.2 verification chain for an already-parsed mdoc.
+/// Using this function rather than calling the four checks individually ensures
+/// that no check is accidentally omitted or reordered at a call site.
+///
+/// # Arguments
+///
+/// * `parsed` — the structurally-parsed mdoc (from [`ParsedMdoc::parse`]).
+/// * `outer_doc_type` — the `docType` string from the credential configuration,
+///   matched against the MSO `docType` field.
+/// * `trust_store` — IACA root certificates accepted for this wallet deployment.
+/// * `holder_binding_public_jwk` — the holder's public key from the OID4VCI proof JWT header.
+/// * `now` — the current time; use `OffsetDateTime::now_utc()` in production.
+///
+/// # Errors
+///
+/// Propagates errors from any of the four underlying checks.
+pub fn verify_mdoc_for_issuance(
+    parsed: &ParsedMdoc,
+    outer_doc_type: &str,
+    trust_store: &dyn IacaTrustStore,
+    holder_binding_public_jwk: &Jwk,
+    now: OffsetDateTime,
+) -> Result<IssuerInfo> {
+    parsed.check_temporal_validity(now)?;
+    let issuer_info = verify_issuer_signature(parsed, outer_doc_type, trust_store)?;
+    verify_digests(parsed)?;
+    verify_device_key_binding(parsed, holder_binding_public_jwk)?;
+    Ok(issuer_info)
 }
 
 /// Returns the value associated with the given integer label in a COSE_Key map,

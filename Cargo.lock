@@ -963,6 +963,8 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "base64ct",
+ "ciborium",
  "cloud-wallet-crypto",
  "cloud-wallet-kms",
  "cloud-wallet-openid4vc",
@@ -1045,6 +1047,7 @@ dependencies = [
 name = "cloud-wallet-openid4vc"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "base64ct",
  "ciborium",
