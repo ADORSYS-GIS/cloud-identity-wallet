@@ -1973,14 +1973,20 @@ components:
           oneOf:
             - type: string
               enum:
-                - verifier_attestation
-                - x509
+                - pre_registered
                 - did_resolution
+                - redirect_uri
+                - verifier_attestation
+                - x509_san_dns
+                - x509_hash
+                - openid_federation
             - type: "null"
           description: |
-            How verification was performed: `"verifier_attestation"`,
-            `"x509"`, `"did_resolution"`, or `null` if unverified.
-          example: "x509"
+            How verification was performed per OID4VP §5.9.3 client identifier
+            schemes: `pre_registered`, `did_resolution`, `redirect_uri`,
+            `verifier_attestation`, `x509_san_dns`, `x509_hash`, `openid_federation`,
+            or `null` if unverified.
+          example: "x509_san_dns"
 
     CredentialMatch:
       type: object
@@ -2041,10 +2047,12 @@ components:
           description: |
             The claims path pointer as a JSON array (OID4VP §7),
             e.g. `["family_name"]` or `["address", "street_address"]`.
+          minItems: 1
           items:
             oneOf:
               - type: string
               - type: integer
+                minimum: 0
               - type: "null"
           example: ["family_name"]
         display_name:
@@ -2100,11 +2108,6 @@ components:
       oneOf:
         - $ref: "#/components/schemas/PresentationConsentAcceptRequest"
         - $ref: "#/components/schemas/PresentationConsentRejectRequest"
-      discriminator:
-        propertyName: accepted
-        mapping:
-          "true": "#/components/schemas/PresentationConsentAcceptRequest"
-          "false": "#/components/schemas/PresentationConsentRejectRequest"
 
     PresentationConsentAcceptRequest:
       type: object
@@ -2197,15 +2200,29 @@ components:
           example: "https://verifier.example.eu/callback#vp_token=...&state=xyz"
         verifier_response:
           oneOf:
-            - type: object
+            - $ref: "#/components/schemas/DirectPostResponse"
             - type: "null"
           description: |
             The parsed JSON body returned by the Verifier's `response_uri`
             endpoint on a successful `direct_post` (OID4VP §8.2), if any.
             May contain a `redirect_uri` from the Verifier. `null` for
             fragment-mode and rejected flows.
-          example:
-            redirect_uri: "https://verifier.example.eu/success?session=abc"
+
+    DirectPostResponse:
+      type: object
+      description: |
+        Response from the Verifier's `response_uri` endpoint after a successful
+        `direct_post` (OID4VP §8.2). The Wallet must ignore any unrecognized
+        parameters.
+      properties:
+        redirect_uri:
+          type: string
+          format: uri
+          description: |
+            Optional URI the Verifier wants the Wallet to redirect the user to
+            after successful presentation.
+          example: "https://verifier.example.eu/success?session=abc"
+      additionalProperties: true
 
 # ---------------------------------------------------------------------------
 # Tags
