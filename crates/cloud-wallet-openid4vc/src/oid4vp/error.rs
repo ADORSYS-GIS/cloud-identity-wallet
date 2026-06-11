@@ -256,19 +256,6 @@ pub enum RequestUriError {
     #[error("failed to serialize wallet metadata: {0}")]
     Serialization(String),
 
-    /// The wallet_nonce in the response does not match the expected value.
-    ///
-    /// **DEPRECATED**: Per OpenID4VP Section 5.10.1, wallet_nonce validation
-    /// MUST happen after the Request Object has been signature-verified or
-    /// decrypted. This error is kept for backward compatibility but new code
-    /// should validate the nonce after Request Object processing.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Validate wallet_nonce after Request Object signature verification instead"
-    )]
-    #[error("wallet_nonce mismatch: expected '{expected}', got '{actual}'")]
-    WalletNonceMismatch { expected: String, actual: String },
-
     /// Validation error occurred.
     #[error("validation error: {0}")]
     ValidationError(String),

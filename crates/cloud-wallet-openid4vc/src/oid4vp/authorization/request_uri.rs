@@ -148,22 +148,29 @@ pub async fn resolve_request_uri_post(
 }
 
 /// Resolves a Request URI using the specified method.
+///
+/// Per the OpenID4VP spec, if `method` is `None`, defaults to GET.
 pub async fn resolve_request_uri(
     client: &ClientWithMiddleware,
     uri: &Url,
-    method: RequestUriMethod,
+    method: Option<RequestUriMethod>,
     wallet_metadata: &Option<WalletPresentationMetadata>,
     wallet_nonce: Option<&str>,
 ) -> Result<RequestUriResult, RequestUriError> {
-    match method {
+    match method.unwrap_or_default() {
         RequestUriMethod::Get => resolve_request_uri_get(client, uri).await,
         RequestUriMethod::Post => {
             // For POST, wallet_metadata is required per the spec workflow
-            let metadata = wallet_metadata.as_ref().ok_or_else(|| {
-                RequestUriError::ValidationError(
-                    "wallet_metadata is required for POST method".to_string(),
-                )
-            })?;
+            let metadata =
+                wallet_metadata
+                    .as_ref()
+                    .ok_or_else(|| RequestUriError::AuthorizationError {
+                        error: AuthorizationErrorResponse::new(
+                            crate::oid4vp::AuthorizationErrorCode::InvalidRequest,
+                        )
+                        .with_description("wallet_metadata is required for POST method"),
+                        status: 400,
+                    })?;
 
             resolve_request_uri_post(client, uri, metadata, wallet_nonce).await
         }
@@ -527,7 +534,7 @@ mod tests {
         let result = resolve_request_uri(
             &client,
             &uri,
-            RequestUriMethod::Post,
+            Some(RequestUriMethod::Post),
             &Some(wallet_metadata),
             Some(wallet_nonce),
         )
@@ -544,13 +551,52 @@ mod tests {
         let client = create_test_client();
         let uri = Url::parse("https://example.com/request").unwrap();
 
-        let result = resolve_request_uri(&client, &uri, RequestUriMethod::Post, &None, None).await;
+        let result =
+            resolve_request_uri(&client, &uri, Some(RequestUriMethod::Post), &None, None).await;
 
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            RequestUriError::ValidationError(_)
-        ));
+        match result.unwrap_err() {
+            RequestUriError::AuthorizationError { error, status } => {
+                assert_eq!(status, 400);
+                assert_eq!(
+                    error.error,
+                    crate::oid4vp::AuthorizationErrorCode::InvalidRequest
+                );
+                assert_eq!(
+                    error.error_description,
+                    Some("wallet_metadata is required for POST method".to_string())
+                );
+            }
+            other => panic!("Expected AuthorizationError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_request_uri_defaults_to_get() {
+        // Test that when method is None, it defaults to GET
+        let mock_server = MockServer::start().await;
+        let jwt = create_test_jwt_without_nonce();
+
+        Mock::given(method("GET"))
+            .and(path("/request"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(jwt.clone().into_bytes())
+                    .append_header("content-type", OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client();
+        let uri = Url::parse(&format!("{}/request", mock_server.uri())).unwrap();
+
+        // Pass None for method - should default to GET
+        let result = resolve_request_uri(&client, &uri, None, &None, None).await;
+
+        assert!(result.is_ok(), "Expected Ok but got {:?}", result);
+        let result = result.unwrap();
+        assert_eq!(result.jwt, jwt);
+        assert_eq!(result.expected_wallet_nonce, None);
     }
 
     #[test]
