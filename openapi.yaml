@@ -820,7 +820,7 @@ paths:
                       logo_uri: "https://verifier.example.eu/assets/logo.svg"
                       policy_uri: "https://verifier.example.eu/privacy"
                       verified: true
-                      verification_method: "x509"
+                      verification_method: "x509_san_dns"
                     purpose: "Age verification for access to restricted content."
                     credential_matches:
                       - query_id: "pid_request"
@@ -858,7 +858,7 @@ paths:
                       logo_uri: "https://bank.example.eu/logo.svg"
                       policy_uri: "https://bank.example.eu/privacy"
                       verified: true
-                      verification_method: "did_resolution"
+                      verification_method: "decentralized_identifier"
                     purpose: "Authorise a payment of EUR 250.00 to ACME Corp."
                     credential_matches:
                       - query_id: "lpid_request"
