@@ -61,6 +61,10 @@ async fn execute_direct_post(
             .await
             .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
 
+        if body_bytes.is_empty() {
+            return Ok(DirectPostResponse { redirect_uri: None });
+        }
+
         match content_type {
             Some(ref ct) if is_json_content_type(ct) => {}
             _ => {
@@ -82,6 +86,8 @@ async fn execute_direct_post(
                 status,
                 body: body_text,
             })
+        } else if status >= 300 && status < 400 {
+            Err(DirectPostError::RedirectNotFollowed { status })
         } else {
             Err(DirectPostError::HttpClientError {
                 status,
@@ -173,7 +179,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_empty_response_body() {
+    async fn accepts_empty_response_body_as_valid() {
         let mock_server = MockServer::start().await;
         let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
 
@@ -185,11 +191,11 @@ mod tests {
 
         let client = test_http_client();
         let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
-        let err = execute_direct_post(&client, &uri, &response)
+        let result = execute_direct_post(&client, &uri, &response)
             .await
-            .unwrap_err();
+            .expect("should succeed with empty body");
 
-        assert!(matches!(err, DirectPostError::ResponseParseError(_)));
+        assert!(result.redirect_uri.is_none());
     }
 
     #[tokio::test]
@@ -261,10 +267,7 @@ mod tests {
 
         assert_eq!(
             err,
-            DirectPostError::HttpClientError {
-                status: 302,
-                body: "".to_string(),
-            }
+            DirectPostError::RedirectNotFollowed { status: 302 }
         );
     }
 
@@ -335,5 +338,33 @@ mod tests {
             .expect("success");
 
         assert!(result.redirect_uri.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_direct_post_rejects_http_url() {
+        let response_uri = Url::parse("http://example.com/response").unwrap();
+        let expected_response_uri = response_uri.clone();
+        let client = test_http_client();
+        let response = AuthorizationResponse::new(vp_token());
+
+        let err = send_direct_post(&client, &response_uri, &expected_response_uri, &response)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, DirectPostError::HttpsRequired);
+    }
+
+    #[tokio::test]
+    async fn send_direct_post_rejects_uri_mismatch() {
+        let response_uri = Url::parse("https://example.com/response").unwrap();
+        let expected_response_uri = Url::parse("https://other.com/response").unwrap();
+        let client = test_http_client();
+        let response = AuthorizationResponse::new(vp_token());
+
+        let err = send_direct_post(&client, &response_uri, &expected_response_uri, &response)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, DirectPostError::UriMismatch);
     }
 }

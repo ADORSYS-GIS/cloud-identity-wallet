@@ -18,6 +18,9 @@ pub enum DirectPostError {
     #[error("HTTP server error {status}: {body}")]
     HttpServerError { status: u16, body: String },
 
+    #[error("redirects are disabled for security, received status {status}")]
+    RedirectNotFollowed { status: u16 },
+
     #[error("failed to parse verifier response: {0}")]
     ResponseParseError(String),
 }
