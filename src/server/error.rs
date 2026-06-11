@@ -12,7 +12,7 @@ use crate::domain::models::issuance::{
     ConsentError, IssuanceError, IssuanceErrorCode, TxCodeError,
 };
 use crate::domain::models::tenants::TenantError;
-use crate::session::SessionError;
+use crate::session::{PresentationSessionStoreError, SessionError};
 
 /// The unified error type used by all HTTP handlers.
 ///
@@ -211,6 +211,24 @@ impl IntoApiError for TxCodeError {
                 error_description: Some(description),
             },
             TxCodeError::SessionStore(source) => ApiError::internal(source),
+        }
+    }
+}
+
+impl IntoApiError for PresentationSessionStoreError {
+    fn into_api_error(self) -> ApiError {
+        match self {
+            PresentationSessionStoreError::SessionNotFound => ApiError {
+                status: StatusCode::NOT_FOUND,
+                error: Cow::Borrowed("session_not_found"),
+                error_description: Some("Session does not exist or has expired.".into()),
+            },
+            PresentationSessionStoreError::InvalidSessionState => ApiError {
+                status: StatusCode::CONFLICT,
+                error: Cow::Borrowed("invalid_session_state"),
+                error_description: Some("Session is not in awaiting_consent state.".into()),
+            },
+            PresentationSessionStoreError::Store(source) => ApiError::internal(source),
         }
     }
 }

@@ -1,4 +1,6 @@
 use cloud_wallet_openid4vc::oid4vci::client::ResolvedOfferContext;
+use cloud_wallet_openid4vc::oid4vp::authorization::{AuthorizationRequest, ResponseMode};
+use cloud_wallet_openid4vc::oid4vp::selection::SelectionResult;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -50,6 +52,78 @@ impl IssuanceSession {
             code_verifier: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresentationSession {
+    pub id: String,
+    pub tenant_id: Uuid,
+    pub state: PresentationState,
+    pub resolved_request: AuthorizationRequest,
+    pub dcql_result: SelectionResult,
+    pub flow: PresentationFlow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationState {
+    AwaitingConsent,
+    Completed,
+    Failed,
+}
+
+impl PresentationState {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationFlow {
+    CrossDevice,
+    SameDevice,
+}
+
+impl PresentationSession {
+    pub fn new(
+        tenant_id: Uuid,
+        resolved_request: AuthorizationRequest,
+        dcql_result: SelectionResult,
+    ) -> Self {
+        let flow = match resolved_request.response_mode {
+            ResponseMode::DcApi | ResponseMode::DcApiJwt => PresentationFlow::SameDevice,
+            _ => PresentationFlow::CrossDevice,
+        };
+        Self {
+            id: utils::generate_presentation_session_id(),
+            tenant_id,
+            state: PresentationState::AwaitingConsent,
+            resolved_request,
+            dcql_result,
+            flow,
+        }
+    }
+}
+
+pub fn transition_presentation(
+    session: &mut PresentationSession,
+    new_state: PresentationState,
+) -> Result<()> {
+    if session.state != PresentationState::AwaitingConsent {
+        return Err(SessionError::InvalidStateTransition(
+            format!("{:?}", session.state).into(),
+            format!("{:?}", new_state).into(),
+        ));
+    }
+    if new_state == PresentationState::AwaitingConsent {
+        return Err(SessionError::InvalidStateTransition(
+            format!("{:?}", session.state).into(),
+            format!("{:?}", new_state).into(),
+        ));
+    }
+    session.state = new_state;
+    Ok(())
 }
 
 pub fn transition(session: &mut IssuanceSession, new_state: IssuanceState) -> Result<()> {
@@ -191,5 +265,84 @@ mod tests {
         let mut session = mock_session(FlowType::AuthorizationCode);
         session.state = IssuanceState::AwaitingTxCode;
         assert!(transition(&mut session, IssuanceState::Processing).is_err());
+    }
+
+    fn mock_presentation_session(response_mode: ResponseMode) -> PresentationSession {
+        use cloud_wallet_openid4vc::oid4vp::dcql::DcqlQuery;
+        let request = AuthorizationRequest {
+            response_type: cloud_wallet_openid4vc::oid4vp::authorization::ResponseType::VpToken,
+            client_id: "client".to_string(),
+            redirect_uri: None,
+            scope: None,
+            state: None,
+            nonce: "nonce".to_string(),
+            response_mode,
+            response_uri: Some(url::Url::parse("https://example.com/response").unwrap()),
+            request_uri: None,
+            request_uri_method: None,
+            dcql_query: Some(DcqlQuery {
+                credentials: vec![],
+                credential_sets: None,
+            }),
+            client_metadata: None,
+            client_metadata_uri: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
+            expected_origins: None,
+        };
+        let dcql_result = SelectionResult {
+            candidates: std::collections::HashMap::new(),
+            unsatisfied_queries: vec![],
+            satisfies_query: true,
+            selected_credential_query_ids: vec![],
+            multiple_allowed_by_query_id: std::collections::HashMap::new(),
+        };
+        PresentationSession::new(Uuid::new_v4(), request, dcql_result)
+    }
+
+    #[test]
+    fn test_presentation_flow_from_response_mode() {
+        let session = mock_presentation_session(ResponseMode::DirectPost);
+        assert_eq!(session.flow, PresentationFlow::CrossDevice);
+
+        let session = mock_presentation_session(ResponseMode::DirectPostJwt);
+        assert_eq!(session.flow, PresentationFlow::CrossDevice);
+
+        let session = mock_presentation_session(ResponseMode::DcApi);
+        assert_eq!(session.flow, PresentationFlow::SameDevice);
+
+        let session = mock_presentation_session(ResponseMode::DcApiJwt);
+        assert_eq!(session.flow, PresentationFlow::SameDevice);
+    }
+
+    #[test]
+    fn test_presentation_valid_transitions() {
+        let mut session = mock_presentation_session(ResponseMode::DirectPost);
+        assert_eq!(session.state, PresentationState::AwaitingConsent);
+
+        transition_presentation(&mut session, PresentationState::Completed).unwrap();
+        assert_eq!(session.state, PresentationState::Completed);
+
+        let mut session = mock_presentation_session(ResponseMode::DirectPost);
+        transition_presentation(&mut session, PresentationState::Failed).unwrap();
+        assert_eq!(session.state, PresentationState::Failed);
+    }
+
+    #[test]
+    fn test_presentation_invalid_transitions_from_terminal() {
+        let mut session = mock_presentation_session(ResponseMode::DirectPost);
+        transition_presentation(&mut session, PresentationState::Completed).unwrap();
+        assert!(transition_presentation(&mut session, PresentationState::Failed).is_err());
+
+        let mut session = mock_presentation_session(ResponseMode::DirectPost);
+        transition_presentation(&mut session, PresentationState::Failed).unwrap();
+        assert!(transition_presentation(&mut session, PresentationState::Completed).is_err());
+    }
+
+    #[test]
+    fn test_presentation_invalid_transition_to_awaiting_consent() {
+        let mut session = mock_presentation_session(ResponseMode::DirectPost);
+        assert!(transition_presentation(&mut session, PresentationState::AwaitingConsent).is_err());
     }
 }

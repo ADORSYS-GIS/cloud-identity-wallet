@@ -15,3 +15,16 @@ pub enum Error {
     #[error("{0}")]
     Other(color_eyre::eyre::Report),
 }
+
+/// Presentation session store errors.
+#[derive(thiserror::Error, Debug)]
+pub enum PresentationSessionStoreError {
+    #[error("Session not found")]
+    SessionNotFound,
+
+    #[error("Invalid session state")]
+    InvalidSessionState,
+
+    #[error("Store error: {0}")]
+    Store(#[from] Error),
+}

@@ -7,6 +7,12 @@ pub fn generate_session_id() -> String {
     format!("ses_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
+pub fn generate_presentation_session_id() -> String {
+    let mut bytes = [0u8; 16];
+    rand::fill(&mut bytes);
+    format!("prs_{}", URL_SAFE_NO_PAD.encode(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -23,6 +29,20 @@ mod tests {
     fn test_generate_session_id_uniqueness() {
         let id1 = generate_session_id();
         let id2 = generate_session_id();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_generate_presentation_session_id() {
+        let id = generate_presentation_session_id();
+        assert!(id.starts_with("prs_"));
+        assert_eq!(id.len(), 26);
+    }
+
+    #[test]
+    fn test_generate_presentation_session_id_uniqueness() {
+        let id1 = generate_presentation_session_id();
+        let id2 = generate_presentation_session_id();
         assert_ne!(id1, id2);
     }
 }
