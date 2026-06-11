@@ -10,6 +10,8 @@
 
 use super::*;
 
+// IMPORTANT: this credential expired 2021-10-01. NEVER call parse_and_validate
+// or check_temporal_validity on it — use parse() + the time-invariant checks only.
 const ISSUER_SIGNED_B64URL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/test_data/mdoc/issuer_signed.b64url"

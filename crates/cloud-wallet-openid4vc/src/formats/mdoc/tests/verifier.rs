@@ -4,6 +4,12 @@ use super::*;
 /// Encoded as relative OID component integers for rcgen `ExtendedKeyUsagePurpose::Other`.
 const DSC_EKU_OID: &[u64] = &[1, 0, 18013, 5, 1, 2];
 
+/// The `validityInfo.signed` (and `validFrom`) timestamp used in `minimal_mso_cbor()`.
+///
+/// Must fall within the default DSC validity window used by `build_chain_params`
+/// (`2023-12-01` – `2024-12-31`).  Change both together if the fixture dates ever move.
+const MINIMAL_MSO_SIGNED: &str = "2024-01-01T00:00:00Z";
+
 /// Builds an IACA root CA cert and a DSC cert signed by that IACA, returning
 /// `(iaca_der, dsc_der, dsc_signing_key)` where `dsc_signing_key` is backed by
 /// `aws-lc-rs` so that signatures produced by it can be verified by
@@ -67,7 +73,8 @@ fn build_chain_params(
     )
     .expect("loading aws-lc-rs key into rcgen must succeed");
 
-    // Default DSC validity: 396-day window that covers the minimal_mso_cbor() signed date.
+    // Default DSC validity: 396-day window that covers MINIMAL_MSO_SIGNED ("2024-01-01").
+    // If MINIMAL_MSO_SIGNED changes, update these dates to keep the signed timestamp in-window.
     let (not_before, not_after) = dsc_validity.unwrap_or_else(|| {
         (
             OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse"),
@@ -136,11 +143,11 @@ fn minimal_mso_cbor() -> Vec<u8> {
     let validity_info = Value::Map(vec![
         (
             Value::Text("signed".into()),
-            Value::Tag(0, Box::new(Value::Text("2024-01-01T00:00:00Z".into()))),
+            Value::Tag(0, Box::new(Value::Text(MINIMAL_MSO_SIGNED.into()))),
         ),
         (
             Value::Text("validFrom".into()),
-            Value::Tag(0, Box::new(Value::Text("2024-01-01T00:00:00Z".into()))),
+            Value::Tag(0, Box::new(Value::Text(MINIMAL_MSO_SIGNED.into()))),
         ),
         (
             Value::Text("validUntil".into()),
@@ -190,19 +197,23 @@ fn minimal_mso_cbor() -> Vec<u8> {
     cbor(&Value::Tag(24, Box::new(Value::Bytes(cbor(&mso)))))
 }
 
-/// Builds an IACA root and DSC cert chain backed by P-521 keys (ES512 / -36).
+/// Builds an IACA root and DSC cert chain for a given ECDSA curve and signing algorithm.
 ///
-/// Returns `(iaca_der, dsc_der, dsc_signing_key)` where the signing key uses
-/// `cloud_wallet_crypto::ecdsa::Curve::P521`.
-fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+/// Both the IACA (self-signed P-256 CA) and DSC use the same validity window as the
+/// default in [`build_chain_params`] so they cover [`MINIMAL_MSO_SIGNED`].
+///
+/// This is the shared implementation used by [`build_chain_p384`] and [`build_chain_p521`].
+fn build_chain_ecdsa(
+    curve: cloud_wallet_crypto::ecdsa::Curve,
+    sign_algo: &'static rcgen::SignatureAlgorithm,
+) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
     use rcgen::{
-        BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
-        KeyUsagePurpose,
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
     };
 
     let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
     let mut iaca_params =
-        CertificateParams::new(vec!["IACA Root P521".to_string()]).expect("iaca params");
+        CertificateParams::new(vec!["IACA Root".to_string()]).expect("iaca params");
     iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let iaca_cert = iaca_params
         .self_signed(&iaca_key)
@@ -210,39 +221,42 @@ fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair)
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
     let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
-    let dsc_aws_key =
-        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P521)
-            .expect("aws-lc-rs P-521 key generation must succeed");
+    let dsc_aws_key = cloud_wallet_crypto::ecdsa::KeyPair::generate(curve)
+        .expect("aws-lc-rs DSC key generation must succeed");
 
     let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
     let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
         &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
             dsc_pkcs8,
         )),
-        &rcgen::PKCS_ECDSA_P521_SHA512,
+        sign_algo,
     )
-    .expect("loading P-521 key into rcgen must succeed");
+    .expect("loading DSC key into rcgen must succeed");
 
     let not_before =
         OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
     let not_after =
         OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
 
-    let mut dsc_params = CertificateParams::new(vec!["DSC P521".to_string()]).expect("dsc params");
+    let mut dsc_params = CertificateParams::new(vec!["DSC".to_string()]).expect("dsc params");
     dsc_params.is_ca = IsCa::NoCa;
     dsc_params.not_before = not_before;
     dsc_params.not_after = not_after;
     dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
-    dsc_params
-        .distinguished_name
-        .push(DnType::CommonName, "DSC P521");
     dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let dsc_cert = dsc_params
         .signed_by(&dsc_rcgen_key, &iaca_issuer)
-        .expect("DSC P-521 signing by IACA must succeed");
+        .expect("DSC signing by IACA must succeed");
     let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
     (iaca_der, dsc_der, dsc_aws_key)
+}
+
+fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+    build_chain_ecdsa(
+        cloud_wallet_crypto::ecdsa::Curve::P521,
+        &rcgen::PKCS_ECDSA_P521_SHA512,
+    )
 }
 
 /// Like [`build_issuer_signed_with_issuer_auth`] but uses the ES512 algorithm (-36).
@@ -652,54 +666,11 @@ fn build_ed448_dsc_chain() -> (Vec<u8>, Vec<u8>) {
     (iaca_der, dsc_der)
 }
 
-/// Builds an IACA root (P-256) and a DSC backed by a P-384 key (ES384 / -35).
-///
-/// Returns `(iaca_der, dsc_der, dsc_signing_key)`.
 fn build_chain_p384() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
-    use rcgen::{
-        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose,
-    };
-
-    let iaca_key = rcgen::KeyPair::generate().expect("rcgen key generation must succeed");
-    let mut iaca_params =
-        CertificateParams::new(vec!["IACA Root P384".to_string()]).expect("iaca params");
-    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let iaca_cert = iaca_params
-        .self_signed(&iaca_key)
-        .expect("self-signed IACA cert must succeed");
-    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
-    let iaca_issuer = Issuer::new(iaca_params, iaca_key);
-
-    let dsc_aws_key =
-        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P384)
-            .expect("aws-lc-rs P-384 key generation must succeed");
-
-    let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
-    let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
-        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
-            dsc_pkcs8,
-        )),
+    build_chain_ecdsa(
+        cloud_wallet_crypto::ecdsa::Curve::P384,
         &rcgen::PKCS_ECDSA_P384_SHA384,
     )
-    .expect("loading P-384 key into rcgen must succeed");
-
-    let not_before =
-        OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("fixed date must parse");
-    let not_after =
-        OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("fixed date must parse");
-
-    let mut dsc_params = CertificateParams::new(vec!["DSC P384".to_string()]).expect("dsc params");
-    dsc_params.is_ca = IsCa::NoCa;
-    dsc_params.not_before = not_before;
-    dsc_params.not_after = not_after;
-    dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
-    dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    let dsc_cert = dsc_params
-        .signed_by(&dsc_rcgen_key, &iaca_issuer)
-        .expect("DSC P-384 signing by IACA must succeed");
-    let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
-
-    (iaca_der, dsc_der, dsc_aws_key)
 }
 
 /// Like [`build_issuer_signed_with_issuer_auth`] but uses the ES384 algorithm (-35).
