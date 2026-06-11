@@ -27,6 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_wallet_crypto::digest::HashAlg;
 use serde_json::Value;
 
@@ -40,10 +41,11 @@ use crate::oid4vp::presentation::error::ProofError;
 
 /// Function type for signing a Key Binding JWT.
 ///
-/// Receives the serialized [`KeyBindingClaims`] and must return a compact JWS
-/// string (header.payload.signature). The caller is responsible for choosing
-/// the signing algorithm, constructing the JOSE header (with `typ: "kb+jwt"`),
-/// and performing the cryptographic signature.
+/// Receives the [`KeyBindingClaims`] and must return a compact JWS string
+/// (header.payload.signature). The signer must use the holder private key
+/// corresponding to the key material identified by the SD-JWT VC `cnf` claim.
+/// Its JOSE header must contain `typ: "kb+jwt"` and an `alg` compatible with
+/// that confirmation key.
 pub type JwtSigner = Box<dyn Fn(&KeyBindingClaims) -> Result<String, ProofError> + Send + Sync>;
 
 const SD_CLAIM: &str = "_sd";
@@ -110,6 +112,12 @@ impl PresentationFactory for SdJwtPresentation {
             transaction_data_hashes_alg,
             signer,
         } = self;
+
+        if !raw_credential.ends_with('~') {
+            return Err(ProofError::InvalidInput(
+                "SD-JWT VC credential must be in issued form and end with '~'".into(),
+            ));
+        }
 
         // Parse the raw credential.
         let sd_jwt = SdJwt::parse(&raw_credential)?;
@@ -397,7 +405,7 @@ fn try_collect_array_element<'a>(
 /// Returns the base64url-encoded hash, using the hash algorithm from the
 /// credential's `_sd_alg` claim (defaulting to SHA-256).
 pub fn compute_sd_hash(presentation_without_kb: &str, hash_alg: HashAlg) -> String {
-    disclosure_digest(presentation_without_kb, hash_alg)
+    URL_SAFE_NO_PAD.encode(hash_alg.hash(presentation_without_kb.as_bytes()).as_ref())
 }
 
 /// Builds the SD-JWT presentation string without the Key Binding JWT.
@@ -628,12 +636,15 @@ mod tests {
     fn computes_sd_hash_correctly() {
         let presentation = "header.payload.sig~disc1~disc2~";
         let hash = compute_sd_hash(presentation, HashAlg::Sha256);
+        let expected =
+            URL_SAFE_NO_PAD.encode(HashAlg::Sha256.hash(presentation.as_bytes()).as_ref());
 
         // Verify it's non-empty base64url (no padding).
         assert!(!hash.is_empty());
         assert!(!hash.contains('='));
         assert!(!hash.contains('+'));
         assert!(!hash.contains('/'));
+        assert_eq!(hash, expected);
 
         // Verify determinism.
         let hash2 = compute_sd_hash(presentation, HashAlg::Sha256);
@@ -841,6 +852,35 @@ mod tests {
     }
 
     #[test]
+    fn rejects_sd_jwt_presentation_input_for_presentation_builder() {
+        let disc = make_disclosure(json!(["salt-1", "given_name", "Ada"]));
+        let digest = test_disclosure_digest(&disc);
+        let mut raw = build_test_sd_jwt(
+            json!({
+                "iss": "https://issuer.example.com",
+                "vct": "https://credentials.example.com/identity",
+                "cnf": holder_binding_cnf(),
+                "_sd": [digest],
+                "_sd_alg": "sha-256"
+            }),
+            &[disc],
+        );
+        raw.push_str("header.payload.signature");
+
+        let err = SdJwtPresentation::builder(raw, "https://verifier.example.com", "nonce")
+            .requested_claims(vec![ClaimPathPointer::from_strings(["given_name"])])
+            .signer(test_signer)
+            .build()
+            .create_presentation()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ProofError::InvalidInput(ref input) if input.contains("issued form")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn rejects_transaction_data_without_signer() {
         let disc = make_disclosure(json!(["salt-1", "given_name", "Ada"]));
         let digest = test_disclosure_digest(&disc);
@@ -929,8 +969,18 @@ mod tests {
 
         // The presentation should contain: <issuer-jwt>~<kb-jwt>
         assert!(s.starts_with(&issuer_jwt));
-        let after_jwt = &s[issuer_jwt.len()..];
-        assert!(after_jwt.starts_with('~'));
+        let parts: Vec<&str> = s.split('~').collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "expected jwt~kb-jwt format with no disclosures, got {parts:?}"
+        );
+        assert_eq!(parts[0], issuer_jwt);
+        assert_eq!(
+            parts[1].split('.').count(),
+            3,
+            "KB-JWT must be a compact JWS"
+        );
     }
 
     #[test]
