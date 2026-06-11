@@ -4,7 +4,7 @@ use std::fmt;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::ser::into_writer;
 use ciborium::value::Value;
-use coset::{AsCborValue, CborSerializable, CoseSign1Builder, HeaderBuilder, iana};
+use coset::{AsCborValue, CoseSign1Builder, HeaderBuilder, iana};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_with::skip_serializing_none;
@@ -361,7 +361,7 @@ mod tests {
     use super::*;
     use base64ct::Base64UrlUnpadded;
     use cloud_wallet_crypto::digest::HashAlg;
-    use coset::CoseSign1;
+    use coset::{CborSerializable, CoseSign1};
     use serde_json::json;
 
     #[test]
