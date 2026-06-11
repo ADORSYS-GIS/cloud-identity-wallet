@@ -1,12 +1,14 @@
 openapi: 3.1.0
 
 info:
-  title: Cloud Wallet OID4VCI Issuance API
+  title: Cloud Wallet API
   version: 1.0.0
   description: |
     API contract between the frontend (web/mobile) and the cloud wallet backend
-    for the OpenID for Verifiable Credential Issuance (OID4VCI) flow.
+    for OpenID for Verifiable Credential Issuance (OID4VCI) and OpenID for
+    Verifiable Presentations (OID4VP) flows.
 
+    ## Issuance (OID4VCI)
     The backend orchestrates all back-channel communication with the external
     credential issuer. The frontend never calls the issuer directly.
 
@@ -14,8 +16,21 @@ info:
     - Authorization Code Flow (with optional PKCE and PAR)
     - Pre-Authorized Code Flow (with optional Transaction Code)
 
+    ## Presentation (OID4VP)
+    The backend orchestrates the OID4VP protocol execution between the Verifier
+    and the wallet. The frontend never calls Verifier endpoints directly.
+
+    Two flows are supported:
+    - **Cross-device flow**: The Verifier's QR code is displayed on a separate
+      screen. The frontend scans it, and the backend POSTs the VP Token directly
+      to the Verifier's `response_uri`.
+    - **Same-device flow**: The Verifier redirects the user into the wallet via
+      a deep link. The backend builds and submits the VP Token synchronously
+      and returns a `redirect_uri` for the frontend to navigate back.
+
     # References
     - [OID4VCI](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
+    - [OID4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html)
     - [RFC 6749 — OAuth 2.0](https://www.rfc-editor.org/rfc/rfc6749)
     - [RFC 7636 — PKCE](https://www.rfc-editor.org/rfc/rfc7636)
     - [RFC 9126 — PAR](https://www.rfc-editor.org/rfc/rfc9126)
@@ -760,6 +775,304 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  # -------------------------------------------------------------------------
+  # 11. Start Presentation Session
+  # -------------------------------------------------------------------------
+  /presentation/start:
+    post:
+      operationId: startPresentationSession
+      summary: Submit an OID4VP authorization request and start a presentation session
+      description: |
+        Submit the raw authorization request received from the Verifier (QR scan,
+        deep link). The backend parses and validates the request, resolves
+        `request_uri` if needed, evaluates the DCQL query against stored credentials,
+        and returns the session with all information needed to render the consent
+        screen.
+      tags:
+        - Presentation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartPresentationRequest"
+            example:
+              request: "openid4vp://?request_uri=https%3A%2F%2Fverifier.example.eu%2Frequest%2Fabc123&client_id=x509_san_dns%3Averifier.example.eu"
+              origin: "https://wallet.example.com"
+      responses:
+        "201":
+          description: |
+            Session created. Returns session details, verifier metadata, and
+            credential matches for user consent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartPresentationResponse"
+              examples:
+                cross_device_single_credential:
+                  summary: Cross-device flow, single required credential
+                  value:
+                    session_id: "prs_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni"
+                    expires_at: "2026-04-08T14:35:00Z"
+                    flow: "cross_device"
+                    verifier:
+                      name: "Example Relying Party"
+                      logo_uri: "https://verifier.example.eu/assets/logo.svg"
+                      policy_uri: "https://verifier.example.eu/privacy"
+                      verified: true
+                      verification_method: "x509_san_dns"
+                    purpose: "Age verification for access to restricted content."
+                    credential_matches:
+                      - query_id: "pid_request"
+                        required: true
+                        candidates:
+                          - credential_id: "c3d4e5f6-7890-abcd-ef12-3456789abcde"
+                            display:
+                              name: "EU Personal ID"
+                              background_color: "#12107c"
+                              text_color: "#ffffff"
+                              logo:
+                                uri: "https://issuer.example.eu/assets/pid-logo.svg"
+                                alt_text: "EU PID Logo"
+                              issuer_name: "Example EU Identity Authority"
+                            requested_claims:
+                              - path: ["family_name"]
+                                display_name: "Family name"
+                                value_required: false
+                              - path: ["given_name"]
+                                display_name: "Given name"
+                                value_required: false
+                              - path: ["age_over_18"]
+                                display_name: "Age over 18"
+                                value_required: true
+                    transaction_data: null
+                    requires_consent: true
+                same_device_with_transaction_data:
+                  summary: Same-device flow with transaction data
+                  value:
+                    session_id: "prs_9aKpR1xWqNmLvYcZbTsE4dBfUhOo2Gj"
+                    expires_at: "2026-04-08T14:45:00Z"
+                    flow: "same_device"
+                    verifier:
+                      name: "Example Bank"
+                      logo_uri: "https://bank.example.eu/logo.svg"
+                      policy_uri: "https://bank.example.eu/privacy"
+                      verified: true
+                      verification_method: "decentralized_identifier"
+                    purpose: "Authorise a payment of EUR 250.00 to ACME Corp."
+                    credential_matches:
+                      - query_id: "lpid_request"
+                        required: true
+                        candidates:
+                          - credential_id: "a1b2c3d4-5678-90ab-cdef-123456789abc"
+                            display:
+                              name: "EU Legal Person ID"
+                              background_color: "#1a4f2e"
+                              text_color: "#ffffff"
+                              logo: null
+                              issuer_name: "EU Business Registry"
+                            requested_claims:
+                              - path: ["legal_name"]
+                                display_name: "Legal name"
+                                value_required: false
+                              - path: ["registration_number"]
+                                display_name: "Registration number"
+                                value_required: false
+                    transaction_data:
+                      - type: "payment_authorization"
+                        credential_ids: ["lpid_request"]
+                        display_data:
+                          amount: "250.00"
+                          currency: "EUR"
+                          payee: "ACME Corp"
+                          iban: "DE89370400440532013000"
+                          reference: "INV-2026-00421"
+                    requires_consent: true
+        "400":
+          description: |
+            Authorization request is missing, malformed, or fails validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_request:
+                  value:
+                    error: invalid_request
+                    error_description: Authorization request is missing or malformed.
+                invalid_dcql_query:
+                  value:
+                    error: invalid_dcql_query
+                    error_description: The DCQL query in the request is structurally invalid.
+                no_matching_credentials:
+                  value:
+                    error: no_matching_credentials
+                    error_description: No stored credential matches any credential query.
+                vp_formats_not_supported:
+                  value:
+                    error: vp_formats_not_supported
+                    error_description: None of the requested credential formats or types are supported.
+                invalid_client:
+                  value:
+                    error: invalid_client
+                    error_description: Verifier identity validation failed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          description: |
+            Backend could not retrieve or validate the Request Object from
+            `request_uri`, or upstream Verifier error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                request_uri_fetch_failed:
+                  value:
+                    error: request_uri_fetch_failed
+                    error_description: "Could not retrieve Request Object from https://verifier.example.eu/request/abc123"
+                request_object_invalid:
+                  value:
+                    error: request_object_invalid
+                    error_description: The fetched Request Object JWT failed signature validation.
+
+  # -------------------------------------------------------------------------
+  # 12. Submit Presentation Consent
+  # -------------------------------------------------------------------------
+  /presentation/{session_id}/consent:
+    post:
+      operationId: submitPresentationConsent
+      summary: Submit the user's consent decision for presentation
+      description: |
+        Submit the user's consent decision with the selected credential(s). The
+        backend validates the selection, builds the VP Token, and submits it to
+        the Verifier — all within this single request. The response contains the
+        final outcome of the presentation.
+
+        The frontend MUST show a loading indicator while waiting. Typical
+        response time is under 3 seconds for direct_post flows.
+      tags:
+        - Presentation
+      parameters:
+        - $ref: "#/components/parameters/PresentationSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PresentationConsentRequest"
+            examples:
+              accept_single_credential:
+                summary: Accept with single credential
+                value:
+                  accepted: true
+                  selected_credentials:
+                    - query_id: "pid_request"
+                      credential_id: "c3d4e5f6-7890-abcd-ef12-3456789abcde"
+                  transaction_data_acknowledged: false
+              accept_with_transaction_data:
+                summary: Accept with transaction data acknowledgment
+                value:
+                  accepted: true
+                  selected_credentials:
+                    - query_id: "lpid_request"
+                      credential_id: "a1b2c3d4-5678-90ab-cdef-123456789abc"
+                  transaction_data_acknowledged: true
+              accept_multiple_credentials:
+                summary: Accept with multiple credentials (credential_set flow)
+                value:
+                  accepted: true
+                  selected_credentials:
+                    - query_id: "pid_request"
+                      credential_id: "c3d4e5f6-7890-abcd-ef12-3456789abcde"
+                    - query_id: "lpid_request"
+                      credential_id: "a1b2c3d4-5678-90ab-cdef-123456789abc"
+                  transaction_data_acknowledged: false
+              reject:
+                summary: User rejects presentation
+                value:
+                  accepted: false
+      responses:
+        "200":
+          description: |
+            Consent processed. Returns the final outcome of the presentation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PresentationConsentResponse"
+              examples:
+                completed_cross_device:
+                  summary: Completed, cross-device flow
+                  value:
+                    status: "completed"
+                    redirect_uri: null
+                    verifier_response:
+                      redirect_uri: "https://verifier.example.eu/success?session=abc"
+                completed_same_device:
+                  summary: Completed, same-device flow
+                  value:
+                    status: "completed"
+                    redirect_uri: "https://verifier.example.eu/callback#vp_token=...&state=xyz"
+                    verifier_response: null
+                rejected:
+                  summary: User declined
+                  value:
+                    status: "rejected"
+                    redirect_uri: null
+                    verifier_response: null
+        "400":
+          description: |
+            Invalid request body, credential selection, or missing transaction
+            data acknowledgment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_request:
+                  value:
+                    error: invalid_request
+                    error_description: selected_credentials missing when accepted is true.
+                invalid_credential_selection:
+                  value:
+                    error: invalid_credential_selection
+                    error_description: credential_id does not match a candidate for the query_id.
+                transaction_data_not_acknowledged:
+                  value:
+                    error: transaction_data_not_acknowledged
+                    error_description: transaction_data was non-null but transaction_data_acknowledged is not true.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Session not found or has expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: session_not_found
+                error_description: No active session found for the given session_id.
+        "500":
+          description: VP Token construction or submission failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                presentation_build_failed:
+                  value:
+                    error: presentation_build_failed
+                    error_description: VP Token construction failed due to a proof error.
+        "502":
+          description: The backend's direct_post to the Verifier's response_uri failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: verifier_submission_failed
+                error_description: "The Verifier returned error: invalid_vp_token"
+
 # ---------------------------------------------------------------------------
 # Components
 # ---------------------------------------------------------------------------
@@ -816,6 +1129,18 @@ components:
         type: string
         format: uuid
         example: c3d4e5f6-7890-abcd-ef12-3456789abcde
+
+    PresentationSessionId:
+      name: session_id
+      in: path
+      required: true
+      description: |
+        Opaque presentation session identifier returned by
+        `POST /presentation/start`.
+      schema:
+        type: string
+        minLength: 22
+        example: prs_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni
 
   # -------------------------------------------------------------------------
   # Reusable Responses
@@ -1516,6 +1841,392 @@ components:
           items:
             $ref: '#/components/schemas/CredentialSummary'
 
+    # -----------------------------------------------------------------------
+    # Presentation - Start Session
+    # -----------------------------------------------------------------------
+    StartPresentationRequest:
+      type: object
+      required:
+        - request
+      properties:
+        request:
+          type: string
+          description: |
+            The raw authorization request. One of:
+            - A full `openid4vp://` URI
+            - An HTTPS URL containing `request_uri` as a query parameter
+            - The raw JSON of a Request Object
+            - The authorization request URI
+          example: "openid4vp://?request_uri=https%3A%2F%2Fverifier.example.eu%2Frequest%2Fabc123&client_id=x509_san_dns%3Averifier.example.eu"
+        origin:
+          type: string
+          description: |
+            The origin of the calling page (required for DC API flows, per
+            Appendix A of OID4VP spec).
+          example: "https://wallet.example.com"
+
+    StartPresentationResponse:
+      type: object
+      required:
+        - session_id
+        - expires_at
+        - flow
+        - verifier
+        - credential_matches
+        - requires_consent
+      properties:
+        session_id:
+          type: string
+          description: |
+            Opaque session identifier. Used for all subsequent calls.
+            Min 128-bit entropy.
+          example: "prs_7f3kQ2mXpLnVwRtYbHsD9cAeUjZo1Ni"
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            Session expiry (15 minutes from creation), ISO 8601 format.
+          example: "2026-04-08T14:35:00Z"
+        flow:
+          type: string
+          enum:
+            - cross_device
+            - same_device
+          description: |
+            Indicates which flow type to expect post-consent.
+          example: "cross_device"
+        verifier:
+          $ref: "#/components/schemas/VerifierDisplay"
+        purpose:
+          type: ["string", "null"]
+          description: |
+            The `purpose` string from the DCQL query or Verifier metadata.
+            Display this to the user to explain why the presentation is requested.
+          example: "Age verification for access to restricted content."
+        credential_matches:
+          type: array
+          description: |
+            The credentials from the wallet that satisfy the DCQL query,
+            grouped by `credential_query_id`.
+          items:
+            $ref: "#/components/schemas/CredentialMatch"
+        credential_set_options:
+          type: ["array", "null"]
+          description: |
+            Present when the DCQL query contains `credential_sets` with multiple
+            options (OID4VP §6.2). Each entry is an array of `credential_query_id`
+            values representing one valid combination.
+          items:
+            type: array
+            items:
+              type: string
+          example:
+            - ["pid_request", "lpid_request"]
+            - ["pid_request_only"]
+        transaction_data:
+          type: ["array", "null"]
+          description: |
+            Transaction data entries (OID4VP §8.4) requiring explicit user
+            acknowledgment before consent.
+          items:
+            $ref: "#/components/schemas/TransactionDataDisplay"
+        requires_consent:
+          type: boolean
+          description: |
+            Always `true`. Reserved for future use where some low-risk
+            profiles may auto-consent.
+          example: true
+
+    VerifierDisplay:
+      type: object
+      required:
+        - name
+        - verified
+      properties:
+        name:
+          type: string
+          description: |
+            Human-readable Verifier name from `client_metadata.client_name`
+            or `client_id`.
+          example: "Example Relying Party"
+        logo_uri:
+          type: ["string", "null"]
+          format: uri
+          description: |
+            Verifier logo URI from `client_metadata.logo_uri`.
+          example: "https://verifier.example.eu/assets/logo.svg"
+        policy_uri:
+          type: ["string", "null"]
+          format: uri
+          description: |
+            Link to the Verifier's privacy policy. Display this as a tappable
+            link in the consent UI.
+          example: "https://verifier.example.eu/privacy"
+        verified:
+          type: boolean
+          description: |
+            Whether the backend was able to verify the Verifier's identity
+            using its `client_id_scheme`. `false` means the Verifier is
+            unverified — the frontend SHOULD show a warning.
+          example: true
+        verification_method:
+          oneOf:
+            - type: string
+              enum:
+                - pre-registered
+                - decentralized_identifier
+                - redirect_uri
+                - verifier_attestation
+                - x509_san_dns
+                - x509_san_uri
+                - x509_hash
+                - openid_federation
+            - type: "null"
+          description: |
+            How verification was performed per OID4VP §5.9.3 client identifier
+            schemes: `pre-registered`, `decentralized_identifier`, `redirect_uri`,
+            `verifier_attestation`, `x509_san_dns`, `x509_san_uri`, `x509_hash`,
+            `openid_federation`, or `null` if unverified.
+          example: "x509_san_dns"
+
+    CredentialMatch:
+      type: object
+      required:
+        - query_id
+        - required
+        - candidates
+      properties:
+        query_id:
+          type: string
+          description: |
+            The `id` from the matching `CredentialQuery` in the DCQL request.
+          example: "pid_request"
+        required:
+          type: boolean
+          description: |
+            Whether this credential is required (`true`) or optional (`false`)
+            based on `credential_set` membership.
+          example: true
+        candidates:
+          type: array
+          description: |
+            The stored wallet credentials that satisfy this query. If multiple,
+            the user should select one.
+          items:
+            $ref: "#/components/schemas/CredentialCandidate"
+
+    CredentialCandidate:
+      type: object
+      required:
+        - credential_id
+        - display
+        - requested_claims
+      properties:
+        credential_id:
+          type: string
+          format: uuid
+          description: |
+            Internal wallet credential ID. Sent back in the consent body
+            to confirm selection.
+          example: "c3d4e5f6-7890-abcd-ef12-3456789abcde"
+        display:
+          $ref: "#/components/schemas/CredentialSummaryDisplay"
+        requested_claims:
+          type: array
+          description: |
+            The specific claims the Verifier is requesting from this credential.
+          items:
+            $ref: "#/components/schemas/RequestedClaim"
+
+    RequestedClaim:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: array
+          description: |
+            The claims path pointer as a JSON array (OID4VP §7),
+            e.g. `["family_name"]` or `["address", "street_address"]`.
+          minItems: 1
+          items:
+            oneOf:
+              - type: string
+              - type: integer
+                minimum: 0
+              - type: "null"
+          example: ["family_name"]
+        display_name:
+          type: ["string", "null"]
+          description: |
+            Human-readable claim name resolved from the issuer's
+            `credential_configurations_supported` display metadata, if available.
+          example: "Family name"
+        value_required:
+          type: boolean
+          description: |
+            Whether the Verifier specified a required value for this claim
+            (OID4VP §6.3 `values` field).
+          example: false
+
+    TransactionDataDisplay:
+      type: object
+      required:
+        - type
+        - credential_ids
+        - display_data
+      properties:
+        type:
+          type: string
+          description: |
+            The `type` identifier of the transaction data entry.
+          example: "payment_authorization"
+        credential_ids:
+          type: array
+          description: |
+            The DCQL `credential_query_id` values this transaction data applies to.
+          items:
+            type: string
+          example: ["lpid_request"]
+        display_data:
+          type: object
+          description: |
+            Type-specific transaction data fields for rendering. Contents depend
+            on `type`. The frontend MUST display this to the user and require
+            explicit acknowledgment.
+          additionalProperties: true
+          example:
+            amount: "250.00"
+            currency: "EUR"
+            payee: "ACME Corp"
+            iban: "DE89370400440532013000"
+            reference: "INV-2026-00421"
+
+    # -----------------------------------------------------------------------
+    # Presentation - Consent
+    # -----------------------------------------------------------------------
+    PresentationConsentRequest:
+      oneOf:
+        - $ref: "#/components/schemas/PresentationConsentAcceptRequest"
+        - $ref: "#/components/schemas/PresentationConsentRejectRequest"
+
+    PresentationConsentAcceptRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - accepted
+        - selected_credentials
+      properties:
+        accepted:
+          type: boolean
+          const: true
+          description: |
+            `true` = user accepted and authorised the presentation.
+        selected_credentials:
+          type: array
+          description: |
+            One entry per `credential_query_id`. Required when `accepted` is
+            `true`. Must contain at least one selection.
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CredentialSelection"
+        transaction_data_acknowledged:
+          type: boolean
+          description: |
+            MUST be `true` when `transaction_data` was non-null in `/start`
+            response. If `false` or missing the request is rejected with
+            `400 transaction_data_not_acknowledged`.
+          example: true
+
+    PresentationConsentRejectRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - accepted
+      properties:
+        accepted:
+          type: boolean
+          const: false
+          description: |
+            `false` = user rejected; the backend sends `access_denied` to the
+            Verifier and returns `status: "rejected"`.
+
+    CredentialSelection:
+      type: object
+      required:
+        - query_id
+        - credential_id
+      properties:
+        query_id:
+          type: string
+          description: |
+            The `credential_query_id` this selection applies to. Must match
+            a `query_id` from the `/start` response `credential_matches`.
+          example: "pid_request"
+        credential_id:
+          type: string
+          format: uuid
+          description: |
+            The wallet credential to present. Must be one of the
+            `candidates[].credential_id` values for this `query_id` in the
+            `/start` response.
+          example: "c3d4e5f6-7890-abcd-ef12-3456789abcde"
+
+    PresentationConsentResponse:
+      type: object
+      required:
+        - status
+        - redirect_uri
+        - verifier_response
+      properties:
+        status:
+          type: string
+          enum:
+            - completed
+            - rejected
+          description: |
+            `"completed"` — VP Token was accepted by the Verifier or built
+            successfully for same-device flows.
+            `"rejected"` — user declined (`accepted: false`).
+          example: "completed"
+        redirect_uri:
+          oneOf:
+            - type: string
+              format: uri
+            - type: "null"
+          description: |
+            **Same-device `completed` only.** The URI the frontend must navigate
+            to in order to return the user to the Verifier. Derived from the
+            Verifier's `direct_post` response body or built from `redirect_uri`
+            + fragment for fragment-mode flows. `null` for cross-device flows
+            and all `rejected` responses.
+          example: "https://verifier.example.eu/callback#vp_token=...&state=xyz"
+        verifier_response:
+          oneOf:
+            - $ref: "#/components/schemas/DirectPostResponse"
+            - type: "null"
+          description: |
+            The parsed JSON body returned by the Verifier's `response_uri`
+            endpoint on a successful `direct_post` (OID4VP §8.2), if any.
+            May contain a `redirect_uri` from the Verifier. `null` for
+            fragment-mode and rejected flows.
+
+    DirectPostResponse:
+      type: object
+      description: |
+        Response from the Verifier's `response_uri` endpoint after a successful
+        `direct_post` (OID4VP §8.2). The Wallet must ignore any unrecognized
+        parameters.
+      properties:
+        redirect_uri:
+          type: string
+          format: uri
+          description: |
+            Optional URI the Verifier wants the Wallet to redirect the user to
+            after successful presentation.
+          example: "https://verifier.example.eu/success?session=abc"
+      additionalProperties: true
+
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
@@ -1527,6 +2238,12 @@ tags:
       OID4VCI credential issuance flow. Covers session lifecycle from offer
       submission through credential delivery, supporting both Authorization
       Code and Pre-Authorized Code grant types.
+  - name: Presentation
+    description: |
+      OID4VP verifiable presentation flow. Covers session lifecycle from
+      authorization request submission through VP Token delivery. Supports both
+      cross-device (direct_post) and same-device (fragment/redirect) flows.
+      The backend orchestrates all communication with the Verifier.
   - name: Credentials
     description: |
       Credential retrieval. Read-only access to verifiable credentials
