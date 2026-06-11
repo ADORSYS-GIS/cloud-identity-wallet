@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use ciborium::value::Value;
 use ciborium::ser::into_writer;
-use coset::{iana, AsCborValue, CborSerializable, CoseSign1Builder, HeaderBuilder};
+use ciborium::value::Value;
+use coset::{AsCborValue, CborSerializable, CoseSign1Builder, HeaderBuilder, iana};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_with::skip_serializing_none;
@@ -53,7 +53,10 @@ pub struct MdocClaimsQuery {
 
 impl MdocClaimsQuery {
     /// Creates an mdoc claims query from a generic DCQL [`ClaimsQuery`].
-    pub fn try_from_claims_query(query: &ClaimsQuery, intent_to_retain: Option<bool>) -> Result<Self> {
+    pub fn try_from_claims_query(
+        query: &ClaimsQuery,
+        intent_to_retain: Option<bool>,
+    ) -> Result<Self> {
         let (namespace, claim_name) = claim_path_to_namespace_and_element(&query.path)?;
         Ok(Self {
             namespace,
@@ -80,9 +83,7 @@ pub fn claim_path_to_namespace_and_element(path: &ClaimPathPointer) -> Result<(S
     };
 
     if namespace.trim().is_empty() {
-        return Err(MdocVpError::EmptyField {
-            field: "namespace",
-        });
+        return Err(MdocVpError::EmptyField { field: "namespace" });
     }
     if claim_name.trim().is_empty() {
         return Err(MdocVpError::EmptyField {
@@ -108,7 +109,8 @@ impl OpenID4VPHandoverInfo {
     /// Serialises the handover info structure to CBOR bytes.
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
-        into_writer(&self.to_cbor_value(), &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
+        into_writer(&self.to_cbor_value(), &mut buf)
+            .map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
         Ok(buf)
     }
 
@@ -151,7 +153,8 @@ impl OpenID4VPHandover {
     /// Serialises the structure to CBOR bytes.
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
-        into_writer(&self.to_cbor_value(), &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
+        into_writer(&self.to_cbor_value(), &mut buf)
+            .map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
         Ok(buf)
     }
 }
@@ -180,7 +183,8 @@ impl SessionTranscript {
     /// Serialises the structure to CBOR bytes.
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
-        into_writer(&self.to_cbor_value(), &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
+        into_writer(&self.to_cbor_value(), &mut buf)
+            .map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
         Ok(buf)
     }
 }
@@ -268,17 +272,20 @@ impl MdocDeviceResponseBuilder {
         let device_auth_payload_bytes = value_to_bytes(&device_auth_payload)?;
         let aad = self.session_transcript.to_cbor_bytes()?;
 
-        let protected = HeaderBuilder::new()
-            .algorithm(self.algorithm)
-            .build();
+        let protected = HeaderBuilder::new().algorithm(self.algorithm).build();
         let sign1 = CoseSign1Builder::new()
             .protected(protected)
             .payload(device_auth_payload_bytes)
-            .try_create_signature(&aad, |tbs| signer(tbs).map_err(|e| MdocVpError::Signing(e.to_string())))?
+            .try_create_signature(&aad, |tbs| {
+                signer(tbs).map_err(|e| MdocVpError::Signing(e.to_string()))
+            })?
             .build();
 
         let device_response = Value::Map(vec![
-            (Value::Text("version".to_string()), Value::Text("1.0".to_string())),
+            (
+                Value::Text("version".to_string()),
+                Value::Text("1.0".to_string()),
+            ),
             (
                 Value::Text("documents".to_string()),
                 Value::Array(vec![Value::Map(vec![
@@ -292,16 +299,12 @@ impl MdocDeviceResponseBuilder {
                             (Value::Text("nameSpaces".to_string()), namespace_value),
                             (
                                 Value::Text("deviceAuth".to_string()),
-                                Value::Map(vec![
-                                    (
-                                        Value::Text("deviceSignature".to_string()),
-                                        sign1
-                                            .to_cbor_value()
-                                            .map_err(|e: coset::CoseError| {
-                                                MdocVpError::CborEncode(e.to_string())
-                                            })?,
-                                    ),
-                                ]),
+                                Value::Map(vec![(
+                                    Value::Text("deviceSignature".to_string()),
+                                    sign1.to_cbor_value().map_err(|e: coset::CoseError| {
+                                        MdocVpError::CborEncode(e.to_string())
+                                    })?,
+                                )]),
                             ),
                         ]),
                     ),
@@ -309,7 +312,9 @@ impl MdocDeviceResponseBuilder {
             ),
         ]);
 
-        Ok(MdocDeviceResponse { value: device_response })
+        Ok(MdocDeviceResponse {
+            value: device_response,
+        })
     }
 }
 
@@ -470,7 +475,8 @@ mod tests {
             panic!("document must be a map");
         };
         assert!(document.iter().any(|(k, v)| {
-            *k == Value::Text("docType".to_string()) && *v == Value::Text("org.iso.18013.5.1.mDL".to_string())
+            *k == Value::Text("docType".to_string())
+                && *v == Value::Text("org.iso.18013.5.1.mDL".to_string())
         }));
 
         let device_signed = document
@@ -482,7 +488,11 @@ mod tests {
         let Value::Map(device_signed) = device_signed else {
             panic!("deviceSigned must be a map");
         };
-        assert!(device_signed.iter().any(|(k, _)| *k == Value::Text("nameSpaces".to_string())));
+        assert!(
+            device_signed
+                .iter()
+                .any(|(k, _)| *k == Value::Text("nameSpaces".to_string()))
+        );
         let device_auth = device_signed
             .iter()
             .find(|(k, _)| *k == Value::Text("deviceAuth".to_string()))
@@ -504,7 +514,9 @@ mod tests {
         let sign1 = CoseSign1::from_slice(&signature_bytes).unwrap();
         assert!(matches!(
             sign1.protected.header.alg,
-            Some(coset::RegisteredLabelWithPrivate::Assigned(iana::Algorithm::ES256))
+            Some(coset::RegisteredLabelWithPrivate::Assigned(
+                iana::Algorithm::ES256
+            ))
         ));
 
         let payload = sign1.payload.expect("embedded payload");
