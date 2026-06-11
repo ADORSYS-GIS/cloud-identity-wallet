@@ -15,6 +15,7 @@ use url::Url;
 
 use crate::errors::{Error, ErrorKind, Result};
 use crate::oauth::authorization::OAuthAuthorizationRequest;
+use crate::utils::is_unreserved_chars;
 
 use super::super::dcql::DcqlQuery;
 use super::super::metadata::verifier::VerifierMetadata;
@@ -44,31 +45,34 @@ impl std::fmt::Display for ResponseType {
 
 /// The `response_mode` parameter for OpenID4VP Authorization Requests.
 ///
-/// Includes `direct_post`/`direct_post.jwt` (Section 5.1) and
-/// `dc_api`/`dc_api.jwt` for the W3C Digital Credentials API (Appendix A).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Per OpenID4VP §5.6, the default response mode for `vp_token` is `fragment`.
+/// This enum includes the OpenID4VP-specific modes (`direct_post`, `direct_post.jwt`)
+/// and DC API modes (`dc_api`, `dc_api.jwt`), as well as an extension variant for
+/// other OAuth-registered response modes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResponseMode {
-    #[serde(rename = "direct_post")]
+    /// Direct POST response mode (OpenID4VP §5.1).
     DirectPost,
 
-    #[serde(rename = "direct_post.jwt")]
+    /// Direct POST with JWT-secured response (OpenID4VP §5.1).
     DirectPostJwt,
 
     /// W3C Digital Credentials API response mode (Appendix A).
-    #[serde(rename = "dc_api")]
     DcApi,
 
-    /// W3C Digital Credentials API response mode with JWT-secured response (Appendix A).
-    #[serde(rename = "dc_api.jwt")]
+    /// W3C Digital Credentials API with JWT-secured response (Appendix A).
     DcApiJwt,
+
+    /// Extension response mode for other OAuth-registered values.
+    Other(String),
 }
 
 impl ResponseMode {
-    fn is_direct_post(self) -> bool {
+    fn is_direct_post(&self) -> bool {
         matches!(self, Self::DirectPost | Self::DirectPostJwt)
     }
 
-    fn is_dc_api(self) -> bool {
+    fn is_dc_api(&self) -> bool {
         matches!(self, Self::DcApi | Self::DcApiJwt)
     }
 }
@@ -80,7 +84,33 @@ impl std::fmt::Display for ResponseMode {
             Self::DirectPostJwt => write!(f, "direct_post.jwt"),
             Self::DcApi => write!(f, "dc_api"),
             Self::DcApiJwt => write!(f, "dc_api.jwt"),
+            Self::Other(s) => write!(f, "{s}"),
         }
+    }
+}
+
+impl Serialize for ResponseMode {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ResponseMode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "direct_post" => Self::DirectPost,
+            "direct_post.jwt" => Self::DirectPostJwt,
+            "dc_api" => Self::DcApi,
+            "dc_api.jwt" => Self::DcApiJwt,
+            _ => Self::Other(value),
+        })
     }
 }
 
@@ -146,11 +176,6 @@ impl VerifierAttestation {
     }
 }
 
-fn is_unreserved_chars(s: &str) -> bool {
-    s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
-}
-
 fn invalid_request(message: impl Into<String>) -> Error {
     Error::message(ErrorKind::InvalidPresentationRequest, message.into())
 }
@@ -161,6 +186,16 @@ fn invalid_request(message: impl Into<String>) -> Error {
 ///
 /// This struct flattens standard OAuth 2.0 authorization request parameters
 /// from [`OAuthAuthorizationRequest`] and adds OpenID4VP-specific extensions.
+///
+/// # Architecture Note
+///
+/// The `nonce` field exists both as a top-level required `String` and within
+/// `oauth.nonce` as `Option<String>`. This is intentional:
+/// - OID4VP requires `nonce` to be present and validated
+/// - The base OAuth model stores `nonce` as optional (appropriate for OIDC/OID4VCI)
+/// - During deserialization, `nonce` is extracted to the top-level field and
+///   `oauth.nonce` is set to `None` to avoid duplication
+/// - Validation uses the top-level `nonce` field directly
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorizationRequest {
@@ -266,8 +301,10 @@ impl AuthorizationRequest {
             ));
         }
 
-        // state validation (unreserved characters)
-        self.oauth.validate_state_unreserved()?;
+        // state validation (unreserved characters) - reuse base OAuth validation
+        self.oauth
+            .validate_state_unreserved()
+            .map_err(|e| invalid_request(format!("'state' validation failed: {e}")))?;
 
         Ok(())
     }
@@ -528,6 +565,8 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
 
         let raw = Raw::deserialize(deserializer)?;
 
+        // Note: nonce is extracted to top-level field; oauth.nonce is set to None
+        // to avoid duplication. See struct documentation for details.
         let request = Self {
             response_type: raw.response_type,
             nonce: raw.nonce,
@@ -537,7 +576,7 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
                 redirect_uri: raw.redirect_uri,
                 scope: raw.scope,
                 state: raw.state,
-                nonce: None,
+                nonce: None, // Top-level nonce is authoritative for OID4VP
                 code_challenge: None,
                 code_challenge_method: None,
             },
@@ -677,6 +716,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_extension_response_mode() {
+        let req = parse(json!({
+            "response_type": "vp_token",
+            "client_id": "https://verifier.example.com",
+            "response_mode": "fragment",
+            "nonce": "abc123",
+            "dcql_query": {
+                "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "meta": { "vct_values": ["https://example.com"] }
+                }]
+            }
+        }))
+        .expect("should parse");
+
+        assert_eq!(
+            req.response_mode,
+            ResponseMode::Other("fragment".to_string())
+        );
+    }
+
+    #[test]
     fn serde_roundtrip() {
         let req = parse(json!({
             "response_type": "vp_token",
@@ -755,6 +817,10 @@ mod tests {
         assert_eq!(ResponseMode::DirectPostJwt.to_string(), "direct_post.jwt");
         assert_eq!(ResponseMode::DcApi.to_string(), "dc_api");
         assert_eq!(ResponseMode::DcApiJwt.to_string(), "dc_api.jwt");
+        assert_eq!(
+            ResponseMode::Other("fragment".to_string()).to_string(),
+            "fragment"
+        );
         assert_eq!(RequestUriMethod::Get.to_string(), "get");
         assert_eq!(RequestUriMethod::Post.to_string(), "post");
         assert_eq!(RequestUriMethod::default(), RequestUriMethod::Get);

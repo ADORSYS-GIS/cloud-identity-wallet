@@ -15,6 +15,7 @@ use serde_with::skip_serializing_none;
 use url::Url;
 
 use crate::errors::{Error, ErrorKind, Result};
+use crate::utils::is_unreserved_chars;
 
 /// PKCE code challenge method per [RFC 7636 §4.2].
 ///
@@ -90,7 +91,7 @@ pub struct OAuthAuthorizationRequest {
 
     /// OPTIONAL. PKCE code challenge (base64url-encoded SHA-256 of verifier).
     ///
-    /// Per RFC 7636 §4.3, this prevents authorization code interpolation attacks.
+    /// Per RFC 7636 §4.3, this prevents authorization code interception attacks.
     pub code_challenge: Option<String>,
 
     /// OPTIONAL. PKCE code challenge method.
@@ -115,14 +116,13 @@ impl OAuthAuthorizationRequest {
 
     /// Validates that `nonce` contains only unreserved URI characters per RFC 3986.
     ///
-    /// Per Section 5.2 of the OpenID4VP specification, nonce MUST contain
-    /// only unreserved characters: A-Z, a-z, 0-9, -, ., _, ~
+    /// Per OpenID4VP §5.2, nonce MUST contain only unreserved characters: A-Z, a-z, 0-9, -, ., _, ~
     pub fn validate_nonce_unreserved(&self) -> Result<()> {
         if let Some(ref nonce) = self.nonce
             && !is_unreserved_chars(nonce)
         {
             return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
+                ErrorKind::InvalidAuthorizationRequest,
                 "'nonce' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
             ));
         }
@@ -135,17 +135,12 @@ impl OAuthAuthorizationRequest {
             && !is_unreserved_chars(state)
         {
             return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
+                ErrorKind::InvalidAuthorizationRequest,
                 "'state' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
             ));
         }
         Ok(())
     }
-}
-
-fn is_unreserved_chars(s: &str) -> bool {
-    s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
 }
 
 #[cfg(test)]

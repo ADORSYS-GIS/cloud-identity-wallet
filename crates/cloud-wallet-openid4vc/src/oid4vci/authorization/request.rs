@@ -50,15 +50,15 @@ pub struct AuthorizationRequest {
 }
 
 impl AuthorizationRequest {
-    /// Validates the authorization request.
+    /// Validates the authorization request per OID4VCI §5.1.
     pub fn validate(&self) -> Result<(), crate::errors::Error> {
         self.oauth.validate_client_id()?;
 
-        // response_type must be "code" for OID4VCI authorization code flow
-        if self.response_type.trim().is_empty() {
+        // response_type MUST be "code" per OID4VCI §5.1
+        if self.response_type != "code" {
             return Err(crate::errors::Error::message(
                 crate::errors::ErrorKind::InvalidAuthorizationRequest,
-                "'response_type' must not be empty",
+                "'response_type' must be 'code' for OID4VCI authorization code flow",
             ));
         }
 
@@ -80,6 +80,7 @@ pub struct PushedAuthorizationRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth::authorization::CodeChallengeMethod;
     use serde_json::json;
 
     #[test]
@@ -93,7 +94,7 @@ mod tests {
                 state: Some("abc123".to_string()),
                 nonce: None,
                 code_challenge: Some("challenge123".to_string()),
-                code_challenge_method: Some(crate::oauth::CodeChallengeMethod::S256),
+                code_challenge_method: Some(CodeChallengeMethod::S256),
             },
             resource: None,
             issuer_state: Some("issuer-state-xyz".to_string()),

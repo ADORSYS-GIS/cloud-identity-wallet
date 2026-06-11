@@ -16,8 +16,7 @@ use reqwest::header::CONTENT_TYPE;
 use url::Url;
 
 use crate::core::client::OidClient;
-use crate::oauth::CodeChallengeMethod;
-use crate::oauth::authorization::OAuthAuthorizationRequest;
+use crate::oauth::authorization::{CodeChallengeMethod, OAuthAuthorizationRequest};
 use crate::oid4vci::authorization::{
     AuthorizationDetails, AuthorizationRequest, AuthorizationResponse, PushedAuthorizationRequest,
     PushedAuthorizationResponse,
