@@ -11,6 +11,7 @@ pub mod formats;
 pub mod metadata;
 pub mod presentation;
 pub mod request_object;
+pub mod response_mode;
 pub mod selection;
 pub mod transaction_data;
 pub mod verifier_attestation;
