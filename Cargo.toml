@@ -85,6 +85,7 @@ futures.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 parking_lot = "0.12"
 rand.workspace = true
+rustls-pemfile = "2"
 rustls-pki-types.workspace = true
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
@@ -123,9 +124,10 @@ features = [
 [dev-dependencies]
 base64ct = { workspace = true, features = ["alloc"] }
 ciborium.workspace = true
-rcgen.workspace = true
+rcgen = { workspace = true, features = ["pem"] }
 reqwest = { version = "0.13", features = ["json"] }
 serde_json = { workspace = true }
+tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["mysql", "postgres", "redis"] }
 tower = { version = "0.5", features = ["util"] }
 webpki.workspace = true
