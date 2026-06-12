@@ -14,13 +14,11 @@ use crate::oid4vp::{
 ///
 /// # Security
 ///
-/// **CRITICAL**: The `http_client` MUST be configured with `.redirect(Policy::none())`.
-/// This function does not verify the client configuration - passing a client that
-/// follows redirects will create an SSRF vulnerability.
-///
 /// - `response_uri` is validated to use HTTPS.
 /// - `response_uri` is validated against `expected_response_uri` from the
 ///   original Authorization Request to prevent SSRF.
+/// - The `http_client` is expected to disable redirects (the `OidClient` already
+///   configures `.redirect(Policy::none())`).
 ///
 /// [OpenID4VP §8.2]: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.2
 pub async fn send_direct_post(
@@ -56,6 +54,14 @@ async fn execute_direct_post(
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
+        if let Some(ref ct) = content_type {
+            if !is_json_content_type(ct) {
+                return Err(DirectPostError::ResponseParseError(format!(
+                    "expected application/json response, got content-type: {content_type:?}"
+                )));
+            }
+        }
+
         let body_bytes = http_response
             .bytes()
             .await
@@ -63,15 +69,6 @@ async fn execute_direct_post(
 
         if body_bytes.is_empty() {
             return Ok(DirectPostResponse { redirect_uri: None });
-        }
-
-        match content_type {
-            Some(ref ct) if is_json_content_type(ct) => {}
-            _ => {
-                return Err(DirectPostError::ResponseParseError(format!(
-                    "expected application/json response, got content-type: {content_type:?}"
-                )));
-            }
         }
 
         let parsed: DirectPostResponse = serde_json::from_slice(&body_bytes)
@@ -89,7 +86,7 @@ async fn execute_direct_post(
         } else if (300..400).contains(&status) {
             Err(DirectPostError::RedirectNotFollowed { status })
         } else {
-            Err(DirectPostError::HttpClientError {
+            Err(DirectPostError::VerifierError {
                 status,
                 body: body_text,
             })
@@ -196,6 +193,33 @@ mod tests {
             .expect("should succeed with empty body");
 
         assert!(result.redirect_uri.is_none());
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_body_with_non_json_content_type() {
+        let mock_server = MockServer::start().await;
+        let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/response"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("content-type", "text/html")
+                    .set_body_string(""),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = test_http_client();
+        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
+        let err = execute_direct_post(&client, &uri, &response)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, DirectPostError::ResponseParseError(_)),
+            "expected ResponseParseError for wrong content-type, got: {err:?}"
+        );
     }
 
     #[tokio::test]

@@ -1,2 +1,5 @@
-pub mod direct_post;
-pub mod error;
+mod direct_post;
+mod error;
+
+pub use direct_post::*;
+pub use error::*;

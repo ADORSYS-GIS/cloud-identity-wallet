@@ -12,8 +12,8 @@ pub enum DirectPostError {
     #[error("HTTP request failed: {0}")]
     HttpRequestFailed(String),
 
-    #[error("HTTP client error {status}: {body}")]
-    HttpClientError { status: u16, body: String },
+    #[error("verifier returned client error {status}: {body}")]
+    VerifierError { status: u16, body: String },
 
     #[error("HTTP server error {status}: {body}")]
     HttpServerError { status: u16, body: String },
