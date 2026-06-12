@@ -28,7 +28,8 @@ use crate::session::SessionStore;
 /// PEM file contains no `CERTIFICATE` blocks.
 fn load_iaca_roots(paths: &[String]) -> color_eyre::Result<Vec<Vec<u8>>> {
     use color_eyre::eyre::eyre;
-    use std::io::BufReader;
+    use rustls_pki_types::CertificateDer;
+    use rustls_pki_types::pem::PemObject as _;
 
     let mut roots = Vec::new();
     for path in paths {
@@ -36,12 +37,11 @@ fn load_iaca_roots(paths: &[String]) -> color_eyre::Result<Vec<Vec<u8>>> {
             .map_err(|e| eyre!("failed to read IACA root file '{path}': {e}"))?;
 
         if bytes.starts_with(b"-----BEGIN") {
-            let mut reader = BufReader::new(bytes.as_slice());
             let mut count = 0usize;
-            for cert in rustls_pemfile::certs(&mut reader) {
+            for cert in CertificateDer::pem_slice_iter(&bytes) {
                 let cert =
                     cert.map_err(|e| eyre!("malformed PEM in IACA root file '{path}': {e}"))?;
-                roots.push(cert.to_vec());
+                roots.push(cert.as_ref().to_vec());
                 count += 1;
             }
             if count == 0 {
@@ -105,6 +105,16 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     Ok(engine)
 }
 
+/// Build a fully wired [`Service`] ready for use in the server.
+pub fn build_service<S: SessionStore + Clone>(
+    session_store: S,
+    tenant_repo: impl TenantRepo + Clone,
+    config: &Config,
+) -> color_eyre::Result<Service<S>> {
+    let engine = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
+    Ok(Service::new(session_store, tenant_repo, engine))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +145,7 @@ mod tests {
             let store = StaticTrustStore::new(roots);
             assert_eq!(
                 store.trusted_roots(),
-                &[der.clone()],
+                std::slice::from_ref(&der),
                 "{label} roots must reach the store"
             );
         }
@@ -168,14 +178,4 @@ mod tests {
             .unwrap();
         assert!(load_iaca_roots(&[f2.path().to_string_lossy().into_owned()]).is_err());
     }
-}
-
-/// Build a fully wired [`Service`] ready for use in the server.
-pub fn build_service<S: SessionStore + Clone>(
-    session_store: S,
-    tenant_repo: impl TenantRepo + Clone,
-    config: &Config,
-) -> color_eyre::Result<Service<S>> {
-    let engine = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
-    Ok(Service::new(session_store, tenant_repo, engine))
 }

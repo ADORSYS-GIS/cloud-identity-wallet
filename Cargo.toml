@@ -85,8 +85,7 @@ futures.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 parking_lot = "0.12"
 rand.workspace = true
-rustls-pemfile = "2"
-rustls-pki-types.workspace = true
+rustls-pki-types = { workspace = true, features = ["alloc"] }
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
