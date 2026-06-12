@@ -33,7 +33,8 @@ use serde_json::Value;
 
 use crate::core::claim_path_pointer::{ClaimPathElement, ClaimPathPointer};
 use crate::formats::sd_jwt::{
-    Disclosure, KeyBindingClaims, SdJwt, disclosure_digest, disclosure_hash_algorithm,
+    Disclosure, KeyBindingClaims, KeyBindingJwt, SdJwt, disclosure_digest,
+    disclosure_hash_algorithm,
 };
 use crate::oid4vp::authorization::Presentation;
 use crate::oid4vp::presentation::PresentationFactory;
@@ -169,6 +170,11 @@ impl PresentationFactory for SdJwtPresentation {
 
         // Sign the KB-JWT.
         let kb_jwt = signer(&kb_claims)?;
+        KeyBindingJwt::decode_unverified(&kb_jwt).map_err(|err| {
+            ProofError::InvalidInput(
+                format!("signer returned invalid Key Binding JWT: {err}").into(),
+            )
+        })?;
 
         // Assemble the final presentation: <issuer-jwt>~<disc>*~<kb-jwt>
         let final_presentation = format!("{presentation_without_kb}{kb_jwt}");
@@ -607,6 +613,121 @@ mod tests {
     }
 
     #[test]
+    fn selects_array_element_disclosure_by_index_path() {
+        let disc_de = make_disclosure(json!(["salt-1", "DE"]));
+        let disc_fr = make_disclosure(json!(["salt-2", "FR"]));
+        let digest_de = test_disclosure_digest(&disc_de);
+        let digest_fr = test_disclosure_digest(&disc_fr);
+
+        let raw = build_test_sd_jwt(
+            json!({
+                "iss": "https://issuer.example.com",
+                "vct": "https://credentials.example.com/identity",
+                "nationalities": [
+                    { "...": digest_de },
+                    { "...": digest_fr }
+                ],
+                "_sd_alg": "sha-256"
+            }),
+            &[disc_de, disc_fr.clone()],
+        );
+
+        let sd_jwt = SdJwt::parse(&raw).unwrap();
+        let requested = vec![ClaimPathPointer::new(vec![
+            ClaimPathElement::from("nationalities"),
+            ClaimPathElement::from(1u64),
+        ])];
+        let selected = select_disclosures(&sd_jwt, &requested).unwrap();
+
+        assert_eq!(selected, vec![disc_fr.as_str()]);
+    }
+
+    #[test]
+    fn selects_array_element_disclosures_by_null_wildcard_path() {
+        let disc_de = make_disclosure(json!(["salt-1", "DE"]));
+        let disc_fr = make_disclosure(json!(["salt-2", "FR"]));
+        let digest_de = test_disclosure_digest(&disc_de);
+        let digest_fr = test_disclosure_digest(&disc_fr);
+
+        let raw = build_test_sd_jwt(
+            json!({
+                "iss": "https://issuer.example.com",
+                "vct": "https://credentials.example.com/identity",
+                "nationalities": [
+                    { "...": digest_de },
+                    { "...": digest_fr }
+                ],
+                "_sd_alg": "sha-256"
+            }),
+            &[disc_de.clone(), disc_fr.clone()],
+        );
+
+        let sd_jwt = SdJwt::parse(&raw).unwrap();
+        let requested = vec![ClaimPathPointer::new(vec![
+            ClaimPathElement::from("nationalities"),
+            ClaimPathElement::Null,
+        ])];
+        let selected = select_disclosures(&sd_jwt, &requested).unwrap();
+
+        assert_eq!(selected, vec![disc_de.as_str(), disc_fr.as_str()]);
+    }
+
+    #[test]
+    fn selects_nested_claims_through_array_object_wildcard_path() {
+        let disc_degree_1_type = make_disclosure(json!(["salt-1-type", "type", "Bachelor"]));
+        let disc_degree_2_type = make_disclosure(json!(["salt-2-type", "type", "Master"]));
+        let digest_degree_1_type = test_disclosure_digest(&disc_degree_1_type);
+        let digest_degree_2_type = test_disclosure_digest(&disc_degree_2_type);
+
+        let disc_degree_1 = make_disclosure(json!([
+            "salt-1-degree",
+            { "_sd": [digest_degree_1_type], "_sd_alg": "sha-256" }
+        ]));
+        let disc_degree_2 = make_disclosure(json!([
+            "salt-2-degree",
+            { "_sd": [digest_degree_2_type], "_sd_alg": "sha-256" }
+        ]));
+        let digest_degree_1 = test_disclosure_digest(&disc_degree_1);
+        let digest_degree_2 = test_disclosure_digest(&disc_degree_2);
+
+        let raw = build_test_sd_jwt(
+            json!({
+                "iss": "https://issuer.example.com",
+                "vct": "https://credentials.example.com/identity",
+                "degrees": [
+                    { "...": digest_degree_1 },
+                    { "...": digest_degree_2 }
+                ],
+                "_sd_alg": "sha-256"
+            }),
+            &[
+                disc_degree_1.clone(),
+                disc_degree_1_type.clone(),
+                disc_degree_2.clone(),
+                disc_degree_2_type.clone(),
+            ],
+        );
+
+        let sd_jwt = SdJwt::parse(&raw).unwrap();
+        let requested = vec![ClaimPathPointer::new(vec![
+            ClaimPathElement::from("degrees"),
+            ClaimPathElement::Null,
+            ClaimPathElement::from("type"),
+        ])];
+        let selected = select_disclosures(&sd_jwt, &requested).unwrap();
+
+        assert_eq!(
+            selected,
+            vec![
+                disc_degree_1.as_str(),
+                disc_degree_1_type.as_str(),
+                disc_degree_2.as_str(),
+                disc_degree_2_type.as_str(),
+            ]
+        );
+    }
+
+    #[test]
     fn deduplicates_disclosures_requested_multiple_times() {
         let disc = make_disclosure(json!(["salt-1", "given_name", "Ada"]));
         let digest = test_disclosure_digest(&disc);
@@ -847,6 +968,34 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(err, ProofError::MissingRequiredField(ref field) if field.contains("cnf")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_key_binding_jwt_from_signer() {
+        let disc = make_disclosure(json!(["salt-1", "given_name", "Ada"]));
+        let digest = test_disclosure_digest(&disc);
+        let raw = build_test_sd_jwt(
+            json!({
+                "iss": "https://issuer.example.com",
+                "vct": "https://credentials.example.com/identity",
+                "cnf": holder_binding_cnf(),
+                "_sd": [digest],
+                "_sd_alg": "sha-256"
+            }),
+            &[disc],
+        );
+
+        let err = SdJwtPresentation::builder(raw, "https://verifier.example.com", "nonce")
+            .requested_claims(vec![ClaimPathPointer::from_strings(["given_name"])])
+            .signer(|_| Ok("not~a~compact~jws".to_string()))
+            .build()
+            .create_presentation()
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ProofError::InvalidInput(ref input) if input.contains("Key Binding JWT")),
             "unexpected error: {err}"
         );
     }
