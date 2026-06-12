@@ -622,8 +622,6 @@ fn rejects_digest_id_out_of_range() {
 
 #[test]
 fn rejects_non_array_issuer_auth() {
-    // bare array. Both tagged and untagged COSE_Sign1 arrays are valid per
-    // ISO 18013-5 §9.1.2 (the spec CDDL does not mandate the optional tag).
     let issuer_signed = Value::Map(vec![
         (Value::Text("nameSpaces".into()), Value::Map(vec![])),
         (
