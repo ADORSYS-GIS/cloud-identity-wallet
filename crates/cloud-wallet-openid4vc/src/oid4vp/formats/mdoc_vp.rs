@@ -111,10 +111,7 @@ impl OpenID4VPHandover {
     /// Creates the handover from the verifier request parameters,
     /// hashing `client_id` and `response_uri` with SHA-256.
     pub fn new(client_id: &str, response_uri: &str, nonce: String) -> Self {
-        let client_id_hash = HashAlg::Sha256
-            .hash(client_id.as_bytes())
-            .as_ref()
-            .to_vec();
+        let client_id_hash = HashAlg::Sha256.hash(client_id.as_bytes()).as_ref().to_vec();
         let response_uri_hash = HashAlg::Sha256
             .hash(response_uri.as_bytes())
             .as_ref()
@@ -297,36 +294,31 @@ impl MdocDeviceResponseBuilder {
             })?
             .build();
 
-        let mut document_entries = vec![
-            (
-                Value::Text("docType".to_string()),
-                Value::Text(self.doc_type),
-            ),
-        ];
+        let mut document_entries = vec![(
+            Value::Text("docType".to_string()),
+            Value::Text(self.doc_type),
+        )];
 
-        document_entries.push((
-            Value::Text("issuerSigned".to_string()),
-            issuer_signed,
-        ));
+        document_entries.push((Value::Text("issuerSigned".to_string()), issuer_signed));
 
         let device_ns_bytes_for_signed = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes)));
 
         let device_signed = Value::Map(vec![
-            (Value::Text("nameSpaces".to_string()), device_ns_bytes_for_signed),
+            (
+                Value::Text("nameSpaces".to_string()),
+                device_ns_bytes_for_signed,
+            ),
             (
                 Value::Text("deviceAuth".to_string()),
                 Value::Map(vec![(
                     Value::Text("deviceSignature".to_string()),
-                    sign1.to_cbor_value().map_err(|e: coset::CoseError| {
-                        MdocVpError::CborEncode(e.to_string())
-                    })?,
+                    sign1
+                        .to_cbor_value()
+                        .map_err(|e: coset::CoseError| MdocVpError::CborEncode(e.to_string()))?,
                 )]),
             ),
         ]);
-        document_entries.push((
-            Value::Text("deviceSigned".to_string()),
-            device_signed,
-        ));
+        document_entries.push((Value::Text("deviceSigned".to_string()), device_signed));
 
         let device_response = Value::Map(vec![
             (
@@ -422,8 +414,7 @@ mod tests {
             "nonce-123".to_string(),
         );
 
-        let expected_client_id_hash =
-            HashAlg::Sha256.hash(b"wallet.example").as_ref().to_vec();
+        let expected_client_id_hash = HashAlg::Sha256.hash(b"wallet.example").as_ref().to_vec();
         let expected_response_uri_hash = HashAlg::Sha256
             .hash(b"https://verifier.example/cb")
             .as_ref()
@@ -472,10 +463,7 @@ mod tests {
 
         let issuer_signed = Value::Map(vec![
             (Value::Text("nameSpaces".to_string()), Value::Map(vec![])),
-            (
-                Value::Text("issuerAuth".to_string()),
-                Value::Null,
-            ),
+            (Value::Text("issuerAuth".to_string()), Value::Null),
         ]);
 
         let response = MdocDeviceResponseBuilder::new("org.iso.18013.5.1.mDL", transcript)
