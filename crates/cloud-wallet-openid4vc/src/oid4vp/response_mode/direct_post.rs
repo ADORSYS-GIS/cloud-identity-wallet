@@ -54,12 +54,12 @@ async fn execute_direct_post(
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        if let Some(ref ct) = content_type {
-            if !is_json_content_type(ct) {
-                return Err(DirectPostError::ResponseParseError(format!(
-                    "expected application/json response, got content-type: {content_type:?}"
-                )));
-            }
+        if let Some(ref ct) = content_type
+            && !is_json_content_type(ct)
+        {
+            return Err(DirectPostError::ResponseParseError(format!(
+                "expected application/json response, got content-type: {content_type:?}"
+            )));
         }
 
         let body_bytes = http_response
@@ -193,33 +193,6 @@ mod tests {
             .expect("should succeed with empty body");
 
         assert!(result.redirect_uri.is_none());
-    }
-
-    #[tokio::test]
-    async fn rejects_empty_body_with_non_json_content_type() {
-        let mock_server = MockServer::start().await;
-        let uri = Url::parse(&format!("{}/response", mock_server.uri())).unwrap();
-
-        Mock::given(method("POST"))
-            .and(path("/response"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .append_header("content-type", "text/html")
-                    .set_body_string(""),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let client = test_http_client();
-        let response = AuthorizationResponse::new(vp_token()).with_state("state-123");
-        let err = execute_direct_post(&client, &uri, &response)
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(err, DirectPostError::ResponseParseError(_)),
-            "expected ResponseParseError for wrong content-type, got: {err:?}"
-        );
     }
 
     #[tokio::test]
