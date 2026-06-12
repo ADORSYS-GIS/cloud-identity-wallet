@@ -1,18 +1,55 @@
+//! ISO mdoc (ISO 18013-5) presentation format as defined in [OpenID4VP Appendix B.2].
+//!
+//! Implements the Wallet-side logic for building mdoc presentations:
+//!
+//! 1. **Session Transcript** — constructs the `SessionTranscript` with the
+//!    `OID4VPHandover` structure per Appendix B.2.6.
+//! 2. **Device Signature** — constructs and signs a COSE_Sign1 `DeviceSignature`
+//!    over the `DeviceAuthentication` payload.
+//! 3. **Presentation assembly** — produces the final base64url-encoded CBOR
+//!    `DeviceResponse`.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use cloud_wallet_openid4vc::oid4vp::presentation::mdoc::MdocPresentation;
+//!
+//! let mdoc_presentation = MdocPresentation::builder(doc_type, session_transcript)
+//!     .algorithm(iana::Algorithm::ES256)
+//!     .add_claim(namespace, claim_name, value)
+//!     .issuer_signed(issuer_signed_value)
+//!     .signer(|tbs| { /* sign DeviceAuthentication bytes */ })
+//!     .build();
+//!
+//! let presentation = mdoc_presentation.create_presentation()?;
+//! ```
+//!
+//! [OpenID4VP Appendix B.2]: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.2
+
+use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::fmt;
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::ser::into_writer;
 use ciborium::value::Value;
 use coset::{AsCborValue, CoseSign1Builder, HeaderBuilder, iana};
-use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_with::skip_serializing_none;
 use thiserror::Error;
 
 use crate::core::claim_path_pointer::{ClaimPathElement, ClaimPathPointer};
+use crate::oid4vp::authorization::Presentation;
 use crate::oid4vp::dcql::ClaimsQuery;
+use crate::oid4vp::presentation::PresentationFactory;
+use crate::oid4vp::presentation::error::ProofError;
 use cloud_wallet_crypto::digest::HashAlg;
+
+/// Function type for signing `DeviceAuthentication` bytes.
+///
+/// Receives the raw `DeviceAuthentication` CBOR payload bytes and must return
+/// the COSE_Sign1 signature bytes. The signer must use the holder private key
+/// corresponding to the device key included in the mdoc's `IssuerSigned`.
+pub type DeviceSigner = Box<dyn Fn(&[u8]) -> Result<Vec<u8>, ProofError> + Send + Sync>;
 
 /// Errors produced while building ISO mdoc OpenID4VP presentation artifacts.
 #[derive(Debug, Error)]
@@ -34,14 +71,24 @@ pub enum MdocVpError {
     Signing(String),
 }
 
-type Result<T> = std::result::Result<T, MdocVpError>;
+impl From<MdocVpError> for ProofError {
+    fn from(value: MdocVpError) -> Self {
+        Self::Format(Box::new(value))
+    }
+}
+
+impl From<coset::CoseError> for MdocVpError {
+    fn from(value: coset::CoseError) -> Self {
+        Self::CborEncode(value.to_string())
+    }
+}
 
 /// mdoc-specific interpretation of a DCQL claims query.
 ///
 /// This normalises a claims path into the `namespace` + `claim_name` pair used
 /// by ISO mdoc presentation logic.
 #[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MdocClaimsQuery {
     /// ISO namespace string.
     pub namespace: String,
@@ -56,7 +103,7 @@ impl MdocClaimsQuery {
     pub fn try_from_claims_query(
         query: &ClaimsQuery,
         intent_to_retain: Option<bool>,
-    ) -> Result<Self> {
+    ) -> Result<Self, MdocVpError> {
         let (namespace, claim_name) = claim_path_to_namespace_and_element(&query.path)?;
         Ok(Self {
             namespace,
@@ -67,7 +114,9 @@ impl MdocClaimsQuery {
 }
 
 /// Converts a DCQL claim path into the mdoc namespace/data-element pair.
-pub fn claim_path_to_namespace_and_element(path: &ClaimPathPointer) -> Result<(String, String)> {
+pub fn claim_path_to_namespace_and_element(
+    path: &ClaimPathPointer,
+) -> Result<(String, String), MdocVpError> {
     let elements = path.elements();
     if elements.len() != 2 {
         return Err(MdocVpError::InvalidClaimsPath);
@@ -136,7 +185,7 @@ impl OpenID4VPHandover {
     }
 
     /// Serialises the structure to CBOR bytes.
-    pub fn to_cbor_bytes(&self) -> Result<Vec<u8>> {
+    pub fn to_cbor_bytes(&self) -> Result<Vec<u8>, MdocVpError> {
         let mut buf = Vec::new();
         into_writer(&self.to_cbor_value(), &mut buf)
             .map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
@@ -168,33 +217,151 @@ impl SessionTranscript {
     }
 }
 
-/// Builder for an mdoc `DeviceResponse`.
-
-/// Builder for an mdoc `DeviceResponse`.
+/// ISO mdoc presentation for building verifiable presentations.
 ///
-/// Per ISO 18013-5 and OpenID4VP Appendix B.2, the `DeviceResponse` must
-/// include both `deviceSigned` and `issuerSigned`.
-#[derive(Debug, Clone)]
-pub struct MdocDeviceResponseBuilder {
+/// Orchestrates `DeviceAuthentication` construction, COSE_Sign1 signature
+/// generation, and final `DeviceResponse` assembly as specified in
+/// [ISO 18013-5 §9.1.2.4] and [OpenID4VP Appendix B.2].
+///
+/// Use [`MdocPresentationBuilder`] (via [`MdocPresentation::builder`]) for
+/// ergonomic construction.
+///
+/// [ISO 18013-5 §9.1.2.4]: https://www.iso.org/standard/69084.html
+/// [OpenID4VP Appendix B.2]: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.2
+pub struct MdocPresentation {
     doc_type: String,
     device_namespaces: BTreeMap<String, BTreeMap<String, JsonValue>>,
     session_transcript: SessionTranscript,
     algorithm: iana::Algorithm,
-    issuer_signed: Option<Value>,
+    issuer_signed: Value,
+    signer: DeviceSigner,
 }
 
-impl MdocDeviceResponseBuilder {
-    /// Creates a new builder for a single mdoc document type.
-    pub fn new(doc_type: impl Into<String>, session_transcript: SessionTranscript) -> Self {
-        Self {
+impl MdocPresentation {
+    /// Returns a builder for constructing an `MdocPresentation`.
+    pub fn builder(
+        doc_type: impl Into<String>,
+        session_transcript: SessionTranscript,
+    ) -> MdocPresentationBuilder {
+        MdocPresentationBuilder {
             doc_type: doc_type.into(),
             device_namespaces: BTreeMap::new(),
             session_transcript,
             algorithm: iana::Algorithm::ES256,
             issuer_signed: None,
+            signer: None,
         }
     }
+}
 
+impl PresentationFactory for MdocPresentation {
+    fn create_presentation(self) -> Result<Presentation, ProofError> {
+        let Self {
+            doc_type,
+            device_namespaces,
+            session_transcript,
+            algorithm,
+            issuer_signed,
+            signer,
+        } = self;
+
+        if doc_type.trim().is_empty() {
+            return Err(ProofError::InvalidInput(Cow::Borrowed("doc_type must not be empty")));
+        }
+
+        let device_ns_value = json_to_cbor_value(&JsonValue::Object(
+            device_namespaces
+                .into_iter()
+                .map(|(ns, claims)| {
+                    let claims = serde_json::Map::from_iter(claims);
+                    (ns, JsonValue::Object(claims))
+                })
+                .collect(),
+        ))?;
+
+        let device_ns_bytes = value_to_bytes(&device_ns_value)?;
+        let device_ns_tagged = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes.clone())));
+
+        let device_auth_payload = Value::Array(vec![
+            Value::Text("DeviceAuthentication".to_string()),
+            session_transcript.to_cbor_value(),
+            Value::Text(doc_type.clone()),
+            device_ns_tagged,
+        ]);
+        let device_auth_payload_bytes = value_to_bytes(&device_auth_payload)?;
+
+        let protected = HeaderBuilder::new().algorithm(algorithm).build();
+        let sign1 = CoseSign1Builder::new()
+            .protected(protected)
+            .payload(device_auth_payload_bytes)
+            .try_create_signature(&[], |tbs| {
+                signer(tbs).map_err(|e| MdocVpError::Signing(e.to_string()))
+            })?
+            .build();
+
+        let mut document_entries = vec![(
+            Value::Text("docType".to_string()),
+            Value::Text(doc_type),
+        )];
+
+        document_entries.push((Value::Text("issuerSigned".to_string()), issuer_signed));
+
+        let device_ns_bytes_for_signed = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes)));
+
+        let device_signed = Value::Map(vec![
+            (
+                Value::Text("nameSpaces".to_string()),
+                device_ns_bytes_for_signed,
+            ),
+            (
+                Value::Text("deviceAuth".to_string()),
+                Value::Map(vec![(
+                    Value::Text("deviceSignature".to_string()),
+                    sign1.to_cbor_value().map_err(MdocVpError::from)?,
+                )]),
+            ),
+        ]);
+        document_entries.push((Value::Text("deviceSigned".to_string()), device_signed));
+
+        let device_response = Value::Map(vec![
+            (
+                Value::Text("version".to_string()),
+                Value::Text("1.0".to_string()),
+            ),
+            (
+                Value::Text("documents".to_string()),
+                Value::Array(vec![Value::Map(document_entries)]),
+            ),
+        ]);
+
+        let bytes = value_to_bytes(&device_response)?;
+        let encoded = Base64UrlUnpadded::encode_string(&bytes);
+
+        Ok(Presentation::String(encoded))
+    }
+}
+
+impl std::fmt::Debug for MdocPresentation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MdocPresentation")
+            .field("doc_type", &self.doc_type)
+            .field("algorithm", &self.algorithm)
+            .field("device_namespaces", &self.device_namespaces)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Builder for [`MdocPresentation`].
+pub struct MdocPresentationBuilder {
+    doc_type: String,
+    device_namespaces: BTreeMap<String, BTreeMap<String, JsonValue>>,
+    session_transcript: SessionTranscript,
+    algorithm: iana::Algorithm,
+    issuer_signed: Option<Value>,
+    signer: Option<DeviceSigner>,
+}
+
+impl MdocPresentationBuilder {
     /// Sets the COSE signing algorithm used for `DeviceSignature`.
     pub fn algorithm(mut self, algorithm: iana::Algorithm) -> Self {
         self.algorithm = algorithm;
@@ -205,7 +372,7 @@ impl MdocDeviceResponseBuilder {
     ///
     /// These populate `deviceSigned.nameSpaces`. For most mdoc presentations
     /// this is empty or minimal; the credential data comes from
-    /// [`MdocDeviceResponseBuilder::issuer_signed`].
+    /// [`MdocPresentationBuilder::issuer_signed`].
     pub fn add_claim(
         mut self,
         namespace: impl Into<String>,
@@ -239,129 +406,44 @@ impl MdocDeviceResponseBuilder {
         self
     }
 
-    /// Builds the CBOR `DeviceResponse` and encodes the `DeviceSignature`.
+    /// Sets the signing function that produces the COSE_Sign1 signature.
     ///
-    /// Per ISO 18013-5 §9.1.2.4, the `DeviceAuthentication` payload is:
-    /// ```cddl
-    /// DeviceAuthentication = [
-    ///     "DeviceAuthentication",
-    ///     SessionTranscript,
-    ///     DocType,
-    ///     DeviceNameSpacesBytes   ; #6.24(bstr .cbor DeviceNameSpaces)
-    /// ]
-    /// ```
-    ///
-    /// The COSE_Sign1 `external_aad` is the empty byte string `h''`.
-    pub fn build<F, E>(self, signer: F) -> Result<MdocDeviceResponse>
+    /// The function receives the raw `DeviceAuthentication` CBOR payload bytes
+    /// and must return the raw signature bytes. The signer must use the holder
+    /// private key corresponding to the device key in the mdoc's `IssuerSigned`.
+    pub fn signer<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&[u8]) -> std::result::Result<Vec<u8>, E>,
-        E: fmt::Display,
+        F: Fn(&[u8]) -> Result<Vec<u8>, ProofError> + Send + Sync + 'static,
     {
-        if self.doc_type.trim().is_empty() {
-            return Err(MdocVpError::EmptyField { field: "doc_type" });
-        }
-        let issuer_signed = self.issuer_signed.ok_or_else(|| MdocVpError::EmptyField {
-            field: "issuer_signed",
+        self.signer = Some(Box::new(f));
+        self
+    }
+
+    /// Builds the [`MdocPresentation`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `issuer_signed` has not been set via
+    /// [`MdocPresentationBuilder::issuer_signed`].
+    pub fn build(self) -> Result<MdocPresentation, ProofError> {
+        let issuer_signed = self.issuer_signed.ok_or_else(|| {
+            ProofError::MissingRequiredField(Cow::Borrowed("issuer_signed"))
         })?;
-
-        let device_ns_value = json_to_cbor_value(&JsonValue::Object(
-            self.device_namespaces
-                .into_iter()
-                .map(|(ns, claims)| {
-                    let claims = serde_json::Map::from_iter(claims);
-                    (ns, JsonValue::Object(claims))
-                })
-                .collect(),
-        ))?;
-
-        let device_ns_bytes = value_to_bytes(&device_ns_value)?;
-        let device_ns_tagged = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes.clone())));
-
-        let device_auth_payload = Value::Array(vec![
-            Value::Text("DeviceAuthentication".to_string()),
-            self.session_transcript.to_cbor_value(),
-            Value::Text(self.doc_type.clone()),
-            device_ns_tagged,
-        ]);
-        let device_auth_payload_bytes = value_to_bytes(&device_auth_payload)?;
-
-        let protected = HeaderBuilder::new().algorithm(self.algorithm).build();
-        let sign1 = CoseSign1Builder::new()
-            .protected(protected)
-            .payload(device_auth_payload_bytes)
-            .try_create_signature(&[], |tbs| {
-                signer(tbs).map_err(|e| MdocVpError::Signing(e.to_string()))
-            })?
-            .build();
-
-        let mut document_entries = vec![(
-            Value::Text("docType".to_string()),
-            Value::Text(self.doc_type),
-        )];
-
-        document_entries.push((Value::Text("issuerSigned".to_string()), issuer_signed));
-
-        let device_ns_bytes_for_signed = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes)));
-
-        let device_signed = Value::Map(vec![
-            (
-                Value::Text("nameSpaces".to_string()),
-                device_ns_bytes_for_signed,
-            ),
-            (
-                Value::Text("deviceAuth".to_string()),
-                Value::Map(vec![(
-                    Value::Text("deviceSignature".to_string()),
-                    sign1
-                        .to_cbor_value()
-                        .map_err(|e: coset::CoseError| MdocVpError::CborEncode(e.to_string()))?,
-                )]),
-            ),
-        ]);
-        document_entries.push((Value::Text("deviceSigned".to_string()), device_signed));
-
-        let device_response = Value::Map(vec![
-            (
-                Value::Text("version".to_string()),
-                Value::Text("1.0".to_string()),
-            ),
-            (
-                Value::Text("documents".to_string()),
-                Value::Array(vec![Value::Map(document_entries)]),
-            ),
-        ]);
-
-        Ok(MdocDeviceResponse {
-            value: device_response,
+        let signer = self.signer.ok_or_else(|| {
+            ProofError::MissingRequiredField(Cow::Borrowed("signer"))
+        })?;
+        Ok(MdocPresentation {
+            doc_type: self.doc_type,
+            device_namespaces: self.device_namespaces,
+            session_transcript: self.session_transcript,
+            algorithm: self.algorithm,
+            issuer_signed,
+            signer,
         })
     }
 }
 
-/// A CBOR `DeviceResponse` value with helper encoding methods.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MdocDeviceResponse {
-    value: Value,
-}
-
-impl MdocDeviceResponse {
-    /// Returns the underlying CBOR value.
-    pub fn value(&self) -> &Value {
-        &self.value
-    }
-
-    /// Serialises the response to CBOR bytes.
-    pub fn to_cbor_bytes(&self) -> Result<Vec<u8>> {
-        value_to_bytes(&self.value)
-    }
-
-    /// Serialises the response to unpadded base64url.
-    pub fn to_base64url(&self) -> Result<String> {
-        let bytes = self.to_cbor_bytes()?;
-        Ok(Base64UrlUnpadded::encode_string(&bytes))
-    }
-}
-
-fn json_to_cbor_value(value: &JsonValue) -> Result<Value> {
+fn json_to_cbor_value(value: &JsonValue) -> Result<Value, ProofError> {
     let mut buf = Vec::new();
     into_writer(value, &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
     let decoded: Value = ciborium::de::from_reader(buf.as_slice())
@@ -369,7 +451,7 @@ fn json_to_cbor_value(value: &JsonValue) -> Result<Value> {
     Ok(decoded)
 }
 
-fn value_to_bytes(value: &Value) -> Result<Vec<u8>> {
+fn value_to_bytes(value: &Value) -> Result<Vec<u8>, ProofError> {
     let mut buf = Vec::new();
     into_writer(value, &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
     Ok(buf)
@@ -458,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_device_response_and_encodes_as_base64url() {
+    fn creates_mdoc_presentation_and_encodes_as_base64url() {
         let transcript = SessionTranscript::new(sample_handover());
 
         let issuer_signed = Value::Map(vec![
@@ -466,19 +548,25 @@ mod tests {
             (Value::Text("issuerAuth".to_string()), Value::Null),
         ]);
 
-        let response = MdocDeviceResponseBuilder::new("org.iso.18013.5.1.mDL", transcript)
-            .algorithm(iana::Algorithm::ES256)
-            .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
-            .add_claim("org.iso.18013.5.1", "given_name", json!("Jane"))
-            .issuer_signed(issuer_signed)
-            .build(|tbs| Ok::<Vec<u8>, std::convert::Infallible>(vec![0xAA; tbs.len().min(64)]))
-            .unwrap();
+        let presentation =
+            MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
+                .algorithm(iana::Algorithm::ES256)
+                .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
+                .add_claim("org.iso.18013.5.1", "given_name", json!("Jane"))
+                .issuer_signed(issuer_signed)
+                .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
+                .build()
+                .unwrap()
+                .create_presentation()
+                .unwrap();
 
-        let bytes = response.to_cbor_bytes().unwrap();
-        let encoded = response.to_base64url().unwrap();
-        assert_eq!(encoded, Base64UrlUnpadded::encode_string(&bytes));
+        let Presentation::String(encoded) = presentation else {
+            panic!("expected string presentation");
+        };
 
+        let bytes = Base64UrlUnpadded::decode_vec(&encoded).unwrap();
         let decoded: Value = ciborium::de::from_reader(bytes.as_slice()).unwrap();
+
         let Value::Map(top) = decoded else {
             panic!("device response must be a map");
         };
@@ -572,13 +660,55 @@ mod tests {
     #[test]
     fn rejects_build_without_issuer_signed() {
         let transcript = SessionTranscript::new(sample_handover());
-        let result = MdocDeviceResponseBuilder::new("org.iso.18013.5.1.mDL", transcript)
+        let result = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
             .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
-            .build(|tbs| Ok::<Vec<u8>, std::convert::Infallible>(vec![0xAA; tbs.len().min(64)]));
+            .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
+            .build();
         assert!(result.is_err());
         match result.unwrap_err() {
-            MdocVpError::EmptyField { field } => assert_eq!(field, "issuer_signed"),
+            ProofError::MissingRequiredField(field) => {
+                assert_eq!(field, "issuer_signed");
+            }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn rejects_build_without_signer() {
+        let transcript = SessionTranscript::new(sample_handover());
+        let issuer_signed = Value::Map(vec![
+            (Value::Text("nameSpaces".to_string()), Value::Map(vec![])),
+            (Value::Text("issuerAuth".to_string()), Value::Null),
+        ]);
+        let result = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
+            .issuer_signed(issuer_signed)
+            .build();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ProofError::MissingRequiredField(field) => {
+                assert_eq!(field, "signer");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn rejects_empty_doc_type_in_create_presentation() {
+        let transcript = SessionTranscript::new(sample_handover());
+        let issuer_signed = Value::Map(vec![
+            (Value::Text("nameSpaces".to_string()), Value::Map(vec![])),
+            (Value::Text("issuerAuth".to_string()), Value::Null),
+        ]);
+        let err = MdocPresentation::builder("", transcript)
+            .issuer_signed(issuer_signed)
+            .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
+            .build()
+            .unwrap()
+            .create_presentation()
+            .unwrap_err();
+        assert!(
+            matches!(err, ProofError::InvalidInput(ref input) if input.contains("doc_type")),
+            "unexpected error: {err}"
+        );
     }
 }
