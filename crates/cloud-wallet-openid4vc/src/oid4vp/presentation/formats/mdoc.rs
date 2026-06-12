@@ -266,7 +266,9 @@ impl PresentationFactory for MdocPresentation {
         } = self;
 
         if doc_type.trim().is_empty() {
-            return Err(ProofError::InvalidInput(Cow::Borrowed("doc_type must not be empty")));
+            return Err(ProofError::InvalidInput(Cow::Borrowed(
+                "doc_type must not be empty",
+            )));
         }
 
         let device_ns_value = json_to_cbor_value(&JsonValue::Object(
@@ -299,10 +301,8 @@ impl PresentationFactory for MdocPresentation {
             })?
             .build();
 
-        let mut document_entries = vec![(
-            Value::Text("docType".to_string()),
-            Value::Text(doc_type),
-        )];
+        let mut document_entries =
+            vec![(Value::Text("docType".to_string()), Value::Text(doc_type))];
 
         document_entries.push((Value::Text("issuerSigned".to_string()), issuer_signed));
 
@@ -426,12 +426,12 @@ impl MdocPresentationBuilder {
     /// Returns an error if `issuer_signed` has not been set via
     /// [`MdocPresentationBuilder::issuer_signed`].
     pub fn build(self) -> Result<MdocPresentation, ProofError> {
-        let issuer_signed = self.issuer_signed.ok_or_else(|| {
-            ProofError::MissingRequiredField(Cow::Borrowed("issuer_signed"))
-        })?;
-        let signer = self.signer.ok_or_else(|| {
-            ProofError::MissingRequiredField(Cow::Borrowed("signer"))
-        })?;
+        let issuer_signed = self
+            .issuer_signed
+            .ok_or_else(|| ProofError::MissingRequiredField(Cow::Borrowed("issuer_signed")))?;
+        let signer = self
+            .signer
+            .ok_or_else(|| ProofError::MissingRequiredField(Cow::Borrowed("signer")))?;
         Ok(MdocPresentation {
             doc_type: self.doc_type,
             device_namespaces: self.device_namespaces,
@@ -548,17 +548,16 @@ mod tests {
             (Value::Text("issuerAuth".to_string()), Value::Null),
         ]);
 
-        let presentation =
-            MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
-                .algorithm(iana::Algorithm::ES256)
-                .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
-                .add_claim("org.iso.18013.5.1", "given_name", json!("Jane"))
-                .issuer_signed(issuer_signed)
-                .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
-                .build()
-                .unwrap()
-                .create_presentation()
-                .unwrap();
+        let presentation = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
+            .algorithm(iana::Algorithm::ES256)
+            .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
+            .add_claim("org.iso.18013.5.1", "given_name", json!("Jane"))
+            .issuer_signed(issuer_signed)
+            .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
+            .build()
+            .unwrap()
+            .create_presentation()
+            .unwrap();
 
         let Presentation::String(encoded) = presentation else {
             panic!("expected string presentation");
