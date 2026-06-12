@@ -9,11 +9,12 @@ mod metadata;
 mod tests;
 mod verification;
 
+pub use decode::{disclosure_digest, disclosure_hash_algorithm};
 pub use disclosure::Disclosure;
 pub use error::{DisclosureError, Error, ProcessingError};
 pub use hash::IanaHashAlgorithm;
 pub use jwt::Jwt;
-pub use kb_jwt::{KeyBindingClaims, KeyBindingJwt};
+pub use kb_jwt::{KEY_BINDING_JWT_TYP, KeyBindingClaims, KeyBindingJwt};
 pub use metadata::IssuerMetadataError;
 pub use verification::{VerificationError, X5cTrustAnchors};
 

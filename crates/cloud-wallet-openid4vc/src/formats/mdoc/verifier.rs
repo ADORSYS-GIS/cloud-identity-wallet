@@ -410,7 +410,9 @@ pub(crate) fn verify_device_key_binding(
     match kty {
         2 => verify_ec2_binding(&entries, holder_binding_public_jwk),
         1 => verify_okp_binding(&entries, holder_binding_public_jwk),
-        _ => Err(MdocError::UnsupportedDeviceKeyType),
+        _ => Err(MdocError::UnsupportedDeviceKeyType {
+            reason: "kty is not EC2 (2) or OKP (1)",
+        }),
     }
 }
 
@@ -422,7 +424,11 @@ fn verify_ec2_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
             1 => ("P-256", cloud_wallet_crypto::jwk::Curve::P256),
             2 => ("P-384", cloud_wallet_crypto::jwk::Curve::P384),
             3 => ("P-521", cloud_wallet_crypto::jwk::Curve::P521),
-            _ => return Err(MdocError::UnsupportedDeviceKeyType),
+            _ => {
+                return Err(MdocError::UnsupportedDeviceKeyType {
+                    reason: "EC2 crv is not P-256 (1), P-384 (2), or P-521 (3)",
+                });
+            }
         },
         Some(_) => {
             return Err(MdocError::MalformedDeviceKey {
@@ -457,7 +463,11 @@ fn verify_ec2_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
         // RFC 8152 §13.1 permits y as a bool for compressed EC2 points. We cannot
         // compare compressed-only keys against the uncompressed JWK y without EC
         // decompression. Reject explicitly rather than silently skipping.
-        Some(Value::Bool(_)) => return Err(MdocError::UnsupportedDeviceKeyType),
+        Some(Value::Bool(_)) => {
+            return Err(MdocError::UnsupportedDeviceKeyType {
+                reason: "compressed EC2 y (bool); uncompressed form required",
+            });
+        }
         Some(_) => {
             return Err(MdocError::MalformedDeviceKey {
                 reason: "y coordinate (label -3) must be bytes or bool".to_owned(),
@@ -473,7 +483,11 @@ fn verify_ec2_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
     // Match proof JWK against Key::Ec.
     let ec = match &holder_binding_public_jwk.key {
         Key::Ec(ec) => ec,
-        _ => return Err(MdocError::UnsupportedDeviceKeyType),
+        _ => {
+            return Err(MdocError::UnsupportedDeviceKeyType {
+                reason: "proof JWK key type is not EC",
+            });
+        }
     };
 
     // Curve consistency check.
@@ -483,7 +497,11 @@ fn verify_ec2_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
         cloud_wallet_crypto::jwk::Curve::P521 => "P-521",
         cloud_wallet_crypto::jwk::Curve::P256K1 => "secp256k1",
         // Curve is #[non_exhaustive]; future variants are unsupported.
-        _ => return Err(MdocError::UnsupportedDeviceKeyType),
+        _ => {
+            return Err(MdocError::UnsupportedDeviceKeyType {
+                reason: "proof JWK EC curve is not P-256, P-384, or P-521",
+            });
+        }
     };
     if ec.crv != jwk_curve {
         return Err(MdocError::CurveMismatch {
@@ -527,7 +545,11 @@ fn verify_okp_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
     match cose_key_get(entries, -1) {
         Some(Value::Integer(n)) => match i128::from(*n) {
             6 => {} // Ed25519 — proceed
-            _ => return Err(MdocError::UnsupportedDeviceKeyType),
+            _ => {
+                return Err(MdocError::UnsupportedDeviceKeyType {
+                    reason: "OKP crv is not Ed25519 (6)",
+                });
+            }
         },
         Some(_) => {
             return Err(MdocError::MalformedDeviceKey {
@@ -559,7 +581,11 @@ fn verify_okp_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
     // Match proof JWK — must be OKP Ed25519.
     let okp = match &holder_binding_public_jwk.key {
         Key::Okp(okp) if okp.crv == OkpCurve::Ed25519 => okp,
-        _ => return Err(MdocError::UnsupportedDeviceKeyType),
+        _ => {
+            return Err(MdocError::UnsupportedDeviceKeyType {
+                reason: "proof JWK key type is not OKP Ed25519",
+            });
+        }
     };
 
     // Ed25519 x must be exactly 32 bytes; validate before ct_eq to ensure the
