@@ -6,7 +6,7 @@ mod utils;
 pub use data::*;
 pub use error::Error as SessionError;
 pub use store::{MemorySession, RedisSession};
-pub use utils::generate_session_id;
+pub use utils::{generate_presentation_session_id, generate_session_id};
 
 pub type Result<T> = std::result::Result<T, SessionError>;
 
