@@ -163,7 +163,10 @@ mod tests {
     }
 
     #[test]
-    fn errors_on_malformed_pem() {
+    fn errors_on_bad_input() {
+        // unreadable path — hard startup error, not silently skipped
+        assert!(load_iaca_roots(&["/nonexistent/path/root.pem".into()]).is_err());
+
         // invalid base64 inside a CERTIFICATE block
         let mut f1 = tempfile::NamedTempFile::new().unwrap();
         f1.write_all(
