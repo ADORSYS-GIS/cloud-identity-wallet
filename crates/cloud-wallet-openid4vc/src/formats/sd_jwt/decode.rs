@@ -12,6 +12,21 @@ const SD_ALG_CLAIM: &str = "_sd_alg";
 const ARRAY_DIGEST_CLAIM: &str = "...";
 const MAX_JSON_NESTING_DEPTH: usize = 64;
 
+/// Determines the hash algorithm to use for disclosure hashing.
+///
+/// Defaults to SHA-256 when `_sd_alg` is absent, per RFC 9901.
+pub fn disclosure_hash_algorithm(sd_alg: Option<&str>) -> Result<HashAlg, Error> {
+    sd_alg
+        .map(IanaHashAlgorithm::from_str)
+        .unwrap_or(Ok(IanaHashAlgorithm::Sha256))
+        .map(Into::into)
+}
+
+/// Computes the base64url-encoded digest of a raw string using the specified hash algorithm.
+pub fn disclosure_digest(raw_disclosure: &str, algorithm: HashAlg) -> String {
+    URL_SAFE_NO_PAD.encode(algorithm.hash(raw_disclosure.as_bytes()).as_ref())
+}
+
 /// Processes the disclosures in the SD-JWT and returns the processed payload.
 ///
 /// The processing is done according to [RFC 9901 Section 7].
@@ -231,19 +246,6 @@ fn encounter_digest(digest: &str, state: &mut ProcessingState) -> Result<(), Err
             digest.to_owned(),
         )))
     }
-}
-
-/// Determines the hash algorithm to use for disclosure hashing.
-fn disclosure_hash_algorithm(sd_alg: Option<&str>) -> Result<HashAlg, Error> {
-    sd_alg
-        .map(IanaHashAlgorithm::from_str)
-        .unwrap_or(Ok(IanaHashAlgorithm::Sha256))
-        .map(Into::into)
-}
-
-/// Computes the digest of a raw disclosure string using the specified hash algorithm.
-fn disclosure_digest(raw_disclosure: &str, algorithm: HashAlg) -> String {
-    URL_SAFE_NO_PAD.encode(algorithm.hash(raw_disclosure.as_bytes()).as_ref())
 }
 
 fn decode_error(reason: ProcessingError) -> Error {
