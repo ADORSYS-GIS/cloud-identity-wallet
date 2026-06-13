@@ -85,6 +85,7 @@ The application is configured via environment variables prefixed with `APP_`, us
 | `APP_OID4VCI__CLIENT_ID`                 | `cloud-identity-wallet`                          | OAuth2 client identifier                                                                                             |
 | `APP_OID4VCI__REDIRECT_URI`              | `http://localhost:3000/api/v1/issuance/callback` | OAuth2 redirect URI                                                                                                  |
 | `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES` | `en`                                             | Comma-separated locale prefixes tried in priority order when selecting credential display metadata (e.g. `en,fr,de`) |
+| `APP_MDOC__IACA_ROOT_PATHS`              | *(empty)*                                        | Comma-separated paths to DER- or PEM-encoded IACA root certificate files (e.g. `/certs/iaca-root.pem`). An empty list is fail-closed: all ISO 18013-5 mDoc credential issuances will be rejected. A startup `WARN` is logged when no roots are loaded. Paths containing commas must be set via a config file instead of this variable. |
 
 ### Testing
 
