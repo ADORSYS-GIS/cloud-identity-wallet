@@ -74,6 +74,7 @@
 //! [RFC8017 Section 8.2]: https://datatracker.ietf.org/doc/html/rfc8017#section-8.2
 //! [RFC8017 Section 8.1]: https://datatracker.ietf.org/doc/html/rfc8017#section-8.1
 
+pub mod oaep;
 #[cfg(test)]
 mod tests;
 
@@ -172,6 +173,27 @@ impl KeyMaterial {
 /// - RSA-3072: 384 bytes
 /// - RSA-4096: 512 bytes
 /// - RSA-8192: 1024 bytes
+///
+/// # No Conversion Path to OAEP Decryption
+///
+/// This type is for **signing** only. There is no conversion path to or from
+/// [`oaep::DecryptingKey`]: the two types wrap different aws-lc-rs internal
+/// representations (`RsaKeyPair` vs `PrivateDecryptingKey`) that have no
+/// `From`/`Into` impl between them. To use the same RSA private key for both
+/// signing and OAEP decryption, load the PKCS#8 DER into each type separately:
+///
+/// ```rust
+/// # use cloud_wallet_crypto::rsa::{KeyPair, RsaKeySize};
+/// # use cloud_wallet_crypto::rsa::oaep::DecryptingKey;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let signing_key = KeyPair::generate(RsaKeySize::Rsa2048)?;
+/// # let mut buf = vec![0u8; 2048];
+/// # let pkcs8_der = signing_key.to_pkcs8_der(&mut buf)?.to_vec();
+/// let signing = KeyPair::from_pkcs8_der(&pkcs8_der)?;
+/// let decrypting = DecryptingKey::from_pkcs8_der(&pkcs8_der)?;
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Examples
 ///
