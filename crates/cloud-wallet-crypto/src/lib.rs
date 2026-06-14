@@ -10,13 +10,16 @@
 #![doc = include_str!("../README.md")]
 
 pub mod aead;
+pub mod aes_kek;
 pub mod digest;
+pub mod ecdh;
 pub mod ecdsa;
 pub mod ed25519;
 pub mod error;
 #[cfg_attr(docsrs, doc(cfg(feature = "jwk")))]
 #[cfg(feature = "jwk")]
 pub mod jwk;
+pub mod kdf;
 pub mod rand;
 pub mod rsa;
 pub mod secret;

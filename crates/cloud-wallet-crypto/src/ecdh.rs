@@ -1,0 +1,549 @@
+//! Ephemeral ECDH key agreement for X25519, P-256, P-384, and P-521.
+//!
+//! All private keys are ephemeral: generated fresh per operation and consumed
+//! on [`EphemeralEcdhKey::into_shared_secret`]. RFC 7518 §4.6 mandates this
+//! for ECDH-ES, so no reuse is exposed. Feed [`SharedSecret`] bytes into
+//! [`crate::kdf::concat_kdf`] to derive a JWE content-encryption key.
+
+use aws_lc_rs::agreement::{self, EphemeralPrivateKey, UnparsedPublicKey, agree_ephemeral};
+use aws_lc_rs::rand::SystemRandom;
+
+use crate::error::{ErrorKind, Result};
+use crate::secret::Secret;
+use crate::utils::{error_msg, key_gen_error, parse_error};
+
+/// Supported ECDH curves.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EcdhCurve {
+    /// NIST P-256 (prime256v1 / secp256r1).
+    P256,
+    /// NIST P-384 (secp384r1).
+    P384,
+    /// NIST P-521 (secp521r1).
+    P521,
+    /// X25519 Diffie-Hellman (RFC 7748).
+    X25519,
+}
+
+impl EcdhCurve {
+    fn algorithm(self) -> &'static agreement::Algorithm {
+        match self {
+            EcdhCurve::P256 => &agreement::ECDH_P256,
+            EcdhCurve::P384 => &agreement::ECDH_P384,
+            EcdhCurve::P521 => &agreement::ECDH_P521,
+            EcdhCurve::X25519 => &agreement::X25519,
+        }
+    }
+
+    /// Expected byte length of the serialised public key for this curve.
+    ///
+    /// NIST curves: 1 (uncompressed tag `04`) + 2 × coordinate size.
+    /// X25519: 32-byte raw scalar.
+    ///
+    /// Use this to size the output buffer passed to
+    /// [`EphemeralEcdhKey::public_key_bytes`].
+    pub fn public_key_len(self) -> usize {
+        match self {
+            EcdhCurve::P256 => 65,  // 1 + 32 + 32
+            EcdhCurve::P384 => 97,  // 1 + 48 + 48
+            EcdhCurve::P521 => 133, // 1 + 66 + 66
+            EcdhCurve::X25519 => 32,
+        }
+    }
+}
+
+// Fixed-size heap-free storage for a public key, one array variant per curve.
+#[derive(Clone, Copy)]
+enum PublicKeyBytes {
+    P256([u8; 65]),
+    P384([u8; 97]),
+    P521([u8; 133]),
+    X25519([u8; 32]),
+}
+
+impl PublicKeyBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::P256(b) => b,
+            Self::P384(b) => b,
+            Self::P521(b) => b,
+            Self::X25519(b) => b,
+        }
+    }
+
+    fn curve(&self) -> EcdhCurve {
+        match self {
+            Self::P256(_) => EcdhCurve::P256,
+            Self::P384(_) => EcdhCurve::P384,
+            Self::P521(_) => EcdhCurve::P521,
+            Self::X25519(_) => EcdhCurve::X25519,
+        }
+    }
+}
+
+/// An ephemeral ECDH private key, consumed on agreement.
+///
+/// RFC 7518 §4.6 requires a fresh ephemeral key per JWE operation; this type
+/// enforces that by taking ownership in [`EphemeralEcdhKey::into_shared_secret`].
+pub struct EphemeralEcdhKey {
+    inner: EphemeralPrivateKey,
+    curve: EcdhCurve,
+}
+
+impl std::fmt::Debug for EphemeralEcdhKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EphemeralEcdhKey")
+            .field("curve", &self.curve)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EphemeralEcdhKey {
+    /// Generate a fresh ephemeral key pair for the given curve.
+    ///
+    /// # Errors
+    /// [`ErrorKind::KeyGeneration`] on RNG or key-generation failure.
+    pub fn generate(curve: EcdhCurve) -> Result<Self> {
+        let rng = SystemRandom::new();
+        let inner = EphemeralPrivateKey::generate(curve.algorithm(), &rng)
+            .map_err(|_| key_gen_error("ephemeral ECDH"))?;
+        Ok(Self { inner, curve })
+    }
+
+    /// The curve this key was generated for.
+    #[must_use]
+    pub fn curve(&self) -> EcdhCurve {
+        self.curve
+    }
+
+    /// Serialise the public key into `output` for inclusion in the JWE `epk` header.
+    ///
+    /// `output.len()` must be `>= self.curve().public_key_len()`.
+    /// Encoding: SEC1 uncompressed point (`04 || x || y`) for P-256/384/521;
+    /// raw 32-byte little-endian scalar for X25519.
+    ///
+    /// Returns the filled sub-slice of `output`.
+    ///
+    /// # Errors
+    /// - [`ErrorKind::WrongLength`] if `output` is too small.
+    /// - [`ErrorKind::KeyGeneration`] on internal failure.
+    pub fn public_key_bytes<'o>(&self, output: &'o mut [u8]) -> Result<&'o [u8]> {
+        let key = self
+            .inner
+            .compute_public_key()
+            .map_err(|_| key_gen_error("ECDH public key"))?;
+        let bytes = key.as_ref();
+        if output.len() < bytes.len() {
+            return Err(error_msg(
+                ErrorKind::WrongLength,
+                format!(
+                    "output buffer must be at least {} bytes for {:?} public key, got {}",
+                    bytes.len(),
+                    self.curve,
+                    output.len()
+                ),
+            ));
+        }
+        output[..bytes.len()].copy_from_slice(bytes);
+        Ok(&output[..bytes.len()])
+    }
+
+    /// Perform ECDH key agreement and return the shared secret, consuming the
+    /// ephemeral key.
+    ///
+    /// The `into_*` prefix signals that `self` is consumed - one call per key.
+    ///
+    /// # Errors
+    /// - [`ErrorKind::KeyParsing`] if `peer.curve()` does not match `self.curve()`, or if
+    ///   the agreement computation fails (low-order point, point not on curve, etc.).
+    pub fn into_shared_secret(self, peer: &EcdhPublicKey) -> Result<SharedSecret> {
+        if self.curve != peer.curve() {
+            return Err(error_msg(
+                ErrorKind::KeyParsing,
+                format!(
+                    "curve mismatch: self is {:?} but peer key is {:?}",
+                    self.curve,
+                    peer.curve()
+                ),
+            ));
+        }
+        let peer_key = UnparsedPublicKey::new(self.curve.algorithm(), peer.as_bytes());
+        let curve = self.curve;
+        agree_ephemeral(
+            self.inner,
+            peer_key,
+            error_msg(
+                ErrorKind::KeyParsing,
+                "ECDH agreement failed: peer key is invalid or a low-order point",
+            ),
+            move |key_material| {
+                Ok(SharedSecret {
+                    secret: Secret::new(key_material),
+                    curve,
+                })
+            },
+        )
+    }
+}
+
+/// Peer public key for ECDH.
+///
+/// For P-256/384/521: uncompressed SEC1 point (`04 || x || y`).
+/// For X25519: raw 32-byte little-endian scalar.
+///
+/// Stored in a fixed-size array determined by the curve; no heap allocation.
+/// Byte length and uncompressed-point tag are validated at construction.
+/// Curve mismatch with the private key is caught in
+/// [`EphemeralEcdhKey::into_shared_secret`].
+#[derive(Clone, Copy)]
+pub struct EcdhPublicKey {
+    bytes: PublicKeyBytes,
+}
+
+impl std::fmt::Debug for EcdhPublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EcdhPublicKey")
+            .field("curve", &self.bytes.curve())
+            .finish_non_exhaustive()
+    }
+}
+
+impl EcdhPublicKey {
+    /// Construct from raw public key bytes for the given curve.
+    ///
+    /// Validates:
+    /// - Exact byte length for the curve (65 / 97 / 133 / 32 bytes).
+    /// - Uncompressed-point tag `0x04` for NIST curves.
+    ///
+    /// Point-on-curve validation is deferred to
+    /// [`EphemeralEcdhKey::into_shared_secret`].
+    ///
+    /// # Errors
+    /// [`ErrorKind::KeyParsing`] if the length or tag is wrong.
+    pub fn from_bytes(curve: EcdhCurve, bytes: &[u8]) -> Result<Self> {
+        let expected = curve.public_key_len();
+        if bytes.len() != expected {
+            return Err(error_msg(
+                ErrorKind::KeyParsing,
+                format!(
+                    "{:?} public key must be {expected} bytes, got {}",
+                    curve,
+                    bytes.len()
+                ),
+            ));
+        }
+        if curve != EcdhCurve::X25519 && bytes[0] != 0x04 {
+            return Err(parse_error(
+                "NIST curve public key must use uncompressed SEC1 encoding (0x04 prefix)",
+            ));
+        }
+        // len validated above - try_into is infallible for each branch.
+        let inner = match curve {
+            EcdhCurve::P256 => PublicKeyBytes::P256(bytes.try_into().unwrap()),
+            EcdhCurve::P384 => PublicKeyBytes::P384(bytes.try_into().unwrap()),
+            EcdhCurve::P521 => PublicKeyBytes::P521(bytes.try_into().unwrap()),
+            EcdhCurve::X25519 => PublicKeyBytes::X25519(bytes.try_into().unwrap()),
+        };
+        Ok(Self { bytes: inner })
+    }
+
+    /// The curve this key belongs to.
+    #[must_use]
+    pub fn curve(&self) -> EcdhCurve {
+        self.bytes.curve()
+    }
+
+    /// Raw public key bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+/// Raw shared secret produced by ECDH.
+///
+/// Do **not** use as an encryption key directly. Derive key material via
+/// [`crate::kdf::concat_kdf`] per RFC 7518 §4.6.2.
+pub struct SharedSecret {
+    secret: Secret,
+    curve: EcdhCurve,
+}
+
+impl std::fmt::Debug for SharedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedSecret")
+            .field("curve", &self.curve)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SharedSecret {
+    /// Exposes the raw shared secret bytes for use with ConcatKDF.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.secret.expose()
+    }
+
+    /// The curve the shared secret was derived from.
+    ///
+    /// Useful for selecting the correct KDF hash (e.g. SHA-256 for P-256/X25519,
+    /// SHA-384 for P-384, SHA-512 for P-521) without tracking the curve
+    /// separately alongside the secret.
+    #[must_use]
+    pub fn curve(&self) -> EcdhCurve {
+        self.curve
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_lc_rs::agreement::{self as lc, PrivateKey, UnparsedPublicKey, agree};
+    use hex_literal::hex;
+
+    // Round-trip tests
+    // Verify that an ephemeral Alice and a static Bob agree on the same secret.
+
+    fn round_trip(curve: EcdhCurve) {
+        let bob = PrivateKey::generate(curve.algorithm()).unwrap();
+        let bob_pub = bob.compute_public_key().unwrap();
+
+        let alice = EphemeralEcdhKey::generate(curve).unwrap();
+        let mut alice_pub_buf = vec![0u8; curve.public_key_len()];
+        let alice_pub_bytes = alice.public_key_bytes(&mut alice_pub_buf).unwrap();
+
+        let alice_shared = alice
+            .into_shared_secret(&EcdhPublicKey::from_bytes(curve, bob_pub.as_ref()).unwrap())
+            .unwrap();
+
+        let alice_pub_unparsed = UnparsedPublicKey::new(curve.algorithm(), alice_pub_bytes);
+        let bob_shared = agree(&bob, alice_pub_unparsed, (), |b| {
+            Ok::<Vec<u8>, ()>(b.to_vec())
+        })
+        .unwrap();
+
+        assert_eq!(alice_shared.as_bytes(), bob_shared.as_slice());
+        assert!(!alice_shared.as_bytes().iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn round_trip_p256() {
+        round_trip(EcdhCurve::P256);
+    }
+
+    #[test]
+    fn round_trip_p384() {
+        round_trip(EcdhCurve::P384);
+    }
+
+    #[test]
+    fn round_trip_p521() {
+        round_trip(EcdhCurve::P521);
+    }
+
+    #[test]
+    fn round_trip_x25519() {
+        round_trip(EcdhCurve::X25519);
+    }
+
+    // ECDH commutativity property
+
+    #[test]
+    fn ecdh_commutativity_property() {
+        // ECDH(a_priv, b_pub) == ECDH(b_priv, a_pub) for any two key pairs.
+        let a = PrivateKey::generate(&lc::ECDH_P256).unwrap();
+        let b = PrivateKey::generate(&lc::ECDH_P256).unwrap();
+        let a_pub = UnparsedPublicKey::new(
+            &lc::ECDH_P256,
+            a.compute_public_key().unwrap().as_ref().to_vec(),
+        );
+        let b_pub = UnparsedPublicKey::new(
+            &lc::ECDH_P256,
+            b.compute_public_key().unwrap().as_ref().to_vec(),
+        );
+
+        let a_secret = agree(&a, b_pub, (), |b| Ok::<Vec<u8>, ()>(b.to_vec())).unwrap();
+        let b_secret = agree(&b, a_pub, (), |b| Ok::<Vec<u8>, ()>(b.to_vec())).unwrap();
+
+        assert_eq!(a_secret, b_secret);
+        assert!(!a_secret.iter().all(|&byte| byte == 0));
+    }
+
+    // - NIST / Wycheproof known-answer tests
+    // Vectors sourced from the aws-lc-rs test suite (agreement_tests.rs),
+    // which in turn uses NIST CAVP vectors for P-256/384/521 and RFC 7748 §6.1 for X25519.
+    fn known_answer(
+        curve: EcdhCurve,
+        lc_alg: &'static lc::Algorithm,
+        d: &[u8],
+        peer_pub: &[u8],
+        expected_z: &[u8],
+    ) {
+        // algorithm constant and EcdhPublicKey parsing are correct.
+        let peer = EcdhPublicKey::from_bytes(curve, peer_pub).unwrap();
+        let priv_key = PrivateKey::from_private_key(lc_alg, d).unwrap();
+        let lc_peer = UnparsedPublicKey::new(lc_alg, peer.as_bytes());
+        let z = agree(&priv_key, lc_peer, (), |b| Ok::<Vec<u8>, ()>(b.to_vec())).unwrap();
+        assert_eq!(z.as_slice(), expected_z);
+
+        // Exercise EphemeralEcdhKey::into_shared_secret end-to-end via commutativity.
+        //
+        // EphemeralPrivateKey has no `from_private_key` constructor (by design), so
+        // the NIST scalar `d` above cannot be loaded through our wrapper. This is not
+        // a second CAVP test — it verifies that our ephemeral wrapper routes to the
+        // same algorithm constant validated in Part 1, using a fresh random key pair.
+        let bob_static = PrivateKey::generate(lc_alg).unwrap();
+        let bob_pub_bytes = bob_static.compute_public_key().unwrap();
+
+        let alice = EphemeralEcdhKey::generate(curve).unwrap();
+        let mut alice_pub_buf = vec![0u8; curve.public_key_len()];
+        let alice_pub_bytes = alice.public_key_bytes(&mut alice_pub_buf).unwrap();
+
+        let bob_peer = EcdhPublicKey::from_bytes(curve, bob_pub_bytes.as_ref()).unwrap();
+        let alice_z = alice.into_shared_secret(&bob_peer).unwrap(); // ← exercises EphemeralEcdhKey::into_shared_secret
+        assert_eq!(alice_z.curve(), curve);
+
+        let alice_pub_unparsed = UnparsedPublicKey::new(lc_alg, alice_pub_bytes);
+        let bob_z = agree(&bob_static, alice_pub_unparsed, (), |b| {
+            Ok::<Vec<u8>, ()>(b.to_vec())
+        })
+        .unwrap();
+
+        assert_eq!(alice_z.as_bytes(), bob_z.as_slice());
+        assert!(!alice_z.as_bytes().iter().all(|&b| b == 0));
+    }
+
+    // Source: aws-lc-rs agreement_tests.rs (NIST CAVP P-256)
+    #[test]
+    fn nist_cavp_p256() {
+        #[rustfmt::skip]
+        known_answer(
+            EcdhCurve::P256,
+            &lc::ECDH_P256,
+            &hex!("C88F01F510D9AC3F70A292DAA2316DE544E9AAB8AFE84049C62A9C57862D1433"),
+            &hex!("04D12DFB5289C8D4F81208B70270398C342296970A0BCCB74C736FC7554494BF6356FBF3CA366CC23E8157854C13C58D6AAC23F046ADA30F8353E74F33039872AB"),
+            &hex!("D6840F6B42F6EDAFD13116E0E12565202FEF8E9ECE7DCE03812464D04B9442DE"),
+        );
+    }
+
+    // Source: aws-lc-rs agreement_tests.rs (NIST CAVP P-384)
+    #[test]
+    fn nist_cavp_p384() {
+        #[rustfmt::skip]
+        known_answer(
+            EcdhCurve::P384,
+            &lc::ECDH_P384,
+            &hex!("099F3C7034D4A2C699884D73A375A67F7624EF7C6B3C0F160647B67414DCE655E35B538041E649EE3FAEF896783AB194"),
+            &hex!("04E558DBEF53EECDE3D3FCCFC1AEA08A89A987475D12FD950D83CFA41732BC509D0D1AC43A0336DEF96FDA41D0774A3571DCFBEC7AACF3196472169E838430367F66EEBE3C6E70C416DD5F0C68759DD1FFF83FA40142209DFF5EAAD96DB9E6386C"),
+            &hex!("11187331C279962D93D604243FD592CB9D0A926F422E47187521287E7156C5C4D603135569B9E9D09CF5D4A270F59746"),
+        );
+    }
+
+    // Source: aws-lc-rs agreement_tests.rs (NIST CAVP P-521)
+    #[test]
+    fn nist_cavp_p521() {
+        #[rustfmt::skip]
+        known_answer(
+            EcdhCurve::P521,
+            &lc::ECDH_P521,
+            &hex!("00df14b1f1432a7b0fb053965fd8643afee26b2451ecb6a8a53a655d5fbe16e4c64ce8647225eb11e7fdcb23627471dffc5c2523bd2ae89957cba3a57a23933e5a78"),
+            &hex!("0401a32099b02c0bd85371f60b0dd20890e6c7af048c8179890fda308b359dbbc2b7a832bb8c6526c4af99a7ea3f0b3cb96ae1eb7684132795c478ad6f962e4a6f446d017627357b39e9d7632a1370b3e93c1afb5c851b910eb4ead0c9d387df67cde85003e0e427552f1cd09059aad0262e235cce5fba8cedc4fdc1463da76dcd4b6d1a46"),
+            &hex!("01aaf24e5d47e4080c18c55ea35581cd8da30f1a079565045d2008d51b12d0abb4411cda7a0785b15d149ed301a3697062f42da237aa7f07e0af3fd00eb1800d9c41"),
+        );
+    }
+
+    // Source: RFC 7748 §6.1 / aws-lc-rs agreement_tests.rs (Wycheproof X25519)
+    #[test]
+    fn rfc7748_x25519() {
+        known_answer(
+            EcdhCurve::X25519,
+            &lc::X25519,
+            &hex!("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"),
+            &hex!("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"),
+            &hex!("c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"),
+        );
+    }
+
+    #[test]
+    fn wrong_length_rejected() {
+        // One byte too short for P-256 (expects 65).
+        let err = EcdhPublicKey::from_bytes(EcdhCurve::P256, &[0u8; 64]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::KeyParsing);
+
+        // One byte too long for X25519 (expects 32).
+        let err = EcdhPublicKey::from_bytes(EcdhCurve::X25519, &[0u8; 33]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::KeyParsing);
+    }
+
+    #[test]
+    fn compressed_point_rejected() {
+        // 65-byte buffer but tag is 0x02 (compressed), not 0x04.
+        let mut bytes = [0u8; 65];
+        bytes[0] = 0x02;
+        let err = EcdhPublicKey::from_bytes(EcdhCurve::P256, &bytes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::KeyParsing);
+    }
+
+    #[test]
+    fn x25519_low_order_point_rejected() {
+        // All-zeros is a low-order point for X25519; aws-lc-rs rejects these internally.
+        // Pins that rejection returns KeyParsing so a kind-change would be caught.
+        let low_order_point = [0u8; 32];
+        let peer = EcdhPublicKey::from_bytes(EcdhCurve::X25519, &low_order_point).unwrap();
+        let alice = EphemeralEcdhKey::generate(EcdhCurve::X25519).unwrap();
+        assert_eq!(
+            alice.into_shared_secret(&peer).unwrap_err().kind(),
+            ErrorKind::KeyParsing
+        );
+    }
+
+    #[test]
+    fn curve_mismatch_rejected() {
+        // P-256 public key offered to a P-384 ephemeral key.
+        let p256_priv = PrivateKey::generate(&lc::ECDH_P256).unwrap();
+        let p256_pub = p256_priv.compute_public_key().unwrap();
+        let peer = EcdhPublicKey::from_bytes(EcdhCurve::P256, p256_pub.as_ref()).unwrap();
+
+        let alice = EphemeralEcdhKey::generate(EcdhCurve::P384).unwrap();
+        let err = alice.into_shared_secret(&peer).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::KeyParsing);
+    }
+
+    #[test]
+    fn shared_secret_exposes_curve() {
+        let bob = PrivateKey::generate(EcdhCurve::P256.algorithm()).unwrap();
+        let bob_pub = bob.compute_public_key().unwrap();
+        let alice = EphemeralEcdhKey::generate(EcdhCurve::P256).unwrap();
+        let secret = alice
+            .into_shared_secret(
+                &EcdhPublicKey::from_bytes(EcdhCurve::P256, bob_pub.as_ref()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(secret.curve(), EcdhCurve::P256);
+    }
+
+    #[test]
+    fn debug_hides_key_material() {
+        let key = EphemeralEcdhKey::generate(EcdhCurve::P256).unwrap();
+        // Capture the public key bytes BEFORE consuming the key via Debug format.
+        // pub_bytes borrows from pub_buf (not from key), so key remains usable.
+        let mut pub_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+        let pub_bytes = key.public_key_bytes(&mut pub_buf).unwrap();
+        let dbg = format!("{key:?}");
+
+        assert!(dbg.contains("EphemeralEcdhKey"));
+
+        // Verify that the raw key bytes do not appear hex-encoded in the output.
+        // Sample 8 bytes from the middle of the 65-byte public key to keep the
+        // false-positive probability astronomically low (~2^-64).
+        let hex_sample: String = pub_bytes[10..18]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert!(
+            !dbg.to_lowercase().contains(&hex_sample),
+            "Debug output must not contain raw key bytes"
+        );
+    }
+}
