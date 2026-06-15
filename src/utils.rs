@@ -151,6 +151,7 @@ pub(crate) fn load_iaca_roots(paths: &[String]) -> color_eyre::Result<Vec<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     #[test]
     fn rewrites_postgres_bindings_to_question_marks() {
@@ -197,8 +198,6 @@ mod tests {
 
     #[test]
     fn pem_bundle_loads_all_certs() {
-        use std::io::Write as _;
-
         let (der1, pem1) = self_signed_cert();
         let (der2, pem2) = self_signed_cert();
         let mut f = tempfile::NamedTempFile::new().unwrap();
@@ -210,8 +209,6 @@ mod tests {
 
     #[test]
     fn errors_on_bad_input() {
-        use std::io::Write as _;
-
         assert!(load_iaca_roots(&["/nonexistent/path/root.pem".into()]).is_err());
 
         let mut f1 = tempfile::NamedTempFile::new().unwrap();
