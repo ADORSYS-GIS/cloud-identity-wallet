@@ -63,8 +63,8 @@ pub enum MdocVpError {
     #[error("{field} must not be empty")]
     EmptyField { field: &'static str },
     /// CBOR serialisation failed.
-    #[error("failed to serialise CBOR value: {0}")]
-    CborEncode(String),
+    #[error("failed to serialise CBOR value")]
+    CborEncode(#[source] ciborium::ser::Error<std::io::Error>),
     /// COSE signing or structure error.
     #[error("COSE error: {0}")]
     CoseSign(#[from] coset::CoseError),
@@ -153,7 +153,26 @@ pub struct OpenID4VPHandover {
 impl OpenID4VPHandover {
     /// Creates the handover from the verifier request parameters,
     /// hashing `client_id` and `response_uri` with SHA-256.
-    pub fn new(client_id: &str, response_uri: &str, nonce: String) -> Self {
+    ///
+    /// Returns an error if `client_id`, `response_uri`, or `nonce` is empty,
+    /// since empty inputs would produce SHA-256 hashes of empty strings —
+    /// structurally valid but semantically meaningless.
+    pub fn new(
+        client_id: &str,
+        response_uri: &str,
+        nonce: String,
+    ) -> Result<Self, MdocVpError> {
+        if client_id.trim().is_empty() {
+            return Err(MdocVpError::EmptyField { field: "client_id" });
+        }
+        if response_uri.trim().is_empty() {
+            return Err(MdocVpError::EmptyField {
+                field: "response_uri",
+            });
+        }
+        if nonce.trim().is_empty() {
+            return Err(MdocVpError::EmptyField { field: "nonce" });
+        }
         let client_id_hash: [u8; 32] = HashAlg::Sha256
             .hash(client_id.as_bytes())
             .as_ref()
@@ -164,11 +183,11 @@ impl OpenID4VPHandover {
             .as_ref()
             .try_into()
             .expect("SHA-256 produces 32 bytes");
-        Self {
+        Ok(Self {
             client_id_hash,
             response_uri_hash,
             nonce,
-        }
+        })
     }
 
     /// Returns the SHA-256 digest of `client_id`.
@@ -202,7 +221,7 @@ impl OpenID4VPHandover {
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>, MdocVpError> {
         let mut buf = Vec::new();
         into_writer(&self.to_cbor_value(), &mut buf)
-            .map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
+            .map_err(MdocVpError::CborEncode)?;
         Ok(buf)
     }
 }
@@ -400,7 +419,13 @@ impl std::fmt::Debug for MdocPresentation {
         f.debug_struct("MdocPresentation")
             .field("doc_type", &self.doc_type)
             .field("algorithm", &self.algorithm)
-            .field("device_namespaces", &self.device_namespaces)
+            .field(
+                "device_namespaces",
+                &format!(
+                    "{} namespace(s) redacted",
+                    self.device_namespaces.len()
+                ),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -506,7 +531,7 @@ impl MdocPresentationBuilder {
 
 fn value_to_bytes(value: &Value) -> Result<Vec<u8>, MdocVpError> {
     let mut buf = Vec::new();
-    into_writer(value, &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
+    into_writer(value, &mut buf).map_err(MdocVpError::CborEncode)?;
     Ok(buf)
 }
 
@@ -521,6 +546,7 @@ mod tests {
             "https://verifier.example/cb",
             "nonce-123".to_string(),
         )
+        .unwrap()
     }
 
     #[test]
@@ -545,7 +571,8 @@ mod tests {
             "wallet.example",
             "https://verifier.example/cb",
             "nonce-123".to_string(),
-        );
+        )
+        .unwrap();
 
         let expected_client_id_hash = HashAlg::Sha256.hash(b"wallet.example").as_ref().to_vec();
         let expected_response_uri_hash = HashAlg::Sha256
@@ -819,6 +846,36 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(err, ProofError::InvalidInput(ref input) if input.contains("doc_type")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_client_id_in_handover() {
+        let err = OpenID4VPHandover::new("", "https://verifier.example/cb", "nonce".to_string())
+            .unwrap_err();
+        assert!(
+            matches!(err, MdocVpError::EmptyField { field } if field == "client_id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_response_uri_in_handover() {
+        let err = OpenID4VPHandover::new("wallet.example", "", "nonce".to_string()).unwrap_err();
+        assert!(
+            matches!(err, MdocVpError::EmptyField { field } if field == "response_uri"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_nonce_in_handover() {
+        let err =
+            OpenID4VPHandover::new("wallet.example", "https://verifier.example/cb", "".to_string())
+                .unwrap_err();
+        assert!(
+            matches!(err, MdocVpError::EmptyField { field } if field == "nonce"),
             "unexpected error: {err}"
         );
     }
