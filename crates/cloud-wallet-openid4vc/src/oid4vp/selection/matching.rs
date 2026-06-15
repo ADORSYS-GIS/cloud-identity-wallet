@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::claim_path_pointer::{ClaimPathPointer, ClaimValue};
@@ -9,7 +10,7 @@ use crate::oid4vp::dcql::{
 };
 
 /// The result of matching a full [`DcqlQuery`] against the Wallet's credentials.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionResult {
     /// All matching candidates, grouped by credential query ID.
     ///
@@ -80,7 +81,7 @@ impl SelectionResult {
 }
 
 /// A credential that matched a single [`CredentialQuery`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialCandidate {
     /// Identifier of the [`CredentialQuery`] that this credential satisfies.
     pub credential_query_id: String,
@@ -99,7 +100,7 @@ pub struct CredentialCandidate {
 }
 
 /// A claim that was matched by a [`ClaimsQuery`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchedClaim {
     /// The claim query that produced this match.
     pub claim_query_id: Option<String>,
@@ -115,7 +116,7 @@ pub struct MatchedClaim {
 ///
 /// Callers construct this from their domain `Credential` model before passing
 /// it into the matching engine.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialView {
     /// Opaque identifier for this credential (e.g., UUID string).
     pub id: String,
@@ -151,7 +152,7 @@ pub struct CredentialView {
 }
 
 /// A trusted authority reference associated with a stored credential.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialAuthority {
     pub authority_type: TrustedAuthorityType,
     pub value: String,
