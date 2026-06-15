@@ -5,9 +5,9 @@
 //! 1. **Session Transcript** — constructs the `SessionTranscript` with the
 //!    `OID4VPHandover` structure per Appendix B.2.6.
 //! 2. **Device Signature** — constructs and signs a COSE_Sign1 `DeviceSignature`
-//!    over the `DeviceAuthentication` payload.
+//!    over the `DeviceAuthentication` payload (§9.1.2.4).
 //! 3. **Presentation assembly** — produces the final base64url-encoded CBOR
-//!    `DeviceResponse`.
+//!    `DeviceResponse` (§8.3.2.1.2).
 //!
 //! # Example
 //!
@@ -33,8 +33,6 @@ use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ciborium::ser::into_writer;
 use ciborium::value::Value;
 use coset::{AsCborValue, CoseSign1Builder, HeaderBuilder, iana};
-use serde_json::Value as JsonValue;
-use serde_with::skip_serializing_none;
 use thiserror::Error;
 
 use crate::core::claim_path_pointer::{ClaimPathElement, ClaimPathPointer};
@@ -46,9 +44,10 @@ use cloud_wallet_crypto::digest::HashAlg;
 
 /// Function type for signing `DeviceAuthentication` bytes.
 ///
-/// Receives the raw `DeviceAuthentication` CBOR payload bytes and must return
-/// the COSE_Sign1 signature bytes. The signer must use the holder private key
-/// corresponding to the device key included in the mdoc's `IssuerSigned`.
+/// Receives the COSE `Sig_Structure` bytes (per RFC 9052 §4.4) and must return
+/// the raw EC signature bytes (e.g., for ES256: the 64-byte r‖s encoding).
+/// The signer must use the device private key corresponding to the key in
+/// `IssuerSigned`.
 pub type DeviceSigner = Box<dyn Fn(&[u8]) -> Result<Vec<u8>, ProofError> + Send + Sync>;
 
 /// Errors produced while building ISO mdoc OpenID4VP presentation artifacts.
@@ -87,28 +86,21 @@ impl From<coset::CoseError> for MdocVpError {
 ///
 /// This normalises a claims path into the `namespace` + `claim_name` pair used
 /// by ISO mdoc presentation logic.
-#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MdocClaimsQuery {
     /// ISO namespace string.
     pub namespace: String,
     /// Data element identifier.
     pub claim_name: String,
-    /// Optional mdoc retention hint.
-    pub intent_to_retain: Option<bool>,
 }
 
 impl MdocClaimsQuery {
     /// Creates an mdoc claims query from a generic DCQL [`ClaimsQuery`].
-    pub fn try_from_claims_query(
-        query: &ClaimsQuery,
-        intent_to_retain: Option<bool>,
-    ) -> Result<Self, MdocVpError> {
+    pub fn try_from_claims_query(query: &ClaimsQuery) -> Result<Self, MdocVpError> {
         let (namespace, claim_name) = claim_path_to_namespace_and_element(&query.path)?;
         Ok(Self {
             namespace,
             claim_name,
-            intent_to_retain,
         })
     }
 }
@@ -230,7 +222,7 @@ impl SessionTranscript {
 /// [OpenID4VP Appendix B.2]: https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.2
 pub struct MdocPresentation {
     doc_type: String,
-    device_namespaces: BTreeMap<String, BTreeMap<String, JsonValue>>,
+    device_namespaces: BTreeMap<String, BTreeMap<String, Value>>,
     session_transcript: SessionTranscript,
     algorithm: iana::Algorithm,
     issuer_signed: Value,
@@ -254,6 +246,79 @@ impl MdocPresentation {
     }
 }
 
+/// Constructs `DeviceAuthenticationBytes` per ISO 18013-5 §9.1.2.4.
+///
+/// Returns the bytes of `#6.24(bstr .cbor DeviceAuthentication)`, which is the
+/// payload that gets signed via COSE_Sign1 with detached content.
+fn build_device_authentication_bytes(
+    doc_type: &str,
+    session_transcript: &SessionTranscript,
+    device_ns_tagged: Value,
+) -> Result<Vec<u8>, MdocVpError> {
+    let device_authentication = Value::Array(vec![
+        Value::Text("DeviceAuthentication".to_string()),
+        session_transcript.to_cbor_value(),
+        Value::Text(doc_type.to_string()),
+        device_ns_tagged,
+    ]);
+    let device_auth_bytes = value_to_bytes(&device_authentication)?;
+    let device_auth_tagged = Value::Tag(24, Box::new(Value::Bytes(device_auth_bytes)));
+    value_to_bytes(&device_auth_tagged)
+}
+
+/// Signs `DeviceAuthenticationBytes` with a detached COSE_Sign1 per
+/// ISO 18013-5 §9.1.2.4.
+///
+/// The payload is nil (detached); the actual data is carried in
+/// `Sig_Structure.payload`. External AAD is empty per spec.
+fn sign_device_authentication(
+    device_auth_bytes: &[u8],
+    algorithm: iana::Algorithm,
+    signer: &DeviceSigner,
+) -> Result<coset::CoseSign1, MdocVpError> {
+    let protected = HeaderBuilder::new().algorithm(algorithm).build();
+    Ok(CoseSign1Builder::new()
+        .protected(protected)
+        .try_create_detached_signature(device_auth_bytes, &[], |tbs| {
+            signer(tbs).map_err(|e| MdocVpError::Signing(e.to_string()))
+        })?
+        .build())
+}
+
+/// Assembles a `DeviceResponse` map per ISO 18013-5 §8.3.2.1.2.
+fn build_device_response(
+    doc_type: &str,
+    issuer_signed: Value,
+    device_ns_tagged: Value,
+    sign1: coset::CoseSign1,
+) -> Result<Value, MdocVpError> {
+    let device_signed = Value::Map(vec![
+        (
+            Value::Text("nameSpaces".to_string()),
+            device_ns_tagged,
+        ),
+        (
+            Value::Text("deviceAuth".to_string()),
+            Value::Map(vec![(
+                Value::Text("deviceSignature".to_string()),
+                sign1.to_cbor_value().map_err(MdocVpError::from)?,
+            )]),
+        ),
+    ]);
+
+    let document = Value::Map(vec![
+        (Value::Text("docType".to_string()), Value::Text(doc_type.to_string())),
+        (Value::Text("issuerSigned".to_string()), issuer_signed),
+        (Value::Text("deviceSigned".to_string()), device_signed),
+    ]);
+
+    Ok(Value::Map(vec![
+        (Value::Text("version".to_string()), Value::Text("1.0".to_string())),
+        (Value::Text("documents".to_string()), Value::Array(vec![document])),
+        (Value::Text("status".to_string()), Value::Integer(0.into())),
+    ]))
+}
+
 impl PresentationFactory for MdocPresentation {
     fn create_presentation(self) -> Result<Presentation, ProofError> {
         let Self {
@@ -271,68 +336,36 @@ impl PresentationFactory for MdocPresentation {
             )));
         }
 
-        let device_ns_value = json_to_cbor_value(&JsonValue::Object(
+        let device_ns_value = Value::Map(
             device_namespaces
                 .into_iter()
                 .map(|(ns, claims)| {
-                    let claims = serde_json::Map::from_iter(claims);
-                    (ns, JsonValue::Object(claims))
+                    let claim_entries: Vec<(Value, Value)> = claims
+                        .into_iter()
+                        .map(|(k, v)| (Value::Text(k), v))
+                        .collect();
+                    (Value::Text(ns), Value::Map(claim_entries))
                 })
                 .collect(),
-        ))?;
-
+        );
         let device_ns_bytes = value_to_bytes(&device_ns_value)?;
         let device_ns_tagged = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes.clone())));
 
-        let device_auth_payload = Value::Array(vec![
-            Value::Text("DeviceAuthentication".to_string()),
-            session_transcript.to_cbor_value(),
-            Value::Text(doc_type.clone()),
+        let device_auth_bytes = build_device_authentication_bytes(
+            &doc_type,
+            &session_transcript,
             device_ns_tagged,
-        ]);
-        let device_auth_payload_bytes = value_to_bytes(&device_auth_payload)?;
+        )?;
 
-        let protected = HeaderBuilder::new().algorithm(algorithm).build();
-        let sign1 = CoseSign1Builder::new()
-            .protected(protected)
-            .payload(device_auth_payload_bytes)
-            .try_create_signature(&[], |tbs| {
-                signer(tbs).map_err(|e| MdocVpError::Signing(e.to_string()))
-            })?
-            .build();
+        let sign1 = sign_device_authentication(&device_auth_bytes, algorithm, &signer)?;
 
-        let mut document_entries =
-            vec![(Value::Text("docType".to_string()), Value::Text(doc_type))];
-
-        document_entries.push((Value::Text("issuerSigned".to_string()), issuer_signed));
-
-        let device_ns_bytes_for_signed = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes)));
-
-        let device_signed = Value::Map(vec![
-            (
-                Value::Text("nameSpaces".to_string()),
-                device_ns_bytes_for_signed,
-            ),
-            (
-                Value::Text("deviceAuth".to_string()),
-                Value::Map(vec![(
-                    Value::Text("deviceSignature".to_string()),
-                    sign1.to_cbor_value().map_err(MdocVpError::from)?,
-                )]),
-            ),
-        ]);
-        document_entries.push((Value::Text("deviceSigned".to_string()), device_signed));
-
-        let device_response = Value::Map(vec![
-            (
-                Value::Text("version".to_string()),
-                Value::Text("1.0".to_string()),
-            ),
-            (
-                Value::Text("documents".to_string()),
-                Value::Array(vec![Value::Map(document_entries)]),
-            ),
-        ]);
+        let device_ns_tagged_for_signed = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes)));
+        let device_response = build_device_response(
+            &doc_type,
+            issuer_signed,
+            device_ns_tagged_for_signed,
+            sign1,
+        )?;
 
         let bytes = value_to_bytes(&device_response)?;
         let encoded = Base64UrlUnpadded::encode_string(&bytes);
@@ -354,7 +387,7 @@ impl std::fmt::Debug for MdocPresentation {
 /// Builder for [`MdocPresentation`].
 pub struct MdocPresentationBuilder {
     doc_type: String,
-    device_namespaces: BTreeMap<String, BTreeMap<String, JsonValue>>,
+    device_namespaces: BTreeMap<String, BTreeMap<String, Value>>,
     session_transcript: SessionTranscript,
     algorithm: iana::Algorithm,
     issuer_signed: Option<Value>,
@@ -373,16 +406,19 @@ impl MdocPresentationBuilder {
     /// These populate `deviceSigned.nameSpaces`. For most mdoc presentations
     /// this is empty or minimal; the credential data comes from
     /// [`MdocPresentationBuilder::issuer_signed`].
+    ///
+    /// The `value` parameter accepts a CBOR [`Value`] to preserve native mdoc
+    /// types (e.g., full-date tags, bstr) that have no JSON equivalent.
     pub fn add_claim(
         mut self,
         namespace: impl Into<String>,
         claim_name: impl Into<String>,
-        value: impl Into<JsonValue>,
+        value: Value,
     ) -> Self {
         self.device_namespaces
             .entry(namespace.into())
             .or_default()
-            .insert(claim_name.into(), value.into());
+            .insert(claim_name.into(), value);
         self
     }
 
@@ -390,7 +426,7 @@ impl MdocPresentationBuilder {
     pub fn add_namespace(
         mut self,
         namespace: impl Into<String>,
-        claims: BTreeMap<String, JsonValue>,
+        claims: BTreeMap<String, Value>,
     ) -> Self {
         self.device_namespaces.insert(namespace.into(), claims);
         self
@@ -408,9 +444,10 @@ impl MdocPresentationBuilder {
 
     /// Sets the signing function that produces the COSE_Sign1 signature.
     ///
-    /// The function receives the raw `DeviceAuthentication` CBOR payload bytes
-    /// and must return the raw signature bytes. The signer must use the holder
-    /// private key corresponding to the device key in the mdoc's `IssuerSigned`.
+    /// The function receives the COSE `Sig_Structure` bytes (per RFC 9052 §4.4)
+    /// and must return the raw EC signature bytes (e.g., for ES256: the 64-byte
+    /// r‖s encoding). The signer must use the device private key corresponding
+    /// to the key in `IssuerSigned`.
     pub fn signer<F>(mut self, f: F) -> Self
     where
         F: Fn(&[u8]) -> Result<Vec<u8>, ProofError> + Send + Sync + 'static,
@@ -443,15 +480,7 @@ impl MdocPresentationBuilder {
     }
 }
 
-fn json_to_cbor_value(value: &JsonValue) -> Result<Value, ProofError> {
-    let mut buf = Vec::new();
-    into_writer(value, &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
-    let decoded: Value = ciborium::de::from_reader(buf.as_slice())
-        .map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
-    Ok(decoded)
-}
-
-fn value_to_bytes(value: &Value) -> Result<Vec<u8>, ProofError> {
+fn value_to_bytes(value: &Value) -> Result<Vec<u8>, MdocVpError> {
     let mut buf = Vec::new();
     into_writer(value, &mut buf).map_err(|e| MdocVpError::CborEncode(e.to_string()))?;
     Ok(buf)
@@ -461,7 +490,6 @@ fn value_to_bytes(value: &Value) -> Result<Vec<u8>, ProofError> {
 mod tests {
     use super::*;
     use coset::{CborSerializable, CoseSign1};
-    use serde_json::json;
 
     fn sample_handover() -> OpenID4VPHandover {
         OpenID4VPHandover::new(
@@ -482,10 +510,9 @@ mod tests {
             values: None,
         };
 
-        let mapped = MdocClaimsQuery::try_from_claims_query(&query, Some(true)).unwrap();
+        let mapped = MdocClaimsQuery::try_from_claims_query(&query).unwrap();
         assert_eq!(mapped.namespace, "org.iso.18013.5.1");
         assert_eq!(mapped.claim_name, "family_name");
-        assert_eq!(mapped.intent_to_retain, Some(true));
     }
 
     #[test]
@@ -540,9 +567,41 @@ mod tests {
     }
 
     #[test]
-    fn creates_mdoc_presentation_and_encodes_as_base64url() {
+    fn device_authentication_bytes_is_tag24_wrapped() {
         let transcript = SessionTranscript::new(sample_handover());
+        let device_ns_tagged = Value::Tag(24, Box::new(Value::Bytes(vec![0xa1])));
 
+        let bytes = build_device_authentication_bytes(
+            "org.iso.18013.5.1.mDL",
+            &transcript,
+            device_ns_tagged,
+        )
+        .unwrap();
+
+        let decoded: Value = ciborium::de::from_reader(bytes.as_slice()).unwrap();
+        assert!(matches!(decoded, Value::Tag(24, _)), "DeviceAuthenticationBytes must be #6.24(bstr)");
+
+        if let Value::Tag(24, inner) = decoded {
+            let inner_bytes = match *inner {
+                Value::Bytes(b) => b,
+                other => panic!("Tag-24 inner must be bstr, got {other:?}"),
+            };
+            let inner_value: Value = ciborium::de::from_reader(inner_bytes.as_slice()).unwrap();
+            if let Value::Array(items) = inner_value {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0], Value::Text("DeviceAuthentication".to_string()));
+                assert!(matches!(items[1], Value::Array(_)), "second element must be SessionTranscript");
+                assert_eq!(items[2], Value::Text("org.iso.18013.5.1.mDL".to_string()));
+                assert!(matches!(items[3], Value::Tag(24, _)), "fourth element must be DeviceNameSpacesBytes");
+            } else {
+                panic!("DeviceAuthentication must be an array");
+            }
+        }
+    }
+
+    #[test]
+    fn creates_mdoc_presentation_with_detached_signature() {
+        let transcript = SessionTranscript::new(sample_handover());
         let issuer_signed = Value::Map(vec![
             (Value::Text("nameSpaces".to_string()), Value::Map(vec![])),
             (Value::Text("issuerAuth".to_string()), Value::Null),
@@ -550,8 +609,8 @@ mod tests {
 
         let presentation = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
             .algorithm(iana::Algorithm::ES256)
-            .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
-            .add_claim("org.iso.18013.5.1", "given_name", json!("Jane"))
+            .add_claim("org.iso.18013.5.1", "family_name", Value::Text("Doe".to_string()))
+            .add_claim("org.iso.18013.5.1", "given_name", Value::Text("Jane".to_string()))
             .issuer_signed(issuer_signed)
             .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
             .build()
@@ -575,6 +634,14 @@ mod tests {
                 .expect("version entry")
                 .1,
             Value::Text("1.0".to_string())
+        );
+
+        assert_eq!(
+            top.iter()
+                .find(|(k, _)| *k == Value::Text("status".to_string()))
+                .expect("status entry")
+                .1,
+            Value::Integer(0.into())
         );
 
         let documents = top
@@ -644,23 +711,14 @@ mod tests {
             ))
         ));
 
-        let payload = sign1.payload.expect("embedded payload");
-        let payload_value: Value = ciborium::de::from_reader(payload.as_slice()).unwrap();
-        let Value::Array(items) = payload_value else {
-            panic!("device auth payload must be an array");
-        };
-        assert_eq!(items.len(), 4);
-        assert_eq!(items[0], Value::Text("DeviceAuthentication".to_string()));
-        assert!(matches!(items[1], Value::Array(_)));
-        assert_eq!(items[2], Value::Text("org.iso.18013.5.1.mDL".to_string()));
-        assert!(matches!(items[3], Value::Tag(24, _)));
+        assert!(sign1.payload.is_none(), "COSE_Sign1 payload must be nil (detached) per ISO 18013-5 §9.1.2.4");
     }
 
     #[test]
     fn rejects_build_without_issuer_signed() {
         let transcript = SessionTranscript::new(sample_handover());
         let result = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
-            .add_claim("org.iso.18013.5.1", "family_name", json!("Doe"))
+            .add_claim("org.iso.18013.5.1", "family_name", Value::Text("Doe".to_string()))
             .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
             .build();
         assert!(result.is_err());
