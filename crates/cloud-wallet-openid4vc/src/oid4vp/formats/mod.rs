@@ -5,6 +5,6 @@
 //! SD-JWT presentation module structure under `presentation::formats`.
 
 pub use crate::oid4vp::presentation::formats::mdoc::{
-    MdocClaimsQuery, MdocPresentation, MdocPresentationBuilder, MdocVpError,
-    OpenID4VPHandover, SessionTranscript,
+    MdocClaimsQuery, MdocPresentation, MdocPresentationBuilder, MdocVpError, OpenID4VPHandover,
+    SessionTranscript,
 };

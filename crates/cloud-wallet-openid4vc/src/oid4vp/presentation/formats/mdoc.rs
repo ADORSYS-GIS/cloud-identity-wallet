@@ -293,10 +293,7 @@ fn build_device_response(
     sign1: coset::CoseSign1,
 ) -> Result<Value, MdocVpError> {
     let device_signed = Value::Map(vec![
-        (
-            Value::Text("nameSpaces".to_string()),
-            device_ns_tagged,
-        ),
+        (Value::Text("nameSpaces".to_string()), device_ns_tagged),
         (
             Value::Text("deviceAuth".to_string()),
             Value::Map(vec![(
@@ -307,14 +304,23 @@ fn build_device_response(
     ]);
 
     let document = Value::Map(vec![
-        (Value::Text("docType".to_string()), Value::Text(doc_type.to_string())),
+        (
+            Value::Text("docType".to_string()),
+            Value::Text(doc_type.to_string()),
+        ),
         (Value::Text("issuerSigned".to_string()), issuer_signed),
         (Value::Text("deviceSigned".to_string()), device_signed),
     ]);
 
     Ok(Value::Map(vec![
-        (Value::Text("version".to_string()), Value::Text("1.0".to_string())),
-        (Value::Text("documents".to_string()), Value::Array(vec![document])),
+        (
+            Value::Text("version".to_string()),
+            Value::Text("1.0".to_string()),
+        ),
+        (
+            Value::Text("documents".to_string()),
+            Value::Array(vec![document]),
+        ),
         (Value::Text("status".to_string()), Value::Integer(0.into())),
     ]))
 }
@@ -351,21 +357,14 @@ impl PresentationFactory for MdocPresentation {
         let device_ns_bytes = value_to_bytes(&device_ns_value)?;
         let device_ns_tagged = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes.clone())));
 
-        let device_auth_bytes = build_device_authentication_bytes(
-            &doc_type,
-            &session_transcript,
-            device_ns_tagged,
-        )?;
+        let device_auth_bytes =
+            build_device_authentication_bytes(&doc_type, &session_transcript, device_ns_tagged)?;
 
         let sign1 = sign_device_authentication(&device_auth_bytes, algorithm, &signer)?;
 
         let device_ns_tagged_for_signed = Value::Tag(24, Box::new(Value::Bytes(device_ns_bytes)));
-        let device_response = build_device_response(
-            &doc_type,
-            issuer_signed,
-            device_ns_tagged_for_signed,
-            sign1,
-        )?;
+        let device_response =
+            build_device_response(&doc_type, issuer_signed, device_ns_tagged_for_signed, sign1)?;
 
         let bytes = value_to_bytes(&device_response)?;
         let encoded = Base64UrlUnpadded::encode_string(&bytes);
@@ -579,7 +578,10 @@ mod tests {
         .unwrap();
 
         let decoded: Value = ciborium::de::from_reader(bytes.as_slice()).unwrap();
-        assert!(matches!(decoded, Value::Tag(24, _)), "DeviceAuthenticationBytes must be #6.24(bstr)");
+        assert!(
+            matches!(decoded, Value::Tag(24, _)),
+            "DeviceAuthenticationBytes must be #6.24(bstr)"
+        );
 
         if let Value::Tag(24, inner) = decoded {
             let inner_bytes = match *inner {
@@ -590,9 +592,15 @@ mod tests {
             if let Value::Array(items) = inner_value {
                 assert_eq!(items.len(), 4);
                 assert_eq!(items[0], Value::Text("DeviceAuthentication".to_string()));
-                assert!(matches!(items[1], Value::Array(_)), "second element must be SessionTranscript");
+                assert!(
+                    matches!(items[1], Value::Array(_)),
+                    "second element must be SessionTranscript"
+                );
                 assert_eq!(items[2], Value::Text("org.iso.18013.5.1.mDL".to_string()));
-                assert!(matches!(items[3], Value::Tag(24, _)), "fourth element must be DeviceNameSpacesBytes");
+                assert!(
+                    matches!(items[3], Value::Tag(24, _)),
+                    "fourth element must be DeviceNameSpacesBytes"
+                );
             } else {
                 panic!("DeviceAuthentication must be an array");
             }
@@ -609,8 +617,16 @@ mod tests {
 
         let presentation = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
             .algorithm(iana::Algorithm::ES256)
-            .add_claim("org.iso.18013.5.1", "family_name", Value::Text("Doe".to_string()))
-            .add_claim("org.iso.18013.5.1", "given_name", Value::Text("Jane".to_string()))
+            .add_claim(
+                "org.iso.18013.5.1",
+                "family_name",
+                Value::Text("Doe".to_string()),
+            )
+            .add_claim(
+                "org.iso.18013.5.1",
+                "given_name",
+                Value::Text("Jane".to_string()),
+            )
             .issuer_signed(issuer_signed)
             .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
             .build()
@@ -711,14 +727,21 @@ mod tests {
             ))
         ));
 
-        assert!(sign1.payload.is_none(), "COSE_Sign1 payload must be nil (detached) per ISO 18013-5 §9.1.2.4");
+        assert!(
+            sign1.payload.is_none(),
+            "COSE_Sign1 payload must be nil (detached) per ISO 18013-5 §9.1.2.4"
+        );
     }
 
     #[test]
     fn rejects_build_without_issuer_signed() {
         let transcript = SessionTranscript::new(sample_handover());
         let result = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
-            .add_claim("org.iso.18013.5.1", "family_name", Value::Text("Doe".to_string()))
+            .add_claim(
+                "org.iso.18013.5.1",
+                "family_name",
+                Value::Text("Doe".to_string()),
+            )
             .signer(|tbs| Ok(vec![0xAA; tbs.len().min(64)]))
             .build();
         assert!(result.is_err());
