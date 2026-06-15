@@ -71,10 +71,6 @@ impl ResponseMode {
     fn is_direct_post(&self) -> bool {
         matches!(self, Self::DirectPost | Self::DirectPostJwt)
     }
-
-    fn is_dc_api(&self) -> bool {
-        matches!(self, Self::DcApi | Self::DcApiJwt)
-    }
 }
 
 impl std::fmt::Display for ResponseMode {
@@ -196,6 +192,13 @@ fn invalid_request(message: impl Into<String>) -> Error {
 /// - During deserialization, `nonce` is extracted to the top-level field and
 ///   `oauth.nonce` is set to `None` to avoid duplication
 /// - Validation uses the top-level `nonce` field directly
+///
+/// # DC API Unsigned Requests (Appendix A.2/A.3.1)
+///
+/// For unsigned DC API requests, `client_id` MUST be omitted. The validation
+/// logic handles this by making `client_id` optional in the raw deserialization
+/// structure and validating the presence/absence based on `response_mode` and
+/// whether a signed Request Object is present.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AuthorizationRequest {
@@ -211,6 +214,9 @@ pub struct AuthorizationRequest {
     pub response_mode: ResponseMode,
 
     /// Standard OAuth 2.0 authorization request parameters.
+    ///
+    /// Note: For unsigned DC API requests, `client_id` may be empty or absent.
+    /// Validation enforces the correct presence based on context.
     #[serde(flatten)]
     pub oauth: OAuthAuthorizationRequest,
 
@@ -253,7 +259,9 @@ pub struct AuthorizationRequest {
 
     /// OPTIONAL. Expected origins for DC API requests (Appendix A).
     ///
-    /// REQUIRED for signed DC API requests.
+    /// Validation of this field for signed DC API requests should be done
+    /// at the Request Object processing layer where the signed/unsigned context
+    /// is available.
     pub expected_origins: Option<Vec<String>>,
 }
 
@@ -262,12 +270,15 @@ impl AuthorizationRequest {
     ///
     /// This method orchestrates validation by delegating to focused
     /// validation functions for each logical group of rules.
+    ///
+    /// Note: DC API-specific validation for signed requests (e.g., `expected_origins`
+    /// enforcement) should be performed at the Request Object / DC API processing
+    /// layer where the signed/unsigned context is available.
     pub fn validate(&self) -> Result<()> {
         self.validate_core_fields()?;
         self.validate_request_uri_consistency()?;
         self.validate_query_mechanism()?;
         self.validate_response_routing()?;
-        self.validate_dc_api_origins()?;
         self.validate_client_metadata()?;
         self.validate_transaction_data()?;
         self.validate_verifier_info()?;
@@ -277,7 +288,13 @@ impl AuthorizationRequest {
 
     /// Validates core required fields: response_type, client_id, nonce, and state.
     fn validate_core_fields(&self) -> Result<()> {
-        self.oauth.validate_client_id()?;
+        // client_id validation: required for non-DC-API modes; may be empty for
+        // unsigned DC API requests (per Appendix A.2/A.3.1)
+        if !self.oauth.client_id.trim().is_empty() {
+            // If client_id is present, it must be non-empty
+            self.oauth.validate_client_id()?;
+        }
+        // Note: For DC API modes, client_id may be empty/absent for unsigned requests
 
         // response_type must be vp_token or vp_token id_token
         if !matches!(
@@ -368,71 +385,6 @@ impl AuthorizationRequest {
             return Err(invalid_request(
                 "'redirect_uri' must not be present when 'response_uri' is used",
             ));
-        }
-
-        Ok(())
-    }
-
-    /// Validates expected_origins for DC API response modes.
-    fn validate_dc_api_origins(&self) -> Result<()> {
-        // Only validate for signed DC API requests (have client_id and request JWT)
-        if self.response_mode.is_dc_api() && self.is_signed_dc_api_request() {
-            match &self.expected_origins {
-                None => {
-                    return Err(invalid_request(
-                        "'expected_origins' is required for signed DC API requests ('dc_api' or 'dc_api.jwt' with client_id and request JWT)",
-                    ));
-                }
-                Some(origins) if origins.is_empty() => {
-                    return Err(invalid_request(
-                        "'expected_origins' must be a non-empty array",
-                    ));
-                }
-                Some(origins) => {
-                    for (i, origin) in origins.iter().enumerate() {
-                        Self::validate_origin(i, origin)?;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Returns true if this is a signed DC API request (has both client_id and request JWT).
-    fn is_signed_dc_api_request(&self) -> bool {
-        !self.oauth.client_id.trim().is_empty() && self.request.is_some()
-    }
-
-    /// Validates a single origin string is a valid origin tuple.
-    fn validate_origin(idx: usize, origin: &str) -> Result<()> {
-        // Parse as URL to validate structure
-        let url = Url::parse(origin).map_err(|e| {
-            invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' is not a valid URL: {e}"
-            ))
-        })?;
-
-        // Validate it's a valid origin (no path, query, or fragment)
-        if url.path() != "/" && !url.path().is_empty() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must not contain a path"
-            )));
-        }
-        if url.query().is_some() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must not contain a query string"
-            )));
-        }
-        if url.fragment().is_some() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must not contain a fragment"
-            )));
-        }
-        if url.host().is_none() {
-            return Err(invalid_request(format!(
-                "'expected_origins[{idx}]' '{origin}' must have a host"
-            )));
         }
 
         Ok(())
@@ -542,12 +494,14 @@ impl AuthorizationRequest {
 /// Deserializes an [`AuthorizationRequest`] and immediately validates it.
 impl<'de> Deserialize<'de> for AuthorizationRequest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        // Note: client_id is optional to support unsigned DC API requests (Appendix A.2/A.3.1)
+        // where it MUST be omitted. Validation logic handles the presence/absence.
         #[derive(Deserialize)]
         struct Raw {
             response_type: ResponseType,
             nonce: String,
             response_mode: ResponseMode,
-            client_id: String,
+            client_id: Option<String>,
             redirect_uri: Option<Url>,
             scope: Option<String>,
             state: Option<String>,
@@ -572,7 +526,7 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
             nonce: raw.nonce,
             response_mode: raw.response_mode,
             oauth: OAuthAuthorizationRequest {
-                client_id: raw.client_id,
+                client_id: raw.client_id.unwrap_or_default(),
                 redirect_uri: raw.redirect_uri,
                 scope: raw.scope,
                 state: raw.state,
@@ -694,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_dc_api_request() {
+    fn parses_dc_api_request_with_client_id() {
         let req = parse(json!({
             "response_type": "vp_token",
             "client_id": "https://verifier.example.com",
@@ -712,7 +666,30 @@ mod tests {
         .expect("should parse");
 
         assert_eq!(req.response_mode, ResponseMode::DcApiJwt);
+        assert_eq!(req.oauth.client_id, "https://verifier.example.com");
         assert!(req.expected_origins.is_some());
+    }
+
+    #[test]
+    fn parses_unsigned_dc_api_request_without_client_id() {
+        // Per OpenID4VP Appendix A.2/A.3.1: unsigned DC API requests MUST omit client_id
+        let req = parse(json!({
+            "response_type": "vp_token",
+            "response_mode": "dc_api",
+            "nonce": "abc123",
+            "dcql_query": {
+                "credentials": [{
+                    "id": "mdl",
+                    "format": "mso_mdoc",
+                    "meta": { "doctype_value": "org.iso.18013.5.1.mDL" }
+                }]
+            }
+        }))
+        .expect("should parse unsigned DC API request without client_id");
+
+        assert_eq!(req.response_mode, ResponseMode::DcApi);
+        assert!(req.oauth.client_id.is_empty());
+        assert!(req.expected_origins.is_none());
     }
 
     #[test]
@@ -722,6 +699,7 @@ mod tests {
             "client_id": "https://verifier.example.com",
             "response_mode": "fragment",
             "nonce": "abc123",
+            "redirect_uri": "https://verifier.example.com/callback",
             "dcql_query": {
                 "credentials": [{
                     "id": "pid",
@@ -736,6 +714,7 @@ mod tests {
             req.response_mode,
             ResponseMode::Other("fragment".to_string())
         );
+        assert!(req.oauth.redirect_uri.is_some());
     }
 
     #[test]
