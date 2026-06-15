@@ -16,7 +16,7 @@
 //!
 //! let mdoc_presentation = MdocPresentation::builder(doc_type, session_transcript)
 //!     .algorithm(iana::Algorithm::ES256)
-//!     .add_claim(namespace, claim_name, value)
+//!     .add_device_claim(namespace, claim_name, value)
 //!     .issuer_signed(issuer_signed_value)
 //!     .signer(|tbs| { /* sign DeviceAuthentication bytes */ })
 //!     .build();
@@ -65,6 +65,9 @@ pub enum MdocVpError {
     /// CBOR serialisation failed.
     #[error("failed to serialise CBOR value: {0}")]
     CborEncode(String),
+    /// COSE signing or structure error.
+    #[error("COSE error: {0}")]
+    CoseSign(#[from] coset::CoseError),
     /// Signing failed.
     #[error("failed to sign DeviceSignature: {0}")]
     Signing(String),
@@ -73,12 +76,6 @@ pub enum MdocVpError {
 impl From<MdocVpError> for ProofError {
     fn from(value: MdocVpError) -> Self {
         Self::Format(Box::new(value))
-    }
-}
-
-impl From<coset::CoseError> for MdocVpError {
-    fn from(value: coset::CoseError) -> Self {
-        Self::CborEncode(value.to_string())
     }
 }
 
@@ -94,9 +91,10 @@ pub struct MdocClaimsQuery {
     pub claim_name: String,
 }
 
-impl MdocClaimsQuery {
-    /// Creates an mdoc claims query from a generic DCQL [`ClaimsQuery`].
-    pub fn try_from_claims_query(query: &ClaimsQuery) -> Result<Self, MdocVpError> {
+impl TryFrom<ClaimsQuery> for MdocClaimsQuery {
+    type Error = MdocVpError;
+
+    fn try_from(query: ClaimsQuery) -> Result<Self, Self::Error> {
         let (namespace, claim_name) = claim_path_to_namespace_and_element(&query.path)?;
         Ok(Self {
             namespace,
@@ -141,27 +139,51 @@ pub fn claim_path_to_namespace_and_element(
 ///
 /// `clientIdHash`  = SHA-256(clientId)
 /// `responseUriHash` = SHA-256(responseUri)
+///
+/// The hash fields are kept private to guarantee they are exactly 32-byte
+/// SHA-256 digests, preventing callers from constructing a spec-invalid
+/// handover with wrong-length byte strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenID4VPHandover {
-    pub client_id_hash: Vec<u8>,
-    pub response_uri_hash: Vec<u8>,
-    pub nonce: String,
+    client_id_hash: [u8; 32],
+    response_uri_hash: [u8; 32],
+    nonce: String,
 }
 
 impl OpenID4VPHandover {
     /// Creates the handover from the verifier request parameters,
     /// hashing `client_id` and `response_uri` with SHA-256.
     pub fn new(client_id: &str, response_uri: &str, nonce: String) -> Self {
-        let client_id_hash = HashAlg::Sha256.hash(client_id.as_bytes()).as_ref().to_vec();
-        let response_uri_hash = HashAlg::Sha256
+        let client_id_hash: [u8; 32] = HashAlg::Sha256
+            .hash(client_id.as_bytes())
+            .as_ref()
+            .try_into()
+            .expect("SHA-256 produces 32 bytes");
+        let response_uri_hash: [u8; 32] = HashAlg::Sha256
             .hash(response_uri.as_bytes())
             .as_ref()
-            .to_vec();
+            .try_into()
+            .expect("SHA-256 produces 32 bytes");
         Self {
             client_id_hash,
             response_uri_hash,
             nonce,
         }
+    }
+
+    /// Returns the SHA-256 digest of `client_id`.
+    pub fn client_id_hash(&self) -> &[u8; 32] {
+        &self.client_id_hash
+    }
+
+    /// Returns the SHA-256 digest of `response_uri`.
+    pub fn response_uri_hash(&self) -> &[u8; 32] {
+        &self.response_uri_hash
+    }
+
+    /// Returns the nonce value.
+    pub fn nonce(&self) -> &str {
+        &self.nonce
     }
 
     /// Serialises the structure to a CBOR value.
@@ -170,8 +192,8 @@ impl OpenID4VPHandover {
     pub fn to_cbor_value(&self) -> Value {
         Value::Array(vec![
             Value::Text("OpenID4VP".to_string()),
-            Value::Bytes(self.client_id_hash.clone()),
-            Value::Bytes(self.response_uri_hash.clone()),
+            Value::Bytes(self.client_id_hash.to_vec()),
+            Value::Bytes(self.response_uri_hash.to_vec()),
             Value::Text(self.nonce.clone()),
         ])
     }
@@ -400,15 +422,18 @@ impl MdocPresentationBuilder {
         self
     }
 
-    /// Adds one device-asserted data element to the response.
+    /// Adds one device-asserted data element to `deviceSigned.nameSpaces`.
     ///
-    /// These populate `deviceSigned.nameSpaces`. For most mdoc presentations
-    /// this is empty or minimal; the credential data comes from
+    /// For most mdoc presentations `deviceSigned.nameSpaces` is empty or
+    /// minimal; the credential data comes from
     /// [`MdocPresentationBuilder::issuer_signed`].
+    ///
+    /// The name `add_device_claim` makes it clear that these values populate
+    /// the device-asserted namespace, not the issuer-signed attributes.
     ///
     /// The `value` parameter accepts a CBOR [`Value`] to preserve native mdoc
     /// types (e.g., full-date tags, bstr) that have no JSON equivalent.
-    pub fn add_claim(
+    pub fn add_device_claim(
         mut self,
         namespace: impl Into<String>,
         claim_name: impl Into<String>,
@@ -422,7 +447,7 @@ impl MdocPresentationBuilder {
     }
 
     /// Adds a set of device-asserted claims for one namespace.
-    pub fn add_namespace(
+    pub fn add_device_namespace(
         mut self,
         namespace: impl Into<String>,
         claims: BTreeMap<String, Value>,
@@ -509,7 +534,7 @@ mod tests {
             values: None,
         };
 
-        let mapped = MdocClaimsQuery::try_from_claims_query(&query).unwrap();
+        let mapped: MdocClaimsQuery = query.try_into().unwrap();
         assert_eq!(mapped.namespace, "org.iso.18013.5.1");
         assert_eq!(mapped.claim_name, "family_name");
     }
@@ -528,9 +553,15 @@ mod tests {
             .as_ref()
             .to_vec();
 
-        assert_eq!(handover.client_id_hash, expected_client_id_hash);
-        assert_eq!(handover.response_uri_hash, expected_response_uri_hash);
-        assert_eq!(handover.nonce, "nonce-123");
+        assert_eq!(
+            handover.client_id_hash().as_slice(),
+            expected_client_id_hash.as_slice()
+        );
+        assert_eq!(
+            handover.response_uri_hash().as_slice(),
+            expected_response_uri_hash.as_slice()
+        );
+        assert_eq!(handover.nonce(), "nonce-123");
 
         let value = handover.to_cbor_value();
         match value {
@@ -617,12 +648,12 @@ mod tests {
 
         let presentation = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
             .algorithm(iana::Algorithm::ES256)
-            .add_claim(
+            .add_device_claim(
                 "org.iso.18013.5.1",
                 "family_name",
                 Value::Text("Doe".to_string()),
             )
-            .add_claim(
+            .add_device_claim(
                 "org.iso.18013.5.1",
                 "given_name",
                 Value::Text("Jane".to_string()),
@@ -737,7 +768,7 @@ mod tests {
     fn rejects_build_without_issuer_signed() {
         let transcript = SessionTranscript::new(sample_handover());
         let result = MdocPresentation::builder("org.iso.18013.5.1.mDL", transcript)
-            .add_claim(
+            .add_device_claim(
                 "org.iso.18013.5.1",
                 "family_name",
                 Value::Text("Doe".to_string()),

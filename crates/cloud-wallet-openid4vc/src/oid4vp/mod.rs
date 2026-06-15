@@ -7,7 +7,6 @@ pub mod authorization;
 pub mod client_id;
 pub mod dcql;
 pub mod error;
-pub mod formats;
 pub mod metadata;
 pub mod presentation;
 pub mod request_object;
