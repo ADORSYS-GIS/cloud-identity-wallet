@@ -104,11 +104,13 @@ impl ParsedMdoc {
         let name_spaces_val = take_entry(&mut issuer_signed_map, "nameSpaces")?;
         let issuer_auth_val = take_entry(&mut issuer_signed_map, "issuerAuth")?;
 
-        // RFC 9052 §4.2: COSE_Sign1 is encoded as CBOR tag 18.
-        // issuerAuth MUST be #6.18(COSE_Sign1); reject untagged arrays for
-        // strict ISO/COSE compliance.
+        // ISO 18013-5 §9.1.2 CDDL defines issuerAuth as COSE_Sign1 without mandating
+        // the optional CBOR tag 18 (RFC 9052 §4.2). Real-world implementations —
+        // including the official ISO Annex D test vectors — use the untagged form.
+        // Accept both; reject anything that is neither a tag-18 wrapper nor a bare array.
         let cose_payload_val = match issuer_auth_val {
             Value::Tag(18, inner) => *inner,
+            val @ Value::Array(_) => val,
             _ => {
                 return Err(MdocError::UnexpectedCborType {
                     field: "issuerAuth",
@@ -308,8 +310,10 @@ fn take_tdate(map: &mut Vec<(Value, Value)>, key: &'static str) -> Result<Offset
         _ => return Err(MdocError::UnexpectedCborType { field: key }),
     };
 
-    OffsetDateTime::parse(&date_str, &Rfc3339)
-        .map_err(|_| MdocError::UnexpectedCborType { field: key })
+    OffsetDateTime::parse(&date_str, &Rfc3339).map_err(|_| MdocError::MalformedTimestamp {
+        field: key,
+        value: date_str,
+    })
 }
 
 fn parse_value_digests(
@@ -510,11 +514,12 @@ fn parse_digest_id(val: Value) -> Result<u64> {
     match val {
         Value::Integer(i) => {
             let n: i128 = i.into();
-            let id = u64::try_from(n)
-                .map_err(|_| MdocError::UnexpectedCborType { field: "digestID" })?;
-            // ISO 18013-5 §9.1.2.4: DigestID value shall be smaller than 2^31.
+            let id =
+                u64::try_from(n).map_err(|_| MdocError::DigestIdOutOfRange { digest_id: n })?;
             if id >= (1u64 << 31) {
-                return Err(MdocError::DigestIdOutOfRange { digest_id: id });
+                return Err(MdocError::DigestIdOutOfRange {
+                    digest_id: id as i128,
+                });
             }
             Ok(id)
         }
