@@ -54,7 +54,7 @@ impl EcdhCurve {
 }
 
 // Fixed-size heap-free storage for a public key, one array variant per curve.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PublicKeyBytes {
     P256([u8; 65]),
     P384([u8; 97]),
@@ -196,7 +196,7 @@ impl EphemeralEcdhKey {
 /// Byte length and uncompressed-point tag are validated at construction.
 /// Curve mismatch with the private key is caught in
 /// [`EphemeralEcdhKey::into_shared_secret`].
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EcdhPublicKey {
     bytes: PublicKeyBytes,
 }
@@ -238,12 +238,20 @@ impl EcdhPublicKey {
                 "NIST curve public key must use uncompressed SEC1 encoding (0x04 prefix)",
             ));
         }
-        // len validated above - try_into is infallible for each branch.
+        // len validated above — try_into is infallible for each branch.
         let inner = match curve {
-            EcdhCurve::P256 => PublicKeyBytes::P256(bytes.try_into().unwrap()),
-            EcdhCurve::P384 => PublicKeyBytes::P384(bytes.try_into().unwrap()),
-            EcdhCurve::P521 => PublicKeyBytes::P521(bytes.try_into().unwrap()),
-            EcdhCurve::X25519 => PublicKeyBytes::X25519(bytes.try_into().unwrap()),
+            EcdhCurve::P256 => {
+                PublicKeyBytes::P256(bytes.try_into().expect("length validated above"))
+            }
+            EcdhCurve::P384 => {
+                PublicKeyBytes::P384(bytes.try_into().expect("length validated above"))
+            }
+            EcdhCurve::P521 => {
+                PublicKeyBytes::P521(bytes.try_into().expect("length validated above"))
+            }
+            EcdhCurve::X25519 => {
+                PublicKeyBytes::X25519(bytes.try_into().expect("length validated above"))
+            }
         };
         Ok(Self { bytes: inner })
     }
@@ -545,5 +553,31 @@ mod tests {
             !dbg.to_lowercase().contains(&hex_sample),
             "Debug output must not contain raw key bytes"
         );
+    }
+
+    #[test]
+    fn public_key_equality() {
+        // Parsing the same bytes twice must yield equal keys.
+        let ephemeral = EphemeralEcdhKey::generate(EcdhCurve::P256).unwrap();
+        let mut buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+        let bytes = ephemeral.public_key_bytes(&mut buf).unwrap().to_vec();
+
+        let key_a = EcdhPublicKey::from_bytes(EcdhCurve::P256, &bytes).unwrap();
+        let key_b = EcdhPublicKey::from_bytes(EcdhCurve::P256, &bytes).unwrap();
+        assert_eq!(key_a, key_b);
+
+        // A freshly generated key must not equal the first (negligible collision probability).
+        let other = EphemeralEcdhKey::generate(EcdhCurve::P256).unwrap();
+        let mut other_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+        let other_bytes = other.public_key_bytes(&mut other_buf).unwrap().to_vec();
+        let key_c = EcdhPublicKey::from_bytes(EcdhCurve::P256, &other_bytes).unwrap();
+        assert_ne!(key_a, key_c);
+
+        // Different curves use different PublicKeyBytes variants and must never compare equal,
+        // even when the raw bytes happen to share a common prefix.
+        let x_bytes = [0x42u8; 32];
+        let x_key = EcdhPublicKey::from_bytes(EcdhCurve::X25519, &x_bytes).unwrap();
+        let p_key = EcdhPublicKey::from_bytes(EcdhCurve::P256, &bytes).unwrap();
+        assert_ne!(x_key, p_key);
     }
 }

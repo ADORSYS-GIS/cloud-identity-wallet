@@ -94,6 +94,27 @@ impl EncryptingKey {
             .map(|s| &*s)
             .map_err(|_| error_msg(ErrorKind::Encryption, "RSA-OAEP encryption failed"))
     }
+
+    /// Encrypt `plaintext` with RSA-OAEP-SHA-256 (JWE `RSA-OAEP-256`).
+    ///
+    /// Equivalent to `self.encrypt(OaepAlgorithm::Sha256, plaintext, output)`.
+    pub fn encrypt_sha256<'o>(&self, plaintext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+        self.encrypt(OaepAlgorithm::Sha256, plaintext, output)
+    }
+
+    /// Encrypt `plaintext` with RSA-OAEP-SHA-384.
+    ///
+    /// Equivalent to `self.encrypt(OaepAlgorithm::Sha384, plaintext, output)`.
+    pub fn encrypt_sha384<'o>(&self, plaintext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+        self.encrypt(OaepAlgorithm::Sha384, plaintext, output)
+    }
+
+    /// Encrypt `plaintext` with RSA-OAEP-SHA-512.
+    ///
+    /// Equivalent to `self.encrypt(OaepAlgorithm::Sha512, plaintext, output)`.
+    pub fn encrypt_sha512<'o>(&self, plaintext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+        self.encrypt(OaepAlgorithm::Sha512, plaintext, output)
+    }
 }
 
 /// RSA private key for OAEP decryption.
@@ -190,6 +211,27 @@ impl DecryptingKey {
             .decrypt(algorithm.lc_algorithm(), ciphertext, output, None)
             .map(|s| &*s)
             .map_err(|_| error_msg(ErrorKind::Decryption, "RSA-OAEP decryption failed"))
+    }
+
+    /// Decrypt `ciphertext` with RSA-OAEP-SHA-256 (JWE `RSA-OAEP-256`).
+    ///
+    /// Equivalent to `self.decrypt(OaepAlgorithm::Sha256, ciphertext, output)`.
+    pub fn decrypt_sha256<'o>(&self, ciphertext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+        self.decrypt(OaepAlgorithm::Sha256, ciphertext, output)
+    }
+
+    /// Decrypt `ciphertext` with RSA-OAEP-SHA-384.
+    ///
+    /// Equivalent to `self.decrypt(OaepAlgorithm::Sha384, ciphertext, output)`.
+    pub fn decrypt_sha384<'o>(&self, ciphertext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+        self.decrypt(OaepAlgorithm::Sha384, ciphertext, output)
+    }
+
+    /// Decrypt `ciphertext` with RSA-OAEP-SHA-512.
+    ///
+    /// Equivalent to `self.decrypt(OaepAlgorithm::Sha512, ciphertext, output)`.
+    pub fn decrypt_sha512<'o>(&self, ciphertext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+        self.decrypt(OaepAlgorithm::Sha512, ciphertext, output)
     }
 }
 
