@@ -2,9 +2,9 @@
 //!
 //! ## Provided Backends
 //!
-//! - `SqlxBackend`: A persistent storage backend that supports any database
+//! - [`SqlxBackend`]: A persistent storage backend that supports any database
 //!   compatible with `sqlx`, such as PostgreSQL, MySQL, and SQLite.
-//! - `InMemoryBackend`: A volatile, in-memory storage backend intended
+//! - [`InMemoryBackend`]: A volatile, in-memory storage backend intended
 //!   for testing and development purposes.
 
 use crate::key::dek::{DataEncryptionKey, Id as DekId};
