@@ -11,6 +11,11 @@ use crate::oid4vp::verifier_attestation::{TrustedAttestationIssuer, VerifierAtte
 /// from a Verifier Attestation JWT as defined in OpenID4VP §5.9.3 and §12.
 pub struct VerifierAttestationKey {
     trusted_issuers: Vec<TrustedAttestationIssuer>,
+
+    /// The URI to validate against the attestation's `redirect_uris` allowlist.
+    /// Each resolver instance is bound to a single request's response_uri/redirect_uri.
+    /// If the trait ever gains a request-context parameter, this field should move
+    /// to the method signature instead.
     expected_uri: String,
 }
 
@@ -73,58 +78,29 @@ impl VerifierKeyResolver for VerifierAttestationKey {
             verifier_id,
             &self.trusted_issuers,
         )
-        .map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("verifier attestation validation failed: {e}"),
-            )
-        })?;
+        .map_err(|e| Error::new(ErrorKind::InvalidPresentationRequest, e))?;
 
         // Validate redirect_uris allowlist against the expected URI
         // Per OpenID4VP §12, the attestation contains an allowlist of redirect_uris
-        // that the verifier is authorized to use
+        // that the verifier is authorized to use. A missing allowlist means no URIs
+        // are allowed, not that all URIs are allowed.
+        if attestation.allowed_redirect_uris().is_none() {
+            return Err(Error::message(
+                ErrorKind::InvalidPresentationRequest,
+                "verifier attestation must include redirect_uris to authorize a response_uri",
+            ));
+        }
         attestation
             .validate_redirect_uri(&self.expected_uri)
-            .map_err(|e| {
-                Error::message(
-                    ErrorKind::InvalidPresentationRequest,
-                    format!("verifier attestation redirect_uri validation failed: {e}"),
-                )
-            })?;
+            .map_err(|e| Error::new(ErrorKind::InvalidPresentationRequest, e))?;
 
         // Convert cnf.jwk to DecodingKey
         let jwk = attestation.verifier_public_key();
-        let decoding_key = jwk_to_decoding_key(jwk).map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("failed to convert attestation JWK to decoding key: {e}"),
-            )
-        })?;
+        let decoding_key = crate::oid4vp::jwk_to_decoding_key(jwk)
+            .map_err(|e| Error::message(ErrorKind::InvalidPresentationRequest, e))?;
 
         Ok(decoding_key)
     }
-}
-
-/// Converts a JWK to a jsonwebtoken DecodingKey.
-fn jwk_to_decoding_key(jwk: &cloud_wallet_crypto::jwk::Jwk) -> crate::errors::Result<DecodingKey> {
-    use jsonwebtoken::jwk::Jwk as JwtJwk;
-
-    // Convert our Jwk type to jsonwebtoken's Jwk type via JSON serialization
-    let jwt_jwk = serde_json::to_value(jwk)
-        .and_then(serde_json::from_value::<JwtJwk>)
-        .map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                format!("failed to convert JWK: {e}"),
-            )
-        })?;
-
-    DecodingKey::from_jwk(&jwt_jwk).map_err(|e| {
-        Error::message(
-            ErrorKind::InvalidPresentationRequest,
-            format!("failed to create decoding key from JWK: {e}"),
-        )
-    })
 }
 
 #[cfg(test)]
@@ -208,6 +184,31 @@ mod tests {
                 jwk: create_verifier_jwk(keys),
             },
             redirect_uris: Some(redirect_uris),
+            nonce: None,
+        }
+    }
+
+    /// Creates claims for a Verifier Attestation JWT without redirect_uris.
+    fn create_attestation_claims_no_redirect_uris(
+        keys: &TestKeys,
+        verifier_id: &str,
+        exp_offset: i64,
+    ) -> crate::oid4vp::verifier_attestation::VerifierAttestationClaims {
+        use crate::oid4vp::verifier_attestation::{CnfClaim, VerifierAttestationClaims};
+
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        VerifierAttestationClaims {
+            iss: TEST_ISSUER.to_string(),
+            sub: verifier_id.to_string(),
+            aud: None,
+            iat: Some(now),
+            exp: now + exp_offset,
+            nbf: None,
+            jti: Some("test-jti".to_string()),
+            cnf: CnfClaim {
+                jwk: create_verifier_jwk(keys),
+            },
+            redirect_uris: None,
             nonce: None,
         }
     }
@@ -401,6 +402,29 @@ mod tests {
                 || err.contains("response_uri")
                 || err.contains("not allowed"),
             "Expected redirect_uri not allowed error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_redirect_uris_rejected() {
+        let keys = TestKeys::generate();
+        let trusted_issuers = vec![create_trusted_issuer(&keys)];
+
+        let claims = create_attestation_claims_no_redirect_uris(&keys, TEST_VERIFIER_ID, 3600);
+        let attestation_jwt = create_attestation_jwt(&keys, &claims);
+
+        let resolver = VerifierAttestationKey::new(trusted_issuers, TEST_RESPONSE_URI.to_string());
+        let client_id = create_client_id(TEST_VERIFIER_ID);
+        let header = create_header_with_jwt(&attestation_jwt);
+
+        let result = resolver.resolve_key(&client_id, &header).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("redirect_uris") || err.contains("response_uri"),
+            "Expected missing redirect_uris error, got: {}",
             err
         );
     }
