@@ -3,9 +3,9 @@
 //! ## Provided Implementations
 //!
 //! - `LocalProvider`: An implementation that uses a locally generated, in-memory master key.
-//!   It is intended for development and testing. Available with the `local-kms` feature.
+//!   It is intended for development and testing.
 //! - `AwsProvider`: An implementation that uses AWS KMS for master key management
-//!   and encryption/decryption of data encryption keys. Available with the `aws-kms` feature.
+//!   and encryption/decryption of data encryption keys.
 
 #[cfg(feature = "aws-kms")]
 mod aws;
