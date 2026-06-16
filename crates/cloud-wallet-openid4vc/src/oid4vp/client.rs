@@ -141,7 +141,7 @@ impl AuthzResponseSender for DirectPostResponseSender {
     }
 }
 
-/// Validated intermediate state produced by [`Oid4vpClient::process_authorization_request`].
+/// Validated intermediate state produced by [`Oid4vpClient::process_authz_request`].
 #[derive(Debug)]
 pub struct PresentationContext {
     /// The validated authorization request.
