@@ -142,7 +142,7 @@ impl RequestObject {
             })?;
 
         // Validate that the Request Object client_id matches the outer client_id
-        let request_object_client_id_str = token_data.claims.params.client_id.as_str();
+        let request_object_client_id_str = token_data.claims.params.oauth.client_id.as_str();
         if outer_client_id != request_object_client_id_str {
             return Err(RequestObjectError::InvalidClientId(format!(
                 "Request Object client_id '{request_object_client_id_str}' does not match outer client_id '{outer_client_id}'"
