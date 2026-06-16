@@ -137,11 +137,12 @@ pub enum PresentationFlow {
     SameDevice,
 }
 
-impl From<ResponseMode> for PresentationFlow {
-    fn from(mode: ResponseMode) -> Self {
+impl From<&ResponseMode> for PresentationFlow {
+    fn from(mode: &ResponseMode) -> Self {
         match mode {
             ResponseMode::DirectPost | ResponseMode::DirectPostJwt => Self::CrossDevice,
             ResponseMode::DcApi | ResponseMode::DcApiJwt => Self::SameDevice,
+            ResponseMode::Other(_) => Self::CrossDevice, // Extension modes default to cross-device
         }
     }
 }
@@ -156,7 +157,7 @@ impl PresentationSession {
         resolved_request: AuthorizationRequest,
         dcql_result: SelectionResult,
     ) -> Self {
-        let flow = PresentationFlow::from(resolved_request.response_mode);
+        let flow = PresentationFlow::from(&resolved_request.response_mode);
         Self {
             id: utils::generate_presentation_session_id(),
             tenant_id,
@@ -298,17 +299,23 @@ mod tests {
     }
 
     fn mock_authorization_request(response_mode: ResponseMode) -> AuthorizationRequest {
+        use cloud_wallet_openid4vc::oauth::authorization::OAuthAuthorizationRequest;
         use cloud_wallet_openid4vc::oid4vp::dcql::{
             CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
         };
         AuthorizationRequest {
             response_type: cloud_wallet_openid4vc::oid4vp::authorization::ResponseType::VpToken,
-            client_id: "https://verifier.example.com".to_string(),
-            redirect_uri: None,
-            scope: None,
-            state: None,
             nonce: "test-nonce".to_string(),
             response_mode,
+            oauth: OAuthAuthorizationRequest {
+                client_id: "https://verifier.example.com".to_string(),
+                redirect_uri: None,
+                scope: None,
+                state: None,
+                nonce: None,
+                code_challenge: None,
+                code_challenge_method: None,
+            },
             response_uri: Some(url::Url::parse("https://verifier.example.com/response").unwrap()),
             request_uri: None,
             request_uri_method: None,
