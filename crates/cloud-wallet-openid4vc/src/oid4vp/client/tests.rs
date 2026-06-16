@@ -1,0 +1,315 @@
+use super::*;
+use crate::oid4vp::authorization::ResponseType;
+use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, encode};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Creates a minimal valid `AuthorizationRequest` for testing.
+fn test_authorization_request() -> AuthorizationRequest {
+    AuthorizationRequest {
+        response_type: ResponseType::VpToken,
+        client_id: "redirect_uri:https://verifier.example.com/cb".into(),
+        redirect_uri: None,
+        scope: None,
+        state: Some("test-state".into()),
+        nonce: "test-nonce".into(),
+        response_mode: ResponseMode::DirectPost,
+        response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
+        request_uri: None,
+        request_uri_method: None,
+        dcql_query: Some(test_dcql_query()),
+        client_metadata: None,
+        client_metadata_uri: None,
+        request: None,
+        transaction_data: None,
+        verifier_info: None,
+        expected_origins: None,
+    }
+}
+
+fn test_dcql_query() -> DcqlQuery {
+    DcqlQuery {
+        credentials: vec![CredentialQuery {
+            id: "pid_request".into(),
+            format: CredentialFormat::DcSdJwt,
+            multiple: None,
+            meta: CredentialMeta::SdJwt {
+                vct_values: vec!["https://example.com/pid".into()],
+            },
+            claims: None,
+            claim_sets: None,
+            trusted_authorities: None,
+            require_cryptographic_holder_binding: None,
+        }],
+        credential_sets: None,
+    }
+}
+
+fn test_config() -> Oid4vpConfig {
+    let inner = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("valid client");
+    Oid4vpConfig {
+        http_client: reqwest_middleware::ClientBuilder::new(inner).build(),
+        discovery_mode: DiscoveryMode::Static,
+        wallet_metadata: None,
+    }
+}
+
+fn signed_request_object(client_id: &str, wallet_nonce: Option<&str>) -> String {
+    let now = jsonwebtoken::get_current_timestamp() as i64;
+    let mut payload = serde_json::json!({
+        "iss": client_id,
+        "aud": "https://self-issued.me/v2",
+        "exp": now + 300,
+        "iat": now,
+        "client_id": client_id,
+        "response_type": "vp_token",
+        "response_mode": "direct_post",
+        "nonce": "test-nonce",
+        "response_uri": "https://verifier.example.com/response",
+        "dcql_query": {
+            "credentials": [{
+                "id": "pid_request",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com/pid"] }
+            }]
+        }
+    });
+    if let Some(wallet_nonce) = wallet_nonce {
+        payload["wallet_nonce"] = serde_json::Value::String(wallet_nonce.to_string());
+    }
+
+    let mut header = Header::new(Algorithm::HS256);
+    header.typ = Some("oauth-authz-req+jwt".to_string());
+    encode(&header, &payload, &EncodingKey::from_secret(b"test-secret"))
+        .expect("test JWT should encode")
+}
+
+struct StaticKeyResolver;
+
+#[async_trait::async_trait]
+impl VerifierKeyResolver for StaticKeyResolver {
+    async fn resolve_key(
+        &self,
+        _client_id: &ParsedClientId,
+        _header: &Header,
+    ) -> crate::errors::Result<DecodingKey> {
+        Ok(DecodingKey::from_secret(b"test-secret"))
+    }
+}
+
+struct StaticRequestUriResolver {
+    result: RequestUriResult,
+    saw_post: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl RequestUriResolver for StaticRequestUriResolver {
+    async fn resolve(
+        &self,
+        _http_client: &ClientWithMiddleware,
+        _uri: &Url,
+        method: Option<RequestUriMethod>,
+        _wallet_metadata: Option<&WalletPresentationMetadata>,
+    ) -> Result<RequestUriResult, RequestUriError> {
+        self.saw_post.store(
+            matches!(method, Some(RequestUriMethod::Post)),
+            Ordering::SeqCst,
+        );
+        Ok(self.result.clone())
+    }
+}
+
+struct RejectingVerifierResolver;
+
+#[async_trait::async_trait]
+impl VerifierKeyResolver for RejectingVerifierResolver {
+    async fn resolve_key(
+        &self,
+        _client_id: &ParsedClientId,
+        _header: &Header,
+    ) -> crate::errors::Result<DecodingKey> {
+        Ok(DecodingKey::from_secret(b"test-secret"))
+    }
+}
+
+#[async_trait::async_trait]
+impl VerifierResolver for RejectingVerifierResolver {
+    async fn resolve_metadata(
+        &self,
+        client_id: &ParsedClientId,
+        _request: &AuthorizationRequest,
+    ) -> Result<Option<VerifierMetadata>, Error> {
+        Err(Error::VerifierResolutionFailed(format!(
+            "unsupported client_id scheme: {:?}",
+            client_id.prefix()
+        )))
+    }
+}
+
+#[test]
+fn presentation_context_credential_queries() {
+    let request = test_authorization_request();
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode,
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.client_id).unwrap(),
+        request,
+    };
+
+    assert_eq!(ctx.credential_queries().len(), 1);
+    assert_eq!(ctx.credential_queries()[0].id, "pid_request");
+}
+
+#[test]
+fn presentation_context_has_no_transaction_data() {
+    let request = test_authorization_request();
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode,
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.client_id).unwrap(),
+        request,
+    };
+
+    assert!(!ctx.has_transaction_data());
+}
+
+#[test]
+fn presentation_context_require_response_uri_absent() {
+    let mut request = test_authorization_request();
+    request.response_uri = None;
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.state.clone(),
+        response_uri: None,
+        response_mode: request.response_mode,
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.client_id).unwrap(),
+        request,
+    };
+
+    assert!(matches!(
+        ctx.require_response_uri(),
+        Err(Error::NoResponseUri)
+    ));
+}
+
+#[test]
+fn parse_json_authorization_request() {
+    let client = Oid4vpClient::new(test_config());
+    let json = serde_json::to_string(&test_authorization_request()).unwrap();
+    let result = client.parse_authorization_request(&json);
+    assert!(result.is_ok(), "parse failed: {:?}", result.err());
+    let request = result.unwrap();
+    assert_eq!(request.nonce, "test-nonce");
+}
+
+#[test]
+fn parse_empty_request_fails() {
+    let client = Oid4vpClient::new(test_config());
+    let result = client.parse_authorization_request("");
+    assert!(matches!(result, Err(Error::InvalidRequest(_))));
+}
+
+#[test]
+fn parse_invalid_json_fails() {
+    let client = Oid4vpClient::new(test_config());
+    let result = client.parse_authorization_request("{not valid json");
+    assert!(matches!(result, Err(Error::InvalidRequest(_))));
+}
+
+#[tokio::test]
+async fn process_request_uri_accepts_partial_outer_request() {
+    let client = Oid4vpClient::new(test_config());
+    let saw_post = Arc::new(AtomicBool::new(false));
+    let resolver = StaticRequestUriResolver {
+        result: RequestUriResult::new(
+            signed_request_object("x509_san_dns:verifier.example.com", None),
+            None,
+        ),
+        saw_post: Arc::clone(&saw_post),
+    };
+    let raw = "openid4vp://?request_uri=https%3A%2F%2Fverifier.example.com%2Frequest%2Fabc123&request_uri_method=post&client_id=x509_san_dns%3Averifier.example.com";
+
+    let context = client
+        .process_authz_request_full(raw, &StaticKeyResolver, None, &resolver)
+        .await
+        .expect("partial request_uri envelope should resolve to a validated request object");
+
+    assert!(saw_post.load(Ordering::SeqCst));
+    assert_eq!(context.client_id.value(), "verifier.example.com");
+    assert_eq!(context.credential_queries()[0].id, "pid_request");
+}
+
+#[tokio::test]
+async fn process_request_uri_validates_wallet_nonce_after_request_object_decode() {
+    let client = Oid4vpClient::new(test_config());
+    let resolver = StaticRequestUriResolver {
+        result: RequestUriResult::new(
+            signed_request_object("x509_san_dns:verifier.example.com", Some("actual")),
+            Some("expected".to_string()),
+        ),
+        saw_post: Arc::new(AtomicBool::new(false)),
+    };
+    let raw = "openid4vp://?request_uri=https%3A%2F%2Fverifier.example.com%2Frequest%2Fabc123&client_id=x509_san_dns%3Averifier.example.com";
+
+    let err = client
+        .process_authz_request_full(raw, &StaticKeyResolver, None, &resolver)
+        .await
+        .expect_err("wallet_nonce mismatch must fail");
+
+    assert!(matches!(
+        err,
+        Error::InvalidRequestObject(RequestObjectError::InvalidClaims(_))
+    ));
+}
+
+#[tokio::test]
+async fn process_authorization_request_delegates_verifier_resolution_to_handler() {
+    let client = Oid4vpClient::new(test_config());
+    let json = serde_json::to_string(&test_authorization_request()).unwrap();
+
+    let err = client
+        .process_authz_request_with_resolver(&json, &RejectingVerifierResolver)
+        .await
+        .expect_err("verifier resolver errors should surface");
+
+    assert!(matches!(err, Error::VerifierResolutionFailed(_)));
+}
+
+#[test]
+fn client_new() {
+    let config = test_config();
+    let client = Oid4vpClient::new(config);
+    assert_eq!(client.config().discovery_mode, DiscoveryMode::Static);
+}
+
+#[test]
+fn error_no_response_uri_display() {
+    let err = Error::NoResponseUri;
+    assert!(err.to_string().contains("no response_uri"));
+}
+
+#[test]
+fn error_invalid_request_display() {
+    let err = Error::InvalidRequest("test error".into());
+    assert!(err.to_string().contains("test error"));
+}
