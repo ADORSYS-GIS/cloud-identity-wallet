@@ -10,7 +10,14 @@ use crate::outbound::{
     MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
 };
 use crate::session::SessionStore;
+use crate::utils::load_iaca_roots;
 
+/// Constructs an [`IssuanceEngine`] from configuration.
+///
+/// Loads IACA roots from [`crate::config::Oid4vciConfig`].  Returns an error if any
+/// configured root path is unreadable or is a PEM file with no certificates.
+/// Logs a `WARN` at startup if no roots are loaded — the resulting store is
+/// fail-closed and all mso_mdoc issuances will be rejected.
 pub fn build_issuance_engine<S: SessionStore + Clone>(
     config: &Config,
     tenant_repo: impl TenantRepo,
@@ -33,6 +40,13 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let credential_repo = MemoryCredentialRepo::new();
     let preferred_display_locales = config.oid4vci.preferred_display_locales.clone();
 
+    let iaca_roots = load_iaca_roots(&config.oid4vci.iaca_root_paths)?;
+    if iaca_roots.is_empty() {
+        tracing::warn!(
+            "mdoc IACA trust store is empty: all mso_mdoc credential issuances will be rejected"
+        );
+    }
+
     let engine = IssuanceEngine::new(
         client,
         task_queue,
@@ -43,10 +57,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         session_store,
         preferred_display_locales,
     )
-    // TODO: load IACA root certificates from configuration for mdoc verification.
-    // The empty store is the fail-closed default: all mdoc credentials are rejected
-    // until IACA roots are supplied.
-    .with_iaca_trust_store(StaticTrustStore::new(vec![]));
+    .with_iaca_trust_store(StaticTrustStore::new(iaca_roots));
     Ok(engine)
 }
 
