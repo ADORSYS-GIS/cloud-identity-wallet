@@ -1,4 +1,6 @@
 use cloud_wallet_openid4vc::oid4vci::client::ResolvedOfferContext;
+use cloud_wallet_openid4vc::oid4vp::authorization::{AuthorizationRequest, ResponseMode};
+use cloud_wallet_openid4vc::oid4vp::selection::SelectionResult;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -87,6 +89,109 @@ fn is_transition_allowed(from: IssuanceState, to: IssuanceState, flow: FlowType)
     }
 }
 
+/// A server-side session bridging POST /start and POST /consent for the
+/// presentation flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresentationSession {
+    /// Presentation session ID (starts with `prs_`).
+    pub id: String,
+    /// The tenant this session belongs to.
+    pub tenant_id: Uuid,
+    /// Current state of the presentation session.
+    pub state: PresentationState,
+    /// The fully parsed and validated authorization request.
+    pub resolved_request: AuthorizationRequest,
+    /// The DCQL evaluation result: which wallet credentials match which
+    /// credential queries, with requested claim paths.
+    pub dcql_result: SelectionResult,
+    /// The `flow` field returned to the frontend (`cross_device` or
+    /// `same_device`), derived from `response_mode` in the request.
+    pub flow: PresentationFlow,
+}
+
+/// States of a presentation session.
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationState {
+    /// Created by `/start`. Waiting for user consent.
+    AwaitingConsent,
+    /// Terminal. Set by `/consent` on success or rejection.
+    Completed,
+    /// Terminal. Set by `/consent` on error.
+    Failed,
+}
+
+impl PresentationState {
+    /// Returns `true` if the state is terminal.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed)
+    }
+}
+
+/// The presentation flow type, derived from the authorization request's
+/// `response_mode`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationFlow {
+    CrossDevice,
+    SameDevice,
+}
+
+impl From<&ResponseMode> for PresentationFlow {
+    fn from(mode: &ResponseMode) -> Self {
+        match mode {
+            ResponseMode::DirectPost | ResponseMode::DirectPostJwt => Self::CrossDevice,
+            ResponseMode::DcApi | ResponseMode::DcApiJwt => Self::SameDevice,
+            ResponseMode::Other(_) => Self::CrossDevice, // Extension modes default to cross-device
+        }
+    }
+}
+
+impl PresentationSession {
+    /// Creates a new presentation session in `AwaitingConsent` state.
+    ///
+    /// The `flow` is derived automatically from the `response_mode` field of
+    /// the resolved authorization request.
+    pub fn new(
+        tenant_id: Uuid,
+        resolved_request: AuthorizationRequest,
+        dcql_result: SelectionResult,
+    ) -> Self {
+        let flow = PresentationFlow::from(&resolved_request.response_mode);
+        Self {
+            id: utils::generate_presentation_session_id(),
+            tenant_id,
+            state: PresentationState::AwaitingConsent,
+            resolved_request,
+            dcql_result,
+            flow,
+        }
+    }
+}
+
+/// Validates and applies a state transition for a [`PresentationSession`].
+///
+/// Only `AwaitingConsent -> Completed` and `AwaitingConsent -> Failed` are
+/// allowed. Any other transition returns [`SessionError::InvalidStateTransition`].
+pub fn transition_presentation_session(
+    session: &mut PresentationSession,
+    new_state: PresentationState,
+) -> Result<()> {
+    if session.state != PresentationState::AwaitingConsent {
+        return Err(SessionError::InvalidStateTransition(
+            format!("{:?}", session.state).into(),
+            format!("{:?}", new_state).into(),
+        ));
+    }
+    if !new_state.is_terminal() {
+        return Err(SessionError::InvalidStateTransition(
+            format!("{:?}", session.state).into(),
+            format!("{:?}", new_state).into(),
+        ));
+    }
+    session.state = new_state;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +296,149 @@ mod tests {
         let mut session = mock_session(FlowType::AuthorizationCode);
         session.state = IssuanceState::AwaitingTxCode;
         assert!(transition(&mut session, IssuanceState::Processing).is_err());
+    }
+
+    fn mock_authorization_request(response_mode: ResponseMode) -> AuthorizationRequest {
+        use cloud_wallet_openid4vc::oauth::authorization::OAuthAuthorizationRequest;
+        use cloud_wallet_openid4vc::oid4vp::dcql::{
+            CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
+        };
+        AuthorizationRequest {
+            response_type: cloud_wallet_openid4vc::oid4vp::authorization::ResponseType::VpToken,
+            nonce: "test-nonce".to_string(),
+            response_mode,
+            oauth: OAuthAuthorizationRequest {
+                client_id: "https://verifier.example.com".to_string(),
+                redirect_uri: None,
+                scope: None,
+                state: None,
+                nonce: None,
+                code_challenge: None,
+                code_challenge_method: None,
+            },
+            response_uri: Some(url::Url::parse("https://verifier.example.com/response").unwrap()),
+            request_uri: None,
+            request_uri_method: None,
+            dcql_query: Some(DcqlQuery {
+                credentials: vec![CredentialQuery {
+                    id: "pid".to_string(),
+                    format: CredentialFormat::DcSdJwt,
+                    multiple: None,
+                    meta: CredentialMeta::SdJwt {
+                        vct_values: vec!["https://example.com/vct".to_string()],
+                    },
+                    claims: None,
+                    claim_sets: None,
+                    trusted_authorities: None,
+                    require_cryptographic_holder_binding: None,
+                }],
+                credential_sets: None,
+            }),
+            client_metadata: None,
+            client_metadata_uri: None,
+            request: None,
+            transaction_data: None,
+            verifier_info: None,
+            expected_origins: None,
+        }
+    }
+
+    fn mock_selection_result() -> SelectionResult {
+        SelectionResult {
+            candidates: std::collections::HashMap::new(),
+            unsatisfied_queries: vec![],
+            satisfies_query: true,
+            selected_credential_query_ids: vec![],
+            multiple_allowed_by_query_id: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_presentation_session_new_and_flow() {
+        let req = mock_authorization_request(ResponseMode::DirectPost);
+        let session = PresentationSession::new(Uuid::new_v4(), req, mock_selection_result());
+        assert!(session.id.starts_with("prs_"));
+        assert_eq!(session.state, PresentationState::AwaitingConsent);
+        assert_eq!(session.flow, PresentationFlow::CrossDevice);
+
+        assert_eq!(
+            PresentationSession::new(
+                Uuid::new_v4(),
+                mock_authorization_request(ResponseMode::DcApi),
+                mock_selection_result()
+            )
+            .flow,
+            PresentationFlow::SameDevice
+        );
+        assert_eq!(
+            PresentationSession::new(
+                Uuid::new_v4(),
+                mock_authorization_request(ResponseMode::DirectPostJwt),
+                mock_selection_result()
+            )
+            .flow,
+            PresentationFlow::CrossDevice
+        );
+        assert_eq!(
+            PresentationSession::new(
+                Uuid::new_v4(),
+                mock_authorization_request(ResponseMode::DcApiJwt),
+                mock_selection_result()
+            )
+            .flow,
+            PresentationFlow::SameDevice
+        );
+    }
+
+    #[test]
+    fn test_transition_valid_terminal_states() {
+        let req = mock_authorization_request(ResponseMode::DirectPost);
+        let mut session =
+            PresentationSession::new(Uuid::new_v4(), req.clone(), mock_selection_result());
+
+        transition_presentation_session(&mut session, PresentationState::Completed).unwrap();
+        assert_eq!(session.state, PresentationState::Completed);
+
+        let mut session = PresentationSession::new(Uuid::new_v4(), req, mock_selection_result());
+        transition_presentation_session(&mut session, PresentationState::Failed).unwrap();
+        assert_eq!(session.state, PresentationState::Failed);
+    }
+
+    #[test]
+    fn test_transition_rejected_when_not_awaiting_consent() {
+        let req = mock_authorization_request(ResponseMode::DirectPost);
+
+        // From Completed
+        let mut s1 = PresentationSession::new(Uuid::new_v4(), req.clone(), mock_selection_result());
+        transition_presentation_session(&mut s1, PresentationState::Completed).unwrap();
+        assert!(transition_presentation_session(&mut s1, PresentationState::Failed).is_err());
+        assert_eq!(s1.state, PresentationState::Completed);
+
+        // From Failed
+        let mut s2 = PresentationSession::new(Uuid::new_v4(), req.clone(), mock_selection_result());
+        transition_presentation_session(&mut s2, PresentationState::Failed).unwrap();
+        assert!(transition_presentation_session(&mut s2, PresentationState::Completed).is_err());
+        assert_eq!(s2.state, PresentationState::Failed);
+
+        // To AwaitingConsent (non-terminal target)
+        let mut s3 = PresentationSession::new(Uuid::new_v4(), req, mock_selection_result());
+        assert!(
+            transition_presentation_session(&mut s3, PresentationState::AwaitingConsent).is_err()
+        );
+        assert_eq!(s3.state, PresentationState::AwaitingConsent);
+    }
+
+    #[test]
+    fn test_presentation_session_serde_roundtrip() {
+        let req = mock_authorization_request(ResponseMode::DirectPost);
+        let original = PresentationSession::new(Uuid::new_v4(), req, mock_selection_result());
+
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: PresentationSession = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(original.id, deserialized.id);
+        assert_eq!(original.tenant_id, deserialized.tenant_id);
+        assert_eq!(original.state, deserialized.state);
+        assert_eq!(original.flow, deserialized.flow);
     }
 }
