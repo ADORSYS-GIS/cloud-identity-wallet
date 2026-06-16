@@ -42,6 +42,8 @@ pub struct RequestObjectClaims {
     #[serde(flatten)]
     pub rfc7519: RFC7519Claims,
 
+    pub wallet_nonce: Option<String>,
+
     #[serde(flatten)]
     pub params: AuthorizationRequest,
 }
