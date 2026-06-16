@@ -45,6 +45,9 @@ pub struct Oid4vciConfig {
     /// Configurable via `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES=en,fr,de`.
     #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
     pub preferred_display_locales: Vec<String>,
+    /// Paths to DER- or PEM-encoded IACA root certificate files loaded at startup.
+    #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
+    pub iaca_root_paths: Vec<String>,
 }
 
 impl RedisConfig {
@@ -114,7 +117,8 @@ impl Config {
                 "http://localhost:3000/api/v1/issuance/callback",
             )?
             .set_default("oid4vci.use_system_proxy", true)?
-            .set_default("oid4vci.preferred_display_locales", vec!["en"])
+            .set_default("oid4vci.preferred_display_locales", vec!["en"])?
+            .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())
     }
 }
 
@@ -165,6 +169,28 @@ mod tests {
         assert_eq!(
             config.redis.uri.expose_secret(),
             "redis://127.0.0.1:6379?protocol=resp3"
+        );
+    }
+
+    #[test]
+    fn test_iaca_root_paths_defaults_to_empty() {
+        let config = Config::load().expect("Failed to load config");
+        assert!(config.oid4vci.iaca_root_paths.is_empty());
+    }
+
+    #[test]
+    fn test_iaca_root_paths_csv_string_override() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert(
+            "oid4vci.iaca_root_paths".to_string(),
+            "/certs/root1.pem,/certs/root2.der".to_string(),
+        );
+
+        let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
+
+        assert_eq!(
+            config.oid4vci.iaca_root_paths,
+            vec!["/certs/root1.pem", "/certs/root2.der"]
         );
     }
 
