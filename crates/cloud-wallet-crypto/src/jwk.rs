@@ -650,6 +650,21 @@ impl std::fmt::Display for Signing {
     }
 }
 
+impl std::fmt::Display for KeyManagement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.serialize(f)
+    }
+}
+
+impl std::fmt::Display for Algorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Signing(s) => s.fmt(f),
+            Self::KeyManagement(km) => km.fmt(f),
+        }
+    }
+}
+
 impl From<Ec> for Key {
     #[inline(always)]
     fn from(key: Ec) -> Self {
@@ -880,6 +895,152 @@ impl From<Curve> for crate::ecdsa::Curve {
             Curve::P521 => crate::ecdsa::Curve::P521,
             Curve::P256K1 => crate::ecdsa::Curve::P256K1,
         }
+    }
+}
+
+/// Converts a JWK EC or OKP public key to an [`crate::ecdh::EcdhPublicKey`].
+///
+/// Supported key types:
+/// - `Key::Ec` with curves P-256, P-384, P-521
+/// - `Key::Okp` with curve X25519
+///
+/// # Errors
+/// [`ErrorKind::UnsupportedAlgorithm`] for unsupported key types or curves.
+/// [`ErrorKind::KeyParsing`] for invalid coordinate lengths or key bytes.
+#[cfg(feature = "jwe")]
+impl TryFrom<&Jwk> for crate::ecdh::EcdhPublicKey {
+    type Error = Error;
+
+    fn try_from(jwk: &Jwk) -> Result<Self> {
+        match &jwk.key {
+            Key::Ec(ec) => {
+                let curve = match ec.crv {
+                    Curve::P256 => crate::ecdh::EcdhCurve::P256,
+                    Curve::P384 => crate::ecdh::EcdhCurve::P384,
+                    Curve::P521 => crate::ecdh::EcdhCurve::P521,
+                    _ => return Err(Error::from(ErrorKind::UnsupportedAlgorithm)),
+                };
+                let coord_size: usize = match curve {
+                    crate::ecdh::EcdhCurve::P256 => 32,
+                    crate::ecdh::EcdhCurve::P384 => 48,
+                    crate::ecdh::EcdhCurve::P521 => 66,
+                    crate::ecdh::EcdhCurve::X25519 => unreachable!(),
+                };
+                if ec.x.len() != coord_size || ec.y.len() != coord_size {
+                    return Err(error_msg(
+                        ErrorKind::KeyParsing,
+                        format!(
+                            "{curve:?} JWK coordinates must be {coord_size} bytes each, \
+                             got x={} y={}",
+                            ec.x.len(),
+                            ec.y.len()
+                        ),
+                    ));
+                }
+                // Reconstruct uncompressed SEC1 point: 04 || x || y
+                let mut point = vec![0x04u8];
+                point.extend_from_slice(&ec.x);
+                point.extend_from_slice(&ec.y);
+                crate::ecdh::EcdhPublicKey::from_bytes(curve, &point)
+            }
+            Key::Okp(okp) if okp.crv == OkpCurve::X25519 => {
+                crate::ecdh::EcdhPublicKey::from_bytes(crate::ecdh::EcdhCurve::X25519, &okp.x)
+            }
+            _ => Err(Error::from(ErrorKind::UnsupportedAlgorithm)),
+        }
+    }
+}
+
+/// Converts a JWK RSA public key to an [`crate::rsa::oaep::EncryptingKey`].
+///
+/// The JWK `n` and `e` fields are encoded as PKCS#1 RSAPublicKey DER via
+/// `simple_asn1`, then wrapped manually in a SubjectPublicKeyInfo (SPKI) envelope
+/// as required by [`crate::rsa::oaep::EncryptingKey::from_spki_der`].
+///
+/// The SPKI wrapper is built byte-by-byte rather than through `simple_asn1::BitString`
+/// because `simple_asn1` 0.6's `BitString` encoding is unreliable with `aws-lc-rs`'s
+/// strict DER parser — the PKCS#1 inner body is already correct from the same
+/// `simple_asn1` path used by `TryFrom<&Jwk> for RsaVerifyingKey`.
+///
+/// # Errors
+/// [`ErrorKind::UnsupportedAlgorithm`] for non-RSA keys.
+/// [`ErrorKind::Serialization`] or [`ErrorKind::KeyParsing`] on DER encoding failure.
+#[cfg(feature = "jwe")]
+impl TryFrom<&Jwk> for crate::rsa::oaep::EncryptingKey {
+    type Error = Error;
+
+    fn try_from(jwk: &Jwk) -> Result<Self> {
+        match &jwk.key {
+            Key::Rsa(rsa_key) => {
+                let n_big = asn1::BigInt::from_bytes_be(Sign::Plus, &rsa_key.n);
+                let e_big = asn1::BigInt::from_bytes_be(Sign::Plus, &rsa_key.e);
+
+                // Build PKCS#1 RSAPublicKey: SEQUENCE { INTEGER n, INTEGER e }
+                // (same code path as TryFrom<&Jwk> for RsaVerifyingKey — known to work)
+                let pkcs1_der = asn1::to_der(&asn1::ASN1Block::Sequence(
+                    0,
+                    vec![
+                        asn1::ASN1Block::Integer(0, n_big),
+                        asn1::ASN1Block::Integer(0, e_big),
+                    ],
+                ))?;
+
+                // Manually wrap the PKCS#1 body in a SubjectPublicKeyInfo (SPKI):
+                //
+                // SEQUENCE {
+                //   SEQUENCE {                                    -- AlgorithmIdentifier
+                //     OID 1.2.840.113549.1.1.1 (rsaEncryption)
+                //     NULL
+                //   }
+                //   BIT STRING { 0x00 || pkcs1_der }             -- subjectPublicKey
+                // }
+                //
+                // The AlgorithmIdentifier for rsaEncryption is fixed 15 bytes.
+                const RSA_ALGO_ID: &[u8] = &[
+                    0x30, 0x0d, // SEQUENCE, 13 bytes
+                    0x06, 0x09, // OID, 9 bytes
+                    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, // 1.2.840.113549.1.1.1
+                    0x05, 0x00, // NULL
+                ];
+
+                // BIT STRING: unused-bits octet (0x00) + pkcs1_der
+                let bit_content_len = 1 + pkcs1_der.len();
+                let mut bit_string = vec![0x03]; // BIT STRING tag
+                bit_string.extend_from_slice(&der_length(bit_content_len));
+                bit_string.push(0x00); // unused bits
+                bit_string.extend_from_slice(&pkcs1_der);
+
+                // Outer SEQUENCE
+                let inner_len = RSA_ALGO_ID.len() + bit_string.len();
+                let mut spki = vec![0x30]; // SEQUENCE tag
+                spki.extend_from_slice(&der_length(inner_len));
+                spki.extend_from_slice(RSA_ALGO_ID);
+                spki.extend_from_slice(&bit_string);
+
+                crate::rsa::oaep::EncryptingKey::from_spki_der(&spki)
+            }
+            _ => Err(Error::from(ErrorKind::UnsupportedAlgorithm)),
+        }
+    }
+}
+
+/// Encode `len` as a DER length field (minimal encoding, as required by DER).
+#[cfg(feature = "jwe")]
+fn der_length(len: usize) -> Vec<u8> {
+    if len < 0x80 {
+        vec![len as u8]
+    } else if len < 0x100 {
+        vec![0x81, len as u8]
+    } else {
+        // RSA public key DER bodies fit in two length bytes (< 65536 bytes).
+        // An RSA-8192 SPKI body is ~1160 bytes; assert here so that a future
+        // key type with a larger DER body fails loudly rather than silently
+        // producing truncated (invalid) DER.
+        assert!(
+            len < 0x10000,
+            "DER body length {len} exceeds two-byte limit; key type is unexpectedly large"
+        );
+        vec![0x82, (len >> 8) as u8, (len & 0xff) as u8]
     }
 }
 

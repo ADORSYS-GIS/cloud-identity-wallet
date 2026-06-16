@@ -1,5 +1,31 @@
 use thiserror::Error;
 
+/// Errors that can occur when building or encrypting a `direct_post.jwt` response.
+///
+/// Covers the build/encrypt layer only. HTTP transport errors use [`DirectPostError`].
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum JarmEncryptError {
+    /// The selected JWK has no `alg` parameter. OID4VP §8.3 requires `alg` in the JWK.
+    #[error("selected JWK has no 'alg' parameter; OID4VP §8.3 requires it")]
+    MissingKeyAlgorithm,
+
+    /// The JWK `alg` value is not a supported JWE key-management algorithm.
+    #[error("JWK 'alg' value '{0}' is not supported for JWE encryption")]
+    UnsupportedAlgorithm(String),
+
+    /// Key material in the JWK is invalid or cannot be loaded.
+    #[error("failed to construct encryption key from JWK: {0}")]
+    KeyConstruction(String),
+
+    /// Serializing the Authorization Response to JSON failed.
+    #[error("failed to serialize authorization response: {0}")]
+    SerializationError(String),
+
+    /// JWE encryption failed.
+    #[error("JWE encryption failed: {0}")]
+    EncryptionFailed(String),
+}
+
 /// Errors that can occur when sending a `direct_post` Authorization Response.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DirectPostError {
@@ -23,4 +49,12 @@ pub enum DirectPostError {
 
     #[error("failed to parse verifier response: {0}")]
     ResponseParseError(String),
+
+    /// Authorization Response encryption failed before any HTTP request was made.
+    ///
+    /// Preserves the structured [`JarmEncryptError`] so callers can distinguish a
+    /// verifier misconfiguration (e.g. [`JarmEncryptError::MissingKeyAlgorithm`])
+    /// from an internal crypto failure (e.g. [`JarmEncryptError::EncryptionFailed`]).
+    #[error("failed to encrypt authorization response: {0}")]
+    EncryptionFailed(#[from] JarmEncryptError),
 }
