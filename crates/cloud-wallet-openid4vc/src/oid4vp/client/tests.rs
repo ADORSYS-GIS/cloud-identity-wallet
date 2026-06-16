@@ -15,7 +15,7 @@ fn test_authorization_request() -> AuthorizationRequest {
             redirect_uri: None,
             scope: None,
             state: Some("test-state".into()),
-            nonce: Some("test-nonce".into()),
+            nonce: None,
             code_challenge: None,
             code_challenge_method: None,
         },
