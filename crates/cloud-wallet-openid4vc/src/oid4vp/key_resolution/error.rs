@@ -2,9 +2,15 @@ use std::borrow::Cow;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RedirectUriKeyError {
-    #[error("failed to fetch verifier metadata")]
+    #[error("client identifier prefix must be redirect_uri, got: {0}")]
+    InvalidClientIdPrefix(String),
+
+    #[error("invalid redirect URI: {0}")]
+    InvalidRedirectUri(String),
+
+    #[error("{message}")]
     MetadataFetchFailed {
-        message: Option<Cow<'static, str>>,
+        message: Cow<'static, str>,
         status: Option<u16>,
         body: Option<String>,
         #[source]
@@ -14,9 +20,9 @@ pub enum RedirectUriKeyError {
     #[error("invalid verifier metadata: {0}")]
     InvalidMetadata(String),
 
-    #[error("failed to fetch JWKS")]
+    #[error("{message}")]
     JwksFetchFailed {
-        message: Option<Cow<'static, str>>,
+        message: Cow<'static, str>,
         status: Option<u16>,
         body: Option<String>,
         #[source]

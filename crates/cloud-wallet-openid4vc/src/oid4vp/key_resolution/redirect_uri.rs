@@ -35,7 +35,7 @@ impl RedirectUriKeyResolver {
             .send()
             .await
             .map_err(|source| RedirectUriKeyError::MetadataFetchFailed {
-                message: Some("failed to fetch verifier metadata".into()),
+                message: "failed to fetch verifier metadata".into(),
                 status: None,
                 body: None,
                 source: Some(Box::new(source)),
@@ -53,10 +53,6 @@ impl RedirectUriKeyResolver {
             RedirectUriKeyError::InvalidMetadata(format!(
                 "failed to parse verifier metadata: {source}"
             ))
-        })?;
-
-        metadata.validate().map_err(|e| {
-            RedirectUriKeyError::InvalidMetadata(format!("metadata validation failed: {e}"))
         })?;
 
         Ok(metadata)
@@ -86,7 +82,7 @@ impl RedirectUriKeyResolver {
             .send()
             .await
             .map_err(|source| RedirectUriKeyError::JwksFetchFailed {
-                message: Some("failed to fetch JWKS".into()),
+                message: "failed to fetch JWKS".into(),
                 status: None,
                 body: None,
                 source: Some(Box::new(source)),
@@ -110,16 +106,15 @@ impl RedirectUriKeyResolver {
             return Err(RedirectUriKeyError::EmptyJwks);
         }
 
-        if let Some(ref kid) = header.kid {
-            jwks.keys
-                .iter()
-                .find(|key| key.prm.kid.as_deref() == Some(kid))
-                .ok_or_else(|| RedirectUriKeyError::KeyNotFound(kid.clone()))
-        } else if jwks.keys.len() == 1 {
-            Ok(&jwks.keys[0])
-        } else {
-            Err(RedirectUriKeyError::MissingKeyId)
-        }
+        let kid = header
+            .kid
+            .as_ref()
+            .ok_or(RedirectUriKeyError::MissingKeyId)?;
+
+        jwks.keys
+            .iter()
+            .find(|key| key.prm.kid.as_deref() == Some(kid))
+            .ok_or_else(|| RedirectUriKeyError::KeyNotFound(kid.clone()))
     }
 }
 
@@ -131,20 +126,17 @@ impl VerifierKeyResolver for RedirectUriKeyResolver {
         header: &Header,
     ) -> crate::errors::Result<DecodingKey> {
         if client_id.prefix() != Some(ClientIdPrefix::RedirectUri) {
-            return Err(Error::message(
+            return Err(Error::new(
                 ErrorKind::InvalidPresentationRequest,
-                format!(
-                    "expected redirect_uri client identifier prefix, got: {:?}",
-                    client_id.prefix()
-                ),
+                RedirectUriKeyError::InvalidClientIdPrefix(format!("{:?}", client_id.prefix())),
             ));
         }
 
         let redirect_uri_str = client_id.value();
         let redirect_uri = Url::parse(redirect_uri_str).map_err(|e| {
-            Error::message(
+            Error::new(
                 ErrorKind::InvalidPresentationRequest,
-                format!("invalid redirect URI: {e}"),
+                RedirectUriKeyError::InvalidRedirectUri(e.to_string()),
             )
         })?;
 
@@ -197,7 +189,7 @@ async fn metadata_error_response(
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
     RedirectUriKeyError::MetadataFetchFailed {
-        message: Some(message.into()),
+        message: message.into(),
         status: Some(status),
         body: Some(body),
         source: None,
@@ -211,7 +203,7 @@ async fn jwks_error_response(
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
     RedirectUriKeyError::JwksFetchFailed {
-        message: Some(message.into()),
+        message: message.into(),
         status: Some(status),
         body: Some(body),
         source: None,
@@ -330,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_single_key_without_kid() {
+    fn rejects_single_key_jwks_without_kid_in_header() {
         let jwks: JwkSet = serde_json::from_value(json!({
             "keys": [{
                 "kty": "EC",
@@ -343,8 +335,11 @@ mod tests {
         .unwrap();
         let header = Header::new(Algorithm::ES256);
 
-        let key = RedirectUriKeyResolver::select_key(&jwks, &header).unwrap();
-        assert_eq!(key.prm.kid.as_deref(), Some("only-key"));
+        let result = RedirectUriKeyResolver::select_key(&jwks, &header);
+        assert!(matches!(
+            result.unwrap_err(),
+            RedirectUriKeyError::MissingKeyId
+        ));
     }
 
     #[tokio::test]
