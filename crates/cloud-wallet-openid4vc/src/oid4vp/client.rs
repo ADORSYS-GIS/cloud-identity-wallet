@@ -134,6 +134,9 @@ impl AuthzResponseSender for DirectPostResponseSender {
             ResponseMode::DcApi | ResponseMode::DcApiJwt => Err(Error::UnsupportedResponseMode(
                 "dc_api response modes are handled by the Digital Credentials API surface",
             )),
+            ResponseMode::Other(_) => {
+                Err(Error::UnsupportedResponseMode("unsupported response mode"))
+            }
         }
     }
 }
@@ -262,7 +265,7 @@ impl Oid4vpClient {
 
         request.validate().map_err(Error::ValidationFailed)?;
 
-        let client_id = ParsedClientId::parse(&request.client_id)?;
+        let client_id = ParsedClientId::parse(&request.oauth.client_id)?;
         let verifier_metadata = match verifier_resolver {
             Some(resolver) => resolver.resolve_metadata(&client_id, &request).await?,
             None => None,
@@ -272,9 +275,9 @@ impl Oid4vpClient {
 
         Ok(PresentationContext {
             nonce: request.nonce.clone(),
-            state: request.state.clone(),
+            state: request.oauth.state.clone(),
             response_uri: request.response_uri.clone(),
-            response_mode: request.response_mode,
+            response_mode: request.response_mode.clone(),
             dcql_query,
             transaction_data,
             verifier_metadata,

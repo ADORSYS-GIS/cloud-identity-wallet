@@ -1,4 +1,5 @@
 use super::*;
+use crate::oauth::authorization::OAuthAuthorizationRequest;
 use crate::oid4vp::authorization::ResponseType;
 use crate::oid4vp::dcql::{CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, encode};
@@ -9,10 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 fn test_authorization_request() -> AuthorizationRequest {
     AuthorizationRequest {
         response_type: ResponseType::VpToken,
-        client_id: "redirect_uri:https://verifier.example.com/cb".into(),
-        redirect_uri: None,
-        scope: None,
-        state: Some("test-state".into()),
+        oauth: OAuthAuthorizationRequest {
+            client_id: "redirect_uri:https://verifier.example.com/cb".into(),
+            redirect_uri: None,
+            scope: None,
+            state: Some("test-state".into()),
+            nonce: Some("test-nonce".into()),
+            code_challenge: None,
+            code_challenge_method: None,
+        },
         nonce: "test-nonce".into(),
         response_mode: ResponseMode::DirectPost,
         response_uri: Some(Url::parse("https://verifier.example.com/response").unwrap()),
@@ -156,13 +162,13 @@ fn presentation_context_credential_queries() {
     let dcql_query = request.dcql_query.clone().unwrap();
     let ctx = PresentationContext {
         nonce: request.nonce.clone(),
-        state: request.state.clone(),
+        state: request.oauth.state.clone(),
         response_uri: request.response_uri.clone(),
-        response_mode: request.response_mode,
+        response_mode: request.response_mode.clone(),
         dcql_query,
         transaction_data: vec![],
         verifier_metadata: None,
-        client_id: ParsedClientId::parse(&request.client_id).unwrap(),
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
         request,
     };
 
@@ -176,13 +182,13 @@ fn presentation_context_has_no_transaction_data() {
     let dcql_query = request.dcql_query.clone().unwrap();
     let ctx = PresentationContext {
         nonce: request.nonce.clone(),
-        state: request.state.clone(),
+        state: request.oauth.state.clone(),
         response_uri: request.response_uri.clone(),
-        response_mode: request.response_mode,
+        response_mode: request.response_mode.clone(),
         dcql_query,
         transaction_data: vec![],
         verifier_metadata: None,
-        client_id: ParsedClientId::parse(&request.client_id).unwrap(),
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
         request,
     };
 
@@ -196,13 +202,13 @@ fn presentation_context_require_response_uri_absent() {
     let dcql_query = request.dcql_query.clone().unwrap();
     let ctx = PresentationContext {
         nonce: request.nonce.clone(),
-        state: request.state.clone(),
+        state: request.oauth.state.clone(),
         response_uri: None,
-        response_mode: request.response_mode,
+        response_mode: request.response_mode.clone(),
         dcql_query,
         transaction_data: vec![],
         verifier_metadata: None,
-        client_id: ParsedClientId::parse(&request.client_id).unwrap(),
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
         request,
     };
 
