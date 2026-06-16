@@ -157,11 +157,7 @@ impl OpenID4VPHandover {
     /// Returns an error if `client_id`, `response_uri`, or `nonce` is empty,
     /// since empty inputs would produce SHA-256 hashes of empty strings —
     /// structurally valid but semantically meaningless.
-    pub fn new(
-        client_id: &str,
-        response_uri: &str,
-        nonce: String,
-    ) -> Result<Self, MdocVpError> {
+    pub fn new(client_id: &str, response_uri: &str, nonce: String) -> Result<Self, MdocVpError> {
         if client_id.trim().is_empty() {
             return Err(MdocVpError::EmptyField { field: "client_id" });
         }
@@ -220,8 +216,7 @@ impl OpenID4VPHandover {
     /// Serialises the structure to CBOR bytes.
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>, MdocVpError> {
         let mut buf = Vec::new();
-        into_writer(&self.to_cbor_value(), &mut buf)
-            .map_err(MdocVpError::CborEncode)?;
+        into_writer(&self.to_cbor_value(), &mut buf).map_err(MdocVpError::CborEncode)?;
         Ok(buf)
     }
 }
@@ -421,10 +416,7 @@ impl std::fmt::Debug for MdocPresentation {
             .field("algorithm", &self.algorithm)
             .field(
                 "device_namespaces",
-                &format!(
-                    "{} namespace(s) redacted",
-                    self.device_namespaces.len()
-                ),
+                &format!("{} namespace(s) redacted", self.device_namespaces.len()),
             )
             .finish_non_exhaustive()
     }
@@ -871,9 +863,12 @@ mod tests {
 
     #[test]
     fn rejects_empty_nonce_in_handover() {
-        let err =
-            OpenID4VPHandover::new("wallet.example", "https://verifier.example/cb", "".to_string())
-                .unwrap_err();
+        let err = OpenID4VPHandover::new(
+            "wallet.example",
+            "https://verifier.example/cb",
+            "".to_string(),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, MdocVpError::EmptyField { field } if field == "nonce"),
             "unexpected error: {err}"
