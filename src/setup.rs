@@ -14,7 +14,7 @@ use crate::utils::load_iaca_roots;
 
 /// Constructs an [`IssuanceEngine`] from configuration.
 ///
-/// Loads IACA roots from [`crate::config::MdocConfig`].  Returns an error if any
+/// Loads IACA roots from [`crate::config::Oid4vciConfig`].  Returns an error if any
 /// configured root path is unreadable or is a PEM file with no certificates.
 /// Logs a `WARN` at startup if no roots are loaded — the resulting store is
 /// fail-closed and all mso_mdoc issuances will be rejected.
