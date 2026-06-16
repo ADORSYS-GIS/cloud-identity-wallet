@@ -23,7 +23,10 @@ impl RedirectUriKeyResolver {
         Self { http_client }
     }
 
-    async fn fetch_metadata(&self, redirect_uri: &Url) -> Result<VerifierMetadata, RedirectUriKeyError> {
+    async fn fetch_metadata(
+        &self,
+        redirect_uri: &Url,
+    ) -> Result<VerifierMetadata, RedirectUriKeyError> {
         let metadata_url = build_metadata_url(redirect_uri)?;
 
         let response = self
@@ -39,15 +42,18 @@ impl RedirectUriKeyResolver {
             })?;
 
         if response.status() != StatusCode::OK {
-            return Err(metadata_error_response(response, "verifier metadata endpoint returned error").await);
+            return Err(metadata_error_response(
+                response,
+                "verifier metadata endpoint returned error",
+            )
+            .await);
         }
 
-        let metadata: VerifierMetadata = response
-            .json()
-            .await
-            .map_err(|source| RedirectUriKeyError::InvalidMetadata(format!(
+        let metadata: VerifierMetadata = response.json().await.map_err(|source| {
+            RedirectUriKeyError::InvalidMetadata(format!(
                 "failed to parse verifier metadata: {source}"
-            )))?;
+            ))
+        })?;
 
         metadata.validate().map_err(|e| {
             RedirectUriKeyError::InvalidMetadata(format!("metadata validation failed: {e}"))
@@ -56,17 +62,19 @@ impl RedirectUriKeyResolver {
         Ok(metadata)
     }
 
-    async fn resolve_jwks(&self, metadata: VerifierMetadata) -> Result<JwkSet, RedirectUriKeyError> {
+    async fn resolve_jwks(
+        &self,
+        metadata: VerifierMetadata,
+    ) -> Result<JwkSet, RedirectUriKeyError> {
         if let Some(jwks) = metadata.client_metadata.jwks {
             return Ok(jwks);
         }
 
-        let jwks_uri = metadata
-            .client_metadata
-            .jwks_uri
-            .ok_or_else(|| RedirectUriKeyError::InvalidMetadata(
+        let jwks_uri = metadata.client_metadata.jwks_uri.ok_or_else(|| {
+            RedirectUriKeyError::InvalidMetadata(
                 "verifier metadata must include either jwks or jwks_uri".to_string(),
-            ))?;
+            )
+        })?;
 
         self.fetch_jwks(&jwks_uri).await
     }
@@ -148,7 +156,8 @@ impl VerifierKeyResolver for RedirectUriKeyResolver {
             .await
             .map_err(|e| Error::new(ErrorKind::InvalidVerifierMetadata, e))?;
 
-        let jwk = Self::select_key(&jwks, header).map_err(|e| Error::new(ErrorKind::InvalidVerifierMetadata, e))?;
+        let jwk = Self::select_key(&jwks, header)
+            .map_err(|e| Error::new(ErrorKind::InvalidVerifierMetadata, e))?;
 
         jwk_to_decoding_key(jwk).map_err(|e| Error::new(ErrorKind::InvalidVerifierMetadata, e))
     }
@@ -157,10 +166,14 @@ impl VerifierKeyResolver for RedirectUriKeyResolver {
 fn jwk_to_decoding_key(jwk: &Jwk) -> Result<DecodingKey, RedirectUriKeyError> {
     let jwt_jwk = serde_json::to_value(jwk)
         .and_then(serde_json::from_value::<JwtJwk>)
-        .map_err(|e| RedirectUriKeyError::KeyConversionFailed(format!("failed to serialize JWK: {e}")))?;
+        .map_err(|e| {
+            RedirectUriKeyError::KeyConversionFailed(format!("failed to serialize JWK: {e}"))
+        })?;
 
     DecodingKey::from_jwk(&jwt_jwk).map_err(|e| {
-        RedirectUriKeyError::KeyConversionFailed(format!("failed to create DecodingKey from JWK: {e}"))
+        RedirectUriKeyError::KeyConversionFailed(format!(
+            "failed to create DecodingKey from JWK: {e}"
+        ))
     })
 }
 
@@ -217,8 +230,8 @@ mod tests {
             "keys": [{
                 "kty": "EC",
                 "crv": "P-256",
-                "x": "WKn-ZIGevcwGIyyrzFoZNBdaq9_TsqzGl96oc0CWuis",
-                "y": "y77t-RvAHRKTsSGdIYUfweuOvwrvDD-Q3Hv5J0fSKbE",
+                "x": "MKBCTTIQ4Ro7WZjfOAfiNONFWEldFflZGdS1bE4R_0A",
+                "y": "bK7XsC9RTVaLo5IT7wW2gA-e6K-XkWyhKyCfLJ7L_Hs",
                 "kid": kid,
                 "alg": "ES256"
             }]
@@ -269,7 +282,10 @@ mod tests {
         let header = Header::new(Algorithm::ES256);
 
         let result = RedirectUriKeyResolver::select_key(&jwks, &header);
-        assert!(matches!(result.unwrap_err(), RedirectUriKeyError::EmptyJwks));
+        assert!(matches!(
+            result.unwrap_err(),
+            RedirectUriKeyError::EmptyJwks
+        ));
     }
 
     #[tokio::test]
@@ -300,13 +316,18 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/.well-known/oauth-authorization-server/callback"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(valid_verifier_metadata_jwks_uri(&jwks_uri)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(valid_verifier_metadata_jwks_uri(&jwks_uri)),
+            )
             .mount(&mock_server)
             .await;
 
         Mock::given(method("GET"))
             .and(path("/jwks.json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_with_kid("remote-key")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(test_jwks_with_kid("remote-key")),
+            )
             .mount(&mock_server)
             .await;
 
