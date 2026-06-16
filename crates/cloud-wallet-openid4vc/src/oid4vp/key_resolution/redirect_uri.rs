@@ -96,9 +96,13 @@ impl RedirectUriKeyResolver {
             return Err(jwks_error_response(response, "JWKS endpoint returned error").await);
         }
 
-        response.json::<JwkSet>().await.map_err(|source| {
+        let jwks = response.json::<JwkSet>().await.map_err(|source| {
             RedirectUriKeyError::JwksParseFailed(format!("failed to parse JWKS response: {source}"))
-        })
+        })?;
+
+        validate_jwks_key_ids(&jwks)?;
+
+        Ok(jwks)
     }
 
     fn select_key<'a>(jwks: &'a JwkSet, header: &Header) -> Result<&'a Jwk, RedirectUriKeyError> {
@@ -114,9 +118,7 @@ impl RedirectUriKeyResolver {
         } else if jwks.keys.len() == 1 {
             Ok(&jwks.keys[0])
         } else {
-            Err(RedirectUriKeyError::KeyNotFound(
-                "kid is required when JWKS has multiple keys".to_string(),
-            ))
+            Err(RedirectUriKeyError::MissingKeyId)
         }
     }
 }
@@ -216,6 +218,15 @@ async fn jwks_error_response(
     }
 }
 
+fn validate_jwks_key_ids(jwks: &JwkSet) -> Result<(), RedirectUriKeyError> {
+    for jwk in &jwks.keys {
+        if jwk.prm.kid.as_deref().is_none_or(str::is_empty) {
+            return Err(RedirectUriKeyError::MissingKeyId);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +297,54 @@ mod tests {
             result.unwrap_err(),
             RedirectUriKeyError::EmptyJwks
         ));
+    }
+
+    #[test]
+    fn rejects_multi_key_jwks_without_kid() {
+        let jwks: JwkSet = serde_json::from_value(json!({
+            "keys": [
+                {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "MKBCTTIQ4Ro7WZjfOAfiNONFWEldFflZGdS1bE4R_0A",
+                    "y": "bK7XsC9RTVaLo5IT7wW2gA-e6K-XkWyhKyCfLJ7L_Hs",
+                    "kid": "key-1"
+                },
+                {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "weNJy2Hsc8l9SrgL-BslWqDg_tOpFCZeuS8YTTRt5Ds",
+                    "y": "auxfJJofHF_trUBo0QnI2TvC8icPqL1FQz2W779v1_I",
+                    "kid": "key-2"
+                }
+            ]
+        }))
+        .unwrap();
+        let header = Header::new(Algorithm::ES256);
+
+        let result = RedirectUriKeyResolver::select_key(&jwks, &header);
+        assert!(matches!(
+            result.unwrap_err(),
+            RedirectUriKeyError::MissingKeyId
+        ));
+    }
+
+    #[test]
+    fn selects_single_key_without_kid() {
+        let jwks: JwkSet = serde_json::from_value(json!({
+            "keys": [{
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "MKBCTTIQ4Ro7WZjfOAfiNONFWEldFflZGdS1bE4R_0A",
+                "y": "bK7XsC9RTVaLo5IT7wW2gA-e6K-XkWyhKyCfLJ7L_Hs",
+                "kid": "only-key"
+            }]
+        }))
+        .unwrap();
+        let header = Header::new(Algorithm::ES256);
+
+        let key = RedirectUriKeyResolver::select_key(&jwks, &header).unwrap();
+        assert_eq!(key.prm.kid.as_deref(), Some("only-key"));
     }
 
     #[tokio::test]
@@ -364,5 +423,116 @@ mod tests {
         let header = Header::new(Algorithm::ES256);
 
         assert!(resolver.resolve_key(&client_id, &header).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_jwks_uri_without_kid() {
+        let mock_server = MockServer::start().await;
+        let redirect_uri = format!("{}/callback", mock_server.uri());
+        let jwks_uri = format!("{}/jwks.json", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server/callback"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(valid_verifier_metadata_jwks_uri(&jwks_uri)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let jwks_without_kid = json!({
+            "keys": [{
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "MKBCTTIQ4Ro7WZjfOAfiNONFWEldFflZGdS1bE4R_0A",
+                "y": "bK7XsC9RTVaLo5IT7wW2gA-e6K-XkWyhKyCfLJ7L_Hs",
+                "alg": "ES256"
+            }]
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/jwks.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jwks_without_kid))
+            .mount(&mock_server)
+            .await;
+
+        let resolver = create_test_resolver();
+        let client_id = ParsedClientId::parse(format!("redirect_uri:{redirect_uri}")).unwrap();
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some("any-key".to_string());
+
+        let result = resolver.resolve_key(&client_id, &header).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_metadata_url_basic() {
+        let redirect_uri = Url::parse("https://example.com/callback").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com/.well-known/oauth-authorization-server/callback"
+        );
+    }
+
+    #[test]
+    fn build_metadata_url_with_path() {
+        let redirect_uri = Url::parse("https://example.com/app/callback").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com/.well-known/oauth-authorization-server/app/callback"
+        );
+    }
+
+    #[test]
+    fn build_metadata_url_root_path() {
+        let redirect_uri = Url::parse("https://example.com/").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com/.well-known/oauth-authorization-server"
+        );
+    }
+
+    #[test]
+    fn build_metadata_url_strips_trailing_slash() {
+        let redirect_uri = Url::parse("https://example.com/callback/").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com/.well-known/oauth-authorization-server/callback"
+        );
+    }
+
+    #[test]
+    fn build_metadata_url_removes_query() {
+        let redirect_uri = Url::parse("https://example.com/callback?state=abc&code=123").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com/.well-known/oauth-authorization-server/callback"
+        );
+    }
+
+    #[test]
+    fn build_metadata_url_removes_fragment() {
+        let redirect_uri = Url::parse("https://example.com/callback#section").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com/.well-known/oauth-authorization-server/callback"
+        );
+    }
+
+    #[test]
+    fn build_metadata_url_complex() {
+        let redirect_uri =
+            Url::parse("https://example.com:8080/path/to/callback?foo=bar#anchor").unwrap();
+        let metadata_url = build_metadata_url(&redirect_uri).unwrap();
+        assert_eq!(
+            metadata_url.as_str(),
+            "https://example.com:8080/.well-known/oauth-authorization-server/path/to/callback"
+        );
     }
 }
