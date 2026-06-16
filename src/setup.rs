@@ -40,7 +40,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let credential_repo = MemoryCredentialRepo::new();
     let preferred_display_locales = config.oid4vci.preferred_display_locales.clone();
 
-    let iaca_roots = load_iaca_roots(&config.mdoc.iaca_root_paths)?;
+    let iaca_roots = load_iaca_roots(&config.oid4vci.iaca_root_paths)?;
     if iaca_roots.is_empty() {
         tracing::warn!(
             "mdoc IACA trust store is empty: all mso_mdoc credential issuances will be rejected"
