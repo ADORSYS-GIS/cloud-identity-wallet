@@ -581,7 +581,13 @@ impl Oid4vciClient {
             for (config_id, identifiers) in resolved {
                 for id in identifiers {
                     let cred_id = CredIdOrCredConfigId::credential_identifier(id);
-                    futures.push(self.request_credential(context, access_token, cred_id, config_id, signer));
+                    futures.push(self.request_credential(
+                        context,
+                        access_token,
+                        cred_id,
+                        config_id,
+                        signer,
+                    ));
                 }
             }
 
@@ -591,29 +597,54 @@ impl Oid4vciClient {
             return Ok(results);
         }
 
-        // Scope-based fallback: `authorization_code_type=none` in a pre-authorized offer means
-        // no tx_code/PIN is required — it does not prevent authorization_details from appearing
-        // in the token response. When the AS is scope-based and omits authorization_details,
-        // identify the credential configuration by reverse-mapping the granted scope value to a
-        // credential_configuration_id via the issuer metadata (OID4VCI §6.2 / RFC 9396 §7).
-        let scope = token.scope.as_deref().ok_or_else(|| ClientError::InvalidResponse {
-            message: "token response has neither authorization_details nor scope — cannot determine credential configuration".into(),
-        })?;
+        // Scope-based fallback (tier 2): `authorization_code_type=none` in a pre-authorized offer
+        // means no tx_code/PIN is required — it does not prevent authorization_details from
+        // appearing in the token response. When the AS is scope-based and omits
+        // authorization_details, identify the credential configuration by reverse-mapping the
+        // granted scope value to a credential_configuration_id via the issuer metadata.
+        if let Some(scope) = token.scope.as_deref() {
+            let config_id = resolve_credential_configuration_id(
+                scope,
+                &context.offer,
+                &context.issuer_metadata,
+            )
+            .ok_or_else(|| ClientError::InvalidResponse {
+                message: format!(
+                    "no credential configuration matching scope '{scope}' found in offer or issuer metadata"
+                )
+                .into(),
+            })?;
 
-        let config_id =
-            resolve_credential_configuration_id(scope, &context.offer, &context.issuer_metadata)
-                .ok_or_else(|| ClientError::InvalidResponse {
-                    message: format!(
-                        "no credential configuration matching scope '{scope}' found in offer or issuer metadata"
-                    )
-                    .into(),
-                })?;
+            let cred_id = CredIdOrCredConfigId::credential_configuration_id(&config_id);
+            let response = self
+                .request_credential(context, access_token, cred_id, &config_id, signer)
+                .await?;
+            return Ok(vec![response]);
+        }
 
-        let cred_id = CredIdOrCredConfigId::credential_configuration_id(&config_id);
-        let response = self
-            .request_credential(context, access_token, cred_id, &config_id, signer)
-            .await?;
-        Ok(vec![response])
+        // Offer-based fallback (tier 3): the token response has neither authorization_details
+        // nor scope. The pre-authorized code already encodes what was authorized on the AS side;
+        // the wallet knows the requested configurations from the original offer. Issue one
+        // credential request per configuration ID using credential_configuration_id directly.
+        let config_ids = &context.offer.credential_configuration_ids;
+        let mut futures = FuturesUnordered::new();
+        let mut results = Vec::with_capacity(config_ids.len());
+
+        for config_id in config_ids {
+            let cred_id = CredIdOrCredConfigId::credential_configuration_id(config_id);
+            futures.push(self.request_credential(
+                context,
+                access_token,
+                cred_id,
+                config_id,
+                signer,
+            ));
+        }
+
+        while let Some(res) = futures.next().await {
+            results.push(res?);
+        }
+        Ok(results)
     }
 
     /// Polls the deferred credential endpoint for a single transaction id.
@@ -895,12 +926,16 @@ impl Oid4vciClient {
             return Err(ClientError::http_response(status.as_u16(), body));
         }
 
-        let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ClientError::http("failed to read credential response body", e))?;
+
+        serde_json::from_str::<CredentialResponse>(&body).map_err(|e| {
             ClientError::InvalidResponse {
-                message: format!("failed to parse credential response: {e}").into(),
+                message: format!("failed to parse credential response: {e}; body: {body}").into(),
             }
-        })?;
-        Ok(credential_response)
+        })
     }
 
     /// Resolve the `c_nonce` to use for proof construction.

@@ -292,13 +292,16 @@ async fn test_issuance_flow() {
 
 #[test]
 fn resolve_credential_configuration_id_finds_match_by_scope() {
-    let offer: CredentialOffer = serde_json::from_str(r#"{
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_configuration_ids": ["tax-id-sd-jwt", "other-credential"]
-    }"#)
+    }"#,
+    )
     .unwrap();
 
-    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(r#"{
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_endpoint": "https://issuer.example.com/credential",
         "credential_configurations_supported": {
@@ -313,7 +316,8 @@ fn resolve_credential_configuration_id_finds_match_by_scope() {
                 "scope": "other-scope"
             }
         }
-    }"#)
+    }"#,
+    )
     .unwrap();
 
     let id = resolve_credential_configuration_id("tax-id-sd-jwt", &offer, &metadata);
@@ -323,13 +327,16 @@ fn resolve_credential_configuration_id_finds_match_by_scope() {
 #[test]
 fn resolve_credential_configuration_id_scope_not_equal_to_config_id() {
     // Verifies the lookup goes through metadata rather than comparing scope to config ID directly
-    let offer: CredentialOffer = serde_json::from_str(r#"{
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_configuration_ids": ["TaxIdCredentialV2"]
-    }"#)
+    }"#,
+    )
     .unwrap();
 
-    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(r#"{
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_endpoint": "https://issuer.example.com/credential",
         "credential_configurations_supported": {
@@ -339,7 +346,8 @@ fn resolve_credential_configuration_id_scope_not_equal_to_config_id() {
                 "scope": "tax_id"
             }
         }
-    }"#)
+    }"#,
+    )
     .unwrap();
 
     let id = resolve_credential_configuration_id("tax_id", &offer, &metadata);
@@ -352,13 +360,16 @@ fn resolve_credential_configuration_id_scope_not_equal_to_config_id() {
 
 #[test]
 fn resolve_credential_configuration_id_returns_none_when_no_match() {
-    let offer: CredentialOffer = serde_json::from_str(r#"{
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_configuration_ids": ["tax-id-sd-jwt"]
-    }"#)
+    }"#,
+    )
     .unwrap();
 
-    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(r#"{
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_endpoint": "https://issuer.example.com/credential",
         "credential_configurations_supported": {
@@ -368,7 +379,8 @@ fn resolve_credential_configuration_id_returns_none_when_no_match() {
                 "scope": "other-scope"
             }
         }
-    }"#)
+    }"#,
+    )
     .unwrap();
 
     let id = resolve_credential_configuration_id("tax-id-sd-jwt", &offer, &metadata);
@@ -378,13 +390,16 @@ fn resolve_credential_configuration_id_returns_none_when_no_match() {
 #[test]
 fn resolve_credential_configuration_id_ignores_configs_not_in_offer() {
     // Even if metadata has a matching scope, configs absent from the offer are not returned
-    let offer: CredentialOffer = serde_json::from_str(r#"{
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_configuration_ids": ["other-credential"]
-    }"#)
+    }"#,
+    )
     .unwrap();
 
-    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(r#"{
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
         "credential_issuer": "https://issuer.example.com",
         "credential_endpoint": "https://issuer.example.com/credential",
         "credential_configurations_supported": {
@@ -399,7 +414,8 @@ fn resolve_credential_configuration_id_ignores_configs_not_in_offer() {
                 "scope": "other-scope"
             }
         }
-    }"#)
+    }"#,
+    )
     .unwrap();
 
     let id = resolve_credential_configuration_id("tax-id-sd-jwt", &offer, &metadata);

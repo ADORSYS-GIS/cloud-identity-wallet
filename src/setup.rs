@@ -10,7 +10,7 @@ use crate::outbound::{
     MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
 };
 use crate::session::SessionStore;
-use crate::utils::load_iaca_roots;
+use crate::utils::{load_iaca_roots, load_x5c_trust_anchors};
 
 /// Constructs an [`IssuanceEngine`] from configuration.
 ///
@@ -57,7 +57,10 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         session_store,
         preferred_display_locales,
     )
-    .with_iaca_trust_store(StaticTrustStore::new(iaca_roots));
+    .with_iaca_trust_store(StaticTrustStore::new(iaca_roots))
+    .with_x5c_trust_anchors(load_x5c_trust_anchors(
+        &config.oid4vci.x5c_trust_anchor_paths,
+    )?);
     Ok(engine)
 }
 

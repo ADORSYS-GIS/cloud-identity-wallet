@@ -31,7 +31,7 @@ use cloud_wallet_openid4vc::oid4vci::credential::{
 use cloud_wallet_openid4vc::oid4vci::notification::{NotificationEvent, NotificationRequest};
 use cloud_wallet_openid4vc::oid4vci::token::TokenResponse;
 use jsonwebtoken::Algorithm as JwtAlgorithm;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rustls_pki_types::TrustAnchor;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
@@ -76,8 +76,8 @@ pub struct IssuanceEngine {
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     worker_notify: Arc<Notify>,
     preferred_display_locales: Arc<Vec<String>>,
-    x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
-    iaca_trust_store: Arc<dyn IacaTrustStore>,
+    x5c_trust_anchors: Arc<RwLock<Arc<Vec<TrustAnchor<'static>>>>>,
+    iaca_trust_store: Arc<RwLock<Arc<dyn IacaTrustStore>>>,
 }
 
 impl Clone for IssuanceEngine {
@@ -191,10 +191,10 @@ impl IssuanceEngine {
             workers: Arc::default(),
             worker_notify: Arc::new(Notify::new()),
             preferred_display_locales: Arc::new(preferred_display_locales),
-            x5c_trust_anchors: Arc::default(),
+            x5c_trust_anchors: Arc::new(RwLock::new(Arc::new(vec![]))),
             // Fail-closed default: no mdoc credentials are accepted until IACA roots
             // are configured via `with_iaca_trust_store`.
-            iaca_trust_store: Arc::new(StaticTrustStore::new(vec![])),
+            iaca_trust_store: Arc::new(RwLock::new(Arc::new(StaticTrustStore::new(vec![])))),
         };
 
         engine.start_worker_count(session_store.clone(), worker_count)
@@ -203,8 +203,8 @@ impl IssuanceEngine {
     /// Configure custom x5c trust anchors for SD-JWT VC issuer signature verification.
     ///
     /// When no custom anchors are configured, Mozilla WebPKI roots are used.
-    pub fn with_x5c_trust_anchors(mut self, trust_anchors: Vec<TrustAnchor<'static>>) -> Self {
-        self.x5c_trust_anchors = Arc::new(trust_anchors);
+    pub fn with_x5c_trust_anchors(self, trust_anchors: Vec<TrustAnchor<'static>>) -> Self {
+        *self.x5c_trust_anchors.write() = Arc::new(trust_anchors);
         self
     }
 
@@ -212,13 +212,13 @@ impl IssuanceEngine {
     ///
     /// The default (fail-closed) store rejects all mdoc credentials. Supply the IACA root
     /// DER certificates for each issuing authority whose credentials this wallet should accept.
-    pub fn with_iaca_trust_store(mut self, store: impl IacaTrustStore + 'static) -> Self {
-        self.iaca_trust_store = Arc::new(store);
+    pub fn with_iaca_trust_store(self, store: impl IacaTrustStore + 'static) -> Self {
+        *self.iaca_trust_store.write() = Arc::new(store);
         self
     }
 
-    fn iaca_trust_store(&self) -> &dyn IacaTrustStore {
-        self.iaca_trust_store.as_ref()
+    fn iaca_trust_store(&self) -> Arc<dyn IacaTrustStore> {
+        Arc::clone(&*self.iaca_trust_store.read())
     }
 
     /// Return the number of worker currently attached to this engine.
@@ -633,7 +633,7 @@ impl IssuanceEngine {
     }
 
     /// Store a raw credential string and its associated display metadata.
-    #[instrument(skip(self, raw_credential, display_metadata))]
+    #[instrument(skip(self, context, raw_credential, display_metadata))]
     async fn store_credential(
         &self,
         tenant_id: Uuid,
@@ -680,8 +680,14 @@ impl IssuanceEngine {
                 let sd_jwt = SdJwt::parse(&raw_credential)?;
                 sd_jwt.to_disclosed_payload()?;
 
+                let anchors = self.x5c_trust_anchors_arc();
+                let trust_anchors = if anchors.is_empty() {
+                    X5cTrustAnchors::default()
+                } else {
+                    X5cTrustAnchors::Custom(anchors.as_slice())
+                };
                 let algorithm = sd_jwt
-                    .verify_signature(self.client.http_client(), self.x5c_trust_anchors())
+                    .verify_signature(self.client.http_client(), trust_anchors)
                     .await?;
                 validate_credential_signing_alg(config, algorithm)?;
 
@@ -714,10 +720,11 @@ impl IssuanceEngine {
                 let now = receipt_time.to_offset(time::UtcOffset::UTC);
                 // Note: RSA-keyed tenants are incompatible with ISO 18013-5 device key
                 // binding (EC/OKP only); they will receive an UnsupportedKeyType error.
+                let trust_store = self.iaca_trust_store();
                 let issuer_info = verify_mdoc_for_issuance(
                     &parsed,
                     &mdoc_config.doctype,
-                    self.iaca_trust_store(),
+                    trust_store.as_ref(),
                     signer.holder_binding_public_jwk(),
                     now,
                 )?;
@@ -737,12 +744,8 @@ impl IssuanceEngine {
         }
     }
 
-    fn x5c_trust_anchors(&self) -> X5cTrustAnchors<'_> {
-        if self.x5c_trust_anchors.is_empty() {
-            X5cTrustAnchors::default()
-        } else {
-            X5cTrustAnchors::Custom(self.x5c_trust_anchors.as_slice())
-        }
+    fn x5c_trust_anchors_arc(&self) -> Arc<Vec<TrustAnchor<'static>>> {
+        Arc::clone(&*self.x5c_trust_anchors.read())
     }
 
     /// Emit a processing SSE event (best-effort, non-fatal on failure).

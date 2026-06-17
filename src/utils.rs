@@ -1,6 +1,5 @@
 use color_eyre::eyre::{WrapErr as _, eyre};
-use rustls_pki_types::CertificateDer;
-use rustls_pki_types::pem::PemObject as _;
+use rustls_pki_types::{CertificateDer, TrustAnchor, pem::PemObject as _};
 use std::borrow::Cow;
 use std::fmt::Write;
 use std::sync::OnceLock;
@@ -146,6 +145,60 @@ pub(crate) fn load_iaca_roots(paths: &[String]) -> color_eyre::Result<Vec<Vec<u8
         }
     }
     Ok(roots)
+}
+
+/// Loads extra x5c trust anchors from the given file paths and combines them with
+/// Mozilla's public WebPKI root certificate set.
+///
+/// Each path may point to either a DER-encoded certificate or a PEM file.  The
+/// Mozilla roots are always included so that public-CA-signed SD-JWT issuers
+/// continue to be trusted alongside any private/test CA anchors you add.
+///
+/// # Errors
+///
+/// Returns an error if any path cannot be read, or if a certificate cannot be
+/// parsed as a valid trust anchor.
+pub(crate) fn load_x5c_trust_anchors(
+    paths: &[String],
+) -> color_eyre::Result<Vec<TrustAnchor<'static>>> {
+    let mut anchors: Vec<TrustAnchor<'static>> = webpki_roots::TLS_SERVER_ROOTS.to_vec();
+
+    for path in paths {
+        let bytes = std::fs::read(path)
+            .wrap_err_with(|| format!("failed to read x5c trust anchor file '{path}'"))?;
+
+        let ders: Vec<Vec<u8>> = if bytes.starts_with(b"-----BEGIN") {
+            let mut certs = Vec::new();
+            for cert in CertificateDer::pem_slice_iter(&bytes) {
+                let cert = cert
+                    .wrap_err_with(|| format!("malformed PEM in x5c trust anchor file '{path}'"))?;
+                certs.push(cert.as_ref().to_vec());
+            }
+            if certs.is_empty() {
+                return Err(eyre!(
+                    "x5c trust anchor file '{path}' is PEM-formatted but contains no certificates"
+                ));
+            }
+            certs
+        } else {
+            vec![bytes]
+        };
+
+        for der in ders {
+            // Leak both the DER bytes and the CertificateDer wrapper so that both
+            // the reference and the inner data carry 'static lifetime — required by
+            // anchor_from_trusted_cert<'a>(&'a CertificateDer<'a>) -> TrustAnchor<'a>.
+            // Trust anchors are loaded once at startup and live for the process lifetime.
+            let static_bytes: &'static [u8] = Box::leak(der.into_boxed_slice());
+            let cert_der = CertificateDer::from(static_bytes);
+            let static_cert: &'static CertificateDer<'static> = Box::leak(Box::new(cert_der));
+            let anchor = webpki::anchor_from_trusted_cert(static_cert)
+                .wrap_err_with(|| format!("failed to create trust anchor from cert in '{path}'"))?;
+            anchors.push(anchor);
+        }
+    }
+
+    Ok(anchors)
 }
 
 #[cfg(test)]

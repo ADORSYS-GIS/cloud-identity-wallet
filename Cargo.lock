@@ -971,6 +971,7 @@ dependencies = [
  "color-eyre",
  "config",
  "dashmap",
+ "dotenvy",
  "futures",
  "jsonwebtoken",
  "parking_lot",
@@ -998,6 +999,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -1073,6 +1075,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tracing",
  "url",
  "validator",
  "webpki-roots",
