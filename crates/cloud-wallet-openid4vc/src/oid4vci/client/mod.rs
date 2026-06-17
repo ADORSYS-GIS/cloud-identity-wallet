@@ -5,6 +5,7 @@ mod tests;
 
 // Public Re-exports
 pub use error::ClientError;
+pub use crate::oid4vci::dpop::{DpopKeyPair, DpopNonceHandler, DpopError, build_dpop_proof, compute_ath, htu_from_url};
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 pub use signer::{
@@ -418,12 +419,21 @@ impl Oid4vciClient {
     }
 
     /// Exchange an authorization code for an access token (authorization code flow).
+    ///
+    /// If `dpop_key` is provided, a DPoP proof JWT is attached to the token request
+    /// per RFC 9449. The same key must be reused for subsequent credential requests
+    /// if the token response indicates `token_type=DPoP`.
+    ///
+    /// If the server responds with a DPoP nonce error, this method automatically
+    /// retries once with the nonce from the `DPoP-Nonce` response header.
     pub async fn exchange_authorization_code(
         &self,
         context: &ResolvedOfferContext,
         code: impl Into<String>,
         pkce_verifier: impl Into<String>,
         credential_config_ids: &[String],
+        dpop_key: Option<&DpopKeyPair>,
+        dpop_nonce: Option<&str>,
     ) -> Result<TokenResponse> {
         // Verify this is an authorization code flow
         if !matches!(context.flow, IssuanceFlow::AuthorizationCode { .. }) {
@@ -447,17 +457,27 @@ impl Oid4vciClient {
             code_verifier: Some(pkce_verifier.into()),
             authorization_details: Some(authz_details),
         });
-        self.post_token_request(token_endpoint, &request).await
+        let htu = htu_from_url(token_endpoint);
+        let dpop_proof = dpop_key
+            .map(|key| build_dpop_proof(key, "POST", &htu, dpop_nonce, None))
+            .transpose()?;
+        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop_key, &htu)
+            .await
     }
 
     /// Exchange a pre-authorized code for an access token.
     /// `tx_code` is included when the issuer requires one (OID4VCI §6.1).
+    ///
+    /// If `dpop_key` is provided, a DPoP proof JWT is attached to the token request
+    /// per RFC 9449.
     pub async fn exchange_pre_authorized_code(
         &self,
         context: &ResolvedOfferContext,
         pre_authorized_code: impl Into<String>,
         tx_code: Option<impl Into<String>>,
         credential_config_ids: &[String],
+        dpop_key: Option<&DpopKeyPair>,
+        dpop_nonce: Option<&str>,
     ) -> Result<TokenResponse> {
         // Verify this is a pre-authorized code flow
         if !matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. }) {
@@ -487,7 +507,12 @@ impl Oid4vciClient {
             tx_code: tx_code.map(|t| t.into()),
             authorization_details: Some(authz_details),
         });
-        self.post_token_request(token_endpoint, &request).await
+        let htu = htu_from_url(token_endpoint);
+        let dpop_proof = dpop_key
+            .map(|key| build_dpop_proof(key, "POST", &htu, dpop_nonce, None))
+            .transpose()?;
+        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop_key, &htu)
+            .await
     }
 
     /// Fetch a fresh `c_nonce` from the issuer's nonce endpoint.
@@ -523,6 +548,11 @@ impl Oid4vciClient {
     ///
     /// Optionally builds the holder-binding proof using `signer`,
     /// submits the credential request.
+    ///
+    /// If `dpop_key` is provided and the access token was DPoP-bound
+    /// (`token_type=DPoP`), a fresh DPoP proof with `ath` (SHA-256 of
+    /// the access token) is attached to the credential request per RFC 9449.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_credential<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
@@ -530,6 +560,8 @@ impl Oid4vciClient {
         credential_identifier: impl Into<String>,
         credential_config_id: &str,
         signer: &S,
+        dpop_key: Option<&DpopKeyPair>,
+        dpop_nonce: Option<&str>,
     ) -> Result<CredentialResponse> {
         let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
@@ -551,7 +583,7 @@ impl Oid4vciClient {
             request = request.with_proofs(p);
         }
 
-        self.post_credential_request(context, access_token, &request)
+        self.post_credential_request(context, access_token, &request, dpop_key, dpop_nonce)
             .await
     }
 
@@ -564,6 +596,8 @@ impl Oid4vciClient {
         context: &ResolvedOfferContext,
         token: &TokenResponse,
         signer: &S,
+        dpop_key: Option<&DpopKeyPair>,
+        dpop_nonce: Option<&str>,
     ) -> Result<Vec<CredentialResponse>> {
         let resolved = resolve_credential_ids(token)?;
         let token = &token.access_token;
@@ -573,7 +607,7 @@ impl Oid4vciClient {
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer));
+                futures.push(self.request_credential(context, token, id, config_id, signer, dpop_key, dpop_nonce));
             }
         }
 
@@ -772,39 +806,72 @@ impl Oid4vciClient {
         &self,
         token_endpoint: &Url,
         request: &T,
+        dpop_proof: Option<&str>,
+        dpop_key: Option<&DpopKeyPair>,
+        htu: &str,
     ) -> Result<TokenResponse> {
+        let response = self
+            .send_token_request(token_endpoint, request, dpop_proof)
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
+            let body = response.text().await.unwrap_or_default();
+
+            if DpopNonceHandler::is_use_nonce_error(status, &body)
+                && let (Some(key), Some(nonce_str)) = (dpop_key, DpopNonceHandler::extract_nonce_from_response(&headers))
+            {
+                let retry_proof = build_dpop_proof(key, "POST", htu, Some(&nonce_str), None)?;
+                let retry_response = self
+                    .send_token_request(token_endpoint, request, Some(&retry_proof))
+                    .await?;
+                return self.parse_token_response(retry_response).await;
+            }
+
+            if let Ok(error) = serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&body) {
+                return Err(ClientError::Token(error));
+            }
+            return Err(ClientError::http_response(status, body));
+        }
+
+        self.parse_token_response(response).await
+    }
+
+    async fn send_token_request<T: serde::Serialize>(
+        &self,
+        token_endpoint: &Url,
+        request: &T,
+        dpop_proof: Option<&str>,
+    ) -> Result<reqwest::Response> {
         let body = serde_urlencoded::to_string(request).map_err(|e| {
             ClientError::internal(format!("Failed to serialize token request: {e}"))
         })?;
 
-        let response = self
+        let mut http_request = self
             .inner_client
             .http_client()
             .post(token_endpoint.as_str())
             .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| ClientError::http("token request failed", e))?;
+            .body(body);
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            // Try to parse as OAuth error response
-            if let Ok(error) = serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&body) {
-                return Err(ClientError::Token(error));
-            }
-            return Err(ClientError::http_response(status.as_u16(), body));
+        if let Some(proof) = dpop_proof {
+            http_request = http_request.header("DPoP", proof);
         }
 
-        // Parse successful response
-        let token_response = response
+        http_request
+            .send()
+            .await
+            .map_err(|e| ClientError::http("token request failed", e))
+    }
+
+    async fn parse_token_response(&self, response: reqwest::Response) -> Result<TokenResponse> {
+        response
             .json()
             .await
             .map_err(|e| ClientError::InvalidResponse {
                 message: format!("failed to parse token response: {e}").into(),
-            })?;
-        Ok(token_response)
+            })
     }
 
     async fn build_proofs<S: ProofSigner>(
@@ -836,30 +903,75 @@ impl Oid4vciClient {
         Ok(Some(Proofs::jwt([jwt])))
     }
 
-    async fn post_credential_request(
+async fn post_credential_request(
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
         request: &CredentialRequest,
+        dpop_key: Option<&DpopKeyPair>,
+        dpop_nonce: Option<&str>,
     ) -> Result<CredentialResponse> {
-        let response = self
+        let credential_endpoint = &context.issuer_metadata.credential_endpoint;
+        let htu = htu_from_url(credential_endpoint);
+        let ath = dpop_key.map(|_| compute_ath(access_token));
+
+        let mut http_request = self
             .inner_client
             .http_client()
-            .post(context.issuer_metadata.credential_endpoint.as_str())
+            .post(credential_endpoint.as_str())
             .bearer_auth(access_token)
-            .json(request)
+            .json(request);
+
+        if let Some(key) = dpop_key {
+            let proof = build_dpop_proof(key, "POST", &htu, dpop_nonce, ath.as_deref())?;
+            http_request = http_request.header("DPoP", proof);
+        }
+
+        let response = http_request
             .send()
             .await
             .map_err(|e| ClientError::http("credential request failed", e))?;
 
         if !response.status().is_success() {
-            let status = response.status();
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
             let body = response.text().await.unwrap_or_default();
-            if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body)
+
+            if DpopNonceHandler::is_use_nonce_error(status, &body)
+                && let (Some(key), Some(nonce_str)) = (dpop_key, DpopNonceHandler::extract_nonce_from_response(&headers))
             {
+                let retry_proof = build_dpop_proof(key, "POST", &htu, Some(&nonce_str), ath.as_deref())?;
+                let retry_response = self
+                    .inner_client
+                    .http_client()
+                    .post(credential_endpoint.as_str())
+                    .bearer_auth(access_token)
+                    .json(request)
+                    .header("DPoP", retry_proof)
+                    .send()
+                    .await
+                    .map_err(|e| ClientError::http("credential request retry failed", e))?;
+                if !retry_response.status().is_success() {
+                    let retry_status = retry_response.status();
+                    let retry_body = retry_response.text().await.unwrap_or_default();
+                    if let Ok(error) =
+                        serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&retry_body)
+                    {
+                        return Err(ClientError::Credential(error));
+                    }
+                    return Err(ClientError::http_response(retry_status.as_u16(), retry_body));
+                }
+                return retry_response.json::<CredentialResponse>().await.map_err(|e| {
+                    ClientError::InvalidResponse {
+                        message: format!("failed to parse credential response: {e}").into(),
+                    }
+                });
+            }
+
+            if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body) {
                 return Err(ClientError::Credential(error));
             }
-            return Err(ClientError::http_response(status.as_u16(), body));
+            return Err(ClientError::http_response(status, body));
         }
 
         let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {
@@ -867,7 +979,7 @@ impl Oid4vciClient {
                 message: format!("failed to parse credential response: {e}").into(),
             }
         })?;
-        Ok(credential_response)
+Ok(credential_response)
     }
 
     /// Resolve the `c_nonce` to use for proof construction.

@@ -255,6 +255,8 @@ async fn test_issuance_flow() {
             "test_code_abc",
             None::<String>,
             &["UniversityDegreeCredential".to_string()],
+            None,
+            None,
         )
         .await
         .expect("Failed to exchange token");
@@ -274,7 +276,7 @@ async fn test_issuance_flow() {
         .await;
 
     let credentials = client
-        .request_credentials(&context, &token, &signer)
+        .request_credentials(&context, &token, &signer, None, None)
         .await
         .expect("Failed to request credentials");
 
