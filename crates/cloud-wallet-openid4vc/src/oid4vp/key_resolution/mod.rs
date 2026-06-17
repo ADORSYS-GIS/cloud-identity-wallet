@@ -5,4 +5,5 @@
 //! - `x509_*`: Key resolution via X.509 certificates
 
 pub mod redirect_uri;
+pub mod verifier_attestation;
 pub mod x509;
