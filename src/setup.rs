@@ -14,10 +14,9 @@ use crate::utils::{load_iaca_roots, load_x5c_trust_anchors};
 
 /// Constructs an [`IssuanceEngine`] from configuration.
 ///
-/// Loads IACA roots from [`crate::config::Oid4vciConfig`].  Returns an error if any
-/// configured root path is unreadable or is a PEM file with no certificates.
-/// Logs a `WARN` at startup if no roots are loaded — the resulting store is
-/// fail-closed and all mso_mdoc issuances will be rejected.
+/// Returns an error if any configured root path is unreadable or is a PEM file with no
+/// certificates.  Logs a `WARN` for each trust representation that is empty at startup
+/// so operators catch misconfiguration before the first credential request arrives.
 pub fn build_issuance_engine<S: SessionStore + Clone>(
     config: &Config,
     tenant_repo: impl TenantRepo,
@@ -40,10 +39,21 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let credential_repo = MemoryCredentialRepo::new();
     let preferred_display_locales = config.oid4vci.preferred_display_locales.clone();
 
+    // Load all trust material upfront so the startup audit is one contiguous block.
     let iaca_roots = load_iaca_roots(&config.oid4vci.iaca_root_paths)?;
+    let x5c_anchors = load_x5c_trust_anchors(&config.oid4vci.x5c_trust_anchor_paths)?;
+
+    // Startup audit — warn on every empty trust representation so operators catch
+    // misconfiguration before the first credential request arrives.
     if iaca_roots.is_empty() {
         tracing::warn!(
             "mdoc IACA trust store is empty: all mso_mdoc credential issuances will be rejected"
+        );
+    }
+    if config.oid4vci.x5c_trust_anchor_paths.is_empty() {
+        tracing::warn!(
+            "no custom x5c trust anchor paths configured: \
+             SD-JWT VC x5c validation will use Mozilla WebPKI roots only"
         );
     }
 
@@ -58,9 +68,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         preferred_display_locales,
     )
     .with_iaca_trust_store(StaticTrustStore::new(iaca_roots))
-    .with_x5c_trust_anchors(load_x5c_trust_anchors(
-        &config.oid4vci.x5c_trust_anchor_paths,
-    )?);
+    .with_x5c_trust_anchors(x5c_anchors);
     Ok(engine)
 }
 
