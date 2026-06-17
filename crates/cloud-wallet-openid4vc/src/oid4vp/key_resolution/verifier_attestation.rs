@@ -13,9 +13,9 @@ pub struct VerifierAttestationKey {
     trusted_issuers: Vec<TrustedAttestationIssuer>,
 
     /// The URI to validate against the attestation's `redirect_uris` allowlist.
-    /// Each resolver instance is bound to a single request's response_uri/redirect_uri.
-    /// If the trait ever gains a request-context parameter, this field should move
-    /// to the method signature instead.
+    /// This can be either the request's `redirect_uri` or `response_uri` parameter
+    /// (mutually exclusive per OpenID4VP). Per §5.9.3, if the attestation contains
+    /// `redirect_uris`, the Wallet MUST ensure the URI exactly matches an entry.
     expected_uri: String,
 }
 
@@ -81,15 +81,9 @@ impl VerifierKeyResolver for VerifierAttestationKey {
         .map_err(|e| Error::new(ErrorKind::InvalidPresentationRequest, e))?;
 
         // Validate redirect_uris allowlist against the expected URI
-        // Per OpenID4VP §12, the attestation contains an allowlist of redirect_uris
-        // that the verifier is authorized to use. A missing allowlist means no URIs
-        // are allowed, not that all URIs are allowed.
-        if attestation.allowed_redirect_uris().is_none() {
-            return Err(Error::message(
-                ErrorKind::InvalidPresentationRequest,
-                "verifier attestation must include redirect_uris to authorize a response_uri",
-            ));
-        }
+        // Per OpenID4VP §5.9.3, the `redirect_uris` claim is OPTIONAL. If present,
+        // the Wallet MUST ensure the request's redirect_uri/response_uri exactly
+        // matches an entry in the allowlist. If absent, no validation is required.
         attestation
             .validate_redirect_uri(&self.expected_uri)
             .map_err(|e| Error::new(ErrorKind::InvalidPresentationRequest, e))?;
@@ -407,7 +401,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_redirect_uris_rejected() {
+    async fn missing_redirect_uris_accepted() {
+        // Per OpenID4VP §5.9.3, redirect_uris is OPTIONAL. If absent, no validation is required.
         let keys = TestKeys::generate();
         let trusted_issuers = vec![create_trusted_issuer(&keys)];
 
@@ -420,12 +415,10 @@ mod tests {
 
         let result = resolver.resolve_key(&client_id, &header).await;
 
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("redirect_uris") || err.contains("response_uri"),
-            "Expected missing redirect_uris error, got: {}",
-            err
+            result.is_ok(),
+            "Expected success when redirect_uris is absent (optional per spec), got: {:?}",
+            result.err()
         );
     }
 
