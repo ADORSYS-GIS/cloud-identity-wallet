@@ -477,8 +477,11 @@ impl Oid4vciClient {
             Some(self.inner_client.config().client_id.clone())
         };
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
+        // Include authorization_details per §6.2 so the AS can return credential_identifiers.
+        // Note: `authorization_code_type=none` in the offer signals only that no tx_code/PIN is
+        // required — it does not prevent the AS from returning authorization_details. If the AS
+        // uses scope-based issuance and omits authorization_details from the response,
+        // request_credentials falls back to scope-based credential resolution.
         let authz_details = build_authorization_details(context, credential_config_ids)?;
 
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
@@ -527,7 +530,7 @@ impl Oid4vciClient {
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
-        credential_identifier: impl Into<String>,
+        cred_id: CredIdOrCredConfigId,
         credential_config_id: &str,
         signer: &S,
     ) -> Result<CredentialResponse> {
@@ -545,8 +548,7 @@ impl Oid4vciClient {
             )
             .await?;
 
-        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
-        let mut request = CredentialRequest::new(id);
+        let mut request = CredentialRequest::new(cred_id);
         if let Some(p) = proofs {
             request = request.with_proofs(p);
         }
@@ -557,6 +559,8 @@ impl Oid4vciClient {
 
     /// Request all credentials authorized by the token response.
     ///
+    /// Supports both the `authorization_details` flow (§7.1) and a scope-based fallback
+    /// for issuers that omit `authorization_details` from the token response.
     /// The caller is responsible for handling individual failures (e.g. deferred
     /// issuance on some credentials while others succeed).
     pub async fn request_credentials<S: ProofSigner>(
@@ -565,22 +569,51 @@ impl Oid4vciClient {
         token: &TokenResponse,
         signer: &S,
     ) -> Result<Vec<CredentialResponse>> {
-        let resolved = resolve_credential_ids(token)?;
-        let token = &token.access_token;
-        let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
-        let mut results = Vec::with_capacity(total);
-        let mut futures = FuturesUnordered::new();
+        let access_token = &token.access_token;
 
-        for (config_id, identifiers) in resolved {
-            for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer));
+        if token.authorization_details.is_some() {
+            // authorization_details flow: credential_identifiers are returned in the token response (§7.1)
+            let resolved = resolve_credential_ids(token)?;
+            let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
+            let mut results = Vec::with_capacity(total);
+            let mut futures = FuturesUnordered::new();
+
+            for (config_id, identifiers) in resolved {
+                for id in identifiers {
+                    let cred_id = CredIdOrCredConfigId::credential_identifier(id);
+                    futures.push(self.request_credential(context, access_token, cred_id, config_id, signer));
+                }
             }
+
+            while let Some(res) = futures.next().await {
+                results.push(res?);
+            }
+            return Ok(results);
         }
 
-        while let Some(res) = futures.next().await {
-            results.push(res?);
-        }
-        Ok(results)
+        // Scope-based fallback: `authorization_code_type=none` in a pre-authorized offer means
+        // no tx_code/PIN is required — it does not prevent authorization_details from appearing
+        // in the token response. When the AS is scope-based and omits authorization_details,
+        // identify the credential configuration by reverse-mapping the granted scope value to a
+        // credential_configuration_id via the issuer metadata (OID4VCI §6.2 / RFC 9396 §7).
+        let scope = token.scope.as_deref().ok_or_else(|| ClientError::InvalidResponse {
+            message: "token response has neither authorization_details nor scope — cannot determine credential configuration".into(),
+        })?;
+
+        let config_id =
+            resolve_credential_configuration_id(scope, &context.offer, &context.issuer_metadata)
+                .ok_or_else(|| ClientError::InvalidResponse {
+                    message: format!(
+                        "no credential configuration matching scope '{scope}' found in offer or issuer metadata"
+                    )
+                    .into(),
+                })?;
+
+        let cred_id = CredIdOrCredConfigId::credential_configuration_id(&config_id);
+        let response = self
+            .request_credential(context, access_token, cred_id, &config_id, signer)
+            .await?;
+        Ok(vec![response])
     }
 
     /// Polls the deferred credential endpoint for a single transaction id.
@@ -1074,6 +1107,31 @@ pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[Stri
         });
     }
     Ok(result)
+}
+
+/// Reverse-maps a granted scope value to a `credential_configuration_id`.
+///
+/// Searches the offer's `credential_configuration_ids` for one whose entry in
+/// `issuer_metadata.credential_configurations_supported` declares a matching `scope` field.
+/// The scope value and the configuration ID are not required to be identical strings — the
+/// issuer assigns them independently. Returns the first match, or `None` if no configuration
+/// in the offer declares that scope.
+fn resolve_credential_configuration_id(
+    scope: &str,
+    offer: &CredentialOffer,
+    issuer_metadata: &CredentialIssuerMetadata,
+) -> Option<String> {
+    offer
+        .credential_configuration_ids
+        .iter()
+        .find(|id| {
+            issuer_metadata
+                .credential_configurations_supported
+                .get(*id)
+                .and_then(|config| config.scope.as_deref())
+                == Some(scope)
+        })
+        .cloned()
 }
 
 /// Build the minimal PAR redirect URL.
