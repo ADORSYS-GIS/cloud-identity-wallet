@@ -4,3 +4,4 @@
 //! client identifier prefix types as defined in OpenID4VP Section 5.9.
 
 pub mod verifier_attestation;
+pub mod x509;
