@@ -314,9 +314,10 @@ pub struct CredentialOfferUri {
 impl CredentialOfferUri {
     /// Parses a credential offer from a full offer link URI.
     ///
-    /// Accepts either:
-    /// - A full URI like `openid-credential-offer://?credential_offer=...`
-    /// - A query string like `credential_offer=...` (will prepend the scheme)
+    /// Accepts:
+    /// - `openid-credential-offer://?credential_offer=...` (OpenID4VCI standard)
+    /// - `haip-vci://?credential_offer=...` (HAIP §4.2 alternative)
+    /// - A query string like `credential_offer=...` (will prepend the OpenID scheme)
     ///
     /// # Mutual Exclusivity
     ///
@@ -331,11 +332,17 @@ impl CredentialOfferUri {
     /// - The URI is malformed
     /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
-        // Prepend scheme if not already present
-        let parsed_url = if link.contains("://") {
-            Url::parse(link)
+        let normalized_link = if link.to_lowercase().starts_with("haip-vci://") {
+            link.replacen("haip-vci://", "openid-credential-offer://", 1)
         } else {
-            Url::parse(&format!("openid-credential-offer://?{link}"))
+            link.to_string()
+        };
+
+        // Prepend scheme if not already present
+        let parsed_url = if normalized_link.contains("://") {
+            Url::parse(&normalized_link)
+        } else {
+            Url::parse(&format!("openid-credential-offer://?{normalized_link}"))
         }
         .map_err(|e| {
             Error::message(
@@ -1111,5 +1118,71 @@ mod tests {
         );
         assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
         assert!(offer.grants.is_none());
+    }
+
+    #[test]
+    fn parse_haip_vci_offer_link_by_value() {
+        // Test haip-vci:// scheme (HAIP §4.2) - should normalize to openid-credential-offer://
+        let haip_uri = "haip-vci://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri).expect("should parse haip-vci URI");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+                assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_offer_link_by_reference() {
+        // Test haip-vci:// scheme with credential_offer_uri
+        let haip_uri =
+            "haip-vci://?credential_offer_uri=https%3A%2F%2Fissuer.example.com%2Foffer%2F123";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri).expect("should parse haip-vci URI");
+
+        match uri.source {
+            CredentialOfferSource::ByReference(url) => {
+                assert_eq!(url, "https://issuer.example.com/offer/123");
+            }
+            CredentialOfferSource::ByValue(_) => panic!("Expected by reference"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_case_insensitive_scheme() {
+        // Scheme should be case-insensitive
+        let haip_uri = "HAIP-VCI://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri).expect("should parse HAIP-VCI URI");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_rejects_both_parameters() {
+        // Both credential_offer and credential_offer_uri present - must be rejected
+        let haip_uri =
+            "haip-vci://?credential_offer=%7B%7D&credential_offer_uri=https%3A%2F%2Fexample.com";
+
+        let result = CredentialOfferUri::from_offer_link(haip_uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("mutually exclusive"));
     }
 }
