@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_wallet_crypto::digest::HashAlg;
 use cloud_wallet_crypto::ecdsa::{self, Curve};
-use cloud_wallet_crypto::jwk::Jwk;
 use cloud_wallet_crypto::jwk::B64;
+use cloud_wallet_crypto::jwk::Jwk;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
@@ -43,8 +43,10 @@ pub struct DpopKeyPair {
 
 impl DpopKeyPair {
     pub fn generate() -> Result<Self, DpopError> {
-        let key = ecdsa::KeyPair::generate(Curve::P256).map_err(|e| DpopError::KeyGeneration(e.to_string()))?;
-        let public_jwk = Jwk::try_from(&key).map_err(|e| DpopError::KeyGeneration(e.to_string()))?;
+        let key = ecdsa::KeyPair::generate(Curve::P256)
+            .map_err(|e| DpopError::KeyGeneration(e.to_string()))?;
+        let public_jwk =
+            Jwk::try_from(&key).map_err(|e| DpopError::KeyGeneration(e.to_string()))?;
         Ok(Self { key, public_jwk })
     }
 
@@ -72,7 +74,9 @@ impl DpopKeyPair {
         signing_input.push(b'.');
         signing_input.extend_from_slice(claims_b64.as_bytes());
 
-        let signature = self.key.sign_sha256(&signing_input)
+        let signature = self
+            .key
+            .sign_sha256(&signing_input)
             .map_err(|e| DpopError::ProofGeneration(format!("signing failed: {e}")))?;
         let sig_b64 = URL_SAFE_NO_PAD.encode(signature);
 
@@ -98,7 +102,11 @@ fn jwk_thumbprint(jwk: &Jwk) -> Result<String, DpopError> {
                 "y": y,
             })
         }
-        _ => return Err(DpopError::Thumbprint("DPoP thumbprint only supports EC JWKs".into())),
+        _ => {
+            return Err(DpopError::Thumbprint(
+                "DPoP thumbprint only supports EC JWKs".into(),
+            ));
+        }
     };
     let canonical_str = serde_json::to_string(&canonical)
         .map_err(|e| DpopError::Thumbprint(format!("failed to serialize canonical JWK: {e}")))?;
@@ -202,20 +210,35 @@ mod tests {
     #[test]
     fn dpop_proof_valid_structure() {
         let key_pair = make_key_pair();
-        let proof = build_dpop_proof(&key_pair, "POST", "https://issuer.example.com/token", None, None)
-            .expect("proof generation should succeed");
+        let proof = build_dpop_proof(
+            &key_pair,
+            "POST",
+            "https://issuer.example.com/token",
+            None,
+            None,
+        )
+        .expect("proof generation should succeed");
 
         let parts: Vec<&str> = proof.split('.').collect();
         assert_eq!(parts.len(), 3, "JWT should have 3 parts");
 
-        let header_bytes = URL_SAFE_NO_PAD.decode(parts[0]).expect("header base64url decode");
-        let header: DpopProofHeader = serde_json::from_slice(&header_bytes).expect("header JSON parse");
+        let header_bytes = URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .expect("header base64url decode");
+        let header: DpopProofHeader =
+            serde_json::from_slice(&header_bytes).expect("header JSON parse");
         assert_eq!(header.typ, "dpop+jwt");
         assert_eq!(header.alg, "ES256");
-        assert!(matches!(header.jwk.key, cloud_wallet_crypto::jwk::Key::Ec(_)));
+        assert!(matches!(
+            header.jwk.key,
+            cloud_wallet_crypto::jwk::Key::Ec(_)
+        ));
 
-        let claims_bytes = URL_SAFE_NO_PAD.decode(parts[1]).expect("claims base64url decode");
-        let claims: DpopProofClaims = serde_json::from_slice(&claims_bytes).expect("claims JSON parse");
+        let claims_bytes = URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("claims base64url decode");
+        let claims: DpopProofClaims =
+            serde_json::from_slice(&claims_bytes).expect("claims JSON parse");
         assert_eq!(claims.htm, "POST");
         assert_eq!(claims.htu, "https://issuer.example.com/token");
         assert!(!claims.jti.is_empty());
@@ -228,8 +251,14 @@ mod tests {
     fn dpop_proof_with_nonce() {
         let key_pair = make_key_pair();
         let nonce = "server-nonce-123";
-        let proof = build_dpop_proof(&key_pair, "POST", "https://issuer.example.com/token", Some(nonce), None)
-            .expect("proof generation should succeed");
+        let proof = build_dpop_proof(
+            &key_pair,
+            "POST",
+            "https://issuer.example.com/token",
+            Some(nonce),
+            None,
+        )
+        .expect("proof generation should succeed");
 
         let parts: Vec<&str> = proof.split('.').collect();
         let claims_bytes = URL_SAFE_NO_PAD.decode(parts[1]).expect("claims decode");
@@ -242,8 +271,14 @@ mod tests {
         let key_pair = make_key_pair();
         let access_token = "Kz~8mXK1EalYznwH-LC-1fBAo.4Ljp~zsPE_NeO.gxU";
         let expected_ath = compute_ath(access_token);
-        let proof = build_dpop_proof(&key_pair, "POST", "https://issuer.example.com/credential", None, Some(&expected_ath))
-            .expect("proof generation should succeed");
+        let proof = build_dpop_proof(
+            &key_pair,
+            "POST",
+            "https://issuer.example.com/credential",
+            None,
+            Some(&expected_ath),
+        )
+        .expect("proof generation should succeed");
 
         let parts: Vec<&str> = proof.split('.').collect();
         let claims_bytes = URL_SAFE_NO_PAD.decode(parts[1]).expect("claims decode");
@@ -254,24 +289,54 @@ mod tests {
     #[test]
     fn dpop_nonce_handler() {
         let mut handler = DpopNonceHandler::new();
-        assert!(handler.get_nonce("https://issuer.example.com/token").is_none());
+        assert!(
+            handler
+                .get_nonce("https://issuer.example.com/token")
+                .is_none()
+        );
 
         handler.store_nonce("https://issuer.example.com/token", "abc123");
-        assert_eq!(handler.get_nonce("https://issuer.example.com/token"), Some("abc123"));
+        assert_eq!(
+            handler.get_nonce("https://issuer.example.com/token"),
+            Some("abc123")
+        );
     }
 
     #[test]
     fn dpop_is_use_nonce_error() {
-        assert!(DpopNonceHandler::is_use_nonce_error(400, r#"{"error":"use_nonce"}"#));
-        assert!(!DpopNonceHandler::is_use_nonce_error(401, r#"{"error":"use_nonce"}"#));
-        assert!(!DpopNonceHandler::is_use_nonce_error(400, r#"{"error":"invalid_grant"}"#));
+        assert!(DpopNonceHandler::is_use_nonce_error(
+            400,
+            r#"{"error":"use_nonce"}"#
+        ));
+        assert!(!DpopNonceHandler::is_use_nonce_error(
+            401,
+            r#"{"error":"use_nonce"}"#
+        ));
+        assert!(!DpopNonceHandler::is_use_nonce_error(
+            400,
+            r#"{"error":"invalid_grant"}"#
+        ));
     }
 
     #[test]
     fn dpop_jti_uniqueness() {
         let key_pair = make_key_pair();
-        let proof1 = build_dpop_proof(&key_pair, "POST", "https://issuer.example.com/token", None, None).unwrap();
-        let proof2 = build_dpop_proof(&key_pair, "POST", "https://issuer.example.com/token", None, None).unwrap();
+        let proof1 = build_dpop_proof(
+            &key_pair,
+            "POST",
+            "https://issuer.example.com/token",
+            None,
+            None,
+        )
+        .unwrap();
+        let proof2 = build_dpop_proof(
+            &key_pair,
+            "POST",
+            "https://issuer.example.com/token",
+            None,
+            None,
+        )
+        .unwrap();
 
         let claims1: DpopProofClaims = decode_claims(&proof1);
         let claims2: DpopProofClaims = decode_claims(&proof2);
@@ -304,7 +369,9 @@ mod tests {
     fn dpop_thumbprint_computation() {
         let key_pair = make_key_pair();
         let thumbprint = key_pair.thumbprint().expect("thumbprint should succeed");
-        let decoded = URL_SAFE_NO_PAD.decode(&thumbprint).expect("thumbprint base64url decode");
+        let decoded = URL_SAFE_NO_PAD
+            .decode(&thumbprint)
+            .expect("thumbprint base64url decode");
         assert_eq!(decoded.len(), 32, "SHA-256 thumbprint should be 32 bytes");
     }
 

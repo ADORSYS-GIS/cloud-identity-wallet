@@ -4,8 +4,10 @@ mod signer;
 mod tests;
 
 // Public Re-exports
+pub use crate::oid4vci::dpop::{
+    DpopError, DpopKeyPair, DpopNonceHandler, build_dpop_proof, compute_ath, htu_from_url,
+};
 pub use error::ClientError;
-pub use crate::oid4vci::dpop::{DpopKeyPair, DpopNonceHandler, DpopError, build_dpop_proof, compute_ath, htu_from_url};
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 pub use signer::{
@@ -461,8 +463,14 @@ impl Oid4vciClient {
         let dpop_proof = dpop_key
             .map(|key| build_dpop_proof(key, "POST", &htu, dpop_nonce, None))
             .transpose()?;
-        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop_key, &htu)
-            .await
+        self.post_token_request(
+            token_endpoint,
+            &request,
+            dpop_proof.as_deref(),
+            dpop_key,
+            &htu,
+        )
+        .await
     }
 
     /// Exchange a pre-authorized code for an access token.
@@ -511,8 +519,14 @@ impl Oid4vciClient {
         let dpop_proof = dpop_key
             .map(|key| build_dpop_proof(key, "POST", &htu, dpop_nonce, None))
             .transpose()?;
-        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop_key, &htu)
-            .await
+        self.post_token_request(
+            token_endpoint,
+            &request,
+            dpop_proof.as_deref(),
+            dpop_key,
+            &htu,
+        )
+        .await
     }
 
     /// Fetch a fresh `c_nonce` from the issuer's nonce endpoint.
@@ -607,7 +621,9 @@ impl Oid4vciClient {
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer, dpop_key, dpop_nonce));
+                futures.push(self.request_credential(
+                    context, token, id, config_id, signer, dpop_key, dpop_nonce,
+                ));
             }
         }
 
@@ -820,7 +836,10 @@ impl Oid4vciClient {
             let body = response.text().await.unwrap_or_default();
 
             if DpopNonceHandler::is_use_nonce_error(status, &body)
-                && let (Some(key), Some(nonce_str)) = (dpop_key, DpopNonceHandler::extract_nonce_from_response(&headers))
+                && let (Some(key), Some(nonce_str)) = (
+                    dpop_key,
+                    DpopNonceHandler::extract_nonce_from_response(&headers),
+                )
             {
                 let retry_proof = build_dpop_proof(key, "POST", htu, Some(&nonce_str), None)?;
                 let retry_response = self
@@ -903,7 +922,7 @@ impl Oid4vciClient {
         Ok(Some(Proofs::jwt([jwt])))
     }
 
-async fn post_credential_request(
+    async fn post_credential_request(
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
@@ -938,9 +957,13 @@ async fn post_credential_request(
             let body = response.text().await.unwrap_or_default();
 
             if DpopNonceHandler::is_use_nonce_error(status, &body)
-                && let (Some(key), Some(nonce_str)) = (dpop_key, DpopNonceHandler::extract_nonce_from_response(&headers))
+                && let (Some(key), Some(nonce_str)) = (
+                    dpop_key,
+                    DpopNonceHandler::extract_nonce_from_response(&headers),
+                )
             {
-                let retry_proof = build_dpop_proof(key, "POST", &htu, Some(&nonce_str), ath.as_deref())?;
+                let retry_proof =
+                    build_dpop_proof(key, "POST", &htu, Some(&nonce_str), ath.as_deref())?;
                 let retry_response = self
                     .inner_client
                     .http_client()
@@ -959,16 +982,21 @@ async fn post_credential_request(
                     {
                         return Err(ClientError::Credential(error));
                     }
-                    return Err(ClientError::http_response(retry_status.as_u16(), retry_body));
+                    return Err(ClientError::http_response(
+                        retry_status.as_u16(),
+                        retry_body,
+                    ));
                 }
-                return retry_response.json::<CredentialResponse>().await.map_err(|e| {
-                    ClientError::InvalidResponse {
+                return retry_response
+                    .json::<CredentialResponse>()
+                    .await
+                    .map_err(|e| ClientError::InvalidResponse {
                         message: format!("failed to parse credential response: {e}").into(),
-                    }
-                });
+                    });
             }
 
-            if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body) {
+            if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body)
+            {
                 return Err(ClientError::Credential(error));
             }
             return Err(ClientError::http_response(status, body));
@@ -979,7 +1007,7 @@ async fn post_credential_request(
                 message: format!("failed to parse credential response: {e}").into(),
             }
         })?;
-Ok(credential_response)
+        Ok(credential_response)
     }
 
     /// Resolve the `c_nonce` to use for proof construction.
