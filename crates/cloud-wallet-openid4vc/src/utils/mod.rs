@@ -184,6 +184,14 @@ fn invalid_metadata<T>(kind: ErrorKind, message: impl Into<String>) -> Result<T,
     Err(Error::message(kind, message.into()))
 }
 
+/// Checks that every character in `s` is an unreserved URI character per RFC 3986.
+///
+/// Unreserved characters are: A-Z, a-z, 0-9, `-`, `.`, `_`, `~`
+pub fn is_unreserved_chars(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+}
+
 /// A parsed, duplicate-free set of query parameters.
 #[derive(Debug)]
 pub struct QueryParams {
