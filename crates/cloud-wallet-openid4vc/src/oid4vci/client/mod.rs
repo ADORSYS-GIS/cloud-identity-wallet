@@ -478,10 +478,6 @@ impl Oid4vciClient {
         };
 
         // Include authorization_details per §6.2 so the AS can return credential_identifiers.
-        // Note: `authorization_code_type=none` in the offer signals only that no tx_code/PIN is
-        // required — it does not prevent the AS from returning authorization_details. If the AS
-        // uses scope-based issuance and omits authorization_details from the response,
-        // request_credentials falls back to scope-based credential resolution.
         let authz_details = build_authorization_details(context, credential_config_ids)?;
 
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
@@ -559,8 +555,6 @@ impl Oid4vciClient {
 
     /// Request all credentials authorized by the token response.
     ///
-    /// Supports both the `authorization_details` flow (§7.1) and a scope-based fallback
-    /// for issuers that omit `authorization_details` from the token response.
     /// The caller is responsible for handling individual failures (e.g. deferred
     /// issuance on some credentials while others succeed).
     pub async fn request_credentials<S: ProofSigner>(
@@ -572,7 +566,6 @@ impl Oid4vciClient {
         let access_token = &token.access_token;
 
         if token.authorization_details.is_some() {
-            // authorization_details flow: credential_identifiers are returned in the token response (§7.1)
             let resolved = resolve_credential_ids(token)?;
             let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
             let mut results = Vec::with_capacity(total);
@@ -597,11 +590,6 @@ impl Oid4vciClient {
             return Ok(results);
         }
 
-        // Scope-based fallback (tier 2): `authorization_code_type=none` in a pre-authorized offer
-        // means no tx_code/PIN is required — it does not prevent authorization_details from
-        // appearing in the token response. When the AS is scope-based and omits
-        // authorization_details, identify the credential configuration by reverse-mapping the
-        // granted scope value to a credential_configuration_id via the issuer metadata.
         if let Some(scope) = token.scope.as_deref() {
             let config_id = resolve_credential_configuration_id(
                 scope,
@@ -622,10 +610,6 @@ impl Oid4vciClient {
             return Ok(vec![response]);
         }
 
-        // Offer-based fallback (tier 3): the token response has neither authorization_details
-        // nor scope. The pre-authorized code already encodes what was authorized on the AS side;
-        // the wallet knows the requested configurations from the original offer. Issue one
-        // credential request per configuration ID using credential_configuration_id directly.
         let config_ids = &context.offer.credential_configuration_ids;
         let mut futures = FuturesUnordered::new();
         let mut results = Vec::with_capacity(config_ids.len());
@@ -1144,13 +1128,8 @@ pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[Stri
     Ok(result)
 }
 
-/// Reverse-maps a granted scope value to a `credential_configuration_id`.
-///
-/// Searches the offer's `credential_configuration_ids` for one whose entry in
-/// `issuer_metadata.credential_configurations_supported` declares a matching `scope` field.
-/// The scope value and the configuration ID are not required to be identical strings — the
-/// issuer assigns them independently. Returns the first match, or `None` if no configuration
-/// in the offer declares that scope.
+/// Returns the `credential_configuration_id` from the offer whose `scope` matches the given value,
+/// or `None` if no match is found.
 fn resolve_credential_configuration_id(
     scope: &str,
     offer: &CredentialOffer,
