@@ -16,9 +16,10 @@ use reqwest::header::CONTENT_TYPE;
 use url::Url;
 
 use crate::core::client::OidClient;
+use crate::oauth::authorization::{CodeChallengeMethod, OAuthAuthorizationRequest};
 use crate::oid4vci::authorization::{
-    AuthorizationDetails, AuthorizationRequest, AuthorizationResponse, CodeChallengeMethod,
-    PushedAuthorizationRequest, PushedAuthorizationResponse,
+    AuthorizationDetails, AuthorizationRequest, AuthorizationResponse, PushedAuthorizationRequest,
+    PushedAuthorizationResponse,
 };
 use crate::oid4vci::credential::offer::{
     CredentialOffer, CredentialOfferSource, CredentialOfferUri, TxCode, resolve_by_reference,
@@ -347,15 +348,18 @@ impl Oid4vciClient {
         // Build the authorization request
         let authz_request = AuthorizationRequest {
             response_type: OAUTH_RESPONSE_TYPE.into(),
-            client_id: self.inner_client.config().client_id.clone(),
-            redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
-            state: Some(state.into()),
-            scope: None,
+            oauth: OAuthAuthorizationRequest {
+                client_id: self.inner_client.config().client_id.clone(),
+                redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
+                state: Some(state.into()),
+                scope: None,
+                nonce: None,
+                code_challenge: Some(code_challenge),
+                code_challenge_method: Some(CodeChallengeMethod::S256),
+            },
             resource: None,
             issuer_state,
             authorization_details: Some(authz_details),
-            code_challenge: Some(code_challenge),
-            code_challenge_method: Some(CodeChallengeMethod::S256),
         };
 
         let authz_url = if context
