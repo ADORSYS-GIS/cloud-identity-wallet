@@ -69,7 +69,7 @@ impl EncryptingKey {
     #[must_use]
     pub fn max_plaintext_size(&self, algorithm: OaepAlgorithm) -> usize {
         OaepPublicEncryptingKey::new(self.0.clone())
-            .expect("already validated at construction")
+            .expect("OaepPublicEncryptingKey::new is infallible for a valid PublicEncryptingKey")
             .max_plaintext_size(algorithm.into())
     }
 
@@ -112,7 +112,7 @@ impl EncryptingKey {
     ) -> Result<&'o [u8]> {
         // RFC 7518 §4.3 specifies an empty label for JWE RSA-OAEP.
         OaepPublicEncryptingKey::new(self.0.clone())
-            .expect("already validated at construction")
+            .expect("OaepPublicEncryptingKey::new is infallible for a valid PublicEncryptingKey")
             .encrypt(algorithm.into(), plaintext, output, None)
             .map(|s| &*s)
             .map_err(|_| error_msg(ErrorKind::Encryption, "RSA-OAEP encryption failed"))
