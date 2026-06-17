@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use cloud_wallet_crypto::jwk::{Jwk, Key, KeyUse, Operations};
-use jsonwebtoken::{DecodingKey, Validation, decode, jwk::Jwk as JwtJwk};
+use jsonwebtoken::{DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
@@ -196,20 +196,8 @@ impl VerifierAttestationJwt {
 
     /// Converts a JWK to a jsonwebtoken DecodingKey.
     fn jwk_to_decoding_key(jwk: &Jwk) -> Result<DecodingKey, VerifierAttestationError> {
-        // Convert our Jwk type to jsonwebtoken's Jwk type
-        let jwt_jwk = serde_json::to_value(jwk)
-            .and_then(serde_json::from_value::<JwtJwk>)
-            .map_err(|e| {
-                VerifierAttestationError::SignatureVerificationFailed(format!(
-                    "failed to convert JWK: {e}"
-                ))
-            })?;
-
-        DecodingKey::from_jwk(&jwt_jwk).map_err(|e| {
-            VerifierAttestationError::SignatureVerificationFailed(format!(
-                "failed to create decoding key from JWK: {e}"
-            ))
-        })
+        super::jwk_to_decoding_key(jwk)
+            .map_err(VerifierAttestationError::SignatureVerificationFailed)
     }
 
     /// Validates that the `sub` claim matches the expected client_id.
