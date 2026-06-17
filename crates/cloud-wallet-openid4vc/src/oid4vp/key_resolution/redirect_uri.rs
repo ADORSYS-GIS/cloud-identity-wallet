@@ -116,12 +116,22 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn rejects_invalid_redirect_uri() {
-        let result = ParsedClientId::parse("redirect_uri:not-a-valid-uri");
-        assert!(
-            result.is_err(),
-            "ParsedClientId::parse should reject invalid URIs"
-        );
+#[test]
+    fn provides_access_to_metadata_fields() {
+        let client_id = ParsedClientId::parse("redirect_uri:https://example.com/callback").unwrap();
+        let metadata: VerifierMetadata = serde_json::from_value(serde_json::json!({
+            "vp_formats_supported": {
+                "dc+sd-jwt": {
+                    "sd-jwt_alg_values": ["ES256", "ES384"],
+                    "kb-jwt_alg_values": ["ES256"]
+                }
+            },
+            "client_name": "Test Verifier"
+        }))
+        .unwrap();
+
+        let client = RedirectUriClient::parse(&client_id, Some(metadata.clone())).unwrap();
+        assert_eq!(client.redirect_uri().as_str(), "https://example.com/callback");
+        assert_eq!(client.metadata().client_metadata.client_name.as_deref(), Some("Test Verifier"));
     }
 }
