@@ -252,7 +252,7 @@ let mut epk_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
 let _epk_bytes = sender.public_key_bytes(&mut epk_buf)?;
 
 // Agree — `sender` is consumed here; do not use the raw shared secret as a key.
-let shared = sender.into_shared_secret(&peer)?;
+let shared = sender.agree(&peer)?;
 
 // Derive a 256-bit key-encryption key via ConcatKDF (RFC 7518 §4.6.2).
 let mut kek_bytes = [0u8; 32];
@@ -270,7 +270,7 @@ rand::fill_bytes(&mut cek)?;
 
 let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A256Kw, &kek_bytes)?;
 let mut wrap_buf = vec![0u8; cek.len() + 8];
-let _wrapped_cek = kek.wrap(&cek, &mut wrap_buf)?;
+let _wrapped_cek = kek.wrap_key(&cek, &mut wrap_buf)?;
 # Ok(())
 # }
 ```

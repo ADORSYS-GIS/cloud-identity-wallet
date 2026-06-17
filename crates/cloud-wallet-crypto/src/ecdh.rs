@@ -1,7 +1,7 @@
 //! Ephemeral ECDH key agreement for X25519, P-256, P-384, and P-521.
 //!
 //! All private keys are ephemeral: generated fresh per operation and consumed
-//! on [`EphemeralEcdhKey::into_shared_secret`]. RFC 7518 §4.6 mandates this
+//! on [`EphemeralEcdhKey::agree`]. RFC 7518 §4.6 mandates this
 //! for ECDH-ES, so no reuse is exposed. Feed [`SharedSecret`] bytes into
 //! [`crate::kdf::concat_kdf`] to derive a JWE content-encryption key.
 
@@ -26,16 +26,18 @@ pub enum EcdhCurve {
     X25519,
 }
 
-impl EcdhCurve {
-    fn algorithm(self) -> &'static agreement::Algorithm {
-        match self {
+impl From<EcdhCurve> for &'static agreement::Algorithm {
+    fn from(curve: EcdhCurve) -> Self {
+        match curve {
             EcdhCurve::P256 => &agreement::ECDH_P256,
             EcdhCurve::P384 => &agreement::ECDH_P384,
             EcdhCurve::P521 => &agreement::ECDH_P521,
             EcdhCurve::X25519 => &agreement::X25519,
         }
     }
+}
 
+impl EcdhCurve {
     /// Expected byte length of the serialised public key for this curve.
     ///
     /// NIST curves: 1 (uncompressed tag `04`) + 2 × coordinate size.
@@ -85,7 +87,7 @@ impl PublicKeyBytes {
 /// An ephemeral ECDH private key, consumed on agreement.
 ///
 /// RFC 7518 §4.6 requires a fresh ephemeral key per JWE operation; this type
-/// enforces that by taking ownership in [`EphemeralEcdhKey::into_shared_secret`].
+/// enforces that by taking ownership in [`EphemeralEcdhKey::agree`].
 pub struct EphemeralEcdhKey {
     inner: EphemeralPrivateKey,
     curve: EcdhCurve,
@@ -106,7 +108,7 @@ impl EphemeralEcdhKey {
     /// [`ErrorKind::KeyGeneration`] on RNG or key-generation failure.
     pub fn generate(curve: EcdhCurve) -> Result<Self> {
         let rng = SystemRandom::new();
-        let inner = EphemeralPrivateKey::generate(curve.algorithm(), &rng)
+        let inner = EphemeralPrivateKey::generate(curve.into(), &rng)
             .map_err(|_| key_gen_error("ephemeral ECDH"))?;
         Ok(Self { inner, curve })
     }
@@ -152,12 +154,10 @@ impl EphemeralEcdhKey {
     /// Perform ECDH key agreement and return the shared secret, consuming the
     /// ephemeral key.
     ///
-    /// The `into_*` prefix signals that `self` is consumed - one call per key.
-    ///
     /// # Errors
     /// - [`ErrorKind::KeyParsing`] if `peer.curve()` does not match `self.curve()`, or if
     ///   the agreement computation fails (low-order point, point not on curve, etc.).
-    pub fn into_shared_secret(self, peer: &EcdhPublicKey) -> Result<SharedSecret> {
+    pub fn agree(self, peer: &EcdhPublicKey) -> Result<SharedSecret> {
         if self.curve != peer.curve() {
             return Err(error_msg(
                 ErrorKind::KeyParsing,
@@ -168,7 +168,7 @@ impl EphemeralEcdhKey {
                 ),
             ));
         }
-        let peer_key = UnparsedPublicKey::new(self.curve.algorithm(), peer.as_bytes());
+        let peer_key = UnparsedPublicKey::new(self.curve.into(), peer.as_bytes());
         let curve = self.curve;
         agree_ephemeral(
             self.inner,
@@ -195,7 +195,7 @@ impl EphemeralEcdhKey {
 /// Stored in a fixed-size array determined by the curve; no heap allocation.
 /// Byte length and uncompressed-point tag are validated at construction.
 /// Curve mismatch with the private key is caught in
-/// [`EphemeralEcdhKey::into_shared_secret`].
+/// [`EphemeralEcdhKey::agree`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EcdhPublicKey {
     bytes: PublicKeyBytes,
@@ -217,7 +217,7 @@ impl EcdhPublicKey {
     /// - Uncompressed-point tag `0x04` for NIST curves.
     ///
     /// Point-on-curve validation is deferred to
-    /// [`EphemeralEcdhKey::into_shared_secret`].
+    /// [`EphemeralEcdhKey::agree`].
     ///
     /// # Errors
     /// [`ErrorKind::KeyParsing`] if the length or tag is wrong.
@@ -314,7 +314,7 @@ mod tests {
     // Verify that an ephemeral Alice and a static Bob agree on the same secret.
 
     fn round_trip(curve: EcdhCurve) {
-        let bob = PrivateKey::generate(curve.algorithm()).unwrap();
+        let bob = PrivateKey::generate(curve.into()).unwrap();
         let bob_pub = bob.compute_public_key().unwrap();
 
         let alice = EphemeralEcdhKey::generate(curve).unwrap();
@@ -322,10 +322,10 @@ mod tests {
         let alice_pub_bytes = alice.public_key_bytes(&mut alice_pub_buf).unwrap();
 
         let alice_shared = alice
-            .into_shared_secret(&EcdhPublicKey::from_bytes(curve, bob_pub.as_ref()).unwrap())
+            .agree(&EcdhPublicKey::from_bytes(curve, bob_pub.as_ref()).unwrap())
             .unwrap();
 
-        let alice_pub_unparsed = UnparsedPublicKey::new(curve.algorithm(), alice_pub_bytes);
+        let alice_pub_unparsed = UnparsedPublicKey::new(curve.into(), alice_pub_bytes);
         let bob_shared = agree(&bob, alice_pub_unparsed, (), |b| {
             Ok::<Vec<u8>, ()>(b.to_vec())
         })
@@ -395,7 +395,7 @@ mod tests {
         let z = agree(&priv_key, lc_peer, (), |b| Ok::<Vec<u8>, ()>(b.to_vec())).unwrap();
         assert_eq!(z.as_slice(), expected_z);
 
-        // Exercise EphemeralEcdhKey::into_shared_secret end-to-end via commutativity.
+        // Exercise EphemeralEcdhKey::agree end-to-end via commutativity.
         //
         // EphemeralPrivateKey has no `from_private_key` constructor (by design), so
         // the NIST scalar `d` above cannot be loaded through our wrapper. This is not
@@ -409,7 +409,7 @@ mod tests {
         let alice_pub_bytes = alice.public_key_bytes(&mut alice_pub_buf).unwrap();
 
         let bob_peer = EcdhPublicKey::from_bytes(curve, bob_pub_bytes.as_ref()).unwrap();
-        let alice_z = alice.into_shared_secret(&bob_peer).unwrap(); // ← exercises EphemeralEcdhKey::into_shared_secret
+        let alice_z = alice.agree(&bob_peer).unwrap(); // ← exercises EphemeralEcdhKey::agree
         assert_eq!(alice_z.curve(), curve);
 
         let alice_pub_unparsed = UnparsedPublicKey::new(lc_alg, alice_pub_bytes);
@@ -501,7 +501,7 @@ mod tests {
         let peer = EcdhPublicKey::from_bytes(EcdhCurve::X25519, &low_order_point).unwrap();
         let alice = EphemeralEcdhKey::generate(EcdhCurve::X25519).unwrap();
         assert_eq!(
-            alice.into_shared_secret(&peer).unwrap_err().kind(),
+            alice.agree(&peer).unwrap_err().kind(),
             ErrorKind::KeyParsing
         );
     }
@@ -514,19 +514,17 @@ mod tests {
         let peer = EcdhPublicKey::from_bytes(EcdhCurve::P256, p256_pub.as_ref()).unwrap();
 
         let alice = EphemeralEcdhKey::generate(EcdhCurve::P384).unwrap();
-        let err = alice.into_shared_secret(&peer).unwrap_err();
+        let err = alice.agree(&peer).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::KeyParsing);
     }
 
     #[test]
     fn shared_secret_exposes_curve() {
-        let bob = PrivateKey::generate(EcdhCurve::P256.algorithm()).unwrap();
+        let bob = PrivateKey::generate(EcdhCurve::P256.into()).unwrap();
         let bob_pub = bob.compute_public_key().unwrap();
         let alice = EphemeralEcdhKey::generate(EcdhCurve::P256).unwrap();
         let secret = alice
-            .into_shared_secret(
-                &EcdhPublicKey::from_bytes(EcdhCurve::P256, bob_pub.as_ref()).unwrap(),
-            )
+            .agree(&EcdhPublicKey::from_bytes(EcdhCurve::P256, bob_pub.as_ref()).unwrap())
             .unwrap();
         assert_eq!(secret.curve(), EcdhCurve::P256);
     }

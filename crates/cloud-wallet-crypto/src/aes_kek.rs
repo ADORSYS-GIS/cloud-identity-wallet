@@ -4,7 +4,7 @@
 //! `plaintext.len() + 8` bytes. The plaintext must be a non-zero multiple
 //! of 8 bytes and at least 16 bytes (AWS-LC constraint matching the spec).
 
-use aws_lc_rs::key_wrap::{AES_128, AES_256, AesKek, KeyWrap};
+use aws_lc_rs::key_wrap::{AES_128, AES_256, AesBlockCipher, AesKek, KeyWrap};
 
 use crate::error::{ErrorKind, Result};
 use crate::secret::Secret;
@@ -25,6 +25,15 @@ impl KeyWrapAlgorithm {
         match self {
             Self::A128Kw => 16,
             Self::A256Kw => 32,
+        }
+    }
+}
+
+impl From<KeyWrapAlgorithm> for &'static AesBlockCipher {
+    fn from(alg: KeyWrapAlgorithm) -> Self {
+        match alg {
+            KeyWrapAlgorithm::A128Kw => &AES_128,
+            KeyWrapAlgorithm::A256Kw => &AES_256,
         }
     }
 }
@@ -51,7 +60,7 @@ impl KeyWrapAlgorithm {
 ///
 /// let cek = [0u8; 16];
 /// let mut wrapped = vec![0u8; cek.len() + 8];
-/// let ct = kek.wrap(&cek, &mut wrapped)?;
+/// let ct = kek.wrap_key(&cek, &mut wrapped)?;
 ///
 /// let kek2 = KeyEncryptionKey::new(KeyWrapAlgorithm::A128Kw, &kek_bytes)?;
 /// let mut plaintext = vec![0u8; ct.len() - 8];
@@ -98,11 +107,7 @@ impl KeyEncryptionKey {
     }
 
     fn make_aes_kek(&self) -> Result<AesKek> {
-        let cipher = match self.algorithm {
-            KeyWrapAlgorithm::A128Kw => &AES_128,
-            KeyWrapAlgorithm::A256Kw => &AES_256,
-        };
-        AesKek::new(cipher, self.key.expose())
+        AesKek::new(self.algorithm.into(), self.key.expose())
             .map_err(|_| error_msg(ErrorKind::KeyGeneration, "AES-KW key setup failed"))
     }
 
@@ -117,7 +122,7 @@ impl KeyEncryptionKey {
     /// - [`ErrorKind::WrongLength`] if the plaintext or output buffer size
     ///   constraints are not met.
     /// - [`ErrorKind::Encryption`] on cryptographic failure.
-    pub fn wrap<'o>(&self, plaintext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
+    pub fn wrap_key<'o>(&self, plaintext: &[u8], output: &'o mut [u8]) -> Result<&'o [u8]> {
         if plaintext.len() < 16 || !plaintext.len().is_multiple_of(8) {
             return Err(error_msg(
                 ErrorKind::WrongLength,
@@ -209,7 +214,7 @@ mod tests {
     fn rfc3394_wrap_a128kw() {
         let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A128Kw, &KEK_128).unwrap();
         let mut out = [0u8; 24];
-        let ct = kek.wrap(&KEY_DATA, &mut out).unwrap();
+        let ct = kek.wrap_key(&KEY_DATA, &mut out).unwrap();
         assert_eq!(ct, &WRAPPED_A128KW);
     }
 
@@ -225,7 +230,7 @@ mod tests {
     fn rfc3394_wrap_a256kw() {
         let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A256Kw, &KEK_256).unwrap();
         let mut out = [0u8; 24];
-        let ct = kek.wrap(&KEY_DATA, &mut out).unwrap();
+        let ct = kek.wrap_key(&KEY_DATA, &mut out).unwrap();
         assert_eq!(ct, &WRAPPED_A256KW);
     }
 
@@ -242,7 +247,7 @@ mod tests {
         // RFC 3394 §2.2.6: 256-bit KEK wrapping 256-bit key data → known 40-byte ciphertext.
         let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A256Kw, &KEK_256).unwrap();
         let mut out = [0u8; 40];
-        let ct = kek.wrap(&KEY_DATA_256, &mut out).unwrap();
+        let ct = kek.wrap_key(&KEY_DATA_256, &mut out).unwrap();
         assert_eq!(ct, &WRAPPED_A256KW_256);
     }
 
@@ -277,7 +282,7 @@ mod tests {
         let mut out = [0u8; 16];
         // 8 bytes: multiple of 8 but below the 16-byte minimum
         assert_eq!(
-            kek.wrap(&[0u8; 8], &mut out).unwrap_err().kind(),
+            kek.wrap_key(&[0u8; 8], &mut out).unwrap_err().kind(),
             ErrorKind::WrongLength
         );
     }
@@ -287,7 +292,7 @@ mod tests {
         let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A128Kw, &KEK_128).unwrap();
         let mut out = [0u8; 32];
         assert_eq!(
-            kek.wrap(&[0u8; 17], &mut out).unwrap_err().kind(),
+            kek.wrap_key(&[0u8; 17], &mut out).unwrap_err().kind(),
             ErrorKind::WrongLength
         );
     }
@@ -297,7 +302,7 @@ mod tests {
         let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A128Kw, &KEK_128).unwrap();
         let mut out = [0u8; 23]; // needs 24 for 16-byte input
         assert_eq!(
-            kek.wrap(&KEY_DATA, &mut out).unwrap_err().kind(),
+            kek.wrap_key(&KEY_DATA, &mut out).unwrap_err().kind(),
             ErrorKind::WrongLength
         );
     }

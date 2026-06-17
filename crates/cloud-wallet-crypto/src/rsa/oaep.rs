@@ -1,8 +1,9 @@
 //! RSA-OAEP asymmetric encryption (JWE `RSA-OAEP-256`, `RSA-OAEP-384`, `RSA-OAEP-512`).
 //!
-//! Wraps aws-lc-rs OAEP primitives with crate-consistent error types. The
-//! private key is stored as a plain `PrivateDecryptingKey` so `public_key()`
-//! can be derived without a second stored reference.
+//! Both key types store the underlying aws-lc-rs key without an OAEP wrapper:
+//! `EncryptingKey` stores `PublicEncryptingKey` (enabling SPKI export via `AsDer`),
+//! and `DecryptingKey` stores `PrivateDecryptingKey` (enabling `public_key()` without
+//! a second stored reference). The OAEP wrapper is created per operation.
 
 use aws_lc_rs::rsa::{
     OAEP_SHA256_MGF1SHA256, OAEP_SHA384_MGF1SHA384, OAEP_SHA512_MGF1SHA512,
@@ -10,7 +11,7 @@ use aws_lc_rs::rsa::{
 };
 
 use crate::error::{ErrorKind, Result};
-use crate::utils::{error_msg, key_gen_error, parse_error};
+use crate::utils::{error_msg, key_gen_error, parse_error, serialize_error};
 
 /// RSA-OAEP hash/MGF1 algorithm selector.
 #[non_exhaustive]
@@ -24,18 +25,18 @@ pub enum OaepAlgorithm {
     Sha512,
 }
 
-impl OaepAlgorithm {
-    fn lc_algorithm(self) -> &'static aws_lc_rs::rsa::OaepAlgorithm {
-        match self {
-            Self::Sha256 => &OAEP_SHA256_MGF1SHA256,
-            Self::Sha384 => &OAEP_SHA384_MGF1SHA384,
-            Self::Sha512 => &OAEP_SHA512_MGF1SHA512,
+impl From<OaepAlgorithm> for &'static aws_lc_rs::rsa::OaepAlgorithm {
+    fn from(alg: OaepAlgorithm) -> Self {
+        match alg {
+            OaepAlgorithm::Sha256 => &OAEP_SHA256_MGF1SHA256,
+            OaepAlgorithm::Sha384 => &OAEP_SHA384_MGF1SHA384,
+            OaepAlgorithm::Sha512 => &OAEP_SHA512_MGF1SHA512,
         }
     }
 }
 
 /// RSA public key for OAEP encryption.
-pub struct EncryptingKey(OaepPublicEncryptingKey);
+pub struct EncryptingKey(PublicEncryptingKey);
 
 impl std::fmt::Debug for EncryptingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -52,25 +53,46 @@ impl EncryptingKey {
     /// [`ErrorKind::KeyParsing`] if the bytes are not a valid RSA public key
     /// or if the key size is not supported (must be 2048–8192 bits).
     pub fn from_spki_der(bytes: &[u8]) -> Result<Self> {
-        let pub_key = PublicEncryptingKey::from_der(bytes)
+        let key = PublicEncryptingKey::from_der(bytes)
             .map_err(|_| parse_error("invalid RSA SubjectPublicKeyInfo DER"))?;
-        OaepPublicEncryptingKey::new(pub_key)
-            .map(Self)
-            .map_err(|_| {
-                parse_error("RSA public key is not valid for OAEP (unsupported size or type)")
-            })
+        validate_key_size(key.key_size_bits())?;
+        Ok(Self(key))
     }
 
     /// RSA modulus length in bytes; equals the ciphertext size.
     #[must_use]
     pub fn ciphertext_size(&self) -> usize {
-        self.0.ciphertext_size()
+        self.0.key_size_bytes()
     }
 
     /// Maximum plaintext size for the given padding.
     #[must_use]
     pub fn max_plaintext_size(&self, algorithm: OaepAlgorithm) -> usize {
-        self.0.max_plaintext_size(algorithm.lc_algorithm())
+        OaepPublicEncryptingKey::new(self.0.clone())
+            .expect("already validated at construction")
+            .max_plaintext_size(algorithm.into())
+    }
+
+    /// Serialise the public key to DER-encoded X.509 `SubjectPublicKeyInfo`.
+    ///
+    /// Returns the filled sub-slice of `output`.
+    ///
+    /// # Errors
+    /// - [`ErrorKind::WrongLength`] if `output` is too small.
+    /// - [`ErrorKind::Serialization`] on encoding failure.
+    pub fn to_spki_der<'o>(&self, output: &'o mut [u8]) -> Result<&'o [u8]> {
+        use aws_lc_rs::encoding::{AsDer, PublicKeyX509Der};
+        let spki: PublicKeyX509Der<'_> = self
+            .0
+            .as_der()
+            .map_err(|_| serialize_error("failed to serialise RSA public key to SPKI DER"))?;
+        let bytes = spki.as_ref();
+        let len = bytes.len();
+        if output.len() < len {
+            return Err(ErrorKind::WrongLength.into());
+        }
+        output[..len].copy_from_slice(bytes);
+        Ok(&output[..len])
     }
 
     /// Encrypt `plaintext` into `output` using RSA-OAEP.
@@ -89,8 +111,9 @@ impl EncryptingKey {
         output: &'o mut [u8],
     ) -> Result<&'o [u8]> {
         // RFC 7518 §4.3 specifies an empty label for JWE RSA-OAEP.
-        self.0
-            .encrypt(algorithm.lc_algorithm(), plaintext, output, None)
+        OaepPublicEncryptingKey::new(self.0.clone())
+            .expect("already validated at construction")
+            .encrypt(algorithm.into(), plaintext, output, None)
             .map(|s| &*s)
             .map_err(|_| error_msg(ErrorKind::Encryption, "RSA-OAEP encryption failed"))
     }
@@ -127,12 +150,15 @@ impl EncryptingKey {
 /// `From`/`Into` impl between them. To use the same RSA private key for both
 /// OAEP decryption and signing, load the PKCS#8 DER into each type separately
 /// (see the note on [`super::KeyPair`] for an example).
-pub struct DecryptingKey(PrivateDecryptingKey);
+pub struct DecryptingKey {
+    private: PrivateDecryptingKey,
+    public: EncryptingKey,
+}
 
 impl std::fmt::Debug for DecryptingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DecryptingKey")
-            .field("key_size_bits", &self.0.key_size_bits())
+            .field("key_size_bits", &self.private.key_size_bits())
             .finish_non_exhaustive()
     }
 }
@@ -145,9 +171,10 @@ impl DecryptingKey {
     /// # Errors
     /// [`ErrorKind::KeyGeneration`] on failure.
     pub fn generate(size: super::RsaKeySize) -> Result<Self> {
-        PrivateDecryptingKey::generate(size.into())
-            .map(Self)
-            .map_err(|_| key_gen_error("RSA-OAEP"))
+        let private =
+            PrivateDecryptingKey::generate(size.into()).map_err(|_| key_gen_error("RSA-OAEP"))?;
+        let public = EncryptingKey(private.public_key());
+        Ok(Self { private, public })
     }
 
     /// Deserialise a private key from PKCS#8 DER.
@@ -155,34 +182,29 @@ impl DecryptingKey {
     /// # Errors
     /// [`ErrorKind::KeyParsing`] on failure.
     pub fn from_pkcs8_der(bytes: &[u8]) -> Result<Self> {
-        PrivateDecryptingKey::from_pkcs8(bytes)
-            .map(Self)
-            .map_err(|_| parse_error("invalid RSA PKCS#8 DER"))
+        let private = PrivateDecryptingKey::from_pkcs8(bytes)
+            .map_err(|_| parse_error("invalid RSA PKCS#8 DER"))?;
+        validate_key_size(private.key_size_bits())?;
+        let public = EncryptingKey(private.public_key());
+        Ok(Self { private, public })
     }
 
     /// Returns the corresponding public encrypting key.
-    ///
-    /// # Panics
-    /// Cannot panic — key size is validated during [`DecryptingKey::generate`] /
-    /// [`DecryptingKey::from_pkcs8_der`].
     #[must_use]
-    pub fn public_key(&self) -> EncryptingKey {
-        EncryptingKey(
-            OaepPublicEncryptingKey::new(self.0.public_key())
-                .expect("key size already validated at DecryptingKey construction"),
-        )
+    pub fn public_key(&self) -> &EncryptingKey {
+        &self.public
     }
 
     /// RSA modulus length in bytes.
     #[must_use]
     pub fn key_size_bytes(&self) -> usize {
-        self.0.key_size_bytes()
+        self.private.key_size_bytes()
     }
 
     /// RSA modulus length in bits.
     #[must_use]
     pub fn key_size_bits(&self) -> usize {
-        self.0.key_size_bits()
+        self.private.key_size_bits()
     }
 
     /// Decrypt `ciphertext` using RSA-OAEP into `output`.
@@ -206,9 +228,9 @@ impl DecryptingKey {
         // underlying EVP_PKEY — it does not copy key material. Verified against
         // aws-lc-rs = "1.15". `OaepPrivateDecryptingKey::new` requires ownership,
         // so a clone per call is unavoidable without storing two key types.
-        OaepPrivateDecryptingKey::new(self.0.clone())
+        OaepPrivateDecryptingKey::new(self.private.clone())
             .map_err(|_| error_msg(ErrorKind::Decryption, "RSA-OAEP key setup failed"))?
-            .decrypt(algorithm.lc_algorithm(), ciphertext, output, None)
+            .decrypt(algorithm.into(), ciphertext, output, None)
             .map(|s| &*s)
             .map_err(|_| error_msg(ErrorKind::Decryption, "RSA-OAEP decryption failed"))
     }
@@ -235,9 +257,20 @@ impl DecryptingKey {
     }
 }
 
+fn validate_key_size(key_size_bits: usize) -> Result<()> {
+    match key_size_bits {
+        2048 | 3072 | 4096 | 8192 => Ok(()),
+        _ => Err(crate::error::Error::message(
+            ErrorKind::KeyParsing,
+            format!("RSA key size {key_size_bits} is not supported"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorKind;
     use crate::rsa::RsaKeySize;
 
     fn encrypt_decrypt_cycle(algorithm: OaepAlgorithm) {
@@ -328,5 +361,40 @@ mod tests {
             .decrypt(OaepAlgorithm::Sha256, &ciphertext, &mut out)
             .unwrap();
         assert_eq!(pt, b"data");
+    }
+
+    #[test]
+    fn spki_der_export_import_round_trip() {
+        let key = DecryptingKey::generate(RsaKeySize::Rsa2048).unwrap();
+        let enc = key.public_key();
+
+        // Export the public key to SPKI DER, then re-import it.
+        let mut spki_buf = vec![0u8; 512];
+        let spki = enc.to_spki_der(&mut spki_buf).unwrap().to_vec();
+        let reloaded = EncryptingKey::from_spki_der(&spki).unwrap();
+
+        // Encrypt with the re-imported key; decrypt with the original private key.
+        // A successful decrypt proves export→import is lossless.
+        let plaintext = b"spki round trip";
+        let mut ct = vec![0u8; reloaded.ciphertext_size()];
+        let ciphertext = reloaded
+            .encrypt_sha256(plaintext, &mut ct)
+            .unwrap()
+            .to_vec();
+
+        let mut out = vec![0u8; key.key_size_bytes()];
+        let recovered = key.decrypt_sha256(&ciphertext, &mut out).unwrap();
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[test]
+    fn spki_der_export_buffer_too_small() {
+        let key = DecryptingKey::generate(RsaKeySize::Rsa2048).unwrap();
+        let enc = key.public_key();
+        let mut tiny = [0u8; 1];
+        assert_eq!(
+            enc.to_spki_der(&mut tiny).unwrap_err().kind(),
+            ErrorKind::WrongLength
+        );
     }
 }
