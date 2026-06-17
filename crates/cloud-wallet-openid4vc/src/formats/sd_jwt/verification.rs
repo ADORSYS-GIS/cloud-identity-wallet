@@ -92,14 +92,15 @@ pub(super) fn verify_with_jwks(sd_jwt: &SdJwt<'_>, jwks: &JwkSet) -> Result<JwtA
     Ok(algorithm)
 }
 
-/// Verifies an issuer-signed JWT whose JOSE header carries an `x5c` chain.
+/// Resolves the issuer verification key from the `x5c` JOSE header parameter.
 ///
-/// The leaf certificate is only used for signature verification after the
-/// supplied certificate chain validates against a trust anchor.
-pub(super) fn verify_with_x5c(
+/// Validates the certificate chain against the supplied trust anchors, verifies
+/// the leaf certificate is not self-signed, and returns the leaf public key as
+/// a [`DecodingKey`] together with the JWT algorithm.
+pub(super) fn resolve_x5c_key(
     sd_jwt: &SdJwt<'_>,
     trust_anchors: X5cTrustAnchors<'_>,
-) -> Result<JwtAlgorithm> {
+) -> Result<(JwtAlgorithm, DecodingKey)> {
     let algorithm = supported_public_algorithm(sd_jwt.jwt().header().alg)?;
     let x5c = sd_jwt
         .jwt()
@@ -112,8 +113,12 @@ pub(super) fn verify_with_x5c(
         })?;
 
     let chain = decode_x5c_chain(x5c)?;
+    let (_, leaf_cert) = parse_x509_certificate(&chain[0]).map_err(|_| VerificationError::X5c {
+        message: "failed to parse leaf certificate".into(),
+    })?;
+    validate_leaf_not_self_signed(&leaf_cert)?;
     validate_x5c_chain(&chain, trust_anchors)?;
-    let spki = leaf_spki_for_algorithm(&chain[0], algorithm)?;
+    let spki = leaf_spki_from_cert(&leaf_cert, algorithm)?;
 
     let decoding_key = match algorithm {
         JwtAlgorithm::RS256
@@ -130,6 +135,18 @@ pub(super) fn verify_with_x5c(
             });
         }
     };
+    Ok((algorithm, decoding_key))
+}
+
+/// Verifies an issuer-signed JWT whose JOSE header carries an `x5c` chain.
+///
+/// The leaf certificate is only used for signature verification after the
+/// supplied certificate chain validates against a trust anchor.
+pub(super) fn verify_with_x5c(
+    sd_jwt: &SdJwt<'_>,
+    trust_anchors: X5cTrustAnchors<'_>,
+) -> Result<JwtAlgorithm> {
+    let (algorithm, decoding_key) = resolve_x5c_key(sd_jwt, trust_anchors)?;
     verify_signature(sd_jwt, &decoding_key, algorithm)?;
     Ok(algorithm)
 }
@@ -322,13 +339,24 @@ impl webpki::ExtendedKeyUsageValidator for AnyKeyUsage {
     }
 }
 
-fn leaf_spki_for_algorithm(leaf_der: &[u8], algorithm: JwtAlgorithm) -> Result<Vec<u8>> {
-    let (_, cert) = parse_x509_certificate(leaf_der).map_err(|_| VerificationError::X5c {
-        message: "failed to parse leaf certificate".into(),
-    })?;
-    validate_leaf_key_usage(&cert)?;
+fn validate_leaf_not_self_signed(
+    leaf_cert: &x509_parser::certificate::X509Certificate<'_>,
+) -> Result<()> {
+    if leaf_cert.issuer() == leaf_cert.subject() {
+        return Err(VerificationError::X5c {
+            message: "leaf certificate must not be self-signed".into(),
+        });
+    }
+    Ok(())
+}
 
-    let public_key = cert.public_key();
+fn leaf_spki_from_cert(
+    leaf_cert: &x509_parser::certificate::X509Certificate<'_>,
+    algorithm: JwtAlgorithm,
+) -> Result<Vec<u8>> {
+    validate_leaf_key_usage(leaf_cert)?;
+
+    let public_key = leaf_cert.public_key();
     let compatible = match (algorithm, public_key.parsed()) {
         (
             JwtAlgorithm::RS256

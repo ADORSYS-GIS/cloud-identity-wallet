@@ -16,7 +16,7 @@ use rustls_pki_types::TrustAnchor;
 use serde_json::{Value, json};
 use webpki::anchor_from_trusted_cert;
 
-use crate::formats::sd_jwt::verification::{verify_with_jwks, verify_with_x5c};
+use crate::formats::sd_jwt::verification::{resolve_x5c_key, verify_with_jwks, verify_with_x5c};
 
 use super::*;
 
@@ -98,6 +98,15 @@ fn sd_jwt_with_custom_x5c(
     leaf_key_usages: Vec<KeyUsagePurpose>,
     sign_with_leaf_key: bool,
 ) -> X5cSdJwt {
+    sd_jwt_with_custom_x5c_and_expiry(jwt_algorithm, leaf_key_usages, sign_with_leaf_key, None)
+}
+
+fn sd_jwt_with_custom_x5c_and_expiry(
+    jwt_algorithm: JwtAlgorithm,
+    leaf_key_usages: Vec<KeyUsagePurpose>,
+    sign_with_leaf_key: bool,
+    not_after: Option<time::OffsetDateTime>,
+) -> X5cSdJwt {
     let root_key = CertKeyPair::generate().expect("root key generation should work");
     let mut root_params = CertificateParams::default();
     root_params.distinguished_name = DistinguishedName::new();
@@ -128,6 +137,9 @@ fn sd_jwt_with_custom_x5c(
     leaf_params.is_ca = IsCa::NoCa;
     leaf_params.key_usages = leaf_key_usages;
     leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    if let Some(not_after_time) = not_after {
+        leaf_params.not_after = not_after_time;
+    }
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &root_issuer)
         .expect("leaf certificate should sign");
@@ -821,6 +833,95 @@ fn rejects_issuer_signature_when_trusted_jwk_algorithm_differs() {
     assert!(matches!(
         verify_with_jwks(&sd_jwt, &jwks),
         Err(VerificationError::InvalidKey { .. })
+    ));
+}
+
+#[test]
+fn resolves_x5c_key_for_valid_chain() {
+    let fixture = signed_sd_jwt_with_custom_x5c();
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    let (algorithm, _key) = resolve_x5c_key(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors))
+        .expect("should resolve x5c key");
+    assert_eq!(algorithm, JwtAlgorithm::ES256);
+}
+
+#[test]
+fn rejects_expired_x5c_leaf_certificate() {
+    let yesterday = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+    let fixture = sd_jwt_with_custom_x5c_and_expiry(
+        JwtAlgorithm::ES256,
+        vec![KeyUsagePurpose::DigitalSignature],
+        true,
+        Some(yesterday),
+    );
+    let sd_jwt = SdJwt::parse(&fixture.raw).expect("x5c SD-JWT should parse");
+    let trust_anchors = [fixture.trust_anchor];
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&trust_anchors)),
+        Err(VerificationError::X5c { .. })
+    ));
+}
+
+#[test]
+fn rejects_self_signed_x5c_leaf_certificate() {
+    let leaf_key = CertKeyPair::generate().expect("leaf key generation should work");
+    let mut leaf_params = CertificateParams::new(["issuer.example.com".to_owned()])
+        .expect("leaf params should build");
+    leaf_params.distinguished_name = DistinguishedName::new();
+    leaf_params
+        .distinguished_name
+        .push(DnType::CommonName, "issuer.example.com");
+    leaf_params.is_ca = IsCa::NoCa;
+    leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let leaf_cert = leaf_params
+        .self_signed(&leaf_key)
+        .expect("leaf certificate should sign");
+
+    // Use the self-signed leaf itself as the trust anchor to ensure the
+    // rejection is from the explicit self-signed check, not webpki path validation.
+    let trust_anchor = anchor_from_trusted_cert(leaf_cert.der())
+        .expect("self-signed leaf should become trust anchor")
+        .to_owned();
+
+    let mut header = Header::new(JwtAlgorithm::ES256);
+    header.typ = Some("dc+sd-jwt".to_owned());
+    header.x5c = Some(vec![STANDARD.encode(leaf_cert.der().as_ref())]);
+
+    let claims = json!({
+        "iss": "https://issuer.example.com",
+        "vct": "https://credentials.example.com/identity",
+        "given_name": "Ada"
+    });
+    let token = jsonwebtoken::encode(
+        &header,
+        &claims,
+        &EncodingKey::from_ec_der(&leaf_key.serialize_der()),
+    )
+    .expect("test JWT should sign with leaf key");
+
+    let raw = format!("{token}~");
+    let sd_jwt = SdJwt::parse(&raw).expect("self-signed x5c SD-JWT should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::Custom(&[trust_anchor])),
+        Err(VerificationError::X5c { message })
+        if message.contains("self-signed")
+    ));
+}
+
+#[test]
+fn rejects_missing_x5c() {
+    let (raw, _) = signed_sd_jwt();
+    let sd_jwt = SdJwt::parse(&raw).expect("signed SD-JWT should parse");
+
+    assert!(matches!(
+        verify_with_x5c(&sd_jwt, X5cTrustAnchors::default()),
+        Err(VerificationError::X5c { message })
+        if message.contains("x5c must contain at least one certificate")
     ));
 }
 
