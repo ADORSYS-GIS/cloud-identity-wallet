@@ -116,7 +116,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn provides_access_to_metadata_fields() {
         let client_id = ParsedClientId::parse("redirect_uri:https://example.com/callback").unwrap();
         let metadata: VerifierMetadata = serde_json::from_value(serde_json::json!({
@@ -131,7 +131,13 @@ mod tests {
         .unwrap();
 
         let client = RedirectUriClient::parse(&client_id, Some(metadata.clone())).unwrap();
-        assert_eq!(client.redirect_uri().as_str(), "https://example.com/callback");
-        assert_eq!(client.metadata().client_metadata.client_name.as_deref(), Some("Test Verifier"));
+        assert_eq!(
+            client.redirect_uri().as_str(),
+            "https://example.com/callback"
+        );
+        assert_eq!(
+            client.metadata().client_metadata.client_name.as_deref(),
+            Some("Test Verifier")
+        );
     }
 }
