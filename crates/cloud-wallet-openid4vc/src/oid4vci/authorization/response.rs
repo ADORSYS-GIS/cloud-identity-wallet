@@ -345,10 +345,9 @@ mod tests {
 
     #[test]
     fn from_query_parses_iss_parameter() {
-        let response = AuthorizationResponse::from_query(
-            "code=abc123&state=xyz&iss=https://as.example.com",
-        )
-        .unwrap();
+        let response =
+            AuthorizationResponse::from_query("code=abc123&state=xyz&iss=https://as.example.com")
+                .unwrap();
 
         assert_eq!(response.code, "abc123");
         assert_eq!(response.state.as_deref(), Some("xyz"));
@@ -367,10 +366,9 @@ mod tests {
 
     #[test]
     fn from_query_handles_url_encoded_iss() {
-        let response = AuthorizationResponse::from_query(
-            "code=abc&iss=https%3A%2F%2Fas.example.com%3A8443",
-        )
-        .unwrap();
+        let response =
+            AuthorizationResponse::from_query("code=abc&iss=https%3A%2F%2Fas.example.com%3A8443")
+                .unwrap();
 
         assert_eq!(response.iss.as_deref(), Some("https://as.example.com:8443"));
     }
@@ -411,7 +409,10 @@ mod tests {
 
         let err = response.validate_iss("https://as.example.com").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
-        assert!(err.to_string().contains("missing the required 'iss' parameter"));
+        assert!(
+            err.to_string()
+                .contains("missing the required 'iss' parameter")
+        );
         assert!(err.to_string().contains("RFC 9207"));
         assert!(err.to_string().contains("HAIP"));
     }
@@ -433,9 +434,8 @@ mod tests {
 
     #[test]
     fn from_query_rejects_duplicate_iss_parameter() {
-        let err =
-            AuthorizationResponse::from_query("code=abc&iss=https://a.com&iss=https://b.com")
-                .unwrap_err();
+        let err = AuthorizationResponse::from_query("code=abc&iss=https://a.com&iss=https://b.com")
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
         assert!(err.to_string().contains("duplicate 'iss'"));
     }

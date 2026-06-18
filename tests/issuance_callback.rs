@@ -156,14 +156,18 @@ async fn valid_callback_transitions_session_to_processing_and_enqueues_task() {
 
     let response = client
         .get(format!(
-            "{}/api/v1/issuance/callback?code=auth-code&state={session_id}",
+            "{}/api/v1/issuance/callback?code=auth-code&state={session_id}&iss=https://issuer.example.com/",
             app.base_url
         ))
         .send()
         .await
         .expect("failed to send callback request");
 
-    assert_eq!(response.status(), 200);
+    if !response.status().is_success() {
+        let status = response.status();
+        let body: serde_json::Value = response.json().await.expect("failed to parse response");
+        panic!("Expected 200, got {}: {:?}", status, body);
+    }
     assert!(response.bytes().await.unwrap().is_empty());
 
     let session: IssuanceSession = app.session_store.get(session_id).await.unwrap().unwrap();
