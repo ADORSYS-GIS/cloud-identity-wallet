@@ -14,6 +14,7 @@ use rcgen::{
 };
 use rustls_pki_types::TrustAnchor;
 use serde_json::{Value, json};
+use time::{Duration, OffsetDateTime};
 use webpki::anchor_from_trusted_cert;
 
 use crate::formats::sd_jwt::verification::{resolve_x5c_key, verify_with_jwks, verify_with_x5c};
@@ -105,7 +106,7 @@ fn sd_jwt_with_custom_x5c_and_expiry(
     jwt_algorithm: JwtAlgorithm,
     leaf_key_usages: Vec<KeyUsagePurpose>,
     sign_with_leaf_key: bool,
-    not_after: Option<time::OffsetDateTime>,
+    not_after: Option<OffsetDateTime>,
 ) -> X5cSdJwt {
     let root_key = CertKeyPair::generate().expect("root key generation should work");
     let mut root_params = CertificateParams::default();
@@ -849,7 +850,7 @@ fn resolves_x5c_key_for_valid_chain() {
 
 #[test]
 fn rejects_expired_x5c_leaf_certificate() {
-    let yesterday = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+    let yesterday = OffsetDateTime::now_utc() - Duration::days(1);
     let fixture = sd_jwt_with_custom_x5c_and_expiry(
         JwtAlgorithm::ES256,
         vec![KeyUsagePurpose::DigitalSignature],

@@ -113,8 +113,8 @@ pub(super) fn resolve_x5c_key(
         })?;
 
     let chain = decode_x5c_chain(x5c)?;
-    let (_, leaf_cert) = parse_x509_certificate(&chain[0]).map_err(|_| VerificationError::X5c {
-        message: "failed to parse leaf certificate".into(),
+    let (_, leaf_cert) = parse_x509_certificate(&chain[0]).map_err(|e| VerificationError::X5c {
+        message: format!("failed to parse leaf certificate: {e}").into(),
     })?;
     validate_leaf_not_self_signed(&leaf_cert)?;
     validate_x5c_chain(&chain, trust_anchors)?;
@@ -339,6 +339,11 @@ impl webpki::ExtendedKeyUsageValidator for AnyKeyUsage {
     }
 }
 
+/// Validates that the leaf certificate is not self-signed.
+///
+/// Per HAIP §6.1.1, the issuer's signing certificate MUST NOT be self-signed.
+/// A self-signed certificate would indicate an untrusted issuer that cannot
+/// be authenticated through a trust chain.
 fn validate_leaf_not_self_signed(
     leaf_cert: &x509_parser::certificate::X509Certificate<'_>,
 ) -> Result<()> {
