@@ -118,9 +118,19 @@ fn jwk_b64_value(b64: &B64) -> serde_json::Value {
     serde_json::Value::String(URL_SAFE_NO_PAD.encode(b64.as_ref()))
 }
 
+/// Handler for DPoP nonce persistence per RFC 9449 §7.
+///
+/// Stores nonces keyed by `htu` (the normalized endpoint URL) so that
+/// subsequent requests to the same endpoint can include the nonce
+/// pre-emptively, avoiding extra round trips.
+///
+/// **Cloning**: `Clone` creates a shared reference to the same underlying
+/// nonce store (via `Arc<Mutex>`). Mutations on a clone are visible to all
+/// other clones sharing the same store. This is intentional to allow the
+/// handler to be shared across concurrent requests.
 #[derive(Debug, Clone, Default)]
 pub struct DpopNonceHandler {
-    nonces: HashMap<String, String>,
+    nonces: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
 }
 
 impl DpopNonceHandler {
@@ -128,12 +138,29 @@ impl DpopNonceHandler {
         Self::default()
     }
 
-    pub fn get_nonce(&self, htu: &str) -> Option<&str> {
-        self.nonces.get(htu).map(|s| s.as_str())
+    pub fn get_nonce(&self, htu: &str) -> Option<String> {
+        self.nonces
+            .lock()
+            .expect("DpopNonceHandler lock poisoned")
+            .get(htu)
+            .cloned()
     }
 
-    pub fn store_nonce(&mut self, htu: impl Into<String>, nonce: impl Into<String>) {
-        self.nonces.insert(htu.into(), nonce.into());
+    pub fn store_nonce(&self, htu: impl Into<String>, nonce: impl Into<String>) {
+        self.nonces
+            .lock()
+            .expect("DpopNonceHandler lock poisoned")
+            .insert(htu.into(), nonce.into());
+    }
+
+    pub fn extract_and_store_nonce(
+        &self,
+        htu: &str,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Option<String> {
+        let nonce = Self::extract_nonce_from_response(headers)?;
+        self.store_nonce(htu, &nonce);
+        Some(nonce)
     }
 
     pub fn extract_nonce_from_response(headers: &reqwest::header::HeaderMap) -> Option<String> {
@@ -178,13 +205,24 @@ pub fn build_dpop_proof(
     key_pair.sign_dpop_proof(&claims)
 }
 
-pub fn htu_from_url(url: &url::Url) -> String {
-    let mut htu = format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default());
+pub fn htu_from_url(url: &url::Url) -> Result<String, DpopError> {
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(DpopError::InvalidHtu(format!(
+                "htu must have http or https scheme, got '{scheme}'"
+            )));
+        }
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| DpopError::InvalidHtu("htu requires a host".into()))?;
+    let mut htu = format!("{}://{}", url.scheme(), host);
     if let Some(port) = url.port() {
         htu.push_str(&format!(":{port}"));
     }
     htu.push_str(url.path());
-    htu
+    Ok(htu)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -197,6 +235,9 @@ pub enum DpopError {
 
     #[error("thumbprint computation failed: {0}")]
     Thumbprint(String),
+
+    #[error("invalid htu: {0}")]
+    InvalidHtu(String),
 }
 
 #[cfg(test)]
@@ -288,7 +329,7 @@ mod tests {
 
     #[test]
     fn dpop_nonce_handler() {
-        let mut handler = DpopNonceHandler::new();
+        let handler = DpopNonceHandler::new();
         assert!(
             handler
                 .get_nonce("https://issuer.example.com/token")
@@ -298,7 +339,7 @@ mod tests {
         handler.store_nonce("https://issuer.example.com/token", "abc123");
         assert_eq!(
             handler.get_nonce("https://issuer.example.com/token"),
-            Some("abc123")
+            Some("abc123".to_string())
         );
     }
 
@@ -354,14 +395,14 @@ mod tests {
     #[test]
     fn htu_from_url_strips_query_and_fragment() {
         let url = url::Url::parse("https://issuer.example.com/token?foo=bar#baz").unwrap();
-        let htu = htu_from_url(&url);
+        let htu = htu_from_url(&url).unwrap();
         assert_eq!(htu, "https://issuer.example.com/token");
     }
 
     #[test]
     fn htu_from_url_preserves_port() {
         let url = url::Url::parse("https://issuer.example.com:8443/token").unwrap();
-        let htu = htu_from_url(&url);
+        let htu = htu_from_url(&url).unwrap();
         assert_eq!(htu, "https://issuer.example.com:8443/token");
     }
 
@@ -379,5 +420,103 @@ mod tests {
         let parts: Vec<&str> = jwt.split('.').collect();
         let claims_bytes = URL_SAFE_NO_PAD.decode(parts[1]).expect("claims decode");
         serde_json::from_slice(&claims_bytes).expect("claims parse")
+    }
+
+    #[test]
+    fn dpop_proof_wrong_htu_differs_from_correct() {
+        let key_pair = make_key_pair();
+        let correct_htu = "https://issuer.example.com/token";
+        let wrong_htu = "https://attacker.example.com/token";
+        let proof_correct = build_dpop_proof(
+            &key_pair,
+            "POST",
+            correct_htu,
+            None,
+            None,
+        )
+        .expect("proof generation should succeed");
+        let proof_wrong = build_dpop_proof(
+            &key_pair,
+            "POST",
+            wrong_htu,
+            None,
+            None,
+        )
+        .expect("proof generation should succeed");
+
+        let claims_correct: DpopProofClaims = decode_claims(&proof_correct);
+        let claims_wrong: DpopProofClaims = decode_claims(&proof_wrong);
+
+        assert_ne!(claims_correct.htu, claims_wrong.htu);
+        assert_eq!(claims_correct.htu, correct_htu);
+        assert_eq!(claims_wrong.htu, wrong_htu);
+    }
+
+    #[test]
+    fn dpop_proof_expired_iat_rejected_by_timestamp() {
+        let key_pair = make_key_pair();
+        let old_iat = time::UtcDateTime::now().unix_timestamp() - 3600;
+        let claims = DpopProofClaims {
+            jti: uuid::Uuid::new_v4().to_string(),
+            htm: "POST".to_string(),
+            htu: "https://issuer.example.com/token".to_string(),
+            iat: old_iat,
+            nonce: None,
+            ath: None,
+        };
+        let proof = key_pair.sign_dpop_proof(&claims).expect("signing should succeed");
+        let decoded_claims: DpopProofClaims = decode_claims(&proof);
+        let now = time::UtcDateTime::now().unix_timestamp();
+        assert!(decoded_claims.iat < now - 300, "proof with iat 1 hour ago should be considered expired");
+    }
+
+    #[test]
+    fn htu_from_url_rejects_non_http_scheme() {
+        let url = url::Url::parse("ftp://issuer.example.com/resource").unwrap();
+        let result = htu_from_url(&url);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("http or https"),
+            "error should mention scheme requirement: {err}"
+        );
+    }
+
+    #[test]
+    fn htu_from_url_rejects_missing_host() {
+        let url = url::Url::parse("file:///path/to/resource").unwrap();
+        let result = htu_from_url(&url);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dpop_nonce_handler_store_and_retrieve() {
+        let handler = DpopNonceHandler::new();
+        assert!(handler.get_nonce("https://issuer.example.com/token").is_none());
+
+        handler.store_nonce("https://issuer.example.com/token", "abc123");
+        assert_eq!(
+            handler.get_nonce("https://issuer.example.com/token"),
+            Some("abc123".to_string())
+        );
+        assert!(handler.get_nonce("https://other.example.com/token").is_none());
+    }
+
+    #[test]
+    fn dpop_nonce_handler_clone_shared_state() {
+        let handler = DpopNonceHandler::new();
+        handler.store_nonce("https://issuer.example.com/token", "nonce-abc");
+
+        let cloned = handler.clone();
+        assert_eq!(
+            cloned.get_nonce("https://issuer.example.com/token"),
+            Some("nonce-abc".to_string())
+        );
+
+        cloned.store_nonce("https://issuer.example.com/credential", "nonce-def");
+        assert_eq!(
+            handler.get_nonce("https://issuer.example.com/credential"),
+            Some("nonce-def".to_string())
+        );
     }
 }

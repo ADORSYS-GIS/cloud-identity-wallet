@@ -423,11 +423,17 @@ impl Oid4vciClient {
     /// Exchange an authorization code for an access token (authorization code flow).
     ///
     /// If `dpop_key` is provided, a DPoP proof JWT is attached to the token request
-    /// per RFC 9449. The same key must be reused for subsequent credential requests
-    /// if the token response indicates `token_type=DPoP`.
+    /// per RFC 9449. **Callers are responsible for managing the key lifecycle**: the
+    /// same `DpopKeyPair` must be reused for all DPoP-bound requests (token + credential)
+    /// tied to a single access token, as required by RFC 9449 §3.1.
     ///
-    /// If the server responds with a DPoP nonce error, this method automatically
-    /// retries once with the nonce from the `DPoP-Nonce` response header.
+    /// If `dpop_nonce_handler` is provided, any `DPoP-Nonce` header observed in
+    /// server responses will be stored for pre-emptive use in subsequent requests,
+    /// reducing round trips per RFC 9449 §7.
+    ///
+    /// If the server responds with a DPoP nonce error (`use_nonce`), this method
+    /// automatically retries once with the nonce from the `DPoP-Nonce` response header.
+    #[allow(clippy::too_many_arguments)]
     pub async fn exchange_authorization_code(
         &self,
         context: &ResolvedOfferContext,
@@ -436,6 +442,7 @@ impl Oid4vciClient {
         credential_config_ids: &[String],
         dpop_key: Option<&DpopKeyPair>,
         dpop_nonce: Option<&str>,
+        dpop_nonce_handler: Option<&DpopNonceHandler>,
     ) -> Result<TokenResponse> {
         // Verify this is an authorization code flow
         if !matches!(context.flow, IssuanceFlow::AuthorizationCode { .. }) {
@@ -459,7 +466,7 @@ impl Oid4vciClient {
             code_verifier: Some(pkce_verifier.into()),
             authorization_details: Some(authz_details),
         });
-        let htu = htu_from_url(token_endpoint);
+        let htu = htu_from_url(token_endpoint)?;
         let dpop_proof = dpop_key
             .map(|key| build_dpop_proof(key, "POST", &htu, dpop_nonce, None))
             .transpose()?;
@@ -469,6 +476,7 @@ impl Oid4vciClient {
             dpop_proof.as_deref(),
             dpop_key,
             &htu,
+            dpop_nonce_handler,
         )
         .await
     }
@@ -477,7 +485,9 @@ impl Oid4vciClient {
     /// `tx_code` is included when the issuer requires one (OID4VCI §6.1).
     ///
     /// If `dpop_key` is provided, a DPoP proof JWT is attached to the token request
-    /// per RFC 9449.
+    /// per RFC 9449. If `dpop_nonce_handler` is provided, server-provided nonces
+    /// are stored for pre-emptive use on subsequent requests per RFC 9449 §7.
+    #[allow(clippy::too_many_arguments)]
     pub async fn exchange_pre_authorized_code(
         &self,
         context: &ResolvedOfferContext,
@@ -486,6 +496,7 @@ impl Oid4vciClient {
         credential_config_ids: &[String],
         dpop_key: Option<&DpopKeyPair>,
         dpop_nonce: Option<&str>,
+        dpop_nonce_handler: Option<&DpopNonceHandler>,
     ) -> Result<TokenResponse> {
         // Verify this is a pre-authorized code flow
         if !matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. }) {
@@ -515,7 +526,7 @@ impl Oid4vciClient {
             tx_code: tx_code.map(|t| t.into()),
             authorization_details: Some(authz_details),
         });
-        let htu = htu_from_url(token_endpoint);
+        let htu = htu_from_url(token_endpoint)?;
         let dpop_proof = dpop_key
             .map(|key| build_dpop_proof(key, "POST", &htu, dpop_nonce, None))
             .transpose()?;
@@ -525,6 +536,7 @@ impl Oid4vciClient {
             dpop_proof.as_deref(),
             dpop_key,
             &htu,
+            dpop_nonce_handler,
         )
         .await
     }
@@ -566,6 +578,8 @@ impl Oid4vciClient {
     /// If `dpop_key` is provided and the access token was DPoP-bound
     /// (`token_type=DPoP`), a fresh DPoP proof with `ath` (SHA-256 of
     /// the access token) is attached to the credential request per RFC 9449.
+    /// If `dpop_nonce_handler` is provided, server-provided nonces are stored
+    /// for pre-emptive use on subsequent requests per RFC 9449 §7.
     #[allow(clippy::too_many_arguments)]
     pub async fn request_credential<S: ProofSigner>(
         &self,
@@ -576,6 +590,7 @@ impl Oid4vciClient {
         signer: &S,
         dpop_key: Option<&DpopKeyPair>,
         dpop_nonce: Option<&str>,
+        dpop_nonce_handler: Option<&DpopNonceHandler>,
     ) -> Result<CredentialResponse> {
         let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
@@ -597,7 +612,7 @@ impl Oid4vciClient {
             request = request.with_proofs(p);
         }
 
-        self.post_credential_request(context, access_token, &request, dpop_key, dpop_nonce)
+        self.post_credential_request(context, access_token, &request, dpop_key, dpop_nonce, dpop_nonce_handler)
             .await
     }
 
@@ -605,6 +620,9 @@ impl Oid4vciClient {
     ///
     /// The caller is responsible for handling individual failures (e.g. deferred
     /// issuance on some credentials while others succeed).
+    ///
+    /// If `dpop_nonce_handler` is provided, server-provided nonces are stored
+    /// for pre-emptive use on subsequent requests per RFC 9449 §7.
     pub async fn request_credentials<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
@@ -612,6 +630,7 @@ impl Oid4vciClient {
         signer: &S,
         dpop_key: Option<&DpopKeyPair>,
         dpop_nonce: Option<&str>,
+        dpop_nonce_handler: Option<&DpopNonceHandler>,
     ) -> Result<Vec<CredentialResponse>> {
         let resolved = resolve_credential_ids(token)?;
         let token = &token.access_token;
@@ -622,7 +641,7 @@ impl Oid4vciClient {
         for (config_id, identifiers) in resolved {
             for id in identifiers {
                 futures.push(self.request_credential(
-                    context, token, id, config_id, signer, dpop_key, dpop_nonce,
+                    context, token, id, config_id, signer, dpop_key, dpop_nonce, dpop_nonce_handler,
                 ));
             }
         }
@@ -825,6 +844,7 @@ impl Oid4vciClient {
         dpop_proof: Option<&str>,
         dpop_key: Option<&DpopKeyPair>,
         htu: &str,
+        dpop_nonce_handler: Option<&DpopNonceHandler>,
     ) -> Result<TokenResponse> {
         let response = self
             .send_token_request(token_endpoint, request, dpop_proof)
@@ -841,10 +861,18 @@ impl Oid4vciClient {
                     DpopNonceHandler::extract_nonce_from_response(&headers),
                 )
             {
+                if let Some(handler) = dpop_nonce_handler {
+                    handler.store_nonce(htu, &nonce_str);
+                }
                 let retry_proof = build_dpop_proof(key, "POST", htu, Some(&nonce_str), None)?;
                 let retry_response = self
                     .send_token_request(token_endpoint, request, Some(&retry_proof))
                     .await?;
+
+                if let Some(handler) = dpop_nonce_handler {
+                    handler.extract_and_store_nonce(htu, retry_response.headers());
+                }
+
                 return self.parse_token_response(retry_response).await;
             }
 
@@ -852,6 +880,10 @@ impl Oid4vciClient {
                 return Err(ClientError::Token(error));
             }
             return Err(ClientError::http_response(status, body));
+        }
+
+        if let Some(handler) = dpop_nonce_handler {
+            handler.extract_and_store_nonce(htu, response.headers());
         }
 
         self.parse_token_response(response).await
@@ -929,9 +961,10 @@ impl Oid4vciClient {
         request: &CredentialRequest,
         dpop_key: Option<&DpopKeyPair>,
         dpop_nonce: Option<&str>,
+        dpop_nonce_handler: Option<&DpopNonceHandler>,
     ) -> Result<CredentialResponse> {
         let credential_endpoint = &context.issuer_metadata.credential_endpoint;
-        let htu = htu_from_url(credential_endpoint);
+        let htu = htu_from_url(credential_endpoint)?;
         let ath = dpop_key.map(|_| compute_ath(access_token));
 
         let mut http_request = self
@@ -962,6 +995,9 @@ impl Oid4vciClient {
                     DpopNonceHandler::extract_nonce_from_response(&headers),
                 )
             {
+                if let Some(handler) = dpop_nonce_handler {
+                    handler.store_nonce(&htu, &nonce_str);
+                }
                 let retry_proof =
                     build_dpop_proof(key, "POST", &htu, Some(&nonce_str), ath.as_deref())?;
                 let retry_response = self
@@ -987,6 +1023,11 @@ impl Oid4vciClient {
                         retry_body,
                     ));
                 }
+
+                if let Some(handler) = dpop_nonce_handler {
+                    handler.extract_and_store_nonce(&htu, retry_response.headers());
+                }
+
                 return retry_response
                     .json::<CredentialResponse>()
                     .await
@@ -1000,6 +1041,10 @@ impl Oid4vciClient {
                 return Err(ClientError::Credential(error));
             }
             return Err(ClientError::http_response(status, body));
+        }
+
+        if let Some(handler) = dpop_nonce_handler {
+            handler.extract_and_store_nonce(&htu, response.headers());
         }
 
         let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {

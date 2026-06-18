@@ -257,6 +257,7 @@ async fn test_issuance_flow() {
             &["UniversityDegreeCredential".to_string()],
             None,
             None,
+            None,
         )
         .await
         .expect("Failed to exchange token");
@@ -276,7 +277,7 @@ async fn test_issuance_flow() {
         .await;
 
     let credentials = client
-        .request_credentials(&context, &token, &signer, None, None)
+        .request_credentials(&context, &token, &signer, None, None, None)
         .await
         .expect("Failed to request credentials");
 
@@ -290,4 +291,180 @@ async fn test_issuance_flow() {
         }
         _ => panic!("Expected immediate credential response"),
     }
+}
+
+#[tokio::test]
+async fn test_dpop_proof_attached_to_token_request() {
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    let metadata_json = serde_json::json!({
+        "credential_issuer": issuer_url,
+        "credential_endpoint": format!("{issuer_url}/credential"),
+        "nonce_endpoint": format!("{issuer_url}/nonce"),
+        "authorization_servers": [issuer_url],
+        "credential_configurations_supported": {
+            "UniversityDegreeCredential": {
+                "format": "jwt_vc_json",
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256"]
+                    }
+                }
+            }
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-credential-issuer"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    let as_metadata_json = serde_json::json!({
+        "issuer": issuer_url.replace("http://", "https://"),
+        "authorization_endpoint": format!("{issuer_url}/authorize").replace("http://", "https://"),
+        "token_endpoint": format!("{issuer_url}/token").replace("http://", "https://"),
+        "pushed_authorization_request_endpoint": format!("{issuer_url}/par").replace("http://", "https://"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(as_metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    let token_response = serde_json::json!({
+        "access_token": "dpop_test_access_token",
+        "token_type": "DPoP",
+        "expires_in": 3600,
+        "authorization_details": [{
+            "type": "openid_credential",
+            "credential_configuration_id": "UniversityDegreeCredential",
+            "credential_identifiers": ["UniversityDegreeCredential"]
+        }]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(token_response))
+        .mount(&mock_server)
+        .await;
+
+    let nonce_response = serde_json::json!({
+        "c_nonce": "test_nonce_dpop_123"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/nonce"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(nonce_response))
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+
+    let offer = CredentialOffer {
+        credential_issuer: Url::parse(&issuer_url).unwrap(),
+        credential_configuration_ids: vec!["UniversityDegreeCredential".to_string()],
+        grants: Some(Grants {
+            authorization_code: None,
+            pre_authorized_code: Some(PreAuthorizedCodeGrant {
+                pre_authorized_code: "test_code_dpop".to_string(),
+                tx_code: None,
+                authorization_server: None,
+            }),
+        }),
+    };
+
+    let issuer_metadata = client
+        .fetch_issuer_metadata(&Url::parse(&issuer_url).unwrap())
+        .await
+        .unwrap();
+
+    let mut as_metadata = client
+        .fetch_as_metadata(&Url::parse(&issuer_url).unwrap(), &issuer_metadata, &offer)
+        .await
+        .unwrap();
+
+    as_metadata.authorization_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/authorize")).unwrap());
+    as_metadata.token_endpoint = Some(Url::parse(&format!("{issuer_url}/token")).unwrap());
+    as_metadata.pushed_authorization_request_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/par")).unwrap());
+
+    let flow_type = IssuanceFlow::PreAuthorizedCode {
+        pre_authorized_code: "test_code_dpop".to_string(),
+        tx_code: None,
+    };
+
+    let mut issuer_metadata = issuer_metadata;
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    issuer_metadata.nonce_endpoint = Some(Url::parse(&format!("{issuer_url}/nonce")).unwrap());
+
+    let context = ResolvedOfferContext {
+        offer,
+        issuer_metadata,
+        as_metadata,
+        flow: flow_type,
+    };
+
+    let dpop_key = DpopKeyPair::generate().expect("DPoP key generation should succeed");
+
+    let token = client
+        .exchange_pre_authorized_code(
+            &context,
+            "test_code_dpop",
+            None::<String>,
+            &["UniversityDegreeCredential".to_string()],
+            Some(&dpop_key),
+            None,
+            None,
+        )
+        .await
+        .expect("token exchange with DPoP key should succeed");
+
+    assert_eq!(token.access_token, "dpop_test_access_token");
+    assert_eq!(token.token_type, "DPoP");
+}
+
+#[tokio::test]
+async fn test_dpop_nonce_handler_stores_nonce() {
+    let handler = DpopNonceHandler::new();
+    assert!(handler.get_nonce("https://issuer.example.com/token").is_none());
+
+    handler.store_nonce("https://issuer.example.com/token", "server-nonce-456");
+    assert_eq!(
+        handler.get_nonce("https://issuer.example.com/token"),
+        Some("server-nonce-456".to_string())
+    );
+
+    let cloned = handler.clone();
+    assert_eq!(
+        cloned.get_nonce("https://issuer.example.com/token"),
+        Some("server-nonce-456".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_htu_from_url_validation() {
+    let valid_url = url::Url::parse("https://issuer.example.com/token").unwrap();
+    assert!(htu_from_url(&valid_url).is_ok());
+    assert_eq!(
+        htu_from_url(&valid_url).unwrap(),
+        "https://issuer.example.com/token"
+    );
+
+    let ftp_url = url::Url::parse("ftp://issuer.example.com/resource").unwrap();
+    assert!(htu_from_url(&ftp_url).is_err());
+
+    let url_with_port = url::Url::parse("https://issuer.example.com:8443/credential").unwrap();
+    assert_eq!(
+        htu_from_url(&url_with_port).unwrap(),
+        "https://issuer.example.com:8443/credential"
+    );
 }
