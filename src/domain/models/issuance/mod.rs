@@ -18,7 +18,7 @@ pub use tx_code::{TxCodeError, TxCodeRequest, TxCodeResponse};
 use std::{sync::Arc, time::Duration};
 
 use cloud_wallet_openid4vc::formats::mdoc::{
-    IacaTrustStore, ParsedMdoc, StaticTrustStore, verify_mdoc_for_issuance,
+    IacaTrustStore, ParsedMdoc, RevocationPolicy, StaticTrustStore, verify_mdoc_for_issuance,
 };
 use cloud_wallet_openid4vc::formats::sd_jwt::{SdJwt, SdJwtClaims, StatusClaim, X5cTrustAnchors};
 use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
@@ -720,7 +720,8 @@ impl IssuanceEngine {
                     self.iaca_trust_store(),
                     signer.holder_binding_public_jwk(),
                     now,
-                )?;
+                    RevocationPolicy::default(),
+                ).await?;
                 info!(
                     // TODO: this will be stored later because it is needed for the presentation phase
                     tenant_id = %tenant_id,

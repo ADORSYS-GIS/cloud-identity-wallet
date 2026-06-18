@@ -28,6 +28,7 @@ serde_with.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["parsing", "std"] }
+tracing.workspace = true
 url = { workspace = true, features = ["serde"] }
 validator = { version = "0.20", features = ["derive"] }
 webpki.workspace = true
