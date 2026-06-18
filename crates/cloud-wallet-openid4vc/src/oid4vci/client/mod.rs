@@ -386,7 +386,7 @@ impl Oid4vciClient {
 
     /// Parses authorization callback query parameters into success/error result.
     pub fn parse_authorization_callback(query: &str) -> Result<AuthorizationCallback> {
-        const RECOGNIZED: &[&str] = &["code", "state", "error", "error_description"];
+        const RECOGNIZED: &[&str] = &["code", "state", "iss", "error", "error_description"];
         let params = QueryParams::parse(query, RECOGNIZED)?;
 
         if let Some(error_code) = params.get("error") {

@@ -39,6 +39,23 @@ pub async fn authorization_callback<S: SessionStore + Clone>(
 
     match callback {
         AuthorizationCallback::Success(response) => {
+            // Validate iss parameter per RFC 9207 / FAPI2 / HAIP
+            // The Wallet MUST verify that iss matches the expected Authorization Server issuer
+            let expected_issuer = session.context.as_metadata.issuer.as_str();
+            if let Err(err) = response.validate_iss(expected_issuer) {
+                warn!(
+                    session_id = %session_id,
+                    expected_iss = %expected_issuer,
+                    actual_iss = ?response.iss,
+                    error = %err,
+                    "iss validation failed"
+                );
+                return Err(invalid_callback(format!(
+                    "Authorization response iss mismatch: {}",
+                    err
+                )));
+            }
+
             let code_verifier = session
                 .code_verifier
                 .clone()

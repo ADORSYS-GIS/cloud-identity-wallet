@@ -190,7 +190,7 @@ async fn error_callback_fails_emits_event_and_discards_session() {
 
     let response = client
         .get(format!(
-            "{}/api/v1/issuance/callback?error=access_denied&error_description=No+thanks&state={session_id}",
+            "{}/api/v1/issuance/callback?error=access_denied&error_description=No+thanks&state={session_id}&iss=https://issuer.example.com",
             app.base_url
         ))
         .send()

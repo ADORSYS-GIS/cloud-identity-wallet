@@ -5,7 +5,7 @@ use crate::errors::{Error, ErrorKind};
 use crate::utils::QueryParams;
 
 /// Recognized query parameters in an authorization response.
-const RECOGNIZED_PARAMS: &[&str] = &["code", "state"];
+const RECOGNIZED_PARAMS: &[&str] = &["code", "state", "iss"];
 
 /// A successful Authorization Response as defined in [RFC 6749 §4.1.2].
 ///
@@ -27,6 +27,17 @@ pub struct AuthorizationResponse {
     /// REQUIRED if the `state` parameter was present in the Authorization Request;
     /// the exact value received from the client is echoed back.
     pub state: Option<String>,
+
+    /// The issuer identifier of the Authorization Server.
+    ///
+    /// OPTIONAL per [RFC 9207]. When present, contains the Authorization Server's
+    /// issuer identifier URL. Required by FAPI2 and HAIP to prevent mix-up attacks.
+    ///
+    /// The Wallet MUST validate that this value matches the expected issuer identifier
+    /// from the Authorization Server metadata.
+    ///
+    /// [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html
+    pub iss: Option<String>,
 }
 
 impl AuthorizationResponse {
@@ -40,7 +51,7 @@ impl AuthorizationResponse {
     ///
     /// Returns an error when:
     /// - The `code` parameter is absent or empty.
-    /// - A recognized parameter (`code`, `state`) appears more than once.
+    /// - A recognized parameter (`code`, `state`, `iss`) appears more than once.
     pub fn from_query(query: &str) -> Result<Self, Error> {
         let params = QueryParams::parse(query, RECOGNIZED_PARAMS)?;
 
@@ -61,6 +72,7 @@ impl AuthorizationResponse {
         Ok(Self {
             code: code.to_owned(),
             state: params.get("state").map(ToOwned::to_owned),
+            iss: params.get("iss").map(ToOwned::to_owned),
         })
     }
 
@@ -109,6 +121,45 @@ impl AuthorizationResponse {
         }
         Ok(())
     }
+
+    /// Validates that the `iss` parameter matches the expected Authorization Server issuer.
+    ///
+    /// Per [RFC 9207] and [HAIP §4], the Wallet MUST verify that the `iss` parameter
+    /// in the authorization response matches the issuer identifier of the Authorization Server
+    /// that the Wallet expected to receive the response from.
+    ///
+    /// # Arguments
+    ///
+    /// * `expected_issuer` - The expected Authorization Server issuer URL (from AS metadata).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::InvalidAuthorizationResponse`] when:
+    /// - `iss` is missing (strict mode per FAPI2/HAIP requirement)
+    /// - `iss` does not match the expected issuer
+    ///
+    /// [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html
+    /// [HAIP §4]: https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html#section-4
+    pub fn validate_iss(&self, expected_issuer: &str) -> Result<(), Error> {
+        match &self.iss {
+            Some(iss) => {
+                if iss != expected_issuer {
+                    return Err(Error::message(
+                        ErrorKind::InvalidAuthorizationResponse,
+                        format!(
+                            "authorization response 'iss' mismatch: expected '{}', got '{}'",
+                            expected_issuer, iss
+                        ),
+                    ));
+                }
+                Ok(())
+            }
+            None => Err(Error::message(
+                ErrorKind::InvalidAuthorizationResponse,
+                "authorization response is missing the required 'iss' parameter (per RFC 9207 / HAIP)",
+            )),
+        }
+    }
 }
 
 /// An OAuth 2.0 Pushed Authorization Response (PAR) as outlined in [OID4VCI §5.1.4].
@@ -131,6 +182,7 @@ mod tests {
         let valid = AuthorizationResponse {
             code: "abc123".to_string(),
             state: None,
+            iss: None,
         };
         assert!(valid.validate().is_ok());
     }
@@ -140,6 +192,7 @@ mod tests {
         let invalid = AuthorizationResponse {
             code: "   ".to_string(),
             state: None,
+            iss: None,
         };
         let err = invalid.validate().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
@@ -286,5 +339,104 @@ mod tests {
 
         assert_eq!(response.code, "SplxlOBeZQQYbYS6WxSbIA");
         assert_eq!(response.state.as_deref(), Some("xyz"));
+    }
+
+    // RFC 9207 iss parameter tests
+
+    #[test]
+    fn from_query_parses_iss_parameter() {
+        let response = AuthorizationResponse::from_query(
+            "code=abc123&state=xyz&iss=https://as.example.com",
+        )
+        .unwrap();
+
+        assert_eq!(response.code, "abc123");
+        assert_eq!(response.state.as_deref(), Some("xyz"));
+        assert_eq!(response.iss.as_deref(), Some("https://as.example.com"));
+    }
+
+    #[test]
+    fn from_query_parses_iss_without_state() {
+        let response =
+            AuthorizationResponse::from_query("code=abc123&iss=https://as.example.com").unwrap();
+
+        assert_eq!(response.code, "abc123");
+        assert!(response.state.is_none());
+        assert_eq!(response.iss.as_deref(), Some("https://as.example.com"));
+    }
+
+    #[test]
+    fn from_query_handles_url_encoded_iss() {
+        let response = AuthorizationResponse::from_query(
+            "code=abc&iss=https%3A%2F%2Fas.example.com%3A8443",
+        )
+        .unwrap();
+
+        assert_eq!(response.iss.as_deref(), Some("https://as.example.com:8443"));
+    }
+
+    #[test]
+    fn validate_iss_accepts_matching_issuer() {
+        let response = AuthorizationResponse {
+            code: "abc123".to_string(),
+            state: None,
+            iss: Some("https://as.example.com".to_string()),
+        };
+
+        assert!(response.validate_iss("https://as.example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_iss_rejects_mismatched_issuer() {
+        let response = AuthorizationResponse {
+            code: "abc123".to_string(),
+            state: None,
+            iss: Some("https://attacker.example.com".to_string()),
+        };
+
+        let err = response.validate_iss("https://as.example.com").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
+        assert!(err.to_string().contains("iss' mismatch"));
+        assert!(err.to_string().contains("https://as.example.com"));
+        assert!(err.to_string().contains("https://attacker.example.com"));
+    }
+
+    #[test]
+    fn validate_iss_rejects_missing_issuer() {
+        let response = AuthorizationResponse {
+            code: "abc123".to_string(),
+            state: None,
+            iss: None,
+        };
+
+        let err = response.validate_iss("https://as.example.com").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
+        assert!(err.to_string().contains("missing the required 'iss' parameter"));
+        assert!(err.to_string().contains("RFC 9207"));
+        assert!(err.to_string().contains("HAIP"));
+    }
+
+    /// From RFC 9207 — Authorization Response with iss identifier.
+    #[test]
+    fn rfc9207_authorization_response_with_iss() {
+        // Per RFC 9207, the AS includes 'iss' in the authorization response
+        let uri = "https://wallet.example.org/cb?code=SplxlOBeZQQYbYS6WxSbIA&state=xyz&iss=https://as.example.com";
+        let response = AuthorizationResponse::from_redirect_uri(uri).unwrap();
+
+        assert_eq!(response.code, "SplxlOBeZQQYbYS6WxSbIA");
+        assert_eq!(response.state.as_deref(), Some("xyz"));
+        assert_eq!(response.iss.as_deref(), Some("https://as.example.com"));
+
+        // Validation succeeds when iss matches expected AS issuer
+        assert!(response.validate_iss("https://as.example.com").is_ok());
+    }
+
+    #[test]
+    fn from_query_rejects_duplicate_iss_parameter() {
+        let err =
+            AuthorizationResponse::from_query("code=abc&iss=https://a.com&iss=https://b.com")
+                .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidAuthorizationResponse);
+        assert!(err.to_string().contains("duplicate 'iss'"));
     }
 }
