@@ -11,6 +11,19 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::core::client::Config;
 use crate::oid4vci::credential::offer::{Grants, PreAuthorizedCodeGrant};
 
+use crate::oauth::authorization::OAuthAuthorizationRequest;
+use crate::oid4vci::credential::formats::{
+    CredentialDefinition, CredentialFormatDetails, JwtVcJsonCredentialConfiguration,
+};
+use crate::oid4vci::metadata::{
+    AuthorizationServerMetadata, CredentialConfiguration, CredentialIssuerMetadata,
+};
+use crate::oid4vci::wallet_attestation::{
+    AttestationKey, Cnf, WalletAttestation, WalletAttestationSigner,
+};
+use std::collections::HashMap;
+use wiremock::matchers::header_exists;
+
 // Basic test server setup
 async fn setup_mock_server() -> MockServer {
     MockServer::start().await
@@ -288,4 +301,251 @@ async fn test_issuance_flow() {
         }
         _ => panic!("Expected immediate credential response"),
     }
+}
+
+fn get_wallet_attestation_keys() -> (AttestationKey, AttestationKey) {
+    let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+    let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+    let provider_der = provider_keypair.to_pkcs8_der().to_vec();
+    let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
+    (
+        AttestationKey::from_ecdsa_der(&provider_der).unwrap(),
+        AttestationKey::from_ecdsa_der(&wallet_der).unwrap(),
+    )
+}
+
+fn create_wallet_attestation_signer() -> WalletAttestationSigner {
+    let (provider_key, wallet_key) = get_wallet_attestation_keys();
+    let claims = WalletAttestation {
+        iss: "https://wallet-provider.example.com".to_string(),
+        sub: "wallet-client-id".to_string(),
+        iat: time::UtcDateTime::now().unix_timestamp(),
+        exp: time::UtcDateTime::now().unix_timestamp() + 3600,
+        nbf: None,
+        wallet_name: None,
+        wallet_link: None,
+        status: None,
+        cnf: Cnf {
+            jwk: wallet_key.public_jwk().unwrap().clone(),
+        },
+    };
+    WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
+}
+
+fn minimal_as_metadata(par_url: &str) -> AuthorizationServerMetadata {
+    AuthorizationServerMetadata {
+        issuer: Url::parse(par_url).unwrap(),
+        authorization_endpoint: None,
+        token_endpoint: None,
+        jwks_uri: None,
+        registration_endpoint: None,
+        scopes_supported: None,
+        response_types_supported: None,
+        response_modes_supported: None,
+        grant_types_supported: None,
+        token_endpoint_auth_methods_supported: None,
+        token_endpoint_auth_signing_alg_values_supported: None,
+        service_documentation: None,
+        ui_locales_supported: None,
+        op_policy_uri: None,
+        op_tos_uri: None,
+        revocation_endpoint: None,
+        revocation_endpoint_auth_methods_supported: None,
+        revocation_endpoint_auth_signing_alg_values_supported: None,
+        introspection_endpoint: None,
+        introspection_endpoint_auth_methods_supported: None,
+        introspection_endpoint_auth_signing_alg_values_supported: None,
+        code_challenge_methods_supported: None,
+        pushed_authorization_request_endpoint: Some(Url::parse(par_url).unwrap()),
+        require_pushed_authorization_requests: None,
+        pre_authorized_grant_anonymous_access_supported: None,
+        extra_fields: HashMap::new(),
+    }
+}
+
+fn minimal_issuer_metadata(issuer_url: &str) -> CredentialIssuerMetadata {
+    CredentialIssuerMetadata {
+        credential_issuer: Url::parse(issuer_url).unwrap(),
+        authorization_servers: None,
+        credential_endpoint: Url::parse(&format!("{issuer_url}/credential")).unwrap(),
+        nonce_endpoint: None,
+        deferred_credential_endpoint: None,
+        notification_endpoint: None,
+        batch_credential_endpoint: None,
+        credential_request_encryption: None,
+        credential_response_encryption: None,
+        batch_credential_issuance: None,
+        display: None,
+        credential_configurations_supported: {
+            let mut map = HashMap::new();
+            map.insert(
+                "TestCredential".to_string(),
+                CredentialConfiguration {
+                    id: None,
+                    format_details: CredentialFormatDetails::JwtVcJson(
+                        JwtVcJsonCredentialConfiguration {
+                            credential_definition: CredentialDefinition {
+                                types: vec!["TestType".to_string()],
+                            },
+                        },
+                    ),
+                    scope: None,
+                    cryptographic_binding_methods_supported: None,
+                    credential_signing_alg_values_supported: None,
+                    proof_types_supported: None,
+                    credential_metadata: None,
+                },
+            );
+            map
+        },
+    }
+}
+
+fn minimal_authz_request() -> AuthorizationRequest {
+    AuthorizationRequest {
+        response_type: "code".to_string(),
+        oauth: OAuthAuthorizationRequest {
+            client_id: "test-client".to_string(),
+            redirect_uri: Some(Url::parse("https://client.example.org/cb").unwrap()),
+            state: None,
+            scope: None,
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+        },
+        resource: None,
+        issuer_state: None,
+        authorization_details: None,
+    }
+}
+
+#[tokio::test]
+async fn test_par_sends_wallet_attestation_headers() {
+    let mock_server = setup_mock_server().await;
+    let par_url = format!("{}/par", mock_server.uri());
+
+    let par_response_json = serde_json::json!({
+        "request_uri": "https://as.example.com/req/123",
+        "expires_in": 3600
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/par"))
+        .and(header_exists("OAuth-Client-Attestation"))
+        .and(header_exists("OAuth-Client-Attestation-PoP"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(par_response_json))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/par"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let mut client = create_client();
+    let signer = create_wallet_attestation_signer();
+    client = client.with_wallet_attestation(signer);
+
+    let context = ResolvedOfferContext {
+        offer: CredentialOffer {
+            credential_issuer: Url::parse(&mock_server.uri()).unwrap(),
+            credential_configuration_ids: vec!["TestCredential".to_string()],
+            grants: None,
+        },
+        issuer_metadata: minimal_issuer_metadata(&mock_server.uri()),
+        as_metadata: minimal_as_metadata(&par_url),
+        flow: IssuanceFlow::AuthorizationCode { issuer_state: None },
+    };
+
+    let result = client.send_par(&context, &minimal_authz_request()).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_par_without_wallet_attestation_no_headers() {
+    let mock_server = setup_mock_server().await;
+    let par_url = format!("{}/par", mock_server.uri());
+
+    let par_response_json = serde_json::json!({
+        "request_uri": "https://as.example.com/req/123",
+        "expires_in": 3600
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/par"))
+        .and(header_exists("OAuth-Client-Attestation"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/par"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(par_response_json))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+
+    let context = ResolvedOfferContext {
+        offer: CredentialOffer {
+            credential_issuer: Url::parse(&mock_server.uri()).unwrap(),
+            credential_configuration_ids: vec!["TestCredential".to_string()],
+            grants: None,
+        },
+        issuer_metadata: minimal_issuer_metadata(&mock_server.uri()),
+        as_metadata: minimal_as_metadata(&par_url),
+        flow: IssuanceFlow::AuthorizationCode { issuer_state: None },
+    };
+
+    let result = client.send_par(&context, &minimal_authz_request()).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_token_sends_wallet_attestation_headers() {
+    let mock_server = setup_mock_server().await;
+    let token_url = format!("{}/token", mock_server.uri());
+
+    let token_response_json = serde_json::json!({
+        "access_token": "test_access_token",
+        "token_type": "Bearer",
+        "expires_in": 3600
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(header_exists("OAuth-Client-Attestation"))
+        .and(header_exists("OAuth-Client-Attestation-PoP"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(token_response_json))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let mut client = create_client();
+    let signer = create_wallet_attestation_signer();
+    client = client.with_wallet_attestation(signer);
+
+    let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
+        pre_authorized_code: "test_code".to_string(),
+        client_id: None,
+        tx_code: None,
+        authorization_details: None,
+    });
+
+    let result = client
+        .post_token_request(&Url::parse(&token_url).unwrap(), &request)
+        .await;
+    assert!(result.is_ok());
 }

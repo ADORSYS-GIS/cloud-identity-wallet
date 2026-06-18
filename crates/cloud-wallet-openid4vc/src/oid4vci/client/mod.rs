@@ -13,6 +13,7 @@ pub use signer::{
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use reqwest::header::CONTENT_TYPE;
+use std::sync::Arc;
 use url::Url;
 
 use crate::core::client::OidClient;
@@ -40,6 +41,7 @@ use crate::oid4vci::proofs::Proofs;
 use crate::oid4vci::token::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest, TokenResponse,
 };
+use crate::oid4vci::wallet_attestation::WalletAttestationSigner;
 use crate::utils::QueryParams;
 use crate::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier};
 
@@ -145,6 +147,7 @@ impl AuthorizationCallback {
 #[derive(Debug, Clone)]
 pub struct Oid4vciClient {
     inner_client: OidClient,
+    wallet_attestation: Option<Arc<WalletAttestationSigner>>,
 }
 
 impl Oid4vciClient {
@@ -152,12 +155,30 @@ impl Oid4vciClient {
     pub fn new(client: OidClient) -> Self {
         Self {
             inner_client: client,
+            wallet_attestation: None,
         }
     }
 
     /// Returns the underlying HTTP client used for OID4VCI requests.
     pub fn http_client(&self) -> &ClientWithMiddleware {
         self.inner_client.http_client()
+    }
+
+    /// Configure wallet attestation for client authentication at PAR and Token endpoints.
+    pub fn with_wallet_attestation(mut self, signer: WalletAttestationSigner) -> Self {
+        self.wallet_attestation = Some(Arc::new(signer));
+        self
+    }
+
+    /// Returns the effective `client_id` for this client.
+    ///
+    /// When wallet attestation is configured, this is the `sub` claim from the attestation
+    /// JWT. Otherwise, it falls back to the `client_id` from the base configuration.
+    fn client_id(&self) -> &str {
+        self.wallet_attestation
+            .as_ref()
+            .map(|s| s.client_id())
+            .unwrap_or(&self.inner_client.config().client_id)
     }
 
     /// Resolve a raw credential offer string into a typed `CredentialOffer`.
@@ -349,7 +370,7 @@ impl Oid4vciClient {
         let authz_request = AuthorizationRequest {
             response_type: OAUTH_RESPONSE_TYPE.into(),
             oauth: OAuthAuthorizationRequest {
-                client_id: self.inner_client.config().client_id.clone(),
+                client_id: self.client_id().to_owned(),
                 redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
                 state: Some(state.into()),
                 scope: None,
@@ -369,11 +390,7 @@ impl Oid4vciClient {
         {
             // PAR is advertised, use it.
             let par_response = self.send_par(context, &authz_request).await?;
-            build_par_redirect_url(
-                authz_endpoint,
-                &self.inner_client.config().client_id,
-                par_response,
-            )?
+            build_par_redirect_url(authz_endpoint, self.client_id(), par_response)?
         } else {
             build_plain_authz_url(authz_endpoint, authz_request)?
         };
@@ -443,7 +460,7 @@ impl Oid4vciClient {
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
             code: code.into(),
             redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
-            client_id: self.inner_client.config().client_id.clone(),
+            client_id: self.client_id().to_owned(),
             code_verifier: Some(pkce_verifier.into()),
             authorization_details: Some(authz_details),
         });
@@ -474,7 +491,7 @@ impl Oid4vciClient {
         let client_id = if context.as_metadata.allows_anonymous_pre_authorized_grant() {
             None
         } else {
-            Some(self.inner_client.config().client_id.clone())
+            Some(self.client_id().to_owned())
         };
 
         // Include authorization_details so the AS can return credential_identifiers
@@ -737,11 +754,20 @@ impl Oid4vciClient {
         let body = serde_urlencoded::to_string(request)
             .map_err(|e| ClientError::internal(format!("Failed to serialize PAR request: {e}")))?;
 
-        let response = self
+        let mut req = self
             .inner_client
             .http_client()
             .post(par_endpoint.as_str())
-            .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
+            .header(CONTENT_TYPE, FORM_ENCODED_HEADER);
+
+        if let Some(ref signer) = self.wallet_attestation {
+            let pop = signer.pop_jwt(par_endpoint.as_str(), None)?;
+            req = req
+                .header("OAuth-Client-Attestation", signer.attestation_jwt())
+                .header("OAuth-Client-Attestation-PoP", pop);
+        }
+
+        let response = req
             .body(body)
             .send()
             .await
@@ -777,11 +803,20 @@ impl Oid4vciClient {
             ClientError::internal(format!("Failed to serialize token request: {e}"))
         })?;
 
-        let response = self
+        let mut req = self
             .inner_client
             .http_client()
             .post(token_endpoint.as_str())
-            .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
+            .header(CONTENT_TYPE, FORM_ENCODED_HEADER);
+
+        if let Some(ref signer) = self.wallet_attestation {
+            let pop = signer.pop_jwt(token_endpoint.as_str(), None)?;
+            req = req
+                .header("OAuth-Client-Attestation", signer.attestation_jwt())
+                .header("OAuth-Client-Attestation-PoP", pop);
+        }
+
+        let response = req
             .body(body)
             .send()
             .await
@@ -822,7 +857,7 @@ impl Oid4vciClient {
         let client_id = if is_anonymous {
             None
         } else {
-            Some(self.inner_client.config().client_id.to_owned())
+            Some(self.client_id().to_owned())
         };
 
         let claims = ProofClaims {
