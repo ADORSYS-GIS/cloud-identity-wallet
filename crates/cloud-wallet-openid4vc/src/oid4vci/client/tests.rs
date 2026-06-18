@@ -435,7 +435,11 @@ async fn test_dpop_proof_attached_to_token_request() {
 #[tokio::test]
 async fn test_dpop_nonce_handler_stores_nonce() {
     let handler = DpopNonceHandler::new();
-    assert!(handler.get_nonce("https://issuer.example.com/token").is_none());
+    assert!(
+        handler
+            .get_nonce("https://issuer.example.com/token")
+            .is_none()
+    );
 
     handler.store_nonce("https://issuer.example.com/token", "server-nonce-456");
     assert_eq!(

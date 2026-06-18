@@ -612,8 +612,15 @@ impl Oid4vciClient {
             request = request.with_proofs(p);
         }
 
-        self.post_credential_request(context, access_token, &request, dpop_key, dpop_nonce, dpop_nonce_handler)
-            .await
+        self.post_credential_request(
+            context,
+            access_token,
+            &request,
+            dpop_key,
+            dpop_nonce,
+            dpop_nonce_handler,
+        )
+        .await
     }
 
     /// Request all credentials authorized by the token response.
@@ -641,7 +648,14 @@ impl Oid4vciClient {
         for (config_id, identifiers) in resolved {
             for id in identifiers {
                 futures.push(self.request_credential(
-                    context, token, id, config_id, signer, dpop_key, dpop_nonce, dpop_nonce_handler,
+                    context,
+                    token,
+                    id,
+                    config_id,
+                    signer,
+                    dpop_key,
+                    dpop_nonce,
+                    dpop_nonce_handler,
                 ));
             }
         }

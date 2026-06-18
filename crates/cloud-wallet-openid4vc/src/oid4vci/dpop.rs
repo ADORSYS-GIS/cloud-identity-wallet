@@ -427,22 +427,10 @@ mod tests {
         let key_pair = make_key_pair();
         let correct_htu = "https://issuer.example.com/token";
         let wrong_htu = "https://attacker.example.com/token";
-        let proof_correct = build_dpop_proof(
-            &key_pair,
-            "POST",
-            correct_htu,
-            None,
-            None,
-        )
-        .expect("proof generation should succeed");
-        let proof_wrong = build_dpop_proof(
-            &key_pair,
-            "POST",
-            wrong_htu,
-            None,
-            None,
-        )
-        .expect("proof generation should succeed");
+        let proof_correct = build_dpop_proof(&key_pair, "POST", correct_htu, None, None)
+            .expect("proof generation should succeed");
+        let proof_wrong = build_dpop_proof(&key_pair, "POST", wrong_htu, None, None)
+            .expect("proof generation should succeed");
 
         let claims_correct: DpopProofClaims = decode_claims(&proof_correct);
         let claims_wrong: DpopProofClaims = decode_claims(&proof_wrong);
@@ -464,10 +452,15 @@ mod tests {
             nonce: None,
             ath: None,
         };
-        let proof = key_pair.sign_dpop_proof(&claims).expect("signing should succeed");
+        let proof = key_pair
+            .sign_dpop_proof(&claims)
+            .expect("signing should succeed");
         let decoded_claims: DpopProofClaims = decode_claims(&proof);
         let now = time::UtcDateTime::now().unix_timestamp();
-        assert!(decoded_claims.iat < now - 300, "proof with iat 1 hour ago should be considered expired");
+        assert!(
+            decoded_claims.iat < now - 300,
+            "proof with iat 1 hour ago should be considered expired"
+        );
     }
 
     #[test]
@@ -492,14 +485,22 @@ mod tests {
     #[test]
     fn dpop_nonce_handler_store_and_retrieve() {
         let handler = DpopNonceHandler::new();
-        assert!(handler.get_nonce("https://issuer.example.com/token").is_none());
+        assert!(
+            handler
+                .get_nonce("https://issuer.example.com/token")
+                .is_none()
+        );
 
         handler.store_nonce("https://issuer.example.com/token", "abc123");
         assert_eq!(
             handler.get_nonce("https://issuer.example.com/token"),
             Some("abc123".to_string())
         );
-        assert!(handler.get_nonce("https://other.example.com/token").is_none());
+        assert!(
+            handler
+                .get_nonce("https://other.example.com/token")
+                .is_none()
+        );
     }
 
     #[test]
