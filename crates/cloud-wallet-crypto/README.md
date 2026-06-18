@@ -219,6 +219,96 @@ Ok(())
 # fn main() {}
 ```
 
+### JWE Key Agreement (ECDH-ES)
+
+These four primitives - ephemeral ECDH, ConcatKDF, AES Key Wrap, and RSA-OAEP - are
+low-level building blocks for JWE key-encryption. They are designed to be composed in
+sequence, not used independently. The example below shows the correct sender-side flow
+for ECDH-ES with AES Key Wrap (JWE `ECDH-ES+A256KW`):
+
+```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+use cloud_wallet_crypto::{
+    ecdh::{EcdhCurve, EphemeralEcdhKey, EcdhPublicKey},
+    kdf::{concat_kdf, ConcatKdfParams},
+    aes_kek::{KeyEncryptionKey, KeyWrapAlgorithm},
+    digest::HashAlg,
+    rand,
+};
+# // Stand-in for the recipient's real static public key bytes.
+# let tmp = EphemeralEcdhKey::generate(EcdhCurve::P256)?;
+# let mut tmp_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+# let peer_bytes = tmp.public_key_bytes(&mut tmp_buf)?.to_vec();
+
+// Recipient's P-256 static public key — in OpenID4VP this is the verifier's key
+// from their client metadata.
+let peer = EcdhPublicKey::from_bytes(EcdhCurve::P256, &peer_bytes)?;
+
+// Generate a fresh ephemeral key — consumed on agreement, never reused (RFC 7518 §4.6).
+let sender = EphemeralEcdhKey::generate(EcdhCurve::P256)?;
+
+// Serialise the ephemeral public key; include this in the JWE `epk` header field.
+let mut epk_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+let _epk_bytes = sender.public_key_bytes(&mut epk_buf)?;
+
+// Agree — `sender` is consumed here; do not use the raw shared secret as a key.
+let shared = sender.agree(&peer)?;
+
+// Derive a 256-bit key-encryption key via ConcatKDF (RFC 7518 §4.6.2).
+let mut kek_bytes = [0u8; 32];
+concat_kdf(
+    HashAlg::Sha256,
+    shared.as_bytes(),
+    &ConcatKdfParams { algorithm_id: b"A256KW", party_u_info: b"", party_v_info: b"" },
+    &mut kek_bytes,
+)?;
+
+// Randomly generated content-encryption key — encrypts the actual payload;
+// AES-KW protects it for transport in the JWE encrypted key field.
+let mut cek = [0u8; 32];
+rand::fill_bytes(&mut cek)?;
+
+let kek = KeyEncryptionKey::new(KeyWrapAlgorithm::A256Kw, &kek_bytes)?;
+let mut wrap_buf = vec![0u8; cek.len() + 8];
+let _wrapped_cek = kek.wrap_key(&cek, &mut wrap_buf)?;
+# Ok(())
+# }
+```
+
+> **Scope note**: These primitives cover the **sender side** of JWE ECDH-ES (the
+> wallet's role in OpenID4VP encrypted responses). The recipient side requires
+> static-key ECDH agreement, which this crate does not currently provide. Full JWE
+> framing - header serialisation, CEK generation, and content encryption - is a
+> separate layer not yet provided by this crate.
+
+### RSA-OAEP Key Encryption
+
+An alternative to ECDH-ES when the recipient's key is RSA. Corresponds to JWE
+`RSA-OAEP-256`:
+
+```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+use cloud_wallet_crypto::{
+    rand,
+    rsa::{RsaKeySize, oaep::{DecryptingKey, OaepAlgorithm}},
+};
+
+// In production, load the recipient's public key via EncryptingKey::from_spki_der.
+// Here we generate a key pair to demonstrate the encryption side.
+let key = DecryptingKey::generate(RsaKeySize::Rsa2048)?;
+let enc = key.public_key();
+
+// Randomly generated content-encryption key to wrap.
+let mut cek = [0u8; 32];
+rand::fill_bytes(&mut cek)?;
+
+// Encrypt the CEK with RSA-OAEP-SHA256.
+let mut wrap_buf = vec![0u8; enc.ciphertext_size()];
+let _wrapped_cek = enc.encrypt(OaepAlgorithm::Sha256, &cek, &mut wrap_buf)?;
+# Ok(())
+# }
+```
+
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
