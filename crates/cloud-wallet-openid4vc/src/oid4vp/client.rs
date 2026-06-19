@@ -22,7 +22,7 @@ use crate::oid4vp::authorization::request_uri::{RequestUriResult, resolve_reques
 use crate::oid4vp::authorization::{
     AuthorizationRequest, AuthorizationResponse, DirectPostResponse, RequestUriMethod, ResponseMode,
 };
-use crate::oid4vp::client_id::ParsedClientId;
+use crate::oid4vp::client_id::{ClientIdPrefix, ParsedClientId};
 use crate::oid4vp::dcql::{CredentialQuery, DcqlQuery};
 use crate::oid4vp::error::{AuthorizationErrorCode, RequestObjectError, RequestUriError};
 use crate::oid4vp::metadata::verifier::VerifierMetadata;
@@ -44,6 +44,15 @@ pub struct Oid4vpConfig {
     pub wallet_metadata: Option<WalletPresentationMetadata>,
 }
 
+impl std::fmt::Debug for Oid4vpConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Oid4vpConfig")
+            .field("discovery_mode", &self.discovery_mode)
+            .field("wallet_metadata", &self.wallet_metadata)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Resolves Request Objects referenced by `request_uri`.
 ///
 /// Handlers can implement this trait to inject policy, caching, wallet nonce
@@ -61,6 +70,9 @@ pub trait RequestUriResolver: Send + Sync {
 }
 
 /// Default HTTP-backed [`RequestUriResolver`].
+///
+/// Note: passes `None` for `wallet_nonce`. Callers requiring wallet nonce
+/// binding should provide a custom [`RequestUriResolver`] implementation.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HttpRequestUriResolver;
 
@@ -124,6 +136,8 @@ impl AuthzResponseSender for DirectPostResponseSender {
         match context.response_mode {
             ResponseMode::DirectPost => {
                 let response_uri = context.require_response_uri()?;
+                // response_uri is used as both the endpoint and the expected URI
+                // because both derive from the validated AuthorizationRequest.
                 send_direct_post(http_client, response_uri, response_uri, response)
                     .await
                     .map_err(Into::into)
@@ -184,6 +198,11 @@ impl PresentationContext {
     }
 }
 
+/// Unvalidated envelope extracted from the raw authorization request.
+///
+/// Only `client_id` and the location of the Request Object (`request_uri` / `request`)
+/// are needed at this stage. Full deserialization and validation happen after the
+/// Request Object is resolved and decoded.
 #[derive(Debug, Deserialize)]
 struct AuthorizationRequestEnvelope {
     client_id: String,
@@ -218,8 +237,8 @@ impl Oid4vpClient {
     /// 2. Validate the parsed request
     /// 3. If `request_uri` is present: resolve via GET/POST, then decode+validate
     /// 4. If `request` (inline JWT) is present: decode+validate directly
-    /// 5. Otherwise: use the parsed request directly (unsigned — only valid
-    ///    for pre-registered clients per spec)
+    /// 5. Otherwise: use the parsed request directly (unsigned — only valid for
+    ///    `redirect_uri:` prefix or pre-registered clients per OpenID4VP §5.9)
     /// 6. Parse `client_id` via [`ParsedClientId::parse`]
     /// 7. Decode `transaction_data` if present
     /// 8. Validate `dcql_query` is present (DCQL-only)
@@ -291,8 +310,8 @@ impl Oid4vpClient {
         &self,
         ctx: &PresentationContext,
         credentials: &[CredentialView],
-    ) -> Result<SelectionResult, Error> {
-        Ok(match_dcql_query(&ctx.dcql_query, credentials))
+    ) -> SelectionResult {
+        match_dcql_query(&ctx.dcql_query, credentials)
     }
 
     /// Builds and sends a VP Token response to the Verifier.
@@ -429,6 +448,21 @@ impl Oid4vpClient {
                 .await;
         }
 
+        // Unsigned request path (no request_uri, no inline request JWT).
+        // Per OpenID4VP §5.9.2–5.9.3: only `redirect_uri:` prefix and pre-registered
+        // clients may use unsigned requests. All other prefixes require a signed
+        // Request Object.
+        let client_id = ParsedClientId::parse(&envelope.client_id)?;
+        if let Some(prefix) = client_id.prefix()
+            && prefix != ClientIdPrefix::RedirectUri
+        {
+            return Err(Error::InvalidRequest(format!(
+                "unsigned authorization request not allowed for client_id prefix '{}'; \
+                 a signed Request Object is required",
+                prefix.as_str()
+            )));
+        }
+
         self.parse_authorization_request(raw_request)
     }
 
@@ -487,29 +521,7 @@ impl Oid4vpClient {
         let mut result = Vec::with_capacity(td_entries.len());
         for encoded in td_entries {
             let td = TransactionData::decode(encoded).map_err(Error::InvalidTransactionData)?;
-            let owned = match td {
-                TransactionData::Openid4vp {
-                    data,
-                    original_encoded,
-                } => TransactionData::Openid4vp {
-                    data,
-                    original_encoded: std::borrow::Cow::Owned(original_encoded.into_owned()),
-                },
-                TransactionData::Other {
-                    transaction_type,
-                    credential_ids,
-                    transaction_data_hashes_alg,
-                    additional_params,
-                    original_encoded,
-                } => TransactionData::Other {
-                    transaction_type,
-                    credential_ids,
-                    transaction_data_hashes_alg,
-                    additional_params,
-                    original_encoded: std::borrow::Cow::Owned(original_encoded.into_owned()),
-                },
-            };
-            result.push(owned);
+            result.push(td.into_owned());
         }
         Ok(result)
     }

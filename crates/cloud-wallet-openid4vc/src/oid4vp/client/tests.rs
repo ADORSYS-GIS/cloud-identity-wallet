@@ -319,3 +319,72 @@ fn error_invalid_request_display() {
     let err = Error::InvalidRequest("test error".into());
     assert!(err.to_string().contains("test error"));
 }
+
+#[test]
+fn error_response_builds_with_state() {
+    let request = test_authorization_request();
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.oauth.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode.clone(),
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
+        request,
+    };
+
+    let response = AuthorizationResponse::error(AuthorizationErrorCode::AccessDenied);
+    let response = response.with_state(ctx.state.as_deref().unwrap_or(""));
+    assert!(matches!(response, AuthorizationResponse::Error(_)));
+}
+
+#[tokio::test]
+async fn create_error_response_returns_unsupported_mode() {
+    let mut request = test_authorization_request();
+    request.response_mode = ResponseMode::DirectPostJwt;
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.oauth.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode.clone(),
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
+        request,
+    };
+
+    let client = Oid4vpClient::new(test_config());
+    let result = client
+        .create_error_response(&ctx, AuthorizationErrorCode::AccessDenied)
+        .await;
+    assert!(
+        matches!(result, Err(Error::UnsupportedResponseMode(_))),
+        "direct_post.jwt without encryption sender should return UnsupportedResponseMode"
+    );
+}
+
+#[tokio::test]
+async fn rejects_unsigned_request_for_non_redirect_uri_prefix() {
+    let client = Oid4vpClient::new(test_config());
+    // x509_san_dns prefix requires a signed Request Object per OpenID4VP §5.9.3.
+    // An unsigned request with this prefix must be rejected.
+    let raw = "openid4vp://?response_type=vp_token&client_id=x509_san_dns%3Averifier.example.com&nonce=test-nonce&response_mode=direct_post&response_uri=https%3A%2F%2Fverifier.example.com%2Fresponse&dcql_query=%7B%22credentials%22%3A%5B%7B%22id%22%3A%22pid%22%2C%22format%22%3A%22dc%2Bsd-jwt%22%2C%22meta%22%3A%7B%22vct_values%22%3A%5B%22https%3A%2F%2Fexample.com%2Fpid%22%5D%7D%7D%5D%7D";
+
+    let err = client
+        .process_authz_request(raw, &StaticKeyResolver)
+        .await
+        .expect_err("unsigned request with x509_san_dns prefix should be rejected");
+
+    match &err {
+        Error::InvalidRequest(msg) => {
+            assert!(msg.contains("unsigned"), "expected unsigned rejection, got: {msg}");
+            assert!(msg.contains("x509_san_dns"), "expected prefix in error, got: {msg}");
+        }
+        other => panic!("expected InvalidRequest, got: {other:?}"),
+    }
+}
