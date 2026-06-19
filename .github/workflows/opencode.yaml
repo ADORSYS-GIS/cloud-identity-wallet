@@ -27,7 +27,6 @@ jobs:
     uses: ADORSYS-GIS/ai-governance/.github/workflows/opencode-review.yml@a887e7622d0bec0acff4ce5975229845daa90767
     permissions:
       id-token: write # mint the GHA OIDC token (gateway auth)
-      contents: write # checkout + the action's git ops
       pull-requests: write # post the review
       issues: write # post issue-task / failure comments
     with:
