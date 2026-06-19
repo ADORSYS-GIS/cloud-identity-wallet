@@ -135,6 +135,12 @@ impl AttestationKey {
     pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let rsa_key = rsa::KeyPair::from_pkcs8_der(der.as_ref())
             .map_err(|e| ClientError::internal(format!("crypto error: {e}")))?;
+        let modulus_len = rsa_key.modulus_len();
+        if !matches!(modulus_len, 256 | 384 | 512) {
+            return Err(ClientError::configuration(format!(
+                "unsupported RSA key size: {modulus_len} bytes (expected 2048, 3072, or 4096 bits)"
+            )));
+        }
         let key = KeyMaterial::Rsa(rsa_key);
         let algorithm = key.algorithm();
         let public_jwk = match &key {
@@ -179,7 +185,7 @@ impl KeyMaterial {
                 256 => Algorithm::PS256,
                 384 => Algorithm::PS384,
                 512 => Algorithm::PS512,
-                _ => Algorithm::PS256,
+                _ => unreachable!("RSA key size validated at construction"),
             },
         }
     }
@@ -200,7 +206,7 @@ impl KeyMaterial {
                     256 => keypair.sign_pss_sha256(msg, &mut sig)?,
                     384 => keypair.sign_pss_sha384(msg, &mut sig)?,
                     512 => keypair.sign_pss_sha512(msg, &mut sig)?,
-                    _ => keypair.sign_pss_sha256(msg, &mut sig)?,
+                    _ => unreachable!("RSA key size validated at construction"),
                 };
                 Ok(sig.to_vec())
             }
@@ -273,7 +279,7 @@ impl WalletAttestationSigner {
         };
 
         let claims = ClientAttestationPop {
-            jti: format!("pop-{}", current_timestamp_nanos()),
+            jti: format!("pop-{}", uuid::Uuid::new_v4()),
             aud: audience.to_string(),
             iat: current_timestamp(),
             nonce: nonce.map(|s| s.to_string()),
@@ -327,13 +333,6 @@ fn current_timestamp() -> i64 {
         .duration_since(UNIX_EPOCH)
         .expect("system time before Unix epoch")
         .as_secs() as i64
-}
-
-fn current_timestamp_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_nanos()
 }
 
 #[cfg(test)]

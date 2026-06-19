@@ -761,6 +761,7 @@ impl Oid4vciClient {
             .header(CONTENT_TYPE, FORM_ENCODED_HEADER);
 
         if let Some(ref signer) = self.wallet_attestation {
+            signer.validate_attestation()?;
             let pop = signer.pop_jwt(par_endpoint.as_str(), None)?;
             req = req
                 .header("OAuth-Client-Attestation", signer.attestation_jwt())
@@ -810,6 +811,7 @@ impl Oid4vciClient {
             .header(CONTENT_TYPE, FORM_ENCODED_HEADER);
 
         if let Some(ref signer) = self.wallet_attestation {
+            signer.validate_attestation()?;
             let pop = signer.pop_jwt(token_endpoint.as_str(), None)?;
             req = req
                 .header("OAuth-Client-Attestation", signer.attestation_jwt())

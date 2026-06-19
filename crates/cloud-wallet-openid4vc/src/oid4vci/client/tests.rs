@@ -332,6 +332,24 @@ fn create_wallet_attestation_signer() -> WalletAttestationSigner {
     WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
 }
 
+fn create_expired_wallet_attestation_signer() -> WalletAttestationSigner {
+    let (provider_key, wallet_key) = get_wallet_attestation_keys();
+    let claims = WalletAttestation {
+        iss: "https://wallet-provider.example.com".to_string(),
+        sub: "wallet-client-id".to_string(),
+        iat: time::UtcDateTime::now().unix_timestamp() - 7200,
+        exp: time::UtcDateTime::now().unix_timestamp() - 3600,
+        nbf: None,
+        wallet_name: None,
+        wallet_link: None,
+        status: None,
+        cnf: Cnf {
+            jwk: wallet_key.public_jwk().unwrap().clone(),
+        },
+    };
+    WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
+}
+
 fn minimal_as_metadata(par_url: &str) -> AuthorizationServerMetadata {
     AuthorizationServerMetadata {
         issuer: Url::parse(par_url).unwrap(),
@@ -462,6 +480,33 @@ async fn test_par_sends_wallet_attestation_headers() {
 
     let result = client.send_par(&context, &minimal_authz_request()).await;
     assert!(result.is_ok());
+    mock_server.verify().await;
+}
+
+#[tokio::test]
+async fn test_par_rejects_expired_attestation() {
+    let mock_server = setup_mock_server().await;
+    let par_url = format!("{}/par", mock_server.uri());
+
+    let mut client = create_client();
+    let signer = create_expired_wallet_attestation_signer();
+    client = client.with_wallet_attestation(signer);
+
+    let context = ResolvedOfferContext {
+        offer: CredentialOffer {
+            credential_issuer: Url::parse(&mock_server.uri()).unwrap(),
+            credential_configuration_ids: vec!["TestCredential".to_string()],
+            grants: None,
+        },
+        issuer_metadata: minimal_issuer_metadata(&mock_server.uri()),
+        as_metadata: minimal_as_metadata(&par_url),
+        flow: IssuanceFlow::AuthorizationCode { issuer_state: None },
+    };
+
+    let result = client.send_par(&context, &minimal_authz_request()).await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("expired"));
 }
 
 #[tokio::test]
@@ -474,6 +519,11 @@ async fn test_par_without_wallet_attestation_no_headers() {
         "expires_in": 3600
     });
 
+    // We use two mocks with different matcher specificity to assert header absence.
+    // Wiremock gives higher priority to mocks with more matchers. Mock A includes
+    // `header_exists` so it is more specific. If the request contains the header,
+    // it matches Mock A and fails because expect(0). If the request does not contain
+    // the header, it falls through to Mock B (expect(1)) and passes.
     Mock::given(method("POST"))
         .and(path("/par"))
         .and(header_exists("OAuth-Client-Attestation"))
@@ -504,6 +554,7 @@ async fn test_par_without_wallet_attestation_no_headers() {
 
     let result = client.send_par(&context, &minimal_authz_request()).await;
     assert!(result.is_ok());
+    mock_server.verify().await;
 }
 
 #[tokio::test]
@@ -548,4 +599,29 @@ async fn test_token_sends_wallet_attestation_headers() {
         .post_token_request(&Url::parse(&token_url).unwrap(), &request)
         .await;
     assert!(result.is_ok());
+    mock_server.verify().await;
+}
+
+#[tokio::test]
+async fn test_token_rejects_expired_attestation() {
+    let mock_server = setup_mock_server().await;
+    let token_url = format!("{}/token", mock_server.uri());
+
+    let mut client = create_client();
+    let signer = create_expired_wallet_attestation_signer();
+    client = client.with_wallet_attestation(signer);
+
+    let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
+        pre_authorized_code: "test_code".to_string(),
+        client_id: None,
+        tx_code: None,
+        authorization_details: None,
+    });
+
+    let result = client
+        .post_token_request(&Url::parse(&token_url).unwrap(), &request)
+        .await;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("expired"));
 }
