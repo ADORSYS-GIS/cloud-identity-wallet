@@ -26,6 +26,9 @@ const OID_X509_EXT_CRL_DISTRIBUTION_POINTS: &str = "2.5.29.31";
 /// Default CRL cache TTL (6 hours per ISO 18013-5 Annex B §B.2 guidance).
 const DEFAULT_CRL_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
+/// Maximum number of CRL entries in the cache to prevent unbounded memory growth.
+const MAX_CRL_CACHE_ENTRIES: usize = 64;
+
 /// Maps RFC 5280 §5.3.1 CRLReason to stable string values.
 fn reason_code_to_string(code: ReasonCode) -> &'static str {
     match code {
@@ -86,24 +89,40 @@ struct CrlCacheEntry {
     crl_der: Vec<u8>,
     fetched_at: Instant,
     expires_after: Duration,
+    insertion_order: u64,
 }
 
-static CRL_CACHE: LazyLock<Mutex<HashMap<String, CrlCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static CRL_CACHE: LazyLock<Mutex<(HashMap<String, CrlCacheEntry>, u64)>> =
+    LazyLock::new(|| Mutex::new((HashMap::new(), 0)));
 
-/// Clears a stale cache entry if its TTL has expired.
-fn evict_if_stale(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
+/// Evicts entries that are stale (TTL expired) or when cache exceeds max size.
+fn evict_if_needed(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
+    // First, remove the entry for this URI if stale
     if let Some(entry) = cache.get(uri)
         && entry.fetched_at.elapsed() > entry.expires_after
     {
         cache.remove(uri);
     }
+
+    // If cache exceeds max size, evict oldest entries (lowest insertion_order)
+    while cache.len() > MAX_CRL_CACHE_ENTRIES {
+        let oldest = cache
+            .iter()
+            .min_by_key(|(_, e)| e.insertion_order)
+            .map(|(k, _)| k.clone());
+        if let Some(key) = oldest {
+            cache.remove(&key);
+        } else {
+            break;
+        }
+    }
 }
 
-/// Extracts the first HTTP/HTTPS CRL Distribution Point URI from a DSC.
+/// Extracts the first HTTPS CRL Distribution Point URI from a DSC.
 ///
 /// Per ISO 18013-5 Annex B §B.2 and RFC 5280 §4.2.1.13, the CRL Distribution Points
-/// extension contains URIs where CRLs can be retrieved. We extract the first HTTP(S) URI.
+/// extension contains URIs where CRLs can be retrieved. We extract the first HTTPS URI.
+/// Plain HTTP URIs are rejected per ISO 18013-5 Annex B §B.2 security requirements.
 fn extract_crl_uri(dsc: &X509Certificate<'_>) -> Result<Option<String>> {
     let crl_dp_ext = dsc
         .extensions()
@@ -129,14 +148,18 @@ fn extract_crl_uri(dsc: &X509Certificate<'_>) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Extracts the first HTTP/HTTPS URI from a CRL Distribution Point.
+/// Extracts the first HTTPS URI from a CRL Distribution Point.
+///
+/// Per ISO 18013-5 Annex B §B.2, CRL distribution point URIs MUST use HTTPS.
+/// Plain HTTP URIs are rejected to prevent MITM attacks where a forged CRL
+/// could bypass revocation checking.
 fn extract_https_uri_from_distribution_point<'a>(dp: &CRLDistributionPoint<'a>) -> Option<String> {
     let uri_general_names = dp.distribution_point.as_ref()?;
     match uri_general_names {
         x509_parser::extensions::DistributionPointName::FullName(names) => {
             for general_name in names {
                 if let GeneralName::URI(uri) = general_name
-                    && (uri.starts_with("https://") || uri.starts_with("http://"))
+                    && uri.starts_with("https://")
                 {
                     return Some(uri.to_string());
                 }
@@ -181,14 +204,14 @@ pub async fn check_revocation(
         }
     };
 
-    let crl_bytes = match fetch_crl_cached(&crl_uri, policy).await {
+    let crl_bytes = match fetch_crl_cached(&crl_uri).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return handle_crl_fetch_error(&crl_uri, e, policy);
         }
     };
 
-    let crl = match parse_and_validate_crl(&crl_bytes, dsc_issuer_der, dsc) {
+    let crl = match parse_and_validate_crl(&crl_bytes, dsc_issuer_der) {
         Ok(crl) => crl,
         Err(e) => {
             return handle_crl_parse_error(&crl_uri, e, policy);
@@ -214,13 +237,14 @@ pub async fn check_revocation(
 /// Handles missing CRL Distribution Point URI.
 fn handle_missing_crl_uri(policy: RevocationPolicy) -> Result<()> {
     match policy {
-        RevocationPolicy::Skip | RevocationPolicy::SoftFail => {
+        RevocationPolicy::SoftFail => {
             tracing::warn!("DSC has no CRL Distribution Point URI; skipping revocation check");
             Ok(())
         }
         RevocationPolicy::HardFail => Err(MdocError::RevocationCheckFailed {
             reason: "DSC has no CRL Distribution Point URI".to_owned(),
         }),
+        RevocationPolicy::Skip => unreachable!("Skip policy returns early in check_revocation"),
     }
 }
 
@@ -231,7 +255,7 @@ fn handle_crl_fetch_error(
     policy: RevocationPolicy,
 ) -> Result<()> {
     match policy {
-        RevocationPolicy::Skip | RevocationPolicy::SoftFail => {
+        RevocationPolicy::SoftFail => {
             tracing::warn!(
                 "CRL fetch from {} failed: {error}; skipping revocation check",
                 uri
@@ -241,13 +265,14 @@ fn handle_crl_fetch_error(
         RevocationPolicy::HardFail => Err(MdocError::RevocationCheckFailed {
             reason: format!("CRL fetch from {} failed: {error}", uri),
         }),
+        RevocationPolicy::Skip => unreachable!("Skip policy returns early in check_revocation"),
     }
 }
 
 /// Handles CRL parse/validation errors according to policy.
 fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy) -> Result<()> {
     match policy {
-        RevocationPolicy::Skip | RevocationPolicy::SoftFail => {
+        RevocationPolicy::SoftFail => {
             tracing::warn!(
                 "CRL parse/validation from {} failed: {error:?}; skipping revocation check",
                 uri
@@ -255,18 +280,17 @@ fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy)
             Ok(())
         }
         RevocationPolicy::HardFail => Err(error),
+        RevocationPolicy::Skip => unreachable!("Skip policy returns early in check_revocation"),
     }
 }
 
-/// Fetches CRL bytes from the given HTTP(S) URI, using cache if available and fresh.
-async fn fetch_crl_cached(
-    uri: &str,
-    _policy: RevocationPolicy,
-) -> std::result::Result<Vec<u8>, reqwest::Error> {
+/// Fetches CRL bytes from the given HTTPS URI, using cache if available and fresh.
+async fn fetch_crl_cached(uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
     // Check cache first
     {
-        let mut cache = CRL_CACHE.lock().expect("CRL cache lock poisoned");
-        evict_if_stale(&mut cache, uri);
+        let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+        let (cache, _) = &mut *cache_guard;
+        evict_if_needed(cache, uri);
         if let Some(entry) = cache.get(uri) {
             tracing::debug!(uri, "CRL cache hit");
             return Ok(entry.crl_der.clone());
@@ -281,13 +305,17 @@ async fn fetch_crl_cached(
 
     // Cache the result
     {
-        let mut cache = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+        let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+        let (cache, counter) = &mut *cache_guard;
+        let insertion_order = *counter;
+        *counter += 1;
         cache.insert(
             uri.to_owned(),
             CrlCacheEntry {
                 crl_der: crl_der.clone(),
                 fetched_at: Instant::now(),
                 expires_after: DEFAULT_CRL_CACHE_TTL,
+                insertion_order,
             },
         );
     }
@@ -304,7 +332,6 @@ async fn fetch_crl_cached(
 fn parse_and_validate_crl<'a>(
     crl_der: &'a [u8],
     dsc_issuer_der: &[u8],
-    _dsc: &X509Certificate<'_>,
 ) -> Result<CertificateRevocationList<'a>> {
     let (_, crl) = CertificateRevocationList::from_der(crl_der).map_err(|e| {
         MdocError::RevocationCheckFailed {
@@ -591,11 +618,11 @@ mod tests {
 
         #[tokio::test]
         async fn check_revocation_skip_policy_bypasses_all_checks() {
-            let (_iaca_der, dsc_der, _signing_key) =
-                build_chain_with_crl_uri("http://nonexistent.example.com/crl.crl");
+            let (iaca_der, dsc_der, _signing_key) =
+                build_chain_with_crl_uri("https://nonexistent.example.com/crl.crl");
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
 
-            let result = check_revocation(&dsc, &dsc_der, RevocationPolicy::Skip).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::Skip).await;
             assert!(
                 result.is_ok(),
                 "Skip policy should always return Ok: {:?}",
