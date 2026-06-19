@@ -382,8 +382,14 @@ async fn rejects_unsigned_request_for_non_redirect_uri_prefix() {
 
     match &err {
         Error::InvalidRequest(msg) => {
-            assert!(msg.contains("unsigned"), "expected unsigned rejection, got: {msg}");
-            assert!(msg.contains("x509_san_dns"), "expected prefix in error, got: {msg}");
+            assert!(
+                msg.contains("unsigned"),
+                "expected unsigned rejection, got: {msg}"
+            );
+            assert!(
+                msg.contains("x509_san_dns"),
+                "expected prefix in error, got: {msg}"
+            );
         }
         other => panic!("expected InvalidRequest, got: {other:?}"),
     }
