@@ -21,7 +21,7 @@ use super::cert_chain::{
 };
 use super::error::{MdocError, Result};
 use super::parser::ParsedMdoc;
-use super::revocation::{check_revocation, RevocationPolicy};
+use super::revocation::{RevocationPolicy, check_revocation};
 
 /// COSE unprotected header label for the X.509 certificate chain (RFC 9360).
 const X5CHAIN_LABEL: i64 = 33;
@@ -633,7 +633,8 @@ pub async fn verify_mdoc_for_issuance(
     revocation_policy: RevocationPolicy,
 ) -> Result<IssuerInfo> {
     parsed.check_temporal_validity(now)?;
-    let issuer_info = verify_issuer_signature(parsed, outer_doc_type, trust_store, revocation_policy).await?;
+    let issuer_info =
+        verify_issuer_signature(parsed, outer_doc_type, trust_store, revocation_policy).await?;
     verify_digests(parsed)?;
     verify_device_key_binding(parsed, holder_binding_public_jwk)?;
     Ok(issuer_info)

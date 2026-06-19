@@ -793,7 +793,13 @@ async fn verify_issuer_signature_accepts_valid_chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -816,8 +822,14 @@ async fn verify_issuer_signature_rejects_tampered_payload() {
         ParsedMdoc::parse(&raw).expect("tampered mdoc must still parse (parser is not a verifier)");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("tampered payload must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("tampered payload must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidIssuerSignature),
@@ -835,8 +847,14 @@ async fn verify_issuer_signature_rejects_untrusted_root() {
     let (unrelated_iaca_der, _, _) = build_chain(true);
     let trust_store = StaticTrustStore::new(vec![unrelated_iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("chain not anchored to trusted root must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("chain not anchored to trusted root must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -852,8 +870,14 @@ async fn verify_issuer_signature_rejects_missing_eku() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("DSC without ISO 18013-5 EKU must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("DSC without ISO 18013-5 EKU must be rejected");
 
     assert!(
         matches!(err, MdocError::MissingDocSignerEku),
@@ -911,8 +935,14 @@ async fn verify_issuer_signature_rejects_missing_x5chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc without x5chain must still parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("missing x5chain must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("missing x5chain must be rejected");
 
     assert!(
         matches!(err, MdocError::MissingX5Chain),
@@ -928,8 +958,14 @@ async fn verify_issuer_signature_rejects_doctype_mismatch() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "com.example.other.doctype", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("docType mismatch must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "com.example.other.doctype",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("docType mismatch must be rejected");
 
     assert!(
         matches!(err, MdocError::DocTypeMismatch { .. }),
@@ -956,8 +992,14 @@ async fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("MSO signed before DSC notBefore must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("MSO signed before DSC notBefore must be rejected");
 
     assert!(
         matches!(err, MdocError::SignedOutsideDscValidity { .. }),
@@ -974,8 +1016,14 @@ async fn verify_issuer_signature_rejects_country_mismatch() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("DSC/IACA country mismatch must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("DSC/IACA country mismatch must be rejected");
 
     assert!(
         matches!(err, MdocError::CountryMismatch { .. }),
@@ -1002,8 +1050,14 @@ async fn verify_issuer_signature_rejects_dsc_validity_too_long() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("DSC with 459-day validity must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("DSC with 459-day validity must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1019,7 +1073,13 @@ async fn verify_issuer_signature_accepts_valid_es512() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid ES512 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1041,8 +1101,14 @@ async fn verify_issuer_signature_rejects_state_mismatch() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("DSC/IACA state mismatch must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("DSC/IACA state mismatch must be rejected");
 
     assert!(
         matches!(err, MdocError::StateMismatch { .. }),
@@ -1059,8 +1125,14 @@ async fn verify_issuer_signature_rejects_missing_key_usage() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("DSC without digitalSignature key usage must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("DSC without digitalSignature key usage must be rejected");
 
     assert!(
         matches!(err, MdocError::MissingDigitalSignatureKeyUsage),
@@ -1089,8 +1161,14 @@ async fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("MSO signed after DSC notAfter must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("MSO signed after DSC notAfter must be rejected");
 
     assert!(
         matches!(err, MdocError::SignedOutsideDscValidity { .. }),
@@ -1108,7 +1186,13 @@ async fn verify_issuer_signature_accepts_single_bstr_x5chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1127,7 +1211,13 @@ async fn verify_issuer_signature_accepts_intermediate_ca_chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1154,8 +1244,14 @@ async fn verify_issuer_signature_rejects_tampered_intermediate() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc must still parse structurally");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("chain with wrong intermediate must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("chain with wrong intermediate must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1172,8 +1268,14 @@ async fn verify_issuer_signature_rejects_empty_trust_store() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("empty trust store must reject all chains");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("empty trust store must reject all chains");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1202,8 +1304,14 @@ async fn verify_issuer_signature_rejects_brainpool_algorithms() {
         let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Brainpool alg must parse");
         let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-        let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-            .expect_err("Brainpool must be rejected as unsupported");
+        let err = verify_issuer_signature(
+            &mdoc,
+            "org.iso.18013.5.1.mDL",
+            &trust_store,
+            RevocationPolicy::Skip,
+        )
+        .await
+        .expect_err("Brainpool must be rejected as unsupported");
 
         assert!(
             matches!(err, MdocError::UnsupportedAlgorithm { alg } if alg == expected_alg),
@@ -1228,8 +1336,14 @@ async fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with IACA root in chain must still parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("IACA root present in x5chain must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("IACA root present in x5chain must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1249,8 +1363,14 @@ async fn verify_issuer_signature_rejects_ed448_algorithm() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Ed448 DSC must still parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await
-        .expect_err("Ed448 DSC must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await
+    .expect_err("Ed448 DSC must be rejected");
 
     assert!(
         matches!(err, MdocError::UnsupportedAlgorithm { alg: -8 }),
@@ -1266,7 +1386,13 @@ async fn verify_issuer_signature_accepts_valid_es384() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid ES384 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1287,7 +1413,13 @@ async fn verify_issuer_signature_accepts_valid_ed25519() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid Ed25519 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1370,7 +1502,13 @@ async fn tbs_data_preserves_original_protected_header_bytes() {
     // End-to-end confirmation: the signature was created over `expected_tbs`; if
     // tbs_data() had re-encoded the header, verification would fail with InvalidIssuerSignature.
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store, RevocationPolicy::Skip).await;
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+    )
+    .await;
     assert!(
         result.is_ok(),
         "signature over original protected-header bytes must verify: {result:?}"

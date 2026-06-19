@@ -174,10 +174,17 @@ fn handle_missing_crl_uri(policy: RevocationPolicy) -> Result<()> {
 }
 
 /// Handles CRL fetch errors according to policy.
-fn handle_crl_fetch_error(uri: &str, error: reqwest::Error, policy: RevocationPolicy) -> Result<()> {
+fn handle_crl_fetch_error(
+    uri: &str,
+    error: reqwest::Error,
+    policy: RevocationPolicy,
+) -> Result<()> {
     match policy {
         RevocationPolicy::Skip | RevocationPolicy::SoftFail => {
-            tracing::warn!("CRL fetch from {} failed: {error}; skipping revocation check", uri);
+            tracing::warn!(
+                "CRL fetch from {} failed: {error}; skipping revocation check",
+                uri
+            );
             Ok(())
         }
         RevocationPolicy::HardFail => Err(MdocError::RevocationCheckFailed {
@@ -190,7 +197,10 @@ fn handle_crl_fetch_error(uri: &str, error: reqwest::Error, policy: RevocationPo
 fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy) -> Result<()> {
     match policy {
         RevocationPolicy::Skip | RevocationPolicy::SoftFail => {
-            tracing::warn!("CRL parse/validation from {} failed: {error:?}; skipping revocation check", uri);
+            tracing::warn!(
+                "CRL parse/validation from {} failed: {error:?}; skipping revocation check",
+                uri
+            );
             Ok(())
         }
         RevocationPolicy::HardFail => Err(error),
@@ -208,24 +218,25 @@ async fn fetch_crl(uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
 ///
 /// Per ISO 18013-5 Annex B §B.2, the CRL must be signed by the issuing CA (IACA or intermediate).
 /// We verify against the IACA root for simplicity (single-level chains are typical for mdoc).
-fn parse_and_validate_crl<'a>(crl_der: &'a [u8], iaca_root_der: &[u8]) -> Result<CertificateRevocationList<'a>> {
+fn parse_and_validate_crl<'a>(
+    crl_der: &'a [u8],
+    iaca_root_der: &[u8],
+) -> Result<CertificateRevocationList<'a>> {
     let (_, crl) = CertificateRevocationList::from_der(crl_der).map_err(|e| {
         MdocError::RevocationCheckFailed {
             reason: format!("failed to parse CRL: {e}"),
         }
     })?;
 
-    let (_, root_cert) = X509Certificate::from_der(iaca_root_der).map_err(|e| {
-        MdocError::RevocationCheckFailed {
+    let (_, root_cert) =
+        X509Certificate::from_der(iaca_root_der).map_err(|e| MdocError::RevocationCheckFailed {
             reason: format!("failed to parse IACA root for CRL verification: {e}"),
-        }
-    })?;
+        })?;
 
-    crl.verify_signature(root_cert.public_key()).map_err(|e| {
-        MdocError::RevocationCheckFailed {
+    crl.verify_signature(root_cert.public_key())
+        .map_err(|e| MdocError::RevocationCheckFailed {
             reason: format!("CRL signature verification failed: {e}"),
-        }
-    })?;
+        })?;
 
     Ok(crl)
 }

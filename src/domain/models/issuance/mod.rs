@@ -721,7 +721,8 @@ impl IssuanceEngine {
                     signer.holder_binding_public_jwk(),
                     now,
                     RevocationPolicy::default(),
-                ).await?;
+                )
+                .await?;
                 info!(
                     // TODO: this will be stored later because it is needed for the presentation phase
                     tenant_id = %tenant_id,
