@@ -47,13 +47,17 @@ impl std::fmt::Debug for JweDecryptKey<'_> {
 /// The raw ASCII bytes of the first compact segment are used as AAD for
 /// AES-GCM, exactly as produced by [`fn@crate::jwe::encrypt`].
 ///
+/// The returned plaintext is wrapped in [`Zeroizing`] so that its heap memory
+/// is wiped when the value drops. Callers with sensitive plaintext should avoid
+/// copying it into plain allocations.
+///
 /// # Errors
 /// - [`ErrorKind::Serialization`] — malformed compact token or base64url.
 /// - [`ErrorKind::UnsupportedAlgorithm`] — unknown `alg`/`enc` or `crit`.
 /// - [`ErrorKind::KeyParsing`] — invalid or mismatched EPK.
 /// - [`ErrorKind::Decryption`] — AES-GCM tag failure or AES-KW unwrap failure.
-/// - [`ErrorKind::WrongLength`] — IV or tag wrong length.
-pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Vec<u8>> {
+/// - [`ErrorKind::WrongLength`] — IV, tag, or wrapped-key wrong length.
+pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>> {
     let parts = parse_compact(token)?;
     let [header_b64, enc_key_b64, iv_b64, ct_b64, tag_b64] = parts;
 
@@ -102,8 +106,8 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Vec<u8>> {
     // order, whitespace, and any other formatting are preserved verbatim, so
     // tokens from any sender always verify regardless of their serialization style.
     let aad = header_b64.as_bytes();
-    let mut plaintext = vec![0u8; ct_bytes.len()];
-    cek_key.decrypt_with_tag(&nonce, aad, tag, &ct_bytes, &mut plaintext)?;
+    let mut plaintext = Zeroizing::new(vec![0u8; ct_bytes.len()]);
+    cek_key.decrypt_with_tag(&nonce, aad, tag, &ct_bytes, plaintext.as_mut_slice())?;
 
     Ok(plaintext)
 }
@@ -127,14 +131,8 @@ fn recover_cek(
     key: &JweDecryptKey<'_>,
     enc_key_bytes: &[u8],
 ) -> Result<aead::Key> {
-    let apu_bytes: Vec<u8> = header
-        .apu
-        .as_ref()
-        .map_or(Vec::new(), |b| b.as_ref().to_vec());
-    let apv_bytes: Vec<u8> = header
-        .apv
-        .as_ref()
-        .map_or(Vec::new(), |b| b.as_ref().to_vec());
+    let apu_bytes: &[u8] = header.apu.as_ref().map_or(&[], |b| b.as_ref());
+    let apv_bytes: &[u8] = header.apv.as_ref().map_or(&[], |b| b.as_ref());
 
     match (&header.alg, key) {
         (
@@ -145,7 +143,7 @@ fn recover_cek(
                 .alg
                 .to_oaep_algorithm()
                 .expect("validate_key_alg ensures this is an RSA variant");
-            let mut pt_buf = vec![0u8; rsa_key.key_size_bytes()];
+            let mut pt_buf = Zeroizing::new(vec![0u8; rsa_key.key_size_bytes()]);
             let cek_slice = rsa_key.decrypt(oaep_alg, enc_key_bytes, &mut pt_buf)?;
 
             let cek_bytes = Zeroizing::new(cek_slice.to_vec());
@@ -169,8 +167,8 @@ fn recover_cek(
                 shared_secret.as_bytes(),
                 &ConcatKdfParams {
                     algorithm_id: header.enc.alg_id(),
-                    party_u_info: &apu_bytes,
-                    party_v_info: &apv_bytes,
+                    party_u_info: apu_bytes,
+                    party_v_info: apv_bytes,
                 },
                 &mut cek_bytes,
             )?;
@@ -185,14 +183,7 @@ fn recover_cek(
             JweDecryptKey::Ecdh(static_key),
         ) => {
             let alg = header.alg;
-            ecdh_kw_decrypt(
-                header,
-                static_key,
-                enc_key_bytes,
-                &apu_bytes,
-                &apv_bytes,
-                alg,
-            )
+            ecdh_kw_decrypt(header, static_key, enc_key_bytes, apu_bytes, apv_bytes, alg)
         }
 
         _ => unreachable!("validate_key_alg should have rejected this combination"),
@@ -233,8 +224,19 @@ fn ecdh_kw_decrypt(
     )?;
 
     let kek = KeyEncryptionKey::new(kw_algorithm, &kek_bytes)?;
-    let cek_len = enc_key_bytes.len().saturating_sub(8);
-    let mut cek_bytes = Zeroizing::new(vec![0u8; cek_len]);
+    let expected_cek_len = header.enc.key_len();
+    let expected_wrapped_len = expected_cek_len + 8;
+    if enc_key_bytes.len() != expected_wrapped_len {
+        return Err(error_msg(
+            ErrorKind::WrongLength,
+            format!(
+                "expected {expected_wrapped_len}-byte wrapped CEK for {:?}, got {}",
+                header.enc,
+                enc_key_bytes.len()
+            ),
+        ));
+    }
+    let mut cek_bytes = Zeroizing::new(vec![0u8; expected_cek_len]);
     let cek_slice = kek.unwrap_key(enc_key_bytes, &mut cek_bytes)?;
 
     let cek = aead::Key::new(header.enc.aead_algorithm(), cek_slice)

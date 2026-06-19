@@ -176,6 +176,10 @@ const UNDERSTOOD_EXTENSION_PARAMS: &[&str] = &[];
 /// During encryption the `epk` field is populated by [`fn@crate::jwe::encrypt`]
 /// after the ephemeral key is generated; callers should leave it `None` when
 /// constructing a header for encryption.
+///
+/// Use [`JweHeader::new`] to construct a header; struct literal syntax is not
+/// available to code outside this crate because this type is `#[non_exhaustive]`.
+#[non_exhaustive]
 #[skip_serializing_none]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JweHeader {
@@ -193,10 +197,18 @@ pub struct JweHeader {
     pub epk: Option<crate::jwk::Jwk>,
 
     /// Agreement PartyUInfo — base64url-decoded bytes on the wire (RFC 7518 §4.6.1.2).
+    ///
+    /// Used in the ConcatKDF derivation for ECDH-ES variants only. **Ignored for
+    /// RSA-OAEP variants** (RFC 7518 §4.3 does not define `apu`/`apv` semantics);
+    /// if set, the bytes are still serialised into the header and bound to the
+    /// AES-GCM AAD, but they do not influence key derivation.
     #[serde(default)]
     pub apu: Option<B64>,
 
     /// Agreement PartyVInfo — base64url-decoded bytes on the wire (RFC 7518 §4.6.1.3).
+    ///
+    /// Used in the ConcatKDF derivation for ECDH-ES variants only. **Ignored for
+    /// RSA-OAEP variants** — see `apu` for details.
     #[serde(default)]
     pub apv: Option<B64>,
 

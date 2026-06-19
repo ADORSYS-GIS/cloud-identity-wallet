@@ -94,7 +94,7 @@ fn ecdh_es_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
 
     let token = encrypt(header, plaintext, JweEncryptKey::Ecdh(&pub_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Ecdh(&static_key)).unwrap();
-    assert_eq!(got, plaintext);
+    assert_eq!(got.as_slice(), plaintext);
 }
 
 #[test]
@@ -113,6 +113,11 @@ fn roundtrip_ecdh_es_p521_a256gcm() {
 }
 
 #[test]
+fn roundtrip_ecdh_es_p384_a256gcm() {
+    ecdh_es_roundtrip(EcdhCurve::P384, EncAlgorithm::A256Gcm);
+}
+
+#[test]
 fn roundtrip_ecdh_es_x25519_a256gcm() {
     ecdh_es_roundtrip(EcdhCurve::X25519, EncAlgorithm::A256Gcm);
 }
@@ -124,7 +129,7 @@ fn ecdh_a128kw_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
 
     let token = encrypt(header, plaintext, JweEncryptKey::Ecdh(&pub_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Ecdh(&static_key)).unwrap();
-    assert_eq!(got, plaintext);
+    assert_eq!(got.as_slice(), plaintext);
 }
 
 #[test]
@@ -139,7 +144,7 @@ fn ecdh_a256kw_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
 
     let token = encrypt(header, plaintext, JweEncryptKey::Ecdh(&pub_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Ecdh(&static_key)).unwrap();
-    assert_eq!(got, plaintext);
+    assert_eq!(got.as_slice(), plaintext);
 }
 
 #[test]
@@ -167,7 +172,7 @@ fn roundtrip_rsa_oaep256_a256gcm() {
 
     let token = encrypt(header, plaintext, JweEncryptKey::Rsa(enc_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Rsa(&dec_key)).unwrap();
-    assert_eq!(got, plaintext);
+    assert_eq!(got.as_slice(), plaintext);
 }
 
 #[test]
@@ -188,7 +193,7 @@ fn roundtrip_rsa_oaep384_a256gcm() {
     };
     let token = encrypt(header, b"test384", JweEncryptKey::Rsa(enc_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Rsa(&dec_key)).unwrap();
-    assert_eq!(got, b"test384");
+    assert_eq!(got.as_slice(), b"test384");
 }
 
 #[test]
@@ -209,7 +214,7 @@ fn roundtrip_rsa_oaep512_a256gcm() {
     };
     let token = encrypt(header, b"test512", JweEncryptKey::Rsa(enc_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Rsa(&dec_key)).unwrap();
-    assert_eq!(got, b"test512");
+    assert_eq!(got.as_slice(), b"test512");
 }
 
 /// Encrypt with apu=A, apv=B. Then tamper the header to swap them.
@@ -564,7 +569,7 @@ fn roundtrip_empty_plaintext() {
 
     let token = encrypt(header, b"", JweEncryptKey::Ecdh(&pub_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Ecdh(&static_key)).unwrap();
-    assert_eq!(got, b"");
+    assert_eq!(got.as_slice(), b"");
 }
 
 // RSA-OAEP with large RSA key (ignored — slow in CI)
@@ -589,7 +594,7 @@ fn roundtrip_rsa_oaep256_rsa4096_a256gcm() {
     let plaintext = b"large rsa key test";
     let token = encrypt(header, plaintext, JweEncryptKey::Rsa(enc_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Rsa(&dec_key)).unwrap();
-    assert_eq!(got, plaintext);
+    assert_eq!(got.as_slice(), plaintext);
 }
 
 /// Changing the `enc` field in the protected header invalidates the AAD and,
@@ -792,7 +797,7 @@ fn interop_rsa_oaep256_a256gcm_external_token() {
     let dec_key = RsaDecryptingKey::from_pkcs8_der(der).unwrap();
 
     let plaintext = decrypt(token, JweDecryptKey::Rsa(&dec_key)).unwrap();
-    assert_eq!(plaintext, b"interop test vector");
+    assert_eq!(plaintext.as_slice(), b"interop test vector");
 }
 
 #[test]
@@ -802,7 +807,7 @@ fn interop_ecdh_es_p256_a256gcm_external_token() {
     let static_key = StaticEcdhKey::from_pkcs8_der(EcdhCurve::P256, der).unwrap();
 
     let plaintext = decrypt(token, JweDecryptKey::Ecdh(&static_key)).unwrap();
-    assert_eq!(plaintext, b"ecdh interop");
+    assert_eq!(plaintext.as_slice(), b"ecdh interop");
 }
 
 #[test]
@@ -812,5 +817,5 @@ fn interop_ecdh_es_a256kw_p256_a256gcm_external_token() {
     let static_key = StaticEcdhKey::from_pkcs8_der(EcdhCurve::P256, der).unwrap();
 
     let plaintext = decrypt(token, JweDecryptKey::Ecdh(&static_key)).unwrap();
-    assert_eq!(plaintext, b"ecdh kw interop");
+    assert_eq!(plaintext.as_slice(), b"ecdh kw interop");
 }

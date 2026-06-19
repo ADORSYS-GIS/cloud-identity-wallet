@@ -136,7 +136,11 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
             let mut enc_key_buf = vec![0u8; rsa_key.ciphertext_size()];
             let ct = rsa_key.encrypt(oaep_alg, &cek_bytes, &mut enc_key_buf)?;
             // RSA-OAEP output is always exactly modulus size; ct fills enc_key_buf entirely.
-            debug_assert_eq!(ct.len(), enc_key_buf.len());
+            assert_eq!(
+                ct.len(),
+                enc_key_buf.len(),
+                "RSA-OAEP output length must equal modulus size"
+            );
             let enc_key_bytes = enc_key_buf;
 
             let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;
@@ -214,7 +218,11 @@ fn ecdh_kw(
     let mut wrapped_buf = vec![0u8; cek_len + 8];
     let wrapped = kek.wrap_key(&cek_bytes, &mut wrapped_buf)?;
     // AES-KW output is always exactly input + 8 bytes; wrapped fills wrapped_buf entirely.
-    debug_assert_eq!(wrapped.len(), wrapped_buf.len());
+    assert_eq!(
+        wrapped.len(),
+        wrapped_buf.len(),
+        "AES-KW output length must equal CEK length + 8"
+    );
     let enc_key_bytes = wrapped_buf;
 
     let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;

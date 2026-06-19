@@ -32,22 +32,13 @@
 //! let recipient_pub = EcdhPublicKey::from_bytes(EcdhCurve::P256, pub_bytes)?;
 //!
 //! // Encrypt a message.
-//! let header = JweHeader {
-//!     alg: AlgAlgorithm::EcdhEs,
-//!     enc: EncAlgorithm::A256Gcm,
-//!     epk: None,
-//!     apu: None,
-//!     apv: None,
-//!     kid: None,
-//!     typ: None,
-//!     cty: None,
-//!     crit: None,
-//! };
+//! let header = JweHeader::new(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
 //! let token = encrypt(header, b"hello world", JweEncryptKey::Ecdh(&recipient_pub))?;
 //!
-//! // Decrypt the message.
+//! // Decrypt the message. The plaintext is `Zeroizing<Vec<u8>>` — its heap
+//! // memory is wiped when the value drops.
 //! let plaintext = decrypt(&token, JweDecryptKey::Ecdh(&static_key))?;
-//! assert_eq!(plaintext, b"hello world");
+//! assert_eq!(plaintext.as_slice(), b"hello world");
 //! # Ok(())
 //! # }
 //! ```
