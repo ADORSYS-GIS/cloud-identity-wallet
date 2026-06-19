@@ -1254,8 +1254,7 @@ mod tests {
     #[test]
     fn from_query_rejects_duplicate_credential_offer_uri() {
         // Duplicate credential_offer_uri parameters should be rejected
-        let query =
-            "credential_offer_uri=https%3A%2F%2Fexample.com&credential_offer_uri=https%3A%2F%2Fother.com";
+        let query = "credential_offer_uri=https%3A%2F%2Fexample.com&credential_offer_uri=https%3A%2F%2Fother.com";
 
         let result = CredentialOfferUri::from_query(query);
         assert!(result.is_err());
