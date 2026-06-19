@@ -329,11 +329,13 @@ impl CredentialOfferUri {
     /// Returns an error if:
     /// - Both `credential_offer` and `credential_offer_uri` are present
     /// - Neither parameter is present
+    /// - Duplicate `credential_offer` or `credential_offer_uri` parameters are present
     /// - The URI is malformed
     /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
         let normalized_link = if link.to_lowercase().starts_with("haip-vci://") {
-            link.replacen("haip-vci://", "openid-credential-offer://", 1)
+            let idx = link.find("://").expect("starts_with haip-vci:// guarantees '://' exists");
+            format!("openid-credential-offer://{}", &link[idx + 3..])
         } else {
             link.to_string()
         };
@@ -351,13 +353,25 @@ impl CredentialOfferUri {
             )
         })?;
 
-        let mut credential_offer = None;
-        let mut credential_offer_uri = None;
+        let mut credential_offer: Option<String> = None;
+        let mut credential_offer_uri: Option<String> = None;
 
         for (k, v) in parsed_url.query_pairs() {
             if k == "credential_offer" {
+                if credential_offer.is_some() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "duplicate credential_offer parameter",
+                    ));
+                }
                 credential_offer = Some(v.into_owned());
             } else if k == "credential_offer_uri" {
+                if credential_offer_uri.is_some() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "duplicate credential_offer_uri parameter",
+                    ));
+                }
                 credential_offer_uri = Some(v.into_owned());
             }
         }
@@ -379,18 +393,31 @@ impl CredentialOfferUri {
     /// Returns an error if:
     /// - Both `credential_offer` and `credential_offer_uri` are present
     /// - Neither parameter is present
+    /// - Duplicate `credential_offer` or `credential_offer_uri` parameters are present
     /// - Parsing the credential offer fails (for by-value)
     pub fn from_query(query: &str) -> Result<Self, Error> {
         // Strip leading '?' if present (common when parsing raw query strings)
         let query = query.strip_prefix('?').unwrap_or(query);
 
-        let mut credential_offer = None;
-        let mut credential_offer_uri = None;
+        let mut credential_offer: Option<String> = None;
+        let mut credential_offer_uri: Option<String> = None;
 
         for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
             if k == "credential_offer" {
+                if credential_offer.is_some() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "duplicate credential_offer parameter",
+                    ));
+                }
                 credential_offer = Some(v.into_owned());
             } else if k == "credential_offer_uri" {
+                if credential_offer_uri.is_some() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "duplicate credential_offer_uri parameter",
+                    ));
+                }
                 credential_offer_uri = Some(v.into_owned());
             }
         }
@@ -1184,5 +1211,41 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
         assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn from_offer_link_rejects_duplicate_credential_offer() {
+        // Duplicate credential_offer parameters should be rejected
+        let uri = "openid-credential-offer://?credential_offer=%7B%7D&credential_offer=%7B%7D";
+
+        let result = CredentialOfferUri::from_offer_link(uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn from_offer_link_rejects_duplicate_credential_offer_uri() {
+        // Duplicate credential_offer_uri parameters should be rejected
+        let uri = "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fexample.com&credential_offer_uri=https%3A%2F%2Fother.com";
+
+        let result = CredentialOfferUri::from_offer_link(uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn from_query_rejects_duplicate_credential_offer() {
+        // Duplicate credential_offer parameters should be rejected
+        let query = "credential_offer=%7B%7D&credential_offer=%7B%7D";
+
+        let result = CredentialOfferUri::from_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
     }
 }

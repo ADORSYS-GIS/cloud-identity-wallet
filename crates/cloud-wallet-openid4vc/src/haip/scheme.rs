@@ -9,6 +9,60 @@ use crate::haip::error::{Error, Result};
 const HAIP_VCI_SCHEME: &str = "haip-vci";
 const HAIP_VP_SCHEME: &str = "haip-vp";
 
+/// Extracts `credential_offer` and `credential_offer_uri` from URL query parameters.
+////// Per OpenID4VCI / HAIP specifications, these parameters are mutually exclusive.
+/// Duplicate parameter names are rejected as invalid.
+////// # Errors
+////// Returns an error if:
+/// - Both parameters are present (mutually exclusive)
+/// - Neither parameter is present
+/// - Duplicate parameter names are detected (e.g., `credential_offer=A&credential_offer=B`)
+pub fn extract_credential_offer_params(
+    url: &Url,
+) -> Result<CredentialOfferParams> {
+    let mut credential_offer = None;
+    let mut credential_offer_uri = None;
+
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "credential_offer" => {
+                if credential_offer.is_some() {
+                    return Err(Error::DuplicateParameter("credential_offer"));
+                }
+                credential_offer = Some(v.into_owned());
+            }
+            "credential_offer_uri" => {
+                if credential_offer_uri.is_some() {
+                    return Err(Error::DuplicateParameter("credential_offer_uri"));
+                }
+                credential_offer_uri = Some(v.into_owned());
+            }
+            _ => {}
+        }
+    }
+
+    match (credential_offer, credential_offer_uri) {
+        (Some(_), Some(_)) => Err(Error::MutuallyExclusive(
+            "credential_offer",
+            "credential_offer_uri",
+        )),
+        (Some(json), None) => Ok(CredentialOfferParams::ByValue(json)),
+        (None, Some(uri)) => Ok(CredentialOfferParams::ByReference(uri)),
+        (None, None) => Err(Error::MissingParameter(
+            "credential_offer or credential_offer_uri",
+        )),
+    }
+}
+
+/// Result of extracting credential offer parameters from a URI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialOfferParams {
+    /// Credential offer passed by value (embedded JSON).
+    ByValue(String),
+    /// Credential offer passed by reference (URL to fetch).
+    ByReference(String),
+}
+
 /// Parsed HAIP VCI URI parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HaipVciUri {
@@ -32,10 +86,13 @@ impl HaipVpUri {
     /// Converts parameters to a JSON object suitable for `AuthorizationRequest` deserialization.
     ///
     /// This is useful for constructing an authorization request from URI parameters.
+    ///
+    /// Note: Malformed JSON strings in parameter values are silently treated as plain strings.
+    /// This is intentional for best-effort conversion where invalid JSON gracefully degrades
+    /// to string representation.
     pub fn to_json(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         for (key, value) in &self.params {
-            // Try to parse as JSON, fall back to string
             let json_value = serde_json::from_str(value)
                 .unwrap_or_else(|_| serde_json::Value::String(value.clone()));
             map.insert(key.clone(), json_value);
@@ -44,20 +101,8 @@ impl HaipVpUri {
     }
 }
 
-#[allow(dead_code)]
-pub fn is_haip_vci_uri(uri: &str) -> bool {
-    uri.to_lowercase()
-        .starts_with(&format!("{HAIP_VCI_SCHEME}://"))
-}
-
-#[allow(dead_code)]
-pub fn is_haip_vp_uri(uri: &str) -> bool {
-    uri.to_lowercase()
-        .starts_with(&format!("{HAIP_VP_SCHEME}://"))
-}
-
 /// Parses `haip-vci://` URIs. Returns error if both `credential_offer` and
-/// `credential_offer_uri` are present, or if neither is present.
+/// `credential_offer_uri` are present, or if neither is present, or if duplicates of either parameter.
 pub fn parse_haip_vci_uri(uri: &str) -> Result<HaipVciUri> {
     let parsed = Url::parse(uri).map_err(|e| Error::MalformedUri(e.to_string()))?;
 
@@ -65,32 +110,13 @@ pub fn parse_haip_vci_uri(uri: &str) -> Result<HaipVciUri> {
         return Err(Error::InvalidScheme(parsed.scheme().to_string()));
     }
 
-    let mut credential_offer = None;
-    let mut credential_offer_uri = None;
-
-    for (k, v) in parsed.query_pairs() {
-        match k.as_ref() {
-            "credential_offer" => credential_offer = Some(v.into_owned()),
-            "credential_offer_uri" => credential_offer_uri = Some(v.into_owned()),
-            _ => {}
-        }
-    }
-
-    match (credential_offer, credential_offer_uri) {
-        (Some(_), Some(_)) => Err(Error::MutuallyExclusive(
-            "credential_offer",
-            "credential_offer_uri",
-        )),
-        (Some(json), None) => Ok(HaipVciUri {
-            source: HaipVciSource::ByValue(json),
-        }),
-        (None, Some(uri)) => Ok(HaipVciUri {
-            source: HaipVciSource::ByReference(uri),
-        }),
-        (None, None) => Err(Error::MissingParameter(
-            "credential_offer or credential_offer_uri",
-        )),
-    }
+    let params = extract_credential_offer_params(&parsed)?;
+    Ok(HaipVciUri {
+        source: match params {
+            CredentialOfferParams::ByValue(json) => HaipVciSource::ByValue(json),
+            CredentialOfferParams::ByReference(uri) => HaipVciSource::ByReference(uri),
+        },
+    })
 }
 
 /// Parses `haip-vp://` URIs, extracting query parameters for authorization requests.
@@ -107,38 +133,6 @@ pub fn parse_haip_vp_uri(uri: &str) -> Result<HaipVpUri> {
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect(),
     })
-}
-
-#[allow(dead_code)]
-pub fn normalize_haip_vci_to_openid(uri: &str) -> Result<String> {
-    let parsed = Url::parse(uri).map_err(|e| Error::MalformedUri(e.to_string()))?;
-
-    if parsed.scheme().to_lowercase() != HAIP_VCI_SCHEME {
-        return Err(Error::InvalidScheme(parsed.scheme().to_string()));
-    }
-
-    let mut normalized = parsed;
-    normalized
-        .set_scheme("openid-credential-offer")
-        .map_err(|_| Error::MalformedUri("failed to set scheme".into()))?;
-
-    Ok(normalized.to_string())
-}
-
-#[allow(dead_code)]
-pub fn normalize_haip_vp_to_openid(uri: &str) -> Result<String> {
-    let parsed = Url::parse(uri).map_err(|e| Error::MalformedUri(e.to_string()))?;
-
-    if parsed.scheme().to_lowercase() != HAIP_VP_SCHEME {
-        return Err(Error::InvalidScheme(parsed.scheme().to_string()));
-    }
-
-    let mut normalized = parsed;
-    normalized
-        .set_scheme("openid4vp")
-        .map_err(|_| Error::MalformedUri("failed to set scheme".into()))?;
-
-    Ok(normalized.to_string())
 }
 
 /// Parses `openid4vp://` or `haip-vp://` URIs.
@@ -159,6 +153,8 @@ pub fn parse_vp_uri(uri: &str) -> Result<HaipVpUri> {
 }
 
 /// Parses `openid-credential-offer://` or `haip-vci://` URIs.
+/// Returns error if both `credential_offer` and `credential_offer_uri` are present,
+/// or if neither is present, or if duplicates of either parameter are detected.
 pub fn parse_credential_offer_uri(uri: &str) -> Result<HaipVciUri> {
     let parsed = Url::parse(uri).map_err(|e| Error::MalformedUri(e.to_string()))?;
 
@@ -167,32 +163,13 @@ pub fn parse_credential_offer_uri(uri: &str) -> Result<HaipVciUri> {
         return Err(Error::InvalidScheme(parsed.scheme().to_string()));
     }
 
-    let mut credential_offer = None;
-    let mut credential_offer_uri = None;
-
-    for (k, v) in parsed.query_pairs() {
-        match k.as_ref() {
-            "credential_offer" => credential_offer = Some(v.into_owned()),
-            "credential_offer_uri" => credential_offer_uri = Some(v.into_owned()),
-            _ => {}
-        }
-    }
-
-    match (credential_offer, credential_offer_uri) {
-        (Some(_), Some(_)) => Err(Error::MutuallyExclusive(
-            "credential_offer",
-            "credential_offer_uri",
-        )),
-        (Some(json), None) => Ok(HaipVciUri {
-            source: HaipVciSource::ByValue(json),
-        }),
-        (None, Some(uri)) => Ok(HaipVciUri {
-            source: HaipVciSource::ByReference(uri),
-        }),
-        (None, None) => Err(Error::MissingParameter(
-            "credential_offer or credential_offer_uri",
-        )),
-    }
+    let params = extract_credential_offer_params(&parsed)?;
+    Ok(HaipVciUri {
+        source: match params {
+            CredentialOfferParams::ByValue(json) => HaipVciSource::ByValue(json),
+            CredentialOfferParams::ByReference(uri) => HaipVciSource::ByReference(uri),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -337,29 +314,17 @@ mod tests {
     }
 
     #[test]
-    fn is_haip_vci_uri_detection() {
-        assert!(is_haip_vci_uri("haip-vci://?x=1"));
-        assert!(is_haip_vci_uri("HAIP-VCI://?x=1"));
-        assert!(!is_haip_vci_uri("openid-credential-offer://?x=1"));
+    fn parse_haip_vci_rejects_duplicate_credential_offer() {
+        let uri = "haip-vci://?credential_offer=%7B%7D&credential_offer=%7B%7D";
+        let err = parse_haip_vci_uri(uri).unwrap_err();
+        assert!(matches!(err, Error::DuplicateParameter(_)));
     }
 
     #[test]
-    fn is_haip_vp_uri_detection() {
-        assert!(is_haip_vp_uri("haip-vp://?x=1"));
-        assert!(is_haip_vp_uri("HAIP-VP://?x=1"));
-        assert!(!is_haip_vp_uri("openid4vp://?x=1"));
-    }
-
-    #[test]
-    fn normalize_haip_vci_to_openid_success() {
-        let result = normalize_haip_vci_to_openid("haip-vci://?x=1").unwrap();
-        assert_eq!(result, "openid-credential-offer://?x=1");
-    }
-
-    #[test]
-    fn normalize_haip_vp_to_openid_success() {
-        let result = normalize_haip_vp_to_openid("haip-vp://?x=1").unwrap();
-        assert_eq!(result, "openid4vp://?x=1");
+    fn parse_credential_offer_uri_rejects_duplicate_credential_offer() {
+        let uri = "haip-vci://?credential_offer=%7B%7D&credential_offer=%7B%22test%22%3A%22value%22%7D";
+        let err = parse_credential_offer_uri(uri).unwrap_err();
+        assert!(matches!(err, Error::DuplicateParameter(_)));
     }
 
     #[test]
