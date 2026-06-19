@@ -10,10 +10,13 @@ const HAIP_VCI_SCHEME: &str = "haip-vci";
 const HAIP_VP_SCHEME: &str = "haip-vp";
 
 /// Extracts `credential_offer` and `credential_offer_uri` from URL query parameters.
-////// Per OpenID4VCI / HAIP specifications, these parameters are mutually exclusive.
+///
+/// Per OpenID4VCI / HAIP specifications, these parameters are mutually exclusive.
 /// Duplicate parameter names are rejected as invalid.
-////// # Errors
-////// Returns an error if:
+///
+/// # Errors
+///
+/// Returns an error if:
 /// - Both parameters are present (mutually exclusive)
 /// - Neither parameter is present
 /// - Duplicate parameter names are detected (e.g., `credential_offer=A&credential_offer=B`)
@@ -91,9 +94,7 @@ impl HaipVpUri {
     pub fn to_json(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         for (key, value) in &self.params {
-            let json_value = serde_json::from_str(value)
-                .unwrap_or_else(|_| serde_json::Value::String(value.clone()));
-            map.insert(key.clone(), json_value);
+            map.insert(key.clone(), serde_json::Value::String(value.clone()));
         }
         serde_json::Value::Object(map)
     }
@@ -341,5 +342,19 @@ mod tests {
             json.get("response_mode").unwrap().as_str(),
             Some("direct_post")
         );
+    }
+
+    #[test]
+    fn haip_vp_uri_to_json_treats_all_values_as_strings() {
+        let uri = "haip-vp://?nonce=123&response_type=vp_token&numeric_id=42";
+        let result = parse_haip_vp_uri(uri).unwrap();
+        let json = result.to_json();
+
+        assert_eq!(json.get("nonce").unwrap().as_str(), Some("123"));
+        assert_eq!(
+            json.get("response_type").unwrap().as_str(),
+            Some("vp_token")
+        );
+        assert_eq!(json.get("numeric_id").unwrap().as_str(), Some("42"));
     }
 }
