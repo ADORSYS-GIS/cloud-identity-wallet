@@ -85,10 +85,10 @@ fn extract_https_uri_from_distribution_point<'a>(dp: &CRLDistributionPoint<'a>) 
     match uri_general_names {
         x509_parser::extensions::DistributionPointName::FullName(names) => {
             for general_name in names {
-                if let GeneralName::URI(uri) = general_name {
-                    if uri.starts_with("https://") || uri.starts_with("http://") {
-                        return Some(uri.to_string());
-                    }
+                if let GeneralName::URI(uri) = general_name
+                    && (uri.starts_with("https://") || uri.starts_with("http://"))
+                {
+                    return Some(uri.to_string());
                 }
             }
             None
