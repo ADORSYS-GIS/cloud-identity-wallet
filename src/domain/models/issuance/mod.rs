@@ -78,6 +78,7 @@ pub struct IssuanceEngine {
     preferred_display_locales: Arc<Vec<String>>,
     x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
     iaca_trust_store: Arc<dyn IacaTrustStore>,
+    revocation_policy: RevocationPolicy,
 }
 
 impl Clone for IssuanceEngine {
@@ -94,6 +95,7 @@ impl Clone for IssuanceEngine {
             preferred_display_locales: Arc::clone(&self.preferred_display_locales),
             x5c_trust_anchors: Arc::clone(&self.x5c_trust_anchors),
             iaca_trust_store: Arc::clone(&self.iaca_trust_store),
+            revocation_policy: self.revocation_policy,
         }
     }
 }
@@ -120,6 +122,7 @@ impl std::fmt::Debug for IssuanceEngine {
                 "iaca_trust_store",
                 &std::any::type_name::<dyn IacaTrustStore>(),
             )
+            .field("revocation_policy", &self.revocation_policy)
             .finish()
     }
 }
@@ -195,6 +198,8 @@ impl IssuanceEngine {
             // Fail-closed default: no mdoc credentials are accepted until IACA roots
             // are configured via `with_iaca_trust_store`.
             iaca_trust_store: Arc::new(StaticTrustStore::new(vec![])),
+            // Default to SoftFail: reject revoked DSCs but tolerate CRL fetch failures.
+            revocation_policy: RevocationPolicy::default(),
         };
 
         engine.start_worker_count(session_store.clone(), worker_count)
@@ -214,6 +219,16 @@ impl IssuanceEngine {
     /// DER certificates for each issuing authority whose credentials this wallet should accept.
     pub fn with_iaca_trust_store(mut self, store: impl IacaTrustStore + 'static) -> Self {
         self.iaca_trust_store = Arc::new(store);
+        self
+    }
+
+    /// Configure the revocation checking policy for mdoc DSC verification.
+    ///
+    /// - `Skip`: Bypass revocation checking (offline/test mode)
+    /// - `SoftFail`: Reject revoked DSCs, tolerate CRL fetch failures (default)
+    /// - `HardFail`: Reject revoked DSCs or on any CRL fetch/parse failure
+    pub fn with_revocation_policy(mut self, policy: RevocationPolicy) -> Self {
+        self.revocation_policy = policy;
         self
     }
 
@@ -720,7 +735,7 @@ impl IssuanceEngine {
                     self.iaca_trust_store(),
                     signer.holder_binding_public_jwk(),
                     now,
-                    RevocationPolicy::default(),
+                    self.revocation_policy,
                 )
                 .await?;
                 info!(

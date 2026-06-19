@@ -12,12 +12,36 @@
 
 use reqwest::Client;
 use std::sync::LazyLock;
+use std::time::Duration;
 use x509_parser::extensions::CRLDistributionPoint;
 use x509_parser::prelude::GeneralName;
-use x509_parser::prelude::{FromDer, ParsedExtension, X509Certificate};
+use x509_parser::prelude::{FromDer, ParsedExtension, ReasonCode, X509Certificate};
 use x509_parser::revocation_list::CertificateRevocationList;
 
 use super::error::{MdocError, Result};
+
+/// OID for CRL Distribution Points extension (RFC 5280 §4.2.1.13).
+const OID_X509_EXT_CRL_DISTRIBUTION_POINTS: &str = "2.5.29.31";
+
+/// Default CRL cache TTL (6 hours per ISO 18013-5 Annex B §B.2 guidance).
+const DEFAULT_CRL_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Maps RFC 5280 §5.3.1 CRLReason to stable string values.
+fn reason_code_to_string(code: ReasonCode) -> &'static str {
+    match code {
+        ReasonCode::Unspecified => "unspecified",
+        ReasonCode::KeyCompromise => "keyCompromise",
+        ReasonCode::CACompromise => "cACompromise",
+        ReasonCode::AffiliationChanged => "affiliationChanged",
+        ReasonCode::Superseded => "superseded",
+        ReasonCode::CessationOfOperation => "cessationOfOperation",
+        ReasonCode::CertificateHold => "certificateHold",
+        ReasonCode::RemoveFromCRL => "removeFromCRL",
+        ReasonCode::PrivilegeWithdrawn => "privilegeWithdrawn",
+        ReasonCode::AACompromise => "aACompromise",
+        _ => "unspecified",
+    }
+}
 
 /// Policy for DSC revocation checking (ISO 18013-5 §9.3.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -42,13 +66,39 @@ pub enum RevocationPolicy {
     HardFail,
 }
 
-/// HTTP client for CRL fetching. Lazily initialized with rustls TLS.
+/// HTTP client for CRL fetching. Lazily initialized with explicit rustls TLS backend.
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
+        .use_rustls_tls()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("HTTP client with rustls must initialize")
 });
+
+/// In-memory CRL cache with TTL.
+////// CRLs are cached per-URI to avoid redundant HTTPS fetches. Each entry has a TTL
+/// (default 6 hours) after which the entry is stale and a fresh fetch is required.
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Instant;
+
+struct CrlCacheEntry {
+    crl_der: Vec<u8>,
+    fetched_at: Instant,
+    expires_after: Duration,
+}
+
+static CRL_CACHE: LazyLock<Mutex<HashMap<String, CrlCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Clears a stale cache entry if its TTL has expired.
+fn evict_if_stale(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
+    if let Some(entry) = cache.get(uri)
+        && entry.fetched_at.elapsed() > entry.expires_after
+    {
+        cache.remove(uri);
+    }
+}
 
 /// Extracts the first HTTP/HTTPS CRL Distribution Point URI from a DSC.
 ///
@@ -58,7 +108,7 @@ fn extract_crl_uri(dsc: &X509Certificate<'_>) -> Result<Option<String>> {
     let crl_dp_ext = dsc
         .extensions()
         .iter()
-        .find(|ext| ext.oid.to_id_string() == "2.5.29.31");
+        .find(|ext| ext.oid.to_id_string() == OID_X509_EXT_CRL_DISTRIBUTION_POINTS);
 
     let ext = match crl_dp_ext {
         Some(e) => e,
@@ -102,8 +152,9 @@ fn extract_https_uri_from_distribution_point<'a>(dp: &CRLDistributionPoint<'a>) 
 /// # Parameters
 ///
 /// - `dsc`: The parsed Document Signer Certificate.
-/// - `anchoring_root_der`: DER bytes of the IACA root that anchors the chain, used to
-///   verify the CRL signature.
+/// - `dsc_issuer_der`: DER bytes of the certificate that issued the DSC (immediate issuer),
+///   used to verify the CRL signature. For single-level chains this is the IACA root;
+///   for multi-level chains it is the intermediate CA.
 /// - `policy`: Revocation checking policy.
 ///
 /// # Returns
@@ -114,7 +165,7 @@ fn extract_https_uri_from_distribution_point<'a>(dp: &CRLDistributionPoint<'a>) 
 ///   (only for `HardFail` policy).
 pub async fn check_revocation(
     dsc: &X509Certificate<'_>,
-    anchoring_root_der: &[u8],
+    dsc_issuer_der: &[u8],
     policy: RevocationPolicy,
 ) -> Result<()> {
     if policy == RevocationPolicy::Skip {
@@ -130,14 +181,14 @@ pub async fn check_revocation(
         }
     };
 
-    let crl_bytes = match fetch_crl(&crl_uri).await {
+    let crl_bytes = match fetch_crl_cached(&crl_uri, policy).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return handle_crl_fetch_error(&crl_uri, e, policy);
         }
     };
 
-    let crl = match parse_and_validate_crl(&crl_bytes, anchoring_root_der) {
+    let crl = match parse_and_validate_crl(&crl_bytes, dsc_issuer_der, dsc) {
         Ok(crl) => crl,
         Err(e) => {
             return handle_crl_parse_error(&crl_uri, e, policy);
@@ -151,7 +202,7 @@ pub async fn check_revocation(
                 serial: hex_encode_serial(&serial_bytes),
                 reason: revoked_cert
                     .reason_code()
-                    .map(|r| format!("{:?}", r.1))
+                    .map(|(_critical, code)| reason_code_to_string(code).to_string())
                     .unwrap_or_else(|| "unspecified".to_owned()),
             });
         }
@@ -207,20 +258,50 @@ fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy)
     }
 }
 
-/// Fetches CRL bytes from the given HTTP(S) URI.
-async fn fetch_crl(uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
+/// Fetches CRL bytes from the given HTTP(S) URI, using cache if available and fresh.
+async fn fetch_crl_cached(uri: &str, _policy: RevocationPolicy) -> std::result::Result<Vec<u8>, reqwest::Error> {
+    // Check cache first
+    {
+        let mut cache = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+        evict_if_stale(&mut cache, uri);
+        if let Some(entry) = cache.get(uri) {
+            tracing::debug!(uri, "CRL cache hit");
+            return Ok(entry.crl_der.clone());
+        }
+    }
+
+    // Fetch fresh CRL
+    tracing::debug!(uri, "CRL cache miss, fetching");
     let response = HTTP_CLIENT.get(uri).send().await?;
     let bytes = response.error_for_status()?.bytes().await?;
-    Ok(bytes.to_vec())
+    let crl_der = bytes.to_vec();
+
+    // Cache the result
+    {
+        let mut cache = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+        cache.insert(
+            uri.to_owned(),
+            CrlCacheEntry {
+                crl_der: crl_der.clone(),
+                fetched_at: Instant::now(),
+                expires_after: DEFAULT_CRL_CACHE_TTL,
+            },
+        );
+    }
+
+    Ok(crl_der)
 }
 
-/// Parses a DER-encoded CRL and verifies its signature against the anchoring IACA root.
+/// Parses a DER-encoded CRL and performs full validation per RFC 5280 and ISO 18013-5 Annex B §B.2.
 ///
-/// Per ISO 18013-5 Annex B §B.2, the CRL must be signed by the issuing CA (IACA or intermediate).
-/// We verify against the IACA root for simplicity (single-level chains are typical for mdoc).
+/// Validates:
+/// 1. CRL signature against the DSC's immediate issuer (not the IACA root)
+/// 2. CRL issuer name matches the DSC issuer name
+/// 3. CRL temporal validity (thisUpdate/nextUpdate)
 fn parse_and_validate_crl<'a>(
     crl_der: &'a [u8],
-    iaca_root_der: &[u8],
+    dsc_issuer_der: &[u8],
+    _dsc: &X509Certificate<'_>,
 ) -> Result<CertificateRevocationList<'a>> {
     let (_, crl) = CertificateRevocationList::from_der(crl_der).map_err(|e| {
         MdocError::RevocationCheckFailed {
@@ -228,17 +309,63 @@ fn parse_and_validate_crl<'a>(
         }
     })?;
 
-    let (_, root_cert) =
-        X509Certificate::from_der(iaca_root_der).map_err(|e| MdocError::RevocationCheckFailed {
-            reason: format!("failed to parse IACA root for CRL verification: {e}"),
+    // Parse the DSC's immediate issuer certificate
+    let (_, issuer_cert) =
+        X509Certificate::from_der(dsc_issuer_der).map_err(|e| MdocError::RevocationCheckFailed {
+            reason: format!("failed to parse DSC issuer certificate for CRL verification: {e}"),
         })?;
 
-    crl.verify_signature(root_cert.public_key())
+    // RFC 5280 §5.3.1: The CRL issuer MUST match the DSC issuer name
+    if !issuer_names_match(&crl, &issuer_cert) {
+        return Err(MdocError::RevocationCheckFailed {
+            reason: "CRL issuer name does not match DSC issuer name".to_owned(),
+        });
+    }
+
+    // RFC 5280 §5.1.2.2: Check temporal validity of the CRL
+    let now = time::OffsetDateTime::now_utc();
+    if let Some(next_update) = crl.next_update() {
+        let next_update_ts = next_update.timestamp();
+        let now_ts = now.unix_timestamp();
+        if now_ts > next_update_ts {
+            return Err(MdocError::RevocationCheckFailed {
+                reason: format!(
+                    "CRL has expired (nextUpdate: {}, now: {})",
+                    next_update_ts, now_ts
+                ),
+            });
+        }
+    }
+
+    // RFC 5280 §5.1.2.1: Log warning if CRL is older than expected (but don't reject)
+    let this_update = crl.last_update();
+    let this_update_ts = this_update.timestamp();
+    let now_ts = now.unix_timestamp();
+    let age_hours = (now_ts - this_update_ts) / 3600;
+    if age_hours > 24 {
+        tracing::warn!(
+            this_update_age_hours = age_hours,
+            "CRL thisUpdate is more than 24 hours old"
+        );
+    }
+
+    // Verify CRL signature against the DSC issuer's public key (RFC 5280 §5.3.1, ISO 18013-5 §B.2)
+    crl.verify_signature(issuer_cert.public_key())
         .map_err(|e| MdocError::RevocationCheckFailed {
             reason: format!("CRL signature verification failed: {e}"),
         })?;
 
     Ok(crl)
+}
+
+/// Checks whether the CRL issuer name matches the DSC issuer name.
+////// Per RFC 5280 §5.3.1, the CRL scope includes all certificates issued by the CRL issuer.
+/// We verify the issuer names match to prevent a malicious CRL from a different CA.
+fn issuer_names_match(crl: &CertificateRevocationList<'_>, issuer_cert: &X509Certificate<'_>) -> bool {
+    let crl_issuer = crl.issuer();
+    let cert_issuer = issuer_cert.subject();
+    // Compare the raw DER bytes of the distinguished names
+    crl_issuer.as_raw() == cert_issuer.as_raw()
 }
 
 /// Converts a serial number to a hexadecimal string for error messages.
@@ -260,5 +387,251 @@ mod tests {
         let serial = vec![0x01, 0x23, 0xAB, 0xCD];
         let hex = hex_encode_serial(&serial);
         assert_eq!(hex, "0123ABCD");
+    }
+
+    #[test]
+    fn reason_code_to_string_maps_correctly() {
+        assert_eq!(reason_code_to_string(ReasonCode::Unspecified), "unspecified");
+        assert_eq!(reason_code_to_string(ReasonCode::KeyCompromise), "keyCompromise");
+        assert_eq!(reason_code_to_string(ReasonCode::CACompromise), "cACompromise");
+        assert_eq!(reason_code_to_string(ReasonCode::AffiliationChanged), "affiliationChanged");
+        assert_eq!(reason_code_to_string(ReasonCode::Superseded), "superseded");
+        assert_eq!(reason_code_to_string(ReasonCode::CessationOfOperation), "cessationOfOperation");
+        assert_eq!(reason_code_to_string(ReasonCode::CertificateHold), "certificateHold");
+        assert_eq!(reason_code_to_string(ReasonCode::RemoveFromCRL), "removeFromCRL");
+        assert_eq!(reason_code_to_string(ReasonCode::PrivilegeWithdrawn), "privilegeWithdrawn");
+        assert_eq!(reason_code_to_string(ReasonCode::AACompromise), "aACompromise");
+        // Unknown values fallback to unspecified
+        assert_eq!(reason_code_to_string(ReasonCode(99)), "unspecified");
+    }
+
+    mod integration_tests {
+        use super::*;
+        use rcgen::{BasicConstraints, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyUsagePurpose};
+        use time::OffsetDateTime;
+        use time::format_description::well_known::Rfc3339;
+
+        const DSC_EKU_OID: &[u64] = &[1, 0, 18013, 5, 1, 2];
+        const OID_CRL_DISTRIBUTION_POINTS: &[u64] = &[2, 5, 29, 31];
+
+        fn build_crl_dp_extension(crl_uri: &str) -> Vec<u8> {
+            // DER-encoded CRL Distribution Points extension with a single URI
+            // This is manually constructed ASN.1:
+            // SEQUENCE {
+            //   SEQUENCE {
+            //     [0] SEQUENCE {
+            //       [0] SEQUENCE {
+            //         [6] IA5String (URI)
+            //       }
+            //     }
+            //   }
+            // }
+            let uri_bytes = crl_uri.as_bytes();
+            let uri_len = uri_bytes.len();
+            let uri_len_bytes = if uri_len < 128 {
+                vec![uri_len as u8]
+            } else if uri_len < 256 {
+                vec![0x81, uri_len as u8]
+            } else {
+                vec![0x82, (uri_len >> 8) as u8, (uri_len & 0xff) as u8]
+            };
+            // [6] IA5String URI - context tag 6 for uniformResourceIdentifier
+            let mut gn_bytes = vec![0xA6]; // context-specific constructed tag 6
+            let gn_len = 1 + uri_len_bytes.len() + uri_bytes.len();
+            let gn_len_bytes = if gn_len < 128 {
+                vec![gn_len as u8]
+            } else {
+                vec![0x81, gn_len as u8]
+            };
+            gn_bytes.extend_from_slice(&gn_len_bytes);
+            gn_bytes.push(0x16); // IA5String tag
+            gn_bytes.extend_from_slice(&uri_len_bytes);
+            gn_bytes.extend_from_slice(uri_bytes);
+            
+            // SEQUENCE { gn_bytes }
+            let mut seq_gn = vec![0x30];
+            let seq_len = gn_bytes.len();
+            if seq_len < 128 {
+                seq_gn.push(seq_len as u8);
+            } else {
+                seq_gn.push(0x81);
+                seq_gn.push(seq_len as u8);
+            }
+            seq_gn.extend_from_slice(&gn_bytes);
+            
+            // [0] SEQUENCE (fullName)
+            let mut full_name = vec![0xA0];
+            let fn_len = seq_gn.len();
+            if fn_len < 128 {
+                full_name.push(fn_len as u8);
+            } else {
+                full_name.push(0x81);
+                full_name.push(fn_len as u8);
+            }
+            full_name.extend_from_slice(&seq_gn);
+            
+            // SEQUENCE { DistributionPoint }
+            let mut dp = vec![0x30];
+            let dp_len = full_name.len();
+            if dp_len < 128 {
+                dp.push(dp_len as u8);
+            } else {
+                dp.push(0x81);
+                dp.push(dp_len as u8);
+            }
+            dp.extend_from_slice(&full_name);
+            
+            // SEQUENCE { DistributionPoints }
+            let mut dps = vec![0x30];
+            let dps_len = dp.len();
+            if dps_len < 128 {
+                dps.push(dps_len as u8);
+            } else {
+                dps.push(0x81);
+                dps.push(dps_len as u8);
+            }
+            dps.extend_from_slice(&dp);
+            
+            dps
+        }
+
+        fn build_chain_with_crl_uri(crl_uri: &str) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+            let iaca_key = rcgen::KeyPair::generate().expect("IACA key generation must succeed");
+            let mut iaca_params =
+                rcgen::CertificateParams::new(vec!["Test IACA".to_string()]).expect("IACA params");
+            iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            iaca_params.distinguished_name.push(rcgen::DnType::CountryName, "DE");
+            let iaca_cert = iaca_params
+                .self_signed(&iaca_key)
+                .expect("IACA self-sign must succeed");
+            let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+            let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+            let dsc_aws_key =
+                cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+                    .expect("DSC key generation must succeed");
+
+            let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+            let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+                &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+                    dsc_pkcs8,
+                )),
+                &rcgen::PKCS_ECDSA_P256_SHA256,
+            )
+            .expect("Loading DSC key into rcgen must succeed");
+
+            let not_before =
+                OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("Fixed date must parse");
+            let not_after =
+                OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("Fixed date must parse");
+
+            let crl_dp_content = build_crl_dp_extension(crl_uri);
+
+            let mut dsc_params =
+                rcgen::CertificateParams::new(vec!["Test DSC".to_string()]).expect("DSC params");
+            dsc_params.is_ca = IsCa::NoCa;
+            dsc_params.not_before = not_before;
+            dsc_params.not_after = not_after;
+            dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+            dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+            dsc_params.distinguished_name.push(rcgen::DnType::CountryName, "DE");
+            dsc_params.custom_extensions = vec![rcgen::CustomExtension::from_oid_content(
+                OID_CRL_DISTRIBUTION_POINTS,
+                crl_dp_content,
+            )];
+            let dsc_cert = dsc_params
+                .signed_by(&dsc_rcgen_key, &iaca_issuer)
+                .expect("DSC signing by IACA must succeed");
+            let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+            (iaca_der, dsc_der, dsc_aws_key)
+        }
+
+        #[tokio::test]
+        async fn check_revocation_skip_policy_bypasses_all_checks() {
+            let (_iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri("http://nonexistent.example.com/crl.crl");
+            let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+            
+            let result = check_revocation(&dsc, &dsc_der, RevocationPolicy::Skip).await;
+            assert!(result.is_ok(), "Skip policy should always return Ok: {:?}", result);
+        }
+
+        #[tokio::test]
+        async fn check_revocation_soft_fail_tolerates_missing_crl_uri() {
+            let iaca_key = rcgen::KeyPair::generate().expect("IACA key generation must succeed");
+            let mut iaca_params =
+                rcgen::CertificateParams::new(vec!["Test IACA".to_string()]).expect("IACA params");
+            iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            let iaca_cert = iaca_params
+                .self_signed(&iaca_key)
+                .expect("IACA self-sign must succeed");
+            let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+            let iaca_issuer = Issuer::new(iaca_params, iaca_key);
+
+            let dsc_aws_key =
+                cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+                    .expect("DSC key generation must succeed");
+
+            let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
+            let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+                &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+                    dsc_pkcs8,
+                )),
+                &rcgen::PKCS_ECDSA_P256_SHA256,
+            )
+            .expect("Loading DSC key into rcgen must succeed");
+
+            let not_before =
+                OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("Fixed date must parse");
+            let not_after =
+                OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("Fixed date must parse");
+
+            let mut dsc_params =
+                rcgen::CertificateParams::new(vec!["Test DSC No CRL".to_string()]).expect("DSC params");
+            dsc_params.is_ca = IsCa::NoCa;
+            dsc_params.not_before = not_before;
+            dsc_params.not_after = not_after;
+            dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+            dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+            let dsc_cert = dsc_params.signed_by(&dsc_rcgen_key, &iaca_issuer).expect("DSC signing must succeed");
+            let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
+
+            let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+
+            // SoftFail should tolerate missing CRL URI
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail).await;
+            assert!(result.is_ok(), "SoftFail should tolerate missing CRL URI: {:?}", result);
+
+            // HardFail should reject missing CRL URI
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
+            assert!(result.is_err(), "HardFail should reject missing CRL URI");
+        }
+
+        #[tokio::test]
+        async fn check_revocation_soft_fail_tolerates_crl_fetch_failure() {
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+            use wiremock::matchers::{method, path};
+
+            let mock_server = MockServer::start().await;
+            let crl_uri = format!("{}/crl.crl", mock_server.uri());
+            
+            // Return 404 for CRL request
+            Mock::given(method("GET"))
+                .and(path("/crl.crl"))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&mock_server)
+                .await;
+
+            let (iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri(&crl_uri);
+            let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+
+            // SoftFail should tolerate CRL fetch failure
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail).await;
+            assert!(result.is_ok(), "SoftFail should tolerate CRL fetch failure: {:?}", result);
+
+            // HardFail should reject CRL fetch failure
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
+            assert!(result.is_err(), "HardFail should reject CRL fetch failure");
+        }
     }
 }
