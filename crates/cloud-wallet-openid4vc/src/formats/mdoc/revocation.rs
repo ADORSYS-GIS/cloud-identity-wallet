@@ -259,7 +259,10 @@ fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy)
 }
 
 /// Fetches CRL bytes from the given HTTP(S) URI, using cache if available and fresh.
-async fn fetch_crl_cached(uri: &str, _policy: RevocationPolicy) -> std::result::Result<Vec<u8>, reqwest::Error> {
+async fn fetch_crl_cached(
+    uri: &str,
+    _policy: RevocationPolicy,
+) -> std::result::Result<Vec<u8>, reqwest::Error> {
     // Check cache first
     {
         let mut cache = CRL_CACHE.lock().expect("CRL cache lock poisoned");
@@ -310,10 +313,11 @@ fn parse_and_validate_crl<'a>(
     })?;
 
     // Parse the DSC's immediate issuer certificate
-    let (_, issuer_cert) =
-        X509Certificate::from_der(dsc_issuer_der).map_err(|e| MdocError::RevocationCheckFailed {
+    let (_, issuer_cert) = X509Certificate::from_der(dsc_issuer_der).map_err(|e| {
+        MdocError::RevocationCheckFailed {
             reason: format!("failed to parse DSC issuer certificate for CRL verification: {e}"),
-        })?;
+        }
+    })?;
 
     // RFC 5280 §5.3.1: The CRL issuer MUST match the DSC issuer name
     if !issuer_names_match(&crl, &issuer_cert) {
@@ -361,7 +365,10 @@ fn parse_and_validate_crl<'a>(
 /// Checks whether the CRL issuer name matches the DSC issuer name.
 ////// Per RFC 5280 §5.3.1, the CRL scope includes all certificates issued by the CRL issuer.
 /// We verify the issuer names match to prevent a malicious CRL from a different CA.
-fn issuer_names_match(crl: &CertificateRevocationList<'_>, issuer_cert: &X509Certificate<'_>) -> bool {
+fn issuer_names_match(
+    crl: &CertificateRevocationList<'_>,
+    issuer_cert: &X509Certificate<'_>,
+) -> bool {
     let crl_issuer = crl.issuer();
     let cert_issuer = issuer_cert.subject();
     // Compare the raw DER bytes of the distinguished names
@@ -391,16 +398,43 @@ mod tests {
 
     #[test]
     fn reason_code_to_string_maps_correctly() {
-        assert_eq!(reason_code_to_string(ReasonCode::Unspecified), "unspecified");
-        assert_eq!(reason_code_to_string(ReasonCode::KeyCompromise), "keyCompromise");
-        assert_eq!(reason_code_to_string(ReasonCode::CACompromise), "cACompromise");
-        assert_eq!(reason_code_to_string(ReasonCode::AffiliationChanged), "affiliationChanged");
+        assert_eq!(
+            reason_code_to_string(ReasonCode::Unspecified),
+            "unspecified"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::KeyCompromise),
+            "keyCompromise"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::CACompromise),
+            "cACompromise"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::AffiliationChanged),
+            "affiliationChanged"
+        );
         assert_eq!(reason_code_to_string(ReasonCode::Superseded), "superseded");
-        assert_eq!(reason_code_to_string(ReasonCode::CessationOfOperation), "cessationOfOperation");
-        assert_eq!(reason_code_to_string(ReasonCode::CertificateHold), "certificateHold");
-        assert_eq!(reason_code_to_string(ReasonCode::RemoveFromCRL), "removeFromCRL");
-        assert_eq!(reason_code_to_string(ReasonCode::PrivilegeWithdrawn), "privilegeWithdrawn");
-        assert_eq!(reason_code_to_string(ReasonCode::AACompromise), "aACompromise");
+        assert_eq!(
+            reason_code_to_string(ReasonCode::CessationOfOperation),
+            "cessationOfOperation"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::CertificateHold),
+            "certificateHold"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::RemoveFromCRL),
+            "removeFromCRL"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::PrivilegeWithdrawn),
+            "privilegeWithdrawn"
+        );
+        assert_eq!(
+            reason_code_to_string(ReasonCode::AACompromise),
+            "aACompromise"
+        );
         // Unknown values fallback to unspecified
         assert_eq!(reason_code_to_string(ReasonCode(99)), "unspecified");
     }
@@ -447,7 +481,7 @@ mod tests {
             gn_bytes.push(0x16); // IA5String tag
             gn_bytes.extend_from_slice(&uri_len_bytes);
             gn_bytes.extend_from_slice(uri_bytes);
-            
+
             // SEQUENCE { gn_bytes }
             let mut seq_gn = vec![0x30];
             let seq_len = gn_bytes.len();
@@ -458,7 +492,7 @@ mod tests {
                 seq_gn.push(seq_len as u8);
             }
             seq_gn.extend_from_slice(&gn_bytes);
-            
+
             // [0] SEQUENCE (fullName)
             let mut full_name = vec![0xA0];
             let fn_len = seq_gn.len();
@@ -469,7 +503,7 @@ mod tests {
                 full_name.push(fn_len as u8);
             }
             full_name.extend_from_slice(&seq_gn);
-            
+
             // SEQUENCE { DistributionPoint }
             let mut dp = vec![0x30];
             let dp_len = full_name.len();
@@ -480,7 +514,7 @@ mod tests {
                 dp.push(dp_len as u8);
             }
             dp.extend_from_slice(&full_name);
-            
+
             // SEQUENCE { DistributionPoints }
             let mut dps = vec![0x30];
             let dps_len = dp.len();
@@ -491,39 +525,44 @@ mod tests {
                 dps.push(dps_len as u8);
             }
             dps.extend_from_slice(&dp);
-            
+
             dps
         }
 
-        fn build_chain_with_crl_uri(crl_uri: &str) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
+        fn build_chain_with_crl_uri(
+            crl_uri: &str,
+        ) -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair) {
             let iaca_key = rcgen::KeyPair::generate().expect("IACA key generation must succeed");
             let mut iaca_params =
                 rcgen::CertificateParams::new(vec!["Test IACA".to_string()]).expect("IACA params");
             iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-            iaca_params.distinguished_name.push(rcgen::DnType::CountryName, "DE");
+            iaca_params
+                .distinguished_name
+                .push(rcgen::DnType::CountryName, "DE");
             let iaca_cert = iaca_params
                 .self_signed(&iaca_key)
                 .expect("IACA self-sign must succeed");
             let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
             let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
-            let dsc_aws_key =
-                cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
-                    .expect("DSC key generation must succeed");
+            let dsc_aws_key = cloud_wallet_crypto::ecdsa::KeyPair::generate(
+                cloud_wallet_crypto::ecdsa::Curve::P256,
+            )
+            .expect("DSC key generation must succeed");
 
             let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
             let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
-                &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
-                    dsc_pkcs8,
-                )),
+                &rustls_pki_types::PrivateKeyDer::Pkcs8(
+                    rustls_pki_types::PrivatePkcs8KeyDer::from(dsc_pkcs8),
+                ),
                 &rcgen::PKCS_ECDSA_P256_SHA256,
             )
             .expect("Loading DSC key into rcgen must succeed");
 
-            let not_before =
-                OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("Fixed date must parse");
-            let not_after =
-                OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("Fixed date must parse");
+            let not_before = OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339)
+                .expect("Fixed date must parse");
+            let not_after = OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339)
+                .expect("Fixed date must parse");
 
             let crl_dp_content = build_crl_dp_extension(crl_uri);
 
@@ -532,9 +571,12 @@ mod tests {
             dsc_params.is_ca = IsCa::NoCa;
             dsc_params.not_before = not_before;
             dsc_params.not_after = not_after;
-            dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+            dsc_params.extended_key_usages =
+                vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
             dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-            dsc_params.distinguished_name.push(rcgen::DnType::CountryName, "DE");
+            dsc_params
+                .distinguished_name
+                .push(rcgen::DnType::CountryName, "DE");
             dsc_params.custom_extensions = vec![rcgen::CustomExtension::from_oid_content(
                 OID_CRL_DISTRIBUTION_POINTS,
                 crl_dp_content,
@@ -549,11 +591,16 @@ mod tests {
 
         #[tokio::test]
         async fn check_revocation_skip_policy_bypasses_all_checks() {
-            let (_iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri("http://nonexistent.example.com/crl.crl");
+            let (_iaca_der, dsc_der, _signing_key) =
+                build_chain_with_crl_uri("http://nonexistent.example.com/crl.crl");
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
-            
+
             let result = check_revocation(&dsc, &dsc_der, RevocationPolicy::Skip).await;
-            assert!(result.is_ok(), "Skip policy should always return Ok: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "Skip policy should always return Ok: {:?}",
+                result
+            );
         }
 
         #[tokio::test]
@@ -568,39 +615,47 @@ mod tests {
             let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
             let iaca_issuer = Issuer::new(iaca_params, iaca_key);
 
-            let dsc_aws_key =
-                cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
-                    .expect("DSC key generation must succeed");
+            let dsc_aws_key = cloud_wallet_crypto::ecdsa::KeyPair::generate(
+                cloud_wallet_crypto::ecdsa::Curve::P256,
+            )
+            .expect("DSC key generation must succeed");
 
             let dsc_pkcs8 = dsc_aws_key.to_pkcs8_der();
             let dsc_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
-                &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
-                    dsc_pkcs8,
-                )),
+                &rustls_pki_types::PrivateKeyDer::Pkcs8(
+                    rustls_pki_types::PrivatePkcs8KeyDer::from(dsc_pkcs8),
+                ),
                 &rcgen::PKCS_ECDSA_P256_SHA256,
             )
             .expect("Loading DSC key into rcgen must succeed");
 
-            let not_before =
-                OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339).expect("Fixed date must parse");
-            let not_after =
-                OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339).expect("Fixed date must parse");
+            let not_before = OffsetDateTime::parse("2023-12-01T00:00:00Z", &Rfc3339)
+                .expect("Fixed date must parse");
+            let not_after = OffsetDateTime::parse("2024-12-31T23:59:59Z", &Rfc3339)
+                .expect("Fixed date must parse");
 
-            let mut dsc_params =
-                rcgen::CertificateParams::new(vec!["Test DSC No CRL".to_string()]).expect("DSC params");
+            let mut dsc_params = rcgen::CertificateParams::new(vec!["Test DSC No CRL".to_string()])
+                .expect("DSC params");
             dsc_params.is_ca = IsCa::NoCa;
             dsc_params.not_before = not_before;
             dsc_params.not_after = not_after;
-            dsc_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
+            dsc_params.extended_key_usages =
+                vec![ExtendedKeyUsagePurpose::Other(DSC_EKU_OID.to_vec())];
             dsc_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-            let dsc_cert = dsc_params.signed_by(&dsc_rcgen_key, &iaca_issuer).expect("DSC signing must succeed");
+            let dsc_cert = dsc_params
+                .signed_by(&dsc_rcgen_key, &iaca_issuer)
+                .expect("DSC signing must succeed");
             let dsc_der: Vec<u8> = dsc_cert.der().to_vec();
 
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
 
             // SoftFail should tolerate missing CRL URI
             let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail).await;
-            assert!(result.is_ok(), "SoftFail should tolerate missing CRL URI: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "SoftFail should tolerate missing CRL URI: {:?}",
+                result
+            );
 
             // HardFail should reject missing CRL URI
             let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
@@ -609,12 +664,12 @@ mod tests {
 
         #[tokio::test]
         async fn check_revocation_soft_fail_tolerates_crl_fetch_failure() {
-            use wiremock::{Mock, MockServer, ResponseTemplate};
             use wiremock::matchers::{method, path};
+            use wiremock::{Mock, MockServer, ResponseTemplate};
 
             let mock_server = MockServer::start().await;
             let crl_uri = format!("{}/crl.crl", mock_server.uri());
-            
+
             // Return 404 for CRL request
             Mock::given(method("GET"))
                 .and(path("/crl.crl"))
@@ -627,7 +682,11 @@ mod tests {
 
             // SoftFail should tolerate CRL fetch failure
             let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail).await;
-            assert!(result.is_ok(), "SoftFail should tolerate CRL fetch failure: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "SoftFail should tolerate CRL fetch failure: {:?}",
+                result
+            );
 
             // HardFail should reject CRL fetch failure
             let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
