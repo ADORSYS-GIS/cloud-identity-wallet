@@ -369,6 +369,90 @@ async fn create_error_response_returns_unsupported_mode() {
 }
 
 #[tokio::test]
+async fn create_error_response_rejects_dc_api_mode() {
+    let mut request = test_authorization_request();
+    request.response_mode = ResponseMode::DcApi;
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.oauth.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode.clone(),
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
+        request,
+    };
+
+    let client = Oid4vpClient::new(test_config());
+    let result = client
+        .create_error_response(&ctx, AuthorizationErrorCode::AccessDenied)
+        .await;
+    assert!(
+        matches!(result, Err(Error::UnsupportedResponseMode(_))),
+        "dc_api response mode should return UnsupportedResponseMode"
+    );
+}
+
+#[tokio::test]
+async fn create_error_response_rejects_dc_api_jwt_mode() {
+    let mut request = test_authorization_request();
+    request.response_mode = ResponseMode::DcApiJwt;
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.oauth.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode.clone(),
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
+        request,
+    };
+
+    let client = Oid4vpClient::new(test_config());
+    let result = client
+        .create_error_response(&ctx, AuthorizationErrorCode::AccessDenied)
+        .await;
+    assert!(
+        matches!(result, Err(Error::UnsupportedResponseMode(_))),
+        "dc_api.jwt response mode should return UnsupportedResponseMode"
+    );
+}
+
+#[tokio::test]
+async fn process_inline_request_jwt() {
+    let client = Oid4vpClient::new(test_config());
+    let jwt = signed_request_object("redirect_uri:https://verifier.example.com/cb", None);
+
+    let raw = serde_json::json!({
+        "response_type": "vp_token",
+        "client_id": "redirect_uri:https://verifier.example.com/cb",
+        "nonce": "test-nonce",
+        "response_mode": "direct_post",
+        "response_uri": "https://verifier.example.com/response",
+        "dcql_query": {
+            "credentials": [{
+                "id": "pid_request",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com/pid"] }
+            }]
+        },
+        "request": jwt
+    });
+
+    let context = client
+        .process_authz_request(&raw.to_string(), &StaticKeyResolver)
+        .await
+        .expect("inline request JWT should resolve to a validated request object");
+
+    assert_eq!(context.nonce, "test-nonce");
+    assert_eq!(context.credential_queries()[0].id, "pid_request");
+}
+
+#[tokio::test]
 async fn rejects_unsigned_request_for_non_redirect_uri_prefix() {
     let client = Oid4vpClient::new(test_config());
     // x509_san_dns prefix requires a signed Request Object per OpenID4VP §5.9.3.
