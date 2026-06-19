@@ -334,7 +334,9 @@ impl CredentialOfferUri {
     /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
         let normalized_link = if link.to_lowercase().starts_with("haip-vci://") {
-            let idx = link.find("://").expect("starts_with haip-vci:// guarantees '://' exists");
+            let idx = link
+                .find("://")
+                .expect("starts_with haip-vci:// guarantees '://' exists");
             format!("openid-credential-offer://{}", &link[idx + 3..])
         } else {
             link.to_string()

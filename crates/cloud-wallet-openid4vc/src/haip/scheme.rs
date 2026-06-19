@@ -17,9 +17,7 @@ const HAIP_VP_SCHEME: &str = "haip-vp";
 /// - Both parameters are present (mutually exclusive)
 /// - Neither parameter is present
 /// - Duplicate parameter names are detected (e.g., `credential_offer=A&credential_offer=B`)
-pub fn extract_credential_offer_params(
-    url: &Url,
-) -> Result<CredentialOfferParams> {
+pub fn extract_credential_offer_params(url: &Url) -> Result<CredentialOfferParams> {
     let mut credential_offer = None;
     let mut credential_offer_uri = None;
 
@@ -322,7 +320,8 @@ mod tests {
 
     #[test]
     fn parse_credential_offer_uri_rejects_duplicate_credential_offer() {
-        let uri = "haip-vci://?credential_offer=%7B%7D&credential_offer=%7B%22test%22%3A%22value%22%7D";
+        let uri =
+            "haip-vci://?credential_offer=%7B%7D&credential_offer=%7B%22test%22%3A%22value%22%7D";
         let err = parse_credential_offer_uri(uri).unwrap_err();
         assert!(matches!(err, Error::DuplicateParameter(_)));
     }
