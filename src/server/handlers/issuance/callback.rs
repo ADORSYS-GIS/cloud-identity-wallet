@@ -23,39 +23,37 @@ pub async fn authorization_callback<S: SessionStore + Clone>(
     let query = query.unwrap_or_default();
     debug!(query = %query, "received authorization callback");
 
-    let callback = Oid4vciClient::parse_authorization_callback(&query).map_err(|err| {
-        warn!(error = %err, "invalid authorization callback query");
-        invalid_callback("Invalid authorization callback.")
-    })?;
+    // Extract state parameter first to identify the session
+    let params =
+        cloud_wallet_openid4vc::utils::QueryParams::parse(&query, &["state"]).map_err(|err| {
+            warn!(error = %err, "invalid query parameters");
+            invalid_callback("Invalid authorization callback query.")
+        })?;
 
-    let session_id = callback
-        .state()
-        .filter(|state| !state.trim().is_empty())
+    let session_id = params
+        .get("state")
+        .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| invalid_callback("Missing required state query parameter."))?
         .to_owned();
     tracing::Span::current().record("state", tracing::field::display(&session_id));
 
     let session = load_awaiting_authorization(&state.service.session, &session_id).await?;
 
+    // Parse callback with issuer validation per RFC 9207 / FAPI2 / HAIP
+    let expected_issuer = session.context.as_metadata.issuer.as_str();
+    let callback = Oid4vciClient::parse_authorization_callback(&query, Some(expected_issuer))
+        .map_err(|err| {
+            warn!(
+                session_id = %session_id,
+                expected_iss = %expected_issuer,
+                error = %err,
+                "authorization callback validation failed"
+            );
+            invalid_callback(format!("Authorization callback validation failed: {}", err))
+        })?;
+
     match callback {
         AuthorizationCallback::Success(response) => {
-            // Validate iss parameter per RFC 9207 / FAPI2 / HAIP
-            // The Wallet MUST verify that iss matches the expected Authorization Server issuer
-            let expected_issuer = session.context.as_metadata.issuer.as_str();
-            if let Err(err) = response.validate_iss(expected_issuer) {
-                warn!(
-                    session_id = %session_id,
-                    expected_iss = %expected_issuer,
-                    actual_iss = ?response.iss,
-                    error = %err,
-                    "iss validation failed"
-                );
-                return Err(invalid_callback(format!(
-                    "Authorization response iss mismatch: {}",
-                    err
-                )));
-            }
-
             let code_verifier = session
                 .code_verifier
                 .clone()
