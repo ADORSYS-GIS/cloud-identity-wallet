@@ -141,24 +141,24 @@ impl AuthorizationResponse {
     /// [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html
     /// [HAIP §4]: https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html#section-4
     pub fn validate_iss(&self, expected_issuer: &str) -> Result<(), Error> {
-        match &self.iss {
-            Some(iss) => {
-                if iss != expected_issuer {
-                    return Err(Error::message(
-                        ErrorKind::InvalidAuthorizationResponse,
-                        format!(
-                            "authorization response 'iss' mismatch: expected '{}', got '{}'",
-                            expected_issuer, iss
-                        ),
-                    ));
-                }
-                Ok(())
-            }
-            None => Err(Error::message(
+        let iss = self.iss.as_deref().ok_or_else(|| {
+            Error::message(
                 ErrorKind::InvalidAuthorizationResponse,
                 "authorization response is missing the required 'iss' parameter (per RFC 9207 / HAIP)",
-            )),
+            )
+        })?;
+
+        if iss != expected_issuer {
+            return Err(Error::message(
+                ErrorKind::InvalidAuthorizationResponse,
+                format!(
+                    "authorization response 'iss' mismatch: expected '{}', got '{}'",
+                    expected_issuer, iss
+                ),
+            ));
         }
+
+        Ok(())
     }
 }
 
