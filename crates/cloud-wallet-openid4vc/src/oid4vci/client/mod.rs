@@ -112,6 +112,8 @@ pub struct AuthorizationUrlResult {
 pub struct AuthorizationErrorCallback {
     pub error: Oid4vciError<AuthzErrorResponse>,
     pub state: Option<String>,
+    /// The issuer identifier of the Authorization Server (RFC 9207).
+    pub iss: Option<String>,
 }
 
 /// Parsed authorization callback outcome.
@@ -127,6 +129,14 @@ impl AuthorizationCallback {
         match self {
             Self::Success(response) => response.state.as_deref(),
             Self::Error(response) => response.state.as_deref(),
+        }
+    }
+
+    /// Return the callback `iss` value (Authorization Server issuer), when present.
+    pub fn iss(&self) -> Option<&str> {
+        match self {
+            Self::Success(response) => response.iss.as_deref(),
+            Self::Error(response) => response.iss.as_deref(),
         }
     }
 }
@@ -385,7 +395,27 @@ impl Oid4vciClient {
     }
 
     /// Parses authorization callback query parameters into success/error result.
-    pub fn parse_authorization_callback(query: &str) -> Result<AuthorizationCallback> {
+    ///
+    /// Per RFC 9207, the `iss` parameter identifies the Authorization Server.
+    /// For FAPI2/HAIP compliance, the Wallet MUST validate `iss` against the
+    /// expected issuer from AS metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The raw query string from the redirect URI.
+    /// * `expected_issuer` - When provided, validates that `iss` matches this issuer.
+    ///   Required for FAPI2/HAIP compliance; pass `None` only for non-HAIP flows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The query cannot be parsed.
+    /// - `iss` is missing when `expected_issuer` is provided (strict mode).
+    /// - `iss` does not match `expected_issuer`.
+    pub fn parse_authorization_callback(
+        query: &str,
+        expected_issuer: Option<&str>,
+    ) -> Result<AuthorizationCallback> {
         const RECOGNIZED: &[&str] = &["code", "state", "iss", "error", "error_description"];
         let params = QueryParams::parse(query, RECOGNIZED)?;
 
@@ -401,20 +431,33 @@ impl Oid4vciClient {
             return Ok(AuthorizationCallback::Error(AuthorizationErrorCallback {
                 error,
                 state: params.get("state").map(ToOwned::to_owned),
+                iss: params.get("iss").map(ToOwned::to_owned),
             }));
         }
 
         let response = AuthorizationResponse::from_query(query)?;
+
+        if let Some(expected) = expected_issuer {
+            response.validate_iss(expected).map_err(|e| {
+                ClientError::validation(format!(
+                    "authorization response iss validation failed: {e}"
+                ))
+            })?;
+        }
+
         Ok(AuthorizationCallback::Success(response))
     }
 
     /// Parses authorization callback from redirect URI into success/error result.
+    ///
+    /// This is a convenience wrapper that extracts the query string and delegates
+    /// to [`Self::parse_authorization_callback`]. Does not validate `iss`.
     pub fn parse_authz_callback(&self, redirect_uri: &str) -> Result<AuthorizationCallback> {
         let url = Url::parse(redirect_uri)
             .map_err(|e| ClientError::validation(format!("invalid redirect uri: {e}")))?;
         let query = url.query().unwrap_or_default();
 
-        Self::parse_authorization_callback(query)
+        Self::parse_authorization_callback(query, None)
     }
 
     /// Exchange an authorization code for an access token (authorization code flow).
