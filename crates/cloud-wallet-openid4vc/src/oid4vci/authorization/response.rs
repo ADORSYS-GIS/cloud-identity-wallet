@@ -31,10 +31,12 @@ pub struct AuthorizationResponse {
     /// The issuer identifier of the Authorization Server.
     ///
     /// OPTIONAL per [RFC 9207]. When present, contains the Authorization Server's
-    /// issuer identifier URL. Required by FAPI2 and HAIP to prevent mix-up attacks.
+    /// issuer identifier URL.
     ///
-    /// The Wallet MUST validate that this value matches the expected issuer identifier
-    /// from the Authorization Server metadata.
+    /// **Note:** This implementation enforces HAIP/FAPI2 mode, which requires
+    /// `iss` to be present and validated. Base RFC 9207 permits responses without
+    /// `iss` from ASes that do not support the parameter, but HAIP §4 mandates
+    /// its presence for mix-up attack prevention.
     ///
     /// [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html
     pub iss: Option<String>,
@@ -128,14 +130,24 @@ impl AuthorizationResponse {
     /// in the authorization response matches the issuer identifier of the Authorization Server
     /// that the Wallet expected to receive the response from.
     ///
+    /// **Note:** This implementation enforces strict mode, rejecting responses without `iss`.
+    /// Base RFC 9207 permits optional `iss`, but FAPI2/HAIP requires it for security.
+    ///
     /// # Arguments
     ///
     /// * `expected_issuer` - The expected Authorization Server issuer URL (from AS metadata).
     ///
+    /// # String Comparison
+    ///
+    /// Per RFC 9207 §2.4, comparison uses simple string equality after form-decoding.
+    /// If `expected_issuer` comes from a parsed `Url`, the `url` crate's normalization
+    /// (e.g., trailing slash on bare origins) is applied. Pass the raw metadata value
+    /// if exact string matching is required.
+    ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::InvalidAuthorizationResponse`] when:
-    /// - `iss` is missing (strict mode per FAPI2/HAIP requirement)
+    /// - `iss` is missing (strict mode enforced per FAPI2/HAIP)
     /// - `iss` does not match the expected issuer
     ///
     /// [RFC 9207]: https://www.rfc-editor.org/rfc/rfc9207.html
