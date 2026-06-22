@@ -970,6 +970,7 @@ dependencies = [
  "cloud-wallet-openid4vc",
  "color-eyre",
  "config",
+ "coset",
  "dashmap",
  "futures",
  "jsonwebtoken",

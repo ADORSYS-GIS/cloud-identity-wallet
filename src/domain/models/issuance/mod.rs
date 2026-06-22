@@ -37,10 +37,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
+use crate::domain::keys::tenant_crypto_signer;
 use crate::domain::models::credential::{
     Credential, CredentialDisplayMetadata, CredentialFormat, CredentialStatus,
 };
-use crate::domain::models::tenants::SignAlgorithm;
 use crate::domain::ports::{
     CredentialRepo, IssuanceEventPublisher, IssuanceEventStream, IssuanceEventSubscriber,
     IssuanceTaskQueue, TenantRepo,
@@ -618,18 +618,12 @@ impl IssuanceEngine {
     /// Build a `CryptoSigner` from the tenant's stored key material.
     #[instrument(skip(self))]
     async fn build_signer(&self, tenant_id: Uuid) -> Result<CryptoSigner> {
-        let key = self.tenant_repo.find_key(tenant_id).await?;
-
-        let signer = tokio::task::spawn_blocking(move || {
-            let der = key.der_bytes.expose();
-            match key.algorithm {
-                SignAlgorithm::Ecdsa => CryptoSigner::from_ecdsa_der(der),
-                SignAlgorithm::EdDsa => CryptoSigner::from_ed25519_der(der),
-                SignAlgorithm::Rsa => CryptoSigner::from_rsa_der(der),
-            }
-        })
-        .await??;
-        Ok(signer)
+        tenant_crypto_signer(self.tenant_repo.as_ref(), tenant_id)
+            .await
+            .map_err(|e| {
+                let message = e.to_string();
+                IssuanceError::internal_message(message).with_source(e)
+            })
     }
 
     /// Store a raw credential string and its associated display metadata.
