@@ -234,14 +234,19 @@ pub(crate) async fn verify_issuer_signature(
     // The CRL must be signed by the DSC's immediate issuer, not the IACA root.
     // For single-level chains (DSC → IACA), the issuer is the anchoring root.
     // For multi-level chains (DSC → Intermediate → IACA), the issuer is chain[1].
-    let dsc_issuer_der = if chain.len() > 1 {
+    //
+    // Security note: The issuer DER bytes come from the untrusted x5chain, but this is safe:
+    // - CRL signature verification will fail if a malicious intermediate is substituted
+    // - The CRL is signed by the legitimate issuer, so only a real issuer can produce a valid CRL
+    // - An attacker-controlled intermediate would be caught during x5chain path validation
+    let dsc_issuer_der: &[u8] = if chain.len() > 1 {
         // Multi-level chain: DSC issuer is the intermediate CA at chain[1]
-        chain[1].clone()
+        &chain[1]
     } else {
         // Single-level chain: DSC is directly signed by the IACA root
-        anchoring_root_der.clone()
+        &anchoring_root_der
     };
-    check_revocation(&dsc, &dsc_issuer_der, revocation_policy).await?;
+    check_revocation(&dsc, dsc_issuer_der, revocation_policy, None).await?;
 
     let issuer_subject = dsc.subject().to_string();
     let issuer_country = dsc

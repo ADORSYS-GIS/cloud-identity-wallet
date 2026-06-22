@@ -16,6 +16,7 @@
 //! mentions "CRL/OCSP" but this module implements CRL only. OCSP stapling and
 //! OCSP responder queries will be added in a subsequent PR.
 
+use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -79,14 +80,104 @@ pub enum RevocationPolicy {
     HardFail,
 }
 
-/// HTTP client for CRL fetching. Lazily initialized with explicit rustls TLS backend.
-static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .use_rustls_tls()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .expect("HTTP client with rustls must initialize")
-});
+/// Trait for fetching CRLs, allowing dependency injection for testing.
+///
+/// Production implementations typically use HTTP with caching, while test
+/// implementations can return mock CRLs or simulate failures.
+#[async_trait]
+pub trait CrlFetcher: Send + Sync {
+    /// Fetches CRL bytes from the given URI.
+    ///
+    /// Returns the raw DER-encoded CRL bytes, or an error if the fetch fails.
+    async fn fetch_crl(&self, uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error>;
+}
+
+/// Production HTTP-based CRL fetcher with in-memory caching.
+///
+/// Uses a global cache shared across all instances to avoid redundant HTTPS fetches.
+/// Cache entries have a TTL (default 6 hours) and the cache has a maximum size.
+pub struct HttpCrlFetcher {
+    http_client: Client,
+    cache_ttl: Duration,
+}
+
+impl HttpCrlFetcher {
+    /// Creates a new HTTP CRL fetcher with default settings.
+    pub fn new() -> Self {
+        Self {
+            http_client: Client::builder()
+                .use_rustls_tls()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("HTTP client with rustls must initialize"),
+            cache_ttl: DEFAULT_CRL_CACHE_TTL,
+        }
+    }
+
+    /// Creates a new HTTP CRL fetcher with a custom cache TTL.
+    pub fn with_cache_ttl(cache_ttl: Duration) -> Self {
+        Self {
+            http_client: Client::builder()
+                .use_rustls_tls()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("HTTP client with rustls must initialize"),
+            cache_ttl,
+        }
+    }
+}
+
+impl Default for HttpCrlFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl CrlFetcher for HttpCrlFetcher {
+    async fn fetch_crl(&self, uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
+        // Check cache first
+        {
+            let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+            let (cache, _) = &mut *cache_guard;
+            evict_if_needed(cache, uri);
+            if let Some(entry) = cache.get(uri) {
+                tracing::debug!(uri, "CRL cache hit");
+                return Ok(entry.crl_der.clone());
+            }
+        }
+
+        // Fetch fresh CRL
+        // Note: No retry on transient failures (timeouts, 5xx errors). A single transient
+        // failure will cause SoftFail to log a warning and skip revocation check, or
+        // HardFail to reject. This is a known limitation that could be addressed in
+        // future work with exponential backoff retry.
+        tracing::debug!(uri, "CRL cache miss, fetching");
+        let response = self.http_client.get(uri).send().await?;
+        let bytes = response.error_for_status()?.bytes().await?;
+        let crl_der = bytes.to_vec();
+
+        // Cache the result
+        {
+            let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
+            let (cache, counter) = &mut *cache_guard;
+            evict_if_needed(cache, uri);
+            let insertion_order = *counter;
+            *counter += 1;
+            cache.insert(
+                uri.to_owned(),
+                CrlCacheEntry {
+                    crl_der: crl_der.clone(),
+                    fetched_at: Instant::now(),
+                    expires_after: self.cache_ttl,
+                    insertion_order,
+                },
+            );
+        }
+
+        Ok(crl_der)
+    }
+}
 
 /// In-memory CRL cache with TTL.
 ///
@@ -198,6 +289,7 @@ fn extract_https_uri_from_distribution_point<'a>(dp: &CRLDistributionPoint<'a>) 
 ///   used to verify the CRL signature. For single-level chains this is the IACA root;
 ///   for multi-level chains it is the intermediate CA.
 /// - `policy`: Revocation checking policy.
+/// - `fetcher`: Optional CRL fetcher for dependency injection. Uses default HttpCrlFetcher if None.
 ///
 /// # Returns
 ///
@@ -209,6 +301,7 @@ pub async fn check_revocation(
     dsc: &X509Certificate<'_>,
     dsc_issuer_der: &[u8],
     policy: RevocationPolicy,
+    fetcher: Option<&dyn CrlFetcher>,
 ) -> Result<()> {
     if policy == RevocationPolicy::Skip {
         return Ok(());
@@ -223,7 +316,10 @@ pub async fn check_revocation(
         }
     };
 
-    let crl_bytes = match fetch_crl_cached(&crl_uri).await {
+    let default_fetcher = HttpCrlFetcher::new();
+    let fetcher_ref = fetcher.unwrap_or(&default_fetcher);
+
+    let crl_bytes = match fetcher_ref.fetch_crl(&crl_uri).await {
         Ok(bytes) => bytes,
         Err(e) => {
             return handle_crl_fetch_error(&crl_uri, e, policy);
@@ -301,48 +397,6 @@ fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy)
         RevocationPolicy::HardFail => Err(error),
         RevocationPolicy::Skip => unreachable!("Skip policy returns early in check_revocation"),
     }
-}
-
-/// Fetches CRL bytes from the given HTTPS URI, using cache if available and fresh.
-async fn fetch_crl_cached(uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
-    // Check cache first
-    {
-        let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
-        let (cache, _) = &mut *cache_guard;
-        evict_if_needed(cache, uri);
-        if let Some(entry) = cache.get(uri) {
-            tracing::debug!(uri, "CRL cache hit");
-            return Ok(entry.crl_der.clone());
-        }
-    }
-
-    // Fetch fresh CRL
-    tracing::debug!(uri, "CRL cache miss, fetching");
-    let response = HTTP_CLIENT.get(uri).send().await?;
-    let bytes = response.error_for_status()?.bytes().await?;
-    let crl_der = bytes.to_vec();
-
-    // Cache the result
-    {
-        let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
-        let (cache, counter) = &mut *cache_guard;
-        // Evict before insert to prevent cache from exceeding MAX_CRL_CACHE_ENTRIES.
-        // We sweep all stale entries (not just the current URI) when the cache is full.
-        evict_if_needed(cache, uri);
-        let insertion_order = *counter;
-        *counter += 1;
-        cache.insert(
-            uri.to_owned(),
-            CrlCacheEntry {
-                crl_der: crl_der.clone(),
-                fetched_at: Instant::now(),
-                expires_after: DEFAULT_CRL_CACHE_TTL,
-                insertion_order,
-            },
-        );
-    }
-
-    Ok(crl_der)
 }
 
 /// Parses a DER-encoded CRL and performs full validation per RFC 5280 and ISO 18013-5 Annex B §B.2.
@@ -458,10 +512,14 @@ fn is_indirect_crl(crl: &CertificateRevocationList<'_>) -> bool {
     const OID_ISSUING_DISTRIBUTION_POINT: &str = "2.5.29.28";
     for ext in crl.extensions() {
         if ext.oid.to_id_string() == OID_ISSUING_DISTRIBUTION_POINT {
-            // If this extension is present, check if indirectCRL is set
-            // For simplicity, reject any CRL with this extension as it indicates
-            // a non-standard CRL issuer scenario
-            return true;
+            // The IssuingDistributionPoint extension is allowed on complete CRLs.
+            // We only reject if the indirectCRL boolean is set, which indicates
+            // the CRL issuer differs from the certificate issuer.
+            if let ParsedExtension::IssuingDistributionPoint(idp) = ext.parsed_extension()
+                && idp.indirect_crl
+            {
+                return true;
+            }
         }
     }
     false
@@ -494,19 +552,25 @@ fn verify_aki_match(
     const OID_AKI: &str = "2.5.29.35";
     const OID_SKI: &str = "2.5.29.14";
 
-    // Extract AKI from CRL if present
-    let crl_aki = crl.extensions().iter().find_map(|ext| {
+    // Extract AKI from CRL if present and parse it properly per RFC 5280 §4.2.1.1
+    // The AuthorityKeyIdentifier extension contains an optional keyIdentifier OCTET STRING
+    // We extract only the key_identifier field for comparison
+    let crl_aki_key_id = crl.extensions().iter().find_map(|ext| {
         if ext.oid.to_id_string() == OID_AKI {
-            // AKI extension value contains keyIdentifier (usually first element)
-            // We compare the raw extension value bytes with the issuer's SKI
-            Some(ext.value)
+            match ext.parsed_extension() {
+                ParsedExtension::AuthorityKeyIdentifier(aki) => {
+                    aki.key_identifier.as_ref().map(|ki| ki.0)
+                }
+                _ => None,
+            }
         } else {
             None
         }
     });
 
     // Extract SKI from issuer certificate if present
-    let issuer_ski = issuer_cert.extensions().iter().find_map(|ext| {
+    // SKI extension is just an OCTET STRING containing the key identifier
+    let issuer_ski_value = issuer_cert.extensions().iter().find_map(|ext| {
         if ext.oid.to_id_string() == OID_SKI {
             Some(ext.value)
         } else {
@@ -514,13 +578,12 @@ fn verify_aki_match(
         }
     });
 
-    match (crl_aki, issuer_ski) {
-        (Some(aki), Some(ski)) => {
-            // AKI extension format: OctetString containing the keyIdentifier
-            // The raw extension value should contain the keyIdentifier bytes
-            // For simplicity, we check if SKI bytes appear within AKI bytes
-            // A proper implementation would parse the AKI extension fully
-            if !aki.windows(ski.len()).any(|w| w == ski) {
+    match (crl_aki_key_id, issuer_ski_value) {
+        (Some(aki_key_id), Some(ski_value)) => {
+            // AKI extension is a SEQUENCE with optional keyIdentifier OCTET STRING
+            // We've extracted the key_identifier bytes via parsed_extension
+            // SKI extension is just an OCTET STRING, so its value is the key identifier directly
+            if aki_key_id != ski_value {
                 return Err(MdocError::RevocationCheckFailed {
                     reason:
                         "CRL Authority Key Identifier does not match issuer Subject Key Identifier"
@@ -769,7 +832,7 @@ mod tests {
                 build_chain_with_crl_uri("https://nonexistent.example.com/crl.crl");
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
 
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::Skip).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::Skip, None).await;
             assert!(
                 result.is_ok(),
                 "Skip policy should always return Ok: {:?}",
@@ -824,7 +887,7 @@ mod tests {
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
 
             // SoftFail should tolerate missing CRL URI
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail, None).await;
             assert!(
                 result.is_ok(),
                 "SoftFail should tolerate missing CRL URI: {:?}",
@@ -832,7 +895,7 @@ mod tests {
             );
 
             // HardFail should reject missing CRL URI
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, None).await;
             assert!(result.is_err(), "HardFail should reject missing CRL URI");
         }
 
@@ -855,7 +918,7 @@ mod tests {
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
 
             // SoftFail should tolerate CRL fetch failure
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail, None).await;
             assert!(
                 result.is_ok(),
                 "SoftFail should tolerate CRL fetch failure: {:?}",
@@ -863,7 +926,7 @@ mod tests {
             );
 
             // HardFail should reject CRL fetch failure
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, None).await;
             assert!(result.is_err(), "HardFail should reject CRL fetch failure");
         }
 
@@ -908,5 +971,23 @@ mod tests {
         // - Shell out to `openssl` CLI during test setup (complex, brittle)
         // - Embed pre-generated CRL fixtures as DER bytes (requires regeneration on key rotation)
         // - Contribute CRL generation support to `rcgen` upstream
+        //
+        // Template for mock CrlFetcher-based test:
+        // ```rust
+        // struct MockCrlFetcher {
+        //     crl_bytes: Vec<u8>,
+        // }
+        //
+        // #[async_trait]
+        // impl CrlFetcher for MockCrlFetcher {
+        //     async fn fetch_crl(&self, _uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
+        //         Ok(self.crl_bytes.clone())
+        //     }
+        // }
+        //
+        // // Use in test:
+        // let mock_fetcher = MockCrlFetcher { crl_bytes: pre_generated_crl_der };
+        // let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
+        // ```
     }
 }
