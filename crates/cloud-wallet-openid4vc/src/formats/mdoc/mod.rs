@@ -14,14 +14,12 @@
 mod cert_chain;
 pub mod error;
 mod parser;
-pub mod revocation;
 #[cfg(test)]
 mod tests;
 pub mod verifier;
 
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
-pub use revocation::RevocationPolicy;
 pub use verifier::{IacaTrustStore, IssuerInfo, StaticTrustStore, verify_mdoc_for_issuance};
 
 use cloud_wallet_crypto::digest::HashAlg;

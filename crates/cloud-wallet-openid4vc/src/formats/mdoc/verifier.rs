@@ -21,7 +21,6 @@ use super::cert_chain::{
 };
 use super::error::{MdocError, Result};
 use super::parser::ParsedMdoc;
-use super::revocation::{RevocationPolicy, check_revocation};
 
 /// COSE unprotected header label for the X.509 certificate chain (RFC 9360).
 const X5CHAIN_LABEL: i64 = 33;
@@ -136,7 +135,7 @@ pub struct IssuerInfo {
 
 /// Verifies the `issuerAuth` COSE_Sign1 signature against a trusted IACA certificate chain
 /// (ISO/IEC 18013-5 §9.1.2): chain validation, EKU/key-usage check, docType match,
-/// validity-window check, signature verification, and revocation checking.
+/// validity-window check, and signature verification.
 ///
 /// The DSC (`chain[0]`) is parsed once and the parsed certificate is passed to all
 /// per-certificate helpers, avoiding redundant DER parsing.
@@ -145,7 +144,6 @@ pub struct IssuerInfo {
 ///
 /// - `outer_doc_type`: the `docType` from the enclosing document structure, checked
 ///   against the MSO `docType` field (§9.3.1 step 4).
-/// - `revocation_policy`: policy for DSC revocation checking (ISO 18013-5 §9.3.3).
 ///
 /// # Errors
 ///
@@ -164,14 +162,16 @@ pub struct IssuerInfo {
 /// - [`MdocError::DocTypeMismatch`] — outer `docType` differs from MSO `docType`.
 /// - [`MdocError::SignedOutsideDscValidity`] — MSO `signed` is outside DSC validity.
 /// - [`MdocError::InvalidIssuerSignature`] — signature does not verify.
-/// - [`MdocError::CertificateRevoked`] — DSC is revoked (depends on policy).
-/// - [`MdocError::RevocationCheckFailed`] — CRL fetch/validation failed (HardFail only).
+///
+/// # Known Limitations
+///
+/// Certificate revocation (CRL / OCSP) is not checked. A credential signed by a revoked
+/// DSC will pass all current checks.
 #[must_use = "issuer signature verification failure must be handled"]
-pub(crate) async fn verify_issuer_signature(
+pub(crate) fn verify_issuer_signature(
     parsed: &ParsedMdoc,
     outer_doc_type: &str,
     trust_store: &dyn IacaTrustStore,
-    revocation_policy: RevocationPolicy,
 ) -> Result<IssuerInfo> {
     let alg = read_cose_alg(parsed)?;
 
@@ -228,20 +228,6 @@ pub(crate) async fn verify_issuer_signature(
     }
 
     dispatch_verify(alg, &spki, &tbs, sig)?;
-
-    // Revocation check (ISO 18013-5 §9.3.3) — fetches CRL and verifies DSC is not revoked.
-    // Run after COSE signature verification to avoid network calls for tampered payloads.
-    // The CRL must be signed by the DSC's immediate issuer, not the IACA root.
-    // For single-level chains (DSC → IACA), the issuer is the anchoring root.
-    // For multi-level chains (DSC → Intermediate → IACA), the issuer is chain[1].
-    let dsc_issuer_der = if chain.len() > 1 {
-        // Multi-level chain: DSC issuer is the intermediate CA at chain[1]
-        chain[1].clone()
-    } else {
-        // Single-level chain: DSC is directly signed by the IACA root
-        anchoring_root_der.clone()
-    };
-    check_revocation(&dsc, &dsc_issuer_der, revocation_policy).await?;
 
     let issuer_subject = dsc.subject().to_string();
     let issuer_country = dsc
@@ -630,22 +616,19 @@ fn verify_okp_binding(entries: &[(Value, Value)], holder_binding_public_jwk: &Jw
 /// * `trust_store` — IACA root certificates accepted for this wallet deployment.
 /// * `holder_binding_public_jwk` — the holder's public key from the OID4VCI proof JWT header.
 /// * `now` — the current time; use `OffsetDateTime::now_utc()` in production.
-/// * `revocation_policy` — policy for DSC revocation checking (ISO 18013-5 §9.3.3).
 ///
 /// # Errors
 ///
-/// Propagates errors from any of the underlying checks.
-pub async fn verify_mdoc_for_issuance(
+/// Propagates errors from any of the four underlying checks.
+pub fn verify_mdoc_for_issuance(
     parsed: &ParsedMdoc,
     outer_doc_type: &str,
     trust_store: &dyn IacaTrustStore,
     holder_binding_public_jwk: &Jwk,
     now: OffsetDateTime,
-    revocation_policy: RevocationPolicy,
 ) -> Result<IssuerInfo> {
     parsed.check_temporal_validity(now)?;
-    let issuer_info =
-        verify_issuer_signature(parsed, outer_doc_type, trust_store, revocation_policy).await?;
+    let issuer_info = verify_issuer_signature(parsed, outer_doc_type, trust_store)?;
     verify_digests(parsed)?;
     verify_device_key_binding(parsed, holder_binding_public_jwk)?;
     Ok(issuer_info)

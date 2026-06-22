@@ -193,20 +193,4 @@ pub enum MdocError {
     /// The public key in the MSO `deviceKeyInfo` does not match the holder's proof JWK.
     #[error("MSO device key does not match proof JWK")]
     DeviceKeyMismatch,
-
-    /// The Document Signer Certificate is revoked (ISO 18013-5 §9.3.3).
-    #[error("certificate with serial {serial} is revoked: {reason}")]
-    CertificateRevoked {
-        /// Hex-encoded serial number of the revoked certificate.
-        serial: String,
-        /// Revocation reason (RFC 5280 §5.3.1), or "unspecified".
-        reason: String,
-    },
-
-    /// CRL fetch or validation failed during revocation checking (ISO 18013-5 §9.3.3).
-    #[error("revocation check failed: {reason}")]
-    RevocationCheckFailed {
-        /// Human-readable reason for the failure.
-        reason: String,
-    },
 }
