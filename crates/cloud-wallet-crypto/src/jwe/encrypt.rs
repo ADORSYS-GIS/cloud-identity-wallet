@@ -79,7 +79,7 @@ pub fn encrypt(mut header: JweHeader, plaintext: &[u8], key: JweEncryptKey<'_>) 
     let mut nonce = [0u8; NONCE_LENGTH];
     crate::rand::fill_bytes(&mut nonce)?;
 
-    let mut ct_buf = plaintext.to_vec();
+    let mut ct_buf = Zeroizing::new(plaintext.to_vec());
     let tag = cek_key.encrypt(&nonce, aad, &mut ct_buf)?;
 
     Ok(format!(
@@ -110,15 +110,6 @@ fn validate_key_alg(alg: &KeyManagementAlgorithm, key: &JweEncryptKey<'_>) -> Re
 ///
 /// As a side effect, sets `header.epk` for ECDH-ES variants.
 fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::Key, Vec<u8>)> {
-    let apu_bytes: Vec<u8> = header
-        .apu
-        .as_ref()
-        .map_or(Vec::new(), |b| b.as_ref().to_vec());
-    let apv_bytes: Vec<u8> = header
-        .apv
-        .as_ref()
-        .map_or(Vec::new(), |b| b.as_ref().to_vec());
-
     match (&header.alg, key) {
         (
             KeyManagementAlgorithm::RsaOaep256
@@ -137,12 +128,17 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
 
             let mut enc_key_buf = vec![0u8; rsa_key.ciphertext_size()];
             let ct = rsa_key.encrypt(oaep_alg, &cek_bytes, &mut enc_key_buf)?;
-            // RSA-OAEP output is always exactly modulus size; ct fills enc_key_buf entirely.
-            assert_eq!(
-                ct.len(),
-                enc_key_buf.len(),
-                "RSA-OAEP output length must equal modulus size"
-            );
+            // RSA-OAEP output is always exactly modulus size; ct should fill enc_key_buf entirely.
+            let ct_len = ct.len();
+            let enc_key_buf_len = enc_key_buf.len();
+            if ct_len != enc_key_buf_len {
+                return Err(error_msg(
+                    ErrorKind::Encryption,
+                    format!(
+                        "RSA-OAEP output length {ct_len} does not match modulus size {enc_key_buf_len}"
+                    ),
+                ));
+            }
             let enc_key_bytes = enc_key_buf;
 
             let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;
@@ -153,14 +149,18 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
             let (shared_secret, epk_jwk) = ecdh_and_epk(recipient_pub.curve(), recipient_pub)?;
             header.epk = Some(epk_jwk);
 
+            // Borrowed after the epk write above, so no intermediate Vec copy is needed.
+            let apu_bytes: &[u8] = header.apu.as_ref().map_or(&[], |b| b.as_ref());
+            let apv_bytes: &[u8] = header.apv.as_ref().map_or(&[], |b| b.as_ref());
+
             let mut cek_bytes = Zeroizing::new(vec![0u8; header.enc.key_len()]);
             concat_kdf(
                 HashAlg::Sha256,
                 shared_secret.as_bytes(),
                 &ConcatKdfParams {
                     algorithm_id: header.enc.alg_id(),
-                    party_u_info: &apu_bytes,
-                    party_v_info: &apv_bytes,
+                    party_u_info: apu_bytes,
+                    party_v_info: apv_bytes,
                 },
                 &mut cek_bytes,
             )?;
@@ -174,7 +174,7 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
             JweEncryptKey::Ecdh(recipient_pub),
         ) => {
             let alg = header.alg;
-            ecdh_kw(header, recipient_pub, &apu_bytes, &apv_bytes, alg)
+            ecdh_kw(header, recipient_pub, alg)
         }
 
         _ => unreachable!("unhandled alg/key combination — validate_key_alg should prevent this"),
@@ -185,8 +185,6 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
 fn ecdh_kw(
     header: &mut JweHeader,
     recipient_pub: &EcdhPublicKey,
-    apu_bytes: &[u8],
-    apv_bytes: &[u8],
     alg: KeyManagementAlgorithm,
 ) -> Result<(aead::Key, Vec<u8>)> {
     let kw_alg_id = alg
@@ -199,6 +197,10 @@ fn ecdh_kw(
 
     let (shared_secret, epk_jwk) = ecdh_and_epk(recipient_pub.curve(), recipient_pub)?;
     header.epk = Some(epk_jwk);
+
+    // Borrowed after the epk write above, so no intermediate Vec copy is needed.
+    let apu_bytes: &[u8] = header.apu.as_ref().map_or(&[], |b| b.as_ref());
+    let apv_bytes: &[u8] = header.apv.as_ref().map_or(&[], |b| b.as_ref());
 
     let mut kek_bytes = Zeroizing::new(vec![0u8; kek_len]);
     concat_kdf(
@@ -219,12 +221,17 @@ fn ecdh_kw(
     let kek = KeyEncryptionKey::new(kw_algorithm, &kek_bytes)?;
     let mut wrapped_buf = vec![0u8; cek_len + 8];
     let wrapped = kek.wrap_key(&cek_bytes, &mut wrapped_buf)?;
-    // AES-KW output is always exactly input + 8 bytes; wrapped fills wrapped_buf entirely.
-    assert_eq!(
-        wrapped.len(),
-        wrapped_buf.len(),
-        "AES-KW output length must equal CEK length + 8"
-    );
+    // AES-KW output is always exactly input + 8 bytes; wrapped should fill wrapped_buf entirely.
+    let wrapped_len = wrapped.len();
+    let wrapped_buf_len = wrapped_buf.len();
+    if wrapped_len != wrapped_buf_len {
+        return Err(error_msg(
+            ErrorKind::Encryption,
+            format!(
+                "AES-KW output length {wrapped_len} does not match expected CEK length + 8 ({wrapped_buf_len})"
+            ),
+        ));
+    }
     let enc_key_bytes = wrapped_buf;
 
     let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;

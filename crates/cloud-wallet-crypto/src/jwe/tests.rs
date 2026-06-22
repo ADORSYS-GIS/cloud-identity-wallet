@@ -65,6 +65,7 @@ fn ecdh_header(alg: KeyManagementAlgorithm, enc: ContentEncryptionAlgorithm) -> 
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     }
 }
@@ -84,6 +85,7 @@ fn ecdh_header_with_party(
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     }
 }
@@ -167,6 +169,7 @@ fn roundtrip_rsa_oaep256_a256gcm() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     };
     let plaintext = b"rsa oaep roundtrip";
@@ -190,6 +193,7 @@ fn roundtrip_rsa_oaep384_a256gcm() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     };
     let token = encrypt(header, b"test384", JweEncryptKey::Rsa(enc_key)).unwrap();
@@ -211,6 +215,7 @@ fn roundtrip_rsa_oaep512_a256gcm() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     };
     let token = encrypt(header, b"test512", JweEncryptKey::Rsa(enc_key)).unwrap();
@@ -429,9 +434,36 @@ fn unknown_crit_parameter_rejected() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: Some(vec!["unknown-extension".to_string()]),
     };
     let err = encrypt(header, b"crit test", JweEncryptKey::Ecdh(&pub_key)).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        ErrorKind::UnsupportedAlgorithm,
+        "expected UnsupportedAlgorithm, got {err:?}"
+    );
+}
+
+/// `zip` is not implemented; a header carrying it must be rejected rather than
+/// silently returning undecompressed bytes to the caller (RFC 7516 §4.1.3).
+#[test]
+fn zip_header_parameter_rejected() {
+    let (_, pub_key) = make_ecdh_pair(EcdhCurve::P256);
+
+    let header = JweHeader {
+        alg: KeyManagementAlgorithm::EcdhEs,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
+        epk: None,
+        apu: None,
+        apv: None,
+        kid: None,
+        typ: None,
+        cty: None,
+        zip: Some("DEF".to_string()),
+        crit: None,
+    };
+    let err = encrypt(header, b"test", JweEncryptKey::Ecdh(&pub_key)).unwrap_err();
     assert_eq!(
         err.kind(),
         ErrorKind::UnsupportedAlgorithm,
@@ -488,6 +520,7 @@ fn encrypt_rejects_non_none_epk() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     };
 
@@ -508,6 +541,7 @@ fn encrypt_rejects_empty_crit_array() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: Some(vec![]),
     };
 
@@ -532,6 +566,7 @@ fn encrypt_rejects_registered_param_in_crit() {
             kid: None,
             typ: None,
             cty: None,
+            zip: None,
             crit: Some(vec![param.to_string()]),
         };
         let err = encrypt(header, b"test", JweEncryptKey::Ecdh(&pub_key)).unwrap_err();
@@ -565,6 +600,7 @@ fn key_type_mismatch_rejected_on_encrypt() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     };
     let err = encrypt(header, b"test", JweEncryptKey::Ecdh(&ecdh_pub_key)).unwrap_err();
@@ -615,6 +651,7 @@ fn roundtrip_rsa_oaep256_rsa4096_a256gcm() {
         kid: None,
         typ: None,
         cty: None,
+        zip: None,
         crit: None,
     };
     let plaintext = b"large rsa key test";

@@ -199,17 +199,16 @@ pub struct JweHeader {
 
     /// Agreement PartyUInfo — base64url-decoded bytes on the wire (RFC 7518 §4.6.1.2).
     ///
-    /// Used in the ConcatKDF derivation for ECDH-ES variants only. **Ignored for
-    /// RSA-OAEP variants** (RFC 7518 §4.3 does not define `apu`/`apv` semantics);
-    /// if set, the bytes are still serialised into the header and bound to the
-    /// AES-GCM AAD, but they do not influence key derivation.
+    /// Used in the ConcatKDF derivation for ECDH-ES variants only. Not consumed by
+    /// RSA-OAEP key derivation; however, if present, they are still serialised into
+    /// the protected header and bound to the AAD.
     #[serde(default)]
     pub apu: Option<B64>,
 
     /// Agreement PartyVInfo — base64url-decoded bytes on the wire (RFC 7518 §4.6.1.3).
     ///
-    /// Used in the ConcatKDF derivation for ECDH-ES variants only. **Ignored for
-    /// RSA-OAEP variants** — see `apu` for details.
+    /// Used in the ConcatKDF derivation for ECDH-ES variants only. Not consumed by
+    /// RSA-OAEP key derivation — see `apu` for details.
     #[serde(default)]
     pub apv: Option<B64>,
 
@@ -224,6 +223,14 @@ pub struct JweHeader {
     /// Content type of the plaintext.
     #[serde(default)]
     pub cty: Option<String>,
+
+    /// Compression algorithm (RFC 7516 §4.1.3).
+    ///
+    /// Not implemented by this crate: [`JweHeader::validate`] rejects any token
+    /// where this is present, since silently skipping decompression would hand
+    /// the caller raw compressed bytes with no indication that `zip` was set.
+    #[serde(default)]
+    pub zip: Option<String>,
 
     /// Critical header parameters (RFC 7516 §4.1.13).
     ///
@@ -249,27 +256,38 @@ impl JweHeader {
             kid: None,
             typ: None,
             cty: None,
+            zip: None,
             crit: None,
         }
     }
 
-    /// Validate the header against RFC 7516 §4.1.13 `crit` rules.
+    /// Validate the header against RFC 7516 §4.1.13 `crit` rules and reject
+    /// header parameters this crate cannot safely process.
     ///
-    /// Three conditions are enforced:
-    /// 1. **B-2** — The `crit` array, if present, must not be empty.
-    /// 2. **B-3** — Each entry must not be a registered JOSE header parameter
+    /// Conditions enforced:
+    /// 1. `zip` (RFC 7516 §4.1.3) — rejected unconditionally. This crate does
+    ///    not implement DEFLATE decompression; silently ignoring `zip` would
+    ///    return raw compressed bytes to the caller with no indication that
+    ///    decompression was required.
+    /// 2. **B-2** — The `crit` array, if present, must not be empty.
+    /// 3. **B-3** — Each entry must not be a registered JOSE header parameter
     ///    (`alg`, `enc`, `epk`, etc.); listing them in `crit` is explicitly
     ///    forbidden by RFC 7516 §4.1.13.
-    /// 3. Each entry must be understood by this implementation (currently no
+    /// 4. Each entry must be understood by this implementation (currently no
     ///    proprietary extensions are defined, so any extension param is rejected).
     ///
     /// Called by both [`fn@crate::jwe::encrypt`] and [`fn@crate::jwe::decrypt`] so that
     /// neither side can produce or accept non-conformant tokens.
     ///
     /// # Errors
-    /// [`ErrorKind::UnsupportedAlgorithm`] if any of the three conditions above
-    /// is violated.
+    /// [`ErrorKind::UnsupportedAlgorithm`] if any of the conditions above is violated.
     pub fn validate(&self) -> Result<()> {
+        if self.zip.is_some() {
+            return Err(error_msg(
+                ErrorKind::UnsupportedAlgorithm,
+                "the zip header parameter is not supported (RFC 7516 §4.1.3)",
+            ));
+        }
         if let Some(crit) = &self.crit {
             // B-2: RFC 7516 §4.1.13 — "The value of the crit member MUST NOT be
             // an empty list."
