@@ -256,8 +256,6 @@ async fn test_issuance_flow() {
             None::<String>,
             &["UniversityDegreeCredential".to_string()],
             None,
-            None,
-            None,
         )
         .await
         .expect("Failed to exchange token");
@@ -277,7 +275,7 @@ async fn test_issuance_flow() {
         .await;
 
     let credentials = client
-        .request_credentials(&context, &token, &signer, None, None, None)
+        .request_credentials(&context, &token, &signer, None)
         .await
         .expect("Failed to request credentials");
 
@@ -295,6 +293,8 @@ async fn test_issuance_flow() {
 
 #[tokio::test]
 async fn test_dpop_proof_attached_to_token_request() {
+    use wiremock::matchers::{method, path};
+
     let mock_server = setup_mock_server().await;
     let issuer_url = mock_server.uri();
 
@@ -350,10 +350,13 @@ async fn test_dpop_proof_attached_to_token_request() {
         }]
     });
 
-    Mock::given(method("POST"))
+    // The token endpoint mock matches any POST /token. After the request, we
+    // verify that the DPoP header was present and is a well-formed JWT.
+    let token_guard = Mock::given(method("POST"))
         .and(path("/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(token_response))
-        .mount(&mock_server)
+        .named("token_with_dpop")
+        .mount_as_scoped(&mock_server)
         .await;
 
     let nonce_response = serde_json::json!({
@@ -414,6 +417,10 @@ async fn test_dpop_proof_attached_to_token_request() {
     };
 
     let dpop_key = DpopKeyPair::generate().expect("DPoP key generation should succeed");
+    let dpop_opts = DpopOptions {
+        key: &dpop_key,
+        nonce_handler: None,
+    };
 
     let token = client
         .exchange_pre_authorized_code(
@@ -421,15 +428,36 @@ async fn test_dpop_proof_attached_to_token_request() {
             "test_code_dpop",
             None::<String>,
             &["UniversityDegreeCredential".to_string()],
-            Some(&dpop_key),
-            None,
-            None,
+            Some(&dpop_opts),
         )
         .await
         .expect("token exchange with DPoP key should succeed");
 
     assert_eq!(token.access_token, "dpop_test_access_token");
     assert_eq!(token.token_type, "DPoP");
+
+    let requests = token_guard.received_requests().await;
+    let dpop_header = requests
+        .first()
+        .expect("should have received a token request")
+        .headers
+        .get("DPoP")
+        .expect("DPoP header must be present")
+        .to_str()
+        .unwrap();
+    let parts: Vec<&str> = dpop_header.split('.').collect();
+    assert_eq!(parts.len(), 3, "DPoP header must be a 3-part JWT");
+
+    use base64::Engine;
+    let claims_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .expect("claims should be valid base64url");
+    let claims: serde_json::Value =
+        serde_json::from_slice(&claims_bytes).expect("claims should be valid JSON");
+    assert_eq!(claims["htm"], "POST");
+    assert!(claims["htu"].is_string(), "htu must be present");
+    assert!(claims["jti"].is_string(), "jti must be present");
+    assert!(claims["iat"].is_number(), "iat must be present");
 }
 
 #[tokio::test]

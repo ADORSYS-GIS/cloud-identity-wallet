@@ -398,8 +398,6 @@ impl IssuanceEngine {
                         verifier,
                         selected_config_ids,
                         None,
-                        None,
-                        None,
                     )
                     .await?
             }
@@ -415,8 +413,6 @@ impl IssuanceEngine {
                         pre_code,
                         task.tx_code.as_deref(),
                         selected_config_ids,
-                        None,
-                        None,
                         None,
                     )
                     .await?
@@ -457,7 +453,7 @@ impl IssuanceEngine {
 
         let responses = self
             .client
-            .request_credentials(context, token, &signer, None, None, None)
+            .request_credentials(context, token, &signer, None)
             .await?;
 
         debug!(

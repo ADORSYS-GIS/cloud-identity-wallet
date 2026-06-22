@@ -3,13 +3,16 @@
 //! [RFC 9449]: https://datatracker.ietf.org/doc/html/rfc9449
 //! [HAIP §4.4]: https://ec.europa.eu/digital-building-blocks/wikis/display/EUDIGIDENTITY/Wallet+to+Issuer++-+HAIP
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_wallet_crypto::digest::HashAlg;
 use cloud_wallet_crypto::ecdsa::{self, Curve};
 use cloud_wallet_crypto::jwk::B64;
 use cloud_wallet_crypto::jwk::Jwk;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
@@ -86,6 +89,14 @@ impl DpopKeyPair {
     pub fn thumbprint(&self) -> Result<String, DpopError> {
         jwk_thumbprint(&self.public_jwk)
     }
+
+    #[cfg(test)]
+    fn verify_proof_signature(&self, signing_input: &[u8], signature: &[u8]) -> Result<(), DpopError> {
+        self.key
+            .public_key()
+            .verify_sha256(signing_input, signature)
+            .map_err(|e| DpopError::ProofGeneration(format!("signature verification failed: {e}")))
+    }
 }
 
 fn jwk_thumbprint(jwk: &Jwk) -> Result<String, DpopError> {
@@ -95,12 +106,12 @@ fn jwk_thumbprint(jwk: &Jwk) -> Result<String, DpopError> {
                 .map_err(|e| DpopError::Thumbprint(format!("failed to serialize crv: {e}")))?;
             let x = jwk_b64_value(&ec.x);
             let y = jwk_b64_value(&ec.y);
-            serde_json::json!({
-                "crv": crv,
-                "kty": "EC",
-                "x": x,
-                "y": y,
-            })
+            let mut map = BTreeMap::new();
+            map.insert("crv", crv);
+            map.insert("kty", serde_json::Value::String("EC".into()));
+            map.insert("x", x);
+            map.insert("y", y);
+            serde_json::Value::Object(map.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
         }
         _ => {
             return Err(DpopError::Thumbprint(
@@ -118,39 +129,93 @@ fn jwk_b64_value(b64: &B64) -> serde_json::Value {
     serde_json::Value::String(URL_SAFE_NO_PAD.encode(b64.as_ref()))
 }
 
+/// Default TTL for cached DPoP nonces (5 minutes).
+const DEFAULT_NONCE_TTL: Duration = Duration::from_secs(300);
+
+/// Maximum number of nonces stored in the cache before eviction of the least
+/// recently inserted entry.
+const DEFAULT_MAX_NONCES: usize = 64;
+
+#[derive(Debug)]
+struct NonceEntry {
+    nonce: String,
+    inserted_at: Instant,
+}
+
 /// Handler for DPoP nonce persistence per RFC 9449 §7.
 ///
 /// Stores nonces keyed by `htu` (the normalized endpoint URL) so that
 /// subsequent requests to the same endpoint can include the nonce
 /// pre-emptively, avoiding extra round trips.
 ///
+/// Entries are evicted after a configurable TTL (default: 5 minutes) and
+/// when the cache exceeds a configurable capacity (default: 64 entries),
+/// the least recently inserted entry is removed.
+///
 /// **Cloning**: `Clone` creates a shared reference to the same underlying
 /// nonce store (via `Arc<Mutex>`). Mutations on a clone are visible to all
 /// other clones sharing the same store. This is intentional to allow the
 /// handler to be shared across concurrent requests.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DpopNonceHandler {
-    nonces: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    inner: Arc<Mutex<DpopNonceCache>>,
+}
+
+#[derive(Debug)]
+struct DpopNonceCache {
+    entries: BTreeMap<String, NonceEntry>,
+    ttl: Duration,
+    max_entries: usize,
 }
 
 impl DpopNonceHandler {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_config(DEFAULT_NONCE_TTL, DEFAULT_MAX_NONCES)
+    }
+
+    pub fn with_config(ttl: Duration, max_entries: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(DpopNonceCache {
+                entries: BTreeMap::new(),
+                ttl,
+                max_entries,
+            })),
+        }
     }
 
     pub fn get_nonce(&self, htu: &str) -> Option<String> {
-        self.nonces
-            .lock()
-            .expect("DpopNonceHandler lock poisoned")
-            .get(htu)
-            .cloned()
+        let mut cache = self.inner.lock();
+        if let Some(entry) = cache.entries.get(htu) {
+            if entry.inserted_at.elapsed() > cache.ttl {
+                cache.entries.remove(htu);
+                return None;
+            }
+            return Some(entry.nonce.clone());
+        }
+        None
     }
 
     pub fn store_nonce(&self, htu: impl Into<String>, nonce: impl Into<String>) {
-        self.nonces
-            .lock()
-            .expect("DpopNonceHandler lock poisoned")
-            .insert(htu.into(), nonce.into());
+        let mut cache = self.inner.lock();
+        let htu = htu.into();
+        let nonce = nonce.into();
+        if cache.entries.len() >= cache.max_entries
+            && !cache.entries.contains_key(&htu)
+            && let Some(evict_key) = cache
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.inserted_at)
+                .map(|(k, _)| k.clone())
+        {
+            cache.entries.remove(&evict_key);
+        }
+        cache.entries.insert(
+            htu,
+            NonceEntry {
+                nonce,
+                inserted_at: Instant::now(),
+            },
+        );
     }
 
     pub fn extract_and_store_nonce(
@@ -170,11 +235,49 @@ impl DpopNonceHandler {
             .map(|s| s.to_string())
     }
 
+    /// Check whether an HTTP response represents a DPoP `use_nonce` error.
+    ///
+    /// Per RFC 9449, the `error` field must equal `"use_nonce"`. This parses
+    /// the response body as JSON and checks the `error` field exactly, rather
+    /// than using a loose substring match.
     pub fn is_use_nonce_error(status: u16, body: &str) -> bool {
         if status != 400 {
             return false;
         }
-        body.contains("use_nonce")
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+            return false;
+        };
+        value.get("error").and_then(|e| e.as_str()) == Some("use_nonce")
+    }
+}
+
+impl Default for DpopNonceHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Bundle of DPoP parameters for sender-constrained token and credential requests.
+///
+/// Per RFC 9449 §3.1, the same key pair must be used for all DPoP proofs
+/// bound to a single access token. `DpopOptions` groups the key pair and
+/// optional nonce handler so callers pass a single reference instead of
+/// three separate parameters.
+///
+/// The nonce handler is used for pre-emptive nonce lookup (RFC 9449 §7):
+/// the library automatically calls `handler.get_nonce(htu)` when building
+/// proofs, so callers never need to compute `htu` or manage nonces manually.
+pub struct DpopOptions<'a> {
+    pub key: &'a DpopKeyPair,
+    pub nonce_handler: Option<&'a DpopNonceHandler>,
+}
+
+impl<'a> DpopOptions<'a> {
+    /// Look up a pre-emptive nonce for the given `htu` from the nonce handler.
+    ///
+    /// Returns `None` if no handler is set or if no nonce is cached for this endpoint.
+    pub fn get_nonce(&self, htu: &str) -> Option<String> {
+        self.nonce_handler.and_then(|h| h.get_nonce(htu))
     }
 }
 
@@ -195,7 +298,7 @@ pub fn build_dpop_proof(
 
     let claims = DpopProofClaims {
         jti,
-        htm: htm.to_string(),
+        htm: htm.to_ascii_uppercase(),
         htu: htu.to_string(),
         iat,
         nonce: nonce.map(|n| n.to_string()),
@@ -243,6 +346,7 @@ pub enum DpopError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn make_key_pair() -> DpopKeyPair {
         DpopKeyPair::generate().expect("key generation should succeed")
@@ -357,6 +461,15 @@ mod tests {
             400,
             r#"{"error":"invalid_grant"}"#
         ));
+        assert!(!DpopNonceHandler::is_use_nonce_error(
+            400,
+            r#"{"error":"invalid_grant","error_description":"use_nonce is required"}"#
+        ));
+        assert!(!DpopNonceHandler::is_use_nonce_error(
+            400,
+            r#"{"error_description":"use_nonce should not match"}"#
+        ));
+        assert!(!DpopNonceHandler::is_use_nonce_error(400, "not json"));
     }
 
     #[test]
@@ -519,5 +632,122 @@ mod tests {
             handler.get_nonce("https://issuer.example.com/credential"),
             Some("nonce-def".to_string())
         );
+    }
+
+    #[test]
+    fn dpop_nonce_handler_ttl_eviction() {
+        let handler = DpopNonceHandler::with_config(Duration::from_millis(50), 64);
+        handler.store_nonce("https://issuer.example.com/token", "short-lived");
+        assert_eq!(
+            handler.get_nonce("https://issuer.example.com/token"),
+            Some("short-lived".to_string())
+        );
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            handler
+                .get_nonce("https://issuer.example.com/token")
+                .is_none(),
+            "nonce should be evicted after TTL"
+        );
+    }
+
+    #[test]
+    fn dpop_nonce_handler_max_entries_eviction() {
+        let handler = DpopNonceHandler::with_config(DEFAULT_NONCE_TTL, 2);
+        handler.store_nonce("https://z.example.com/token", "nonce-z");
+        handler.store_nonce("https://m.example.com/token", "nonce-m");
+        handler.store_nonce("https://a.example.com/token", "nonce-a");
+
+        assert!(
+            handler.get_nonce("https://z.example.com/token").is_none(),
+            "least recently inserted entry should be evicted when max_entries is exceeded"
+        );
+        assert_eq!(
+            handler.get_nonce("https://m.example.com/token"),
+            Some("nonce-m".to_string())
+        );
+        assert_eq!(
+            handler.get_nonce("https://a.example.com/token"),
+            Some("nonce-a".to_string())
+        );
+    }
+
+    #[test]
+    fn dpop_htm_normalized_to_uppercase() {
+        let key_pair = make_key_pair();
+        let proof = build_dpop_proof(
+            &key_pair,
+            "post",
+            "https://issuer.example.com/token",
+            None,
+            None,
+        )
+        .expect("proof generation should succeed");
+
+        let claims: DpopProofClaims = decode_claims(&proof);
+        assert_eq!(claims.htm, "POST", "htm should be normalized to uppercase");
+    }
+
+    #[test]
+    fn dpop_proof_signature_verifies_with_public_key() {
+        let key_pair = make_key_pair();
+        let proof = build_dpop_proof(
+            &key_pair,
+            "POST",
+            "https://issuer.example.com/token",
+            None,
+            None,
+        )
+        .expect("proof generation should succeed");
+
+        let parts: Vec<&str> = proof.split('.').collect();
+        assert_eq!(parts.len(), 3, "JWT should have 3 parts");
+
+        let signing_input = format!("{}.{}", parts[0], parts[1]);
+        let signature_bytes = URL_SAFE_NO_PAD
+            .decode(parts[2])
+            .expect("signature base64url decode");
+
+        key_pair
+            .verify_proof_signature(signing_input.as_bytes(), &signature_bytes)
+            .expect("signature should verify with public key");
+
+        let tampered_input = format!("{}.TAMPERED", parts[0]);
+        let tampered_result =
+            key_pair.verify_proof_signature(tampered_input.as_bytes(), &signature_bytes);
+        assert!(
+            tampered_result.is_err(),
+            "tampered input should fail verification"
+        );
+    }
+
+    #[test]
+    fn dpop_thumbprint_rfc7638_canonical_ordering() {
+        use cloud_wallet_crypto::jwk::Key;
+
+        let key_pair = make_key_pair();
+        let thumbprint = key_pair.thumbprint().expect("thumbprint should succeed");
+        let decoded = URL_SAFE_NO_PAD
+            .decode(&thumbprint)
+            .expect("thumbprint base64url decode");
+        assert_eq!(decoded.len(), 32, "SHA-256 thumbprint should be 32 bytes");
+
+        let public_jwk = key_pair.public_jwk();
+        if let Key::Ec(ec) = &public_jwk.key {
+            let mut map = BTreeMap::new();
+            map.insert("crv", serde_json::to_value(&ec.crv).unwrap());
+            map.insert("kty", serde_json::Value::String("EC".into()));
+            map.insert("x", serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.x.as_ref())));
+            map.insert("y", serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.y.as_ref())));
+            let canonical = serde_json::to_string(&serde_json::Value::Object(
+                map.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            ))
+            .unwrap();
+            assert!(
+                canonical.starts_with(r#"{"crv":"#),
+                "BTreeMap should produce canonical order (crv, kty, x, y), got: {canonical}"
+            );
+        }
     }
 }
