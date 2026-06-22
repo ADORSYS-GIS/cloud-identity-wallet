@@ -20,7 +20,7 @@
 //! ```rust
 //! use cloud_wallet_crypto::ecdh::{EcdhCurve, EphemeralEcdhKey, EcdhPublicKey, StaticEcdhKey};
 //! use cloud_wallet_crypto::jwe::{
-//!     AlgAlgorithm, EncAlgorithm, JweHeader,
+//!     KeyManagementAlgorithm, ContentEncryptionAlgorithm, JweHeader,
 //!     encrypt, JweEncryptKey, decrypt, JweDecryptKey,
 //! };
 //!
@@ -32,7 +32,7 @@
 //! let recipient_pub = EcdhPublicKey::from_bytes(EcdhCurve::P256, pub_bytes)?;
 //!
 //! // Encrypt a message.
-//! let header = JweHeader::new(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+//! let header = JweHeader::new(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
 //! let token = encrypt(header, b"hello world", JweEncryptKey::Ecdh(&recipient_pub))?;
 //!
 //! // Decrypt the message. The plaintext is `Zeroizing<Vec<u8>>` — its heap
@@ -53,4 +53,4 @@ mod tests;
 
 pub use decrypt::{JweDecryptKey, decrypt};
 pub use encrypt::{JweEncryptKey, encrypt};
-pub use header::{AlgAlgorithm, EncAlgorithm, JweHeader};
+pub use header::{ContentEncryptionAlgorithm, JweHeader, KeyManagementAlgorithm};

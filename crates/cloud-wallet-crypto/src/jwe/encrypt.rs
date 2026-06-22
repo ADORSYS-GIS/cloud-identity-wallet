@@ -13,7 +13,7 @@ use crate::rsa::oaep::EncryptingKey as RsaEncryptingKey;
 use crate::utils::error_msg;
 
 use super::compact::{b64url_encode, epk_bytes_to_jwk, serialize_header};
-use super::header::{AlgAlgorithm, JweHeader};
+use super::header::{JweHeader, KeyManagementAlgorithm};
 
 /// Key supplied by the caller for JWE encryption.
 ///
@@ -67,9 +67,9 @@ pub fn encrypt(mut header: JweHeader, plaintext: &[u8], key: JweEncryptKey<'_>) 
         ));
     }
 
-    validate_key_alg(&header.alg, &key)?;
-
     header.validate()?;
+
+    validate_key_alg(&header.alg, &key)?;
 
     let (cek_key, enc_key_bytes) = derive_cek(&mut header, key)?;
 
@@ -93,7 +93,7 @@ pub fn encrypt(mut header: JweHeader, plaintext: &[u8], key: JweEncryptKey<'_>) 
 }
 
 /// Reject mismatched alg / key-type pairs before any crypto work.
-fn validate_key_alg(alg: &AlgAlgorithm, key: &JweEncryptKey<'_>) -> Result<()> {
+fn validate_key_alg(alg: &KeyManagementAlgorithm, key: &JweEncryptKey<'_>) -> Result<()> {
     let ok = (alg.is_rsa() && matches!(key, JweEncryptKey::Rsa(_)))
         || (alg.is_ecdh() && matches!(key, JweEncryptKey::Ecdh(_)));
     if ok {
@@ -121,7 +121,9 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
 
     match (&header.alg, key) {
         (
-            AlgAlgorithm::RsaOaep256 | AlgAlgorithm::RsaOaep384 | AlgAlgorithm::RsaOaep512,
+            KeyManagementAlgorithm::RsaOaep256
+            | KeyManagementAlgorithm::RsaOaep384
+            | KeyManagementAlgorithm::RsaOaep512,
             JweEncryptKey::Rsa(rsa_key),
         ) => {
             let oaep_alg = header
@@ -147,7 +149,7 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
             Ok((cek, enc_key_bytes))
         }
 
-        (AlgAlgorithm::EcdhEs, JweEncryptKey::Ecdh(recipient_pub)) => {
+        (KeyManagementAlgorithm::EcdhEs, JweEncryptKey::Ecdh(recipient_pub)) => {
             let (shared_secret, epk_jwk) = ecdh_and_epk(recipient_pub.curve(), recipient_pub)?;
             header.epk = Some(epk_jwk);
 
@@ -168,7 +170,7 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
         }
 
         (
-            AlgAlgorithm::EcdhEsA128Kw | AlgAlgorithm::EcdhEsA256Kw,
+            KeyManagementAlgorithm::EcdhEsA128Kw | KeyManagementAlgorithm::EcdhEsA256Kw,
             JweEncryptKey::Ecdh(recipient_pub),
         ) => {
             let alg = header.alg;
@@ -185,7 +187,7 @@ fn ecdh_kw(
     recipient_pub: &EcdhPublicKey,
     apu_bytes: &[u8],
     apv_bytes: &[u8],
-    alg: AlgAlgorithm,
+    alg: KeyManagementAlgorithm,
 ) -> Result<(aead::Key, Vec<u8>)> {
     let kw_alg_id = alg
         .kdf_alg_id()

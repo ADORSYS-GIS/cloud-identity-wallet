@@ -40,7 +40,7 @@ use crate::aead::TAG_LENGTH;
 use crate::ecdh::{EcdhCurve, EcdhPublicKey, StaticEcdhKey};
 use crate::error::ErrorKind;
 use crate::jwe::{
-    AlgAlgorithm, EncAlgorithm, JweDecryptKey, JweEncryptKey, JweHeader, decrypt, encrypt,
+    KeyManagementAlgorithm, ContentEncryptionAlgorithm, JweDecryptKey, JweEncryptKey, JweHeader, decrypt, encrypt,
 };
 use crate::jwk::B64;
 use crate::rsa::RsaKeySize;
@@ -54,7 +54,7 @@ fn make_ecdh_pair(curve: EcdhCurve) -> (StaticEcdhKey, EcdhPublicKey) {
     (static_key, pub_key)
 }
 
-fn ecdh_header(alg: AlgAlgorithm, enc: EncAlgorithm) -> JweHeader {
+fn ecdh_header(alg: KeyManagementAlgorithm, enc: ContentEncryptionAlgorithm) -> JweHeader {
     JweHeader {
         alg,
         enc,
@@ -69,8 +69,8 @@ fn ecdh_header(alg: AlgAlgorithm, enc: EncAlgorithm) -> JweHeader {
 }
 
 fn ecdh_header_with_party(
-    alg: AlgAlgorithm,
-    enc: EncAlgorithm,
+    alg: KeyManagementAlgorithm,
+    enc: ContentEncryptionAlgorithm,
     apu: &[u8],
     apv: &[u8],
 ) -> JweHeader {
@@ -87,9 +87,9 @@ fn ecdh_header_with_party(
     }
 }
 
-fn ecdh_es_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
+fn ecdh_es_roundtrip(curve: EcdhCurve, enc: ContentEncryptionAlgorithm) {
     let (static_key, pub_key) = make_ecdh_pair(curve);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, enc);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, enc);
     let plaintext = b"roundtrip test";
 
     let token = encrypt(header, plaintext, JweEncryptKey::Ecdh(&pub_key)).unwrap();
@@ -99,32 +99,32 @@ fn ecdh_es_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
 
 #[test]
 fn roundtrip_ecdh_es_p256_a128gcm() {
-    ecdh_es_roundtrip(EcdhCurve::P256, EncAlgorithm::A128Gcm);
+    ecdh_es_roundtrip(EcdhCurve::P256, ContentEncryptionAlgorithm::A128Gcm);
 }
 
 #[test]
 fn roundtrip_ecdh_es_p256_a256gcm() {
-    ecdh_es_roundtrip(EcdhCurve::P256, EncAlgorithm::A256Gcm);
+    ecdh_es_roundtrip(EcdhCurve::P256, ContentEncryptionAlgorithm::A256Gcm);
 }
 
 #[test]
 fn roundtrip_ecdh_es_p521_a256gcm() {
-    ecdh_es_roundtrip(EcdhCurve::P521, EncAlgorithm::A256Gcm);
+    ecdh_es_roundtrip(EcdhCurve::P521, ContentEncryptionAlgorithm::A256Gcm);
 }
 
 #[test]
 fn roundtrip_ecdh_es_p384_a256gcm() {
-    ecdh_es_roundtrip(EcdhCurve::P384, EncAlgorithm::A256Gcm);
+    ecdh_es_roundtrip(EcdhCurve::P384, ContentEncryptionAlgorithm::A256Gcm);
 }
 
 #[test]
 fn roundtrip_ecdh_es_x25519_a256gcm() {
-    ecdh_es_roundtrip(EcdhCurve::X25519, EncAlgorithm::A256Gcm);
+    ecdh_es_roundtrip(EcdhCurve::X25519, ContentEncryptionAlgorithm::A256Gcm);
 }
 
-fn ecdh_a128kw_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
+fn ecdh_a128kw_roundtrip(curve: EcdhCurve, enc: ContentEncryptionAlgorithm) {
     let (static_key, pub_key) = make_ecdh_pair(curve);
-    let header = ecdh_header(AlgAlgorithm::EcdhEsA128Kw, enc);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEsA128Kw, enc);
     let plaintext = b"kw roundtrip";
 
     let token = encrypt(header, plaintext, JweEncryptKey::Ecdh(&pub_key)).unwrap();
@@ -134,12 +134,12 @@ fn ecdh_a128kw_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
 
 #[test]
 fn roundtrip_ecdh_es_a128kw_p256_a256gcm() {
-    ecdh_a128kw_roundtrip(EcdhCurve::P256, EncAlgorithm::A256Gcm);
+    ecdh_a128kw_roundtrip(EcdhCurve::P256, ContentEncryptionAlgorithm::A256Gcm);
 }
 
-fn ecdh_a256kw_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
+fn ecdh_a256kw_roundtrip(curve: EcdhCurve, enc: ContentEncryptionAlgorithm) {
     let (static_key, pub_key) = make_ecdh_pair(curve);
-    let header = ecdh_header(AlgAlgorithm::EcdhEsA256Kw, enc);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEsA256Kw, enc);
     let plaintext = b"a256kw roundtrip";
 
     let token = encrypt(header, plaintext, JweEncryptKey::Ecdh(&pub_key)).unwrap();
@@ -149,7 +149,7 @@ fn ecdh_a256kw_roundtrip(curve: EcdhCurve, enc: EncAlgorithm) {
 
 #[test]
 fn roundtrip_ecdh_es_a256kw_x25519_a256gcm() {
-    ecdh_a256kw_roundtrip(EcdhCurve::X25519, EncAlgorithm::A256Gcm);
+    ecdh_a256kw_roundtrip(EcdhCurve::X25519, ContentEncryptionAlgorithm::A256Gcm);
 }
 
 #[test]
@@ -158,8 +158,8 @@ fn roundtrip_rsa_oaep256_a256gcm() {
     let enc_key = dec_key.public_key();
 
     let header = JweHeader {
-        alg: AlgAlgorithm::RsaOaep256,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::RsaOaep256,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -181,8 +181,8 @@ fn roundtrip_rsa_oaep384_a256gcm() {
     let enc_key = dec_key.public_key();
 
     let header = JweHeader {
-        alg: AlgAlgorithm::RsaOaep384,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::RsaOaep384,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -202,8 +202,8 @@ fn roundtrip_rsa_oaep512_a256gcm() {
     let enc_key = dec_key.public_key();
 
     let header = JweHeader {
-        alg: AlgAlgorithm::RsaOaep512,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::RsaOaep512,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -230,8 +230,8 @@ fn apu_apv_swap_fails_aead_verification() {
     let plaintext = b"swap test";
 
     let header = ecdh_header_with_party(
-        AlgAlgorithm::EcdhEs,
-        EncAlgorithm::A256Gcm,
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A256Gcm,
         b"Alice",
         b"Bob",
     );
@@ -268,8 +268,8 @@ fn apu_apv_bound_to_kdf_in_ecdh_es_direct() {
     let plaintext = b"kdf binding test";
 
     let header = ecdh_header_with_party(
-        AlgAlgorithm::EcdhEs,
-        EncAlgorithm::A128Gcm,
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A128Gcm,
         b"Alice",
         b"Bob",
     );
@@ -298,7 +298,7 @@ fn apu_apv_bound_to_kdf_in_ecdh_es_direct() {
 #[test]
 fn epk_curve_mismatch_rejected() {
     let (_, p256_pub) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"test", JweEncryptKey::Ecdh(&p256_pub)).unwrap();
 
     let (p384_static, _) = make_ecdh_pair(EcdhCurve::P384);
@@ -310,7 +310,7 @@ fn epk_curve_mismatch_rejected() {
 #[test]
 fn tampered_ciphertext_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"secret", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     let mut parts: Vec<String> = token.split('.').map(String::from).collect();
@@ -330,7 +330,7 @@ fn tampered_ciphertext_rejected() {
 #[test]
 fn tampered_tag_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A128Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A128Gcm);
     let token = encrypt(header, b"secret", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     let mut parts: Vec<String> = token.split('.').map(String::from).collect();
@@ -350,7 +350,7 @@ fn tampered_tag_rejected() {
 #[test]
 fn tampered_header_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::X25519);
-    let header = ecdh_header(AlgAlgorithm::EcdhEsA128Kw, EncAlgorithm::A128Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEsA128Kw, ContentEncryptionAlgorithm::A128Gcm);
     let token = encrypt(header, b"tamper", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     let parts: Vec<&str> = token.split('.').collect();
@@ -408,8 +408,8 @@ fn unknown_crit_parameter_rejected() {
     let (_, pub_key) = make_ecdh_pair(EcdhCurve::P256);
 
     let header = JweHeader {
-        alg: AlgAlgorithm::EcdhEs,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::EcdhEs,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -434,7 +434,7 @@ fn unknown_crit_parameter_rejected() {
 fn decrypt_rejects_unknown_crit_in_tampered_token() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::X25519);
 
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A128Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A128Gcm);
     let token = encrypt(header, b"crit decrypt test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     use base64ct::{Base64UrlUnpadded, Encoding};
@@ -464,8 +464,8 @@ fn encrypt_rejects_non_none_epk() {
         crate::jwe::compact::epk_bytes_to_jwk(EcdhCurve::P256, pub_key.as_bytes()).unwrap();
 
     let header = JweHeader {
-        alg: AlgAlgorithm::EcdhEs,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::EcdhEs,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: Some(fake_epk),
         apu: None,
         apv: None,
@@ -484,8 +484,8 @@ fn encrypt_rejects_empty_crit_array() {
     let (_, pub_key) = make_ecdh_pair(EcdhCurve::P256);
 
     let header = JweHeader {
-        alg: AlgAlgorithm::EcdhEs,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::EcdhEs,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -504,11 +504,12 @@ fn encrypt_rejects_registered_param_in_crit() {
     let (_, pub_key) = make_ecdh_pair(EcdhCurve::P256);
 
     for &param in &[
-        "alg", "enc", "epk", "apu", "apv", "kid", "typ", "cty", "crit",
+        "alg", "enc", "epk", "apu", "apv", "kid", "typ", "cty", "crit", "zip", "jku", "jwk",
+        "x5u", "x5c", "x5t", "x5t#S256",
     ] {
         let header = JweHeader {
-            alg: AlgAlgorithm::EcdhEs,
-            enc: EncAlgorithm::A256Gcm,
+            alg: KeyManagementAlgorithm::EcdhEs,
+            enc: ContentEncryptionAlgorithm::A256Gcm,
             epk: None,
             apu: None,
             apv: None,
@@ -532,13 +533,13 @@ fn key_type_mismatch_rejected_on_encrypt() {
     let rsa_enc_key = dec_key.public_key();
     let (_, ecdh_pub_key) = make_ecdh_pair(EcdhCurve::P256);
 
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let err = encrypt(header, b"test", JweEncryptKey::Rsa(rsa_enc_key)).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::UnsupportedAlgorithm);
 
     let header = JweHeader {
-        alg: AlgAlgorithm::RsaOaep256,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::RsaOaep256,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -554,7 +555,7 @@ fn key_type_mismatch_rejected_on_encrypt() {
 #[test]
 fn rsa_key_rejected_for_ecdh_alg_on_decrypt() {
     let (_, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     let dec_key = RsaDecryptingKey::generate(RsaKeySize::Rsa2048).unwrap();
@@ -565,7 +566,7 @@ fn rsa_key_rejected_for_ecdh_alg_on_decrypt() {
 #[test]
 fn roundtrip_empty_plaintext() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A128Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A128Gcm);
 
     let token = encrypt(header, b"", JweEncryptKey::Ecdh(&pub_key)).unwrap();
     let got = decrypt(&token, JweDecryptKey::Ecdh(&static_key)).unwrap();
@@ -581,8 +582,8 @@ fn roundtrip_rsa_oaep256_rsa4096_a256gcm() {
     let enc_key = dec_key.public_key();
 
     let header = JweHeader {
-        alg: AlgAlgorithm::RsaOaep256,
-        enc: EncAlgorithm::A256Gcm,
+        alg: KeyManagementAlgorithm::RsaOaep256,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
         epk: None,
         apu: None,
         apv: None,
@@ -603,14 +604,14 @@ fn roundtrip_rsa_oaep256_rsa4096_a256gcm() {
 #[test]
 fn tampered_enc_algorithm_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"enc-swap test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     use base64ct::{Base64UrlUnpadded, Encoding};
     let parts: Vec<&str> = token.splitn(6, '.').collect();
     let header_json = Base64UrlUnpadded::decode_vec(parts[0]).unwrap();
     let mut hdr: crate::jwe::JweHeader = serde_json::from_slice(&header_json).unwrap();
-    hdr.enc = EncAlgorithm::A128Gcm;
+    hdr.enc = ContentEncryptionAlgorithm::A128Gcm;
     let modified_json = serde_json::to_string(&hdr).unwrap();
     let modified_b64 = Base64UrlUnpadded::encode_string(modified_json.as_bytes());
 
@@ -632,7 +633,7 @@ fn tampered_enc_algorithm_rejected() {
 #[test]
 fn empty_encrypted_key_in_kw_mode_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEsA128Kw, EncAlgorithm::A128Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEsA128Kw, ContentEncryptionAlgorithm::A128Gcm);
     let token = encrypt(header, b"kw-empty-key test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     let parts: Vec<&str> = token.splitn(6, '.').collect();
@@ -650,7 +651,7 @@ fn empty_encrypted_key_in_kw_mode_rejected() {
 #[test]
 fn iv_wrong_length_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A128Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A128Gcm);
     let token = encrypt(header, b"iv-test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     use base64ct::{Base64UrlUnpadded, Encoding};
@@ -713,7 +714,7 @@ fn concat_kdf_rfc7518_appendix_c_sanity() {
 #[test]
 fn missing_epk_in_ecdh_es_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     use base64ct::{Base64UrlUnpadded, Encoding};
@@ -738,11 +739,12 @@ fn missing_epk_in_ecdh_es_rejected() {
 }
 
 /// ECDH-ES direct mode requires an empty encrypted-key segment (RFC 7516 §5.2 step 9).
-/// A non-empty segment must be rejected immediately with Decryption, before any AES-GCM work.
+/// A non-empty segment is a structural/serialisation violation, not a decryption
+/// failure — it must be rejected immediately with Serialization, before any AES-GCM work.
 #[test]
 fn non_empty_enc_key_in_ecdh_es_direct_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     use base64ct::{Base64UrlUnpadded, Encoding};
@@ -756,8 +758,8 @@ fn non_empty_enc_key_in_ecdh_es_direct_rejected() {
     let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
     assert_eq!(
         err.kind(),
-        ErrorKind::Decryption,
-        "expected Decryption, got {err:?}"
+        ErrorKind::Serialization,
+        "expected Serialization, got {err:?}"
     );
 }
 
@@ -766,7 +768,7 @@ fn non_empty_enc_key_in_ecdh_es_direct_rejected() {
 #[test]
 fn epk_low_order_x25519_rejected() {
     let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::X25519);
-    let header = ecdh_header(AlgAlgorithm::EcdhEs, EncAlgorithm::A256Gcm);
+    let header = ecdh_header(KeyManagementAlgorithm::EcdhEs, ContentEncryptionAlgorithm::A256Gcm);
     let token = encrypt(header, b"test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
 
     use base64ct::{Base64UrlUnpadded, Encoding};

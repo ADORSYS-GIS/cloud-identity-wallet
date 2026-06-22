@@ -18,7 +18,7 @@ use serde_with::skip_serializing_none;
 /// rejection of unsupported algorithms before any cryptographic work begins.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AlgAlgorithm {
+pub enum KeyManagementAlgorithm {
     /// RSAES OAEP using SHA-256 and MGF1-SHA-256 (RFC 7518 §4.3).
     #[serde(rename = "RSA-OAEP-256")]
     RsaOaep256,
@@ -51,7 +51,7 @@ pub enum AlgAlgorithm {
     EcdhEsA256Kw,
 }
 
-impl AlgAlgorithm {
+impl KeyManagementAlgorithm {
     /// Returns `true` if this is an RSA-OAEP key management algorithm.
     #[must_use]
     pub(crate) fn is_rsa(self) -> bool {
@@ -111,7 +111,7 @@ impl AlgAlgorithm {
 /// Deserialization fails on any algorithm not listed here.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EncAlgorithm {
+pub enum ContentEncryptionAlgorithm {
     /// AES-GCM with 128-bit key (RFC 7518 §5.3).
     #[serde(rename = "A128GCM")]
     A128Gcm,
@@ -121,7 +121,7 @@ pub enum EncAlgorithm {
     A256Gcm,
 }
 
-impl EncAlgorithm {
+impl ContentEncryptionAlgorithm {
     /// Key length in bytes required for this content encryption algorithm.
     #[must_use]
     pub(crate) fn key_len(self) -> usize {
@@ -158,7 +158,8 @@ impl EncAlgorithm {
 /// Per RFC 7516 §4.1.13 these MUST NOT appear in the `crit` array; doing so is
 /// a protocol error and this implementation rejects such tokens.
 const REGISTERED_HEADER_PARAMS: &[&str] = &[
-    "alg", "enc", "epk", "apu", "apv", "kid", "typ", "cty", "crit",
+    "alg", "enc", "epk", "apu", "apv", "kid", "typ", "cty", "crit", "zip", "jku", "jwk", "x5u",
+    "x5c", "x5t", "x5t#S256",
 ];
 
 /// Extension header parameters understood by this implementation.
@@ -184,10 +185,10 @@ const UNDERSTOOD_EXTENSION_PARAMS: &[&str] = &[];
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JweHeader {
     /// Key management algorithm.
-    pub alg: AlgAlgorithm,
+    pub alg: KeyManagementAlgorithm,
 
     /// Content encryption algorithm.
-    pub enc: EncAlgorithm,
+    pub enc: ContentEncryptionAlgorithm,
 
     /// Ephemeral public key (ECDH-ES variants only).
     ///
@@ -238,7 +239,7 @@ impl JweHeader {
     ///
     /// The `epk` field is always `None` here; [`fn@crate::jwe::encrypt`] populates it
     /// automatically for ECDH-ES variants.
-    pub fn new(alg: AlgAlgorithm, enc: EncAlgorithm) -> Self {
+    pub fn new(alg: KeyManagementAlgorithm, enc: ContentEncryptionAlgorithm) -> Self {
         Self {
             alg,
             enc,

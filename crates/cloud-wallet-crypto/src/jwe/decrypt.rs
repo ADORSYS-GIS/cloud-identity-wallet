@@ -12,7 +12,7 @@ use crate::rsa::oaep::DecryptingKey as RsaDecryptingKey;
 use crate::utils::error_msg;
 
 use super::compact::{b64url_decode, epk_jwk_to_ecdh_pub, parse_compact};
-use super::header::{AlgAlgorithm, JweHeader};
+use super::header::{JweHeader, KeyManagementAlgorithm};
 
 /// Key supplied by the caller for JWE decryption.
 ///
@@ -96,8 +96,12 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
         ));
     }
 
-    let nonce: [u8; NONCE_LENGTH] = iv_bytes.try_into().expect("length validated above");
-    let tag: [u8; TAG_LENGTH] = tag_bytes.try_into().expect("length validated above");
+    let nonce: [u8; NONCE_LENGTH] = iv_bytes
+        .try_into()
+        .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;
+    let tag: [u8; TAG_LENGTH] = tag_bytes
+        .try_into()
+        .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE authentication tag length mismatch"))?;
 
     let cek_key = recover_cek(&header, &key, &enc_key_bytes)?;
 
@@ -112,7 +116,7 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
     Ok(plaintext)
 }
 
-fn validate_key_alg(alg: &AlgAlgorithm, key: &JweDecryptKey<'_>) -> Result<()> {
+fn validate_key_alg(alg: &KeyManagementAlgorithm, key: &JweDecryptKey<'_>) -> Result<()> {
     let ok = (alg.is_rsa() && matches!(key, JweDecryptKey::Rsa(_)))
         || (alg.is_ecdh() && matches!(key, JweDecryptKey::Ecdh(_)));
     if ok {
@@ -136,7 +140,9 @@ fn recover_cek(
 
     match (&header.alg, key) {
         (
-            AlgAlgorithm::RsaOaep256 | AlgAlgorithm::RsaOaep384 | AlgAlgorithm::RsaOaep512,
+            KeyManagementAlgorithm::RsaOaep256
+            | KeyManagementAlgorithm::RsaOaep384
+            | KeyManagementAlgorithm::RsaOaep512,
             JweDecryptKey::Rsa(rsa_key),
         ) => {
             let oaep_alg = header
@@ -152,10 +158,10 @@ fn recover_cek(
             Ok(cek)
         }
 
-        (AlgAlgorithm::EcdhEs, JweDecryptKey::Ecdh(static_key)) => {
+        (KeyManagementAlgorithm::EcdhEs, JweDecryptKey::Ecdh(static_key)) => {
             if !enc_key_bytes.is_empty() {
                 return Err(error_msg(
-                    ErrorKind::Decryption,
+                    ErrorKind::Serialization,
                     "ECDH-ES direct mode requires an empty encrypted-key segment",
                 ));
             }
@@ -179,7 +185,7 @@ fn recover_cek(
         }
 
         (
-            AlgAlgorithm::EcdhEsA128Kw | AlgAlgorithm::EcdhEsA256Kw,
+            KeyManagementAlgorithm::EcdhEsA128Kw | KeyManagementAlgorithm::EcdhEsA256Kw,
             JweDecryptKey::Ecdh(static_key),
         ) => {
             let alg = header.alg;
@@ -197,7 +203,7 @@ fn ecdh_kw_decrypt(
     enc_key_bytes: &[u8],
     apu_bytes: &[u8],
     apv_bytes: &[u8],
-    alg: AlgAlgorithm,
+    alg: KeyManagementAlgorithm,
 ) -> Result<aead::Key> {
     let kw_alg_id = alg
         .kdf_alg_id()
