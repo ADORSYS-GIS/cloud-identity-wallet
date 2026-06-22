@@ -14,8 +14,17 @@ pub trait ProofSigner: Send + Sync + 'static {
     /// Sign `claims` with the provided header and return the compact JWT string.
     fn sign(&self, claims: &Claims) -> Result<String>;
 
+    /// Sign `claims` with a key attestation embedded in the proof JWT header.
+    ///
+    /// The attestation JWT is included in the `attestation` header field
+    /// per OID4VCI Appendix D and HAIP §4.5.1.
+    fn sign_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String>;
+
     /// Returns the algorithm used by this signer.
     fn algorithm(&self) -> Algorithm;
+
+    /// Returns the public JWK for holder binding.
+    fn holder_binding_public_jwk(&self) -> Jwk;
 }
 
 /// JOSE header for OpenID4VCI proof JWTs as defined in [OID4VCI Appendix F]
@@ -209,6 +218,42 @@ impl CryptoSigner {
         Ok(jwt)
     }
 
+    /// Encode to a JWT with a key attestation embedded in the header.
+    ///
+    /// The attestation JWT is included in the `attestation` header field
+    /// per OID4VCI Appendix D and HAIP §4.5.1.
+    fn encode_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String> {
+        let header = Header {
+            alg: self.algorithm,
+            typ: OPENID4VCI_PROOF_JWT_TYP,
+            kid: None,
+            jwk: Some(self.holder_binding_public_jwk.clone()),
+            x5c: None,
+            attestation: Some(attestation_jwt.to_string()),
+            trust_chain: None,
+        };
+        let header_b64 = base64_encode_type(&header)?;
+
+        let payload_b64 = base64_encode_type(claims)?;
+
+        let mut signing_input = Vec::with_capacity(header_b64.len() + 1 + payload_b64.len());
+        signing_input.extend_from_slice(header_b64.as_bytes());
+        signing_input.push(b'.');
+        signing_input.extend_from_slice(payload_b64.as_bytes());
+
+        let signature = self.sign_bytes(&signing_input)?;
+        let sig_b64 = b64_encode(signature);
+
+        let mut jwt =
+            String::with_capacity(header_b64.len() + 1 + payload_b64.len() + 1 + sig_b64.len());
+        jwt.push_str(&header_b64);
+        jwt.push('.');
+        jwt.push_str(&payload_b64);
+        jwt.push('.');
+        jwt.push_str(&sig_b64);
+        Ok(jwt)
+    }
+
     /// Sign `msg`, returning signature bytes.
     fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
         use ecdsa::Curve;
@@ -239,8 +284,16 @@ impl ProofSigner for CryptoSigner {
         self.encode(claims)
     }
 
+    fn sign_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String> {
+        self.encode_with_attestation(claims, attestation_jwt)
+    }
+
     fn algorithm(&self) -> Algorithm {
         self.algorithm
+    }
+
+    fn holder_binding_public_jwk(&self) -> Jwk {
+        self.holder_binding_public_jwk.clone()
     }
 }
 
@@ -406,5 +459,58 @@ mod tests {
         assert_eq!(decoded_claims.aud, claims.aud);
         assert_eq!(decoded_claims.iss, claims.iss);
         assert_eq!(decoded_claims.nonce, claims.nonce);
+    }
+
+    fn decode_and_validate_jwt_with_attestation(token: &str) -> (Claims, Option<String>) {
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        let header_bytes = URL_SAFE_NO_PAD.decode(parts[0]).unwrap();
+        let header_value: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        let attestation = header_value
+            .get("attestation")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let jwt_header = jsonwebtoken::decode_header(token).unwrap();
+        let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&jwt_header.jwk.unwrap()).unwrap();
+        let mut validation = jsonwebtoken::Validation::new(jwt_header.alg);
+        validation.set_audience(&["https://issuer.example.com"]);
+        validation.set_required_spec_claims(&["iat", "iss", "aud"]);
+        let token_data = jsonwebtoken::decode::<Claims>(token, &decoding_key, &validation).unwrap();
+        (token_data.claims, attestation)
+    }
+
+    #[test]
+    fn test_sign_with_attestation() {
+        let der = get_ecdsa_p256_der();
+        let signer = CryptoSigner::from_ecdsa_der(&der).unwrap();
+
+        let claims = sample_claims();
+        let attestation_jwt = "eyJ0eXAiOiJrZXktYXR0ZXN0YXRpb24rand0IiwiYWxnIjoiRVMyNTYifQ.eyJhdHRlc3RlZF9rZXlzIjpbeyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6InRlc3QifV19.signature";
+        let jwt = signer
+            .sign_with_attestation(&claims, attestation_jwt)
+            .expect("failed to sign with attestation");
+
+        let (decoded_claims, decoded_attestation) = decode_and_validate_jwt_with_attestation(&jwt);
+        assert_eq!(decoded_claims.aud, claims.aud);
+        assert_eq!(decoded_claims.iss, claims.iss);
+        assert_eq!(decoded_claims.nonce, claims.nonce);
+        assert!(decoded_attestation.is_some());
+        assert_eq!(decoded_attestation.unwrap(), attestation_jwt);
+    }
+
+    #[test]
+    fn test_sign_without_attestation() {
+        let der = get_ecdsa_p256_der();
+        let signer = CryptoSigner::from_ecdsa_der(&der).unwrap();
+
+        let claims = sample_claims();
+        let jwt = signer.sign(&claims).expect("failed to sign");
+
+        let (decoded_claims, decoded_attestation) = decode_and_validate_jwt_with_attestation(&jwt);
+        assert_eq!(decoded_claims.aud, claims.aud);
+        assert_eq!(decoded_claims.iss, claims.iss);
+        assert!(decoded_attestation.is_none());
     }
 }
