@@ -143,10 +143,10 @@ impl KeyAttestationClaims {
             return Err(KeyAttestationError::IssuedInFuture);
         }
 
-        if let Some(exp) = self.exp {
-            if exp < now {
-                return Err(KeyAttestationError::Expired);
-            }
+        if let Some(exp) = self.exp
+            && exp < now
+        {
+            return Err(KeyAttestationError::Expired);
         }
 
         Ok(())
@@ -334,26 +334,22 @@ impl KeyAttestationRequirements {
 
     /// Validates that the attestation meets the requirements.
     pub fn validate(&self, attestation: &KeyAttestationJwt) -> Result<(), KeyAttestationError> {
-        if let Some(ref required) = self.key_storage {
-            if !attestation.meets_key_storage_requirements(required) {
-                return Err(KeyAttestationError::InsufficientKeyStorage {
-                    required: required.clone(),
-                    provided: attestation.claims.key_storage.clone().unwrap_or_default(),
-                });
-            }
+        if let Some(ref required) = self.key_storage
+            && !attestation.meets_key_storage_requirements(required)
+        {
+            return Err(KeyAttestationError::InsufficientKeyStorage {
+                required: required.clone(),
+                provided: attestation.claims.key_storage.clone().unwrap_or_default(),
+            });
         }
 
-        if let Some(ref required) = self.user_authentication {
-            if !attestation.meets_user_authentication_requirements(required) {
-                return Err(KeyAttestationError::InsufficientUserAuthentication {
-                    required: required.clone(),
-                    provided: attestation
-                        .claims
-                        .user_authentication
-                        .clone()
-                        .unwrap_or_default(),
-                });
-            }
+        if let Some(ref required) = self.user_authentication
+            && !attestation.meets_user_authentication_requirements(required)
+        {
+            return Err(KeyAttestationError::InsufficientUserAuthentication {
+                required: required.clone(),
+                provided: attestation.claims.user_authentication.clone().unwrap_or_default(),
+            });
         }
 
         Ok(())

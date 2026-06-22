@@ -919,7 +919,7 @@ impl Oid4vciClient {
 
         match (&requirements, key_attestation_jwt) {
             (Some(reqs), None) if reqs.is_required() => {
-                return Err(ClientError::missing_key_attestation().into());
+                return Err(ClientError::missing_key_attestation());
             }
             (Some(reqs), Some(attestation_jwt)) if reqs.is_required() => {
                 // Validate the attestation against requirements
@@ -940,8 +940,7 @@ impl Oid4vciClient {
                 if !key_in_attestation {
                     return Err(ClientError::key_attestation_validation(
                         "signer key not found in attested_keys",
-                    )
-                    .into());
+                    ));
                 }
 
                 reqs.validate(&attestation).map_err(|e| {
