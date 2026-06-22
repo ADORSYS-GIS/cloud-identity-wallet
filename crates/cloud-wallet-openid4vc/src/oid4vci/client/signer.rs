@@ -189,7 +189,7 @@ impl JwtSigner {
     }
 
     /// Sign `msg`, returning signature bytes.
-    pub fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
         use ecdsa::Curve;
         match &self.key {
             KeyMaterial::Ecdsa(keypair) => match keypair.curve() {
@@ -205,7 +205,12 @@ impl JwtSigner {
                     256 => keypair.sign_pss_sha256(msg, &mut sig)?,
                     384 => keypair.sign_pss_sha384(msg, &mut sig)?,
                     512 => keypair.sign_pss_sha512(msg, &mut sig)?,
-                    _ => keypair.sign_pss_sha256(msg, &mut sig)?,
+                    _ => {
+                        return Err(ClientError::configuration(format!(
+                            "unsupported RSA key size: {} bits (expected 2048, 3072, or 4096)",
+                            sig_len * 8
+                        )));
+                    }
                 };
                 Ok(sig.to_vec())
             }
@@ -213,7 +218,11 @@ impl JwtSigner {
     }
 
     /// Encode the given `header` + `claims` into a compact JWT signed with this key.
-    pub fn encode<H: Serialize, C: Serialize>(&self, header: &H, claims: &C) -> Result<String> {
+    pub(crate) fn encode<H: Serialize, C: Serialize>(
+        &self,
+        header: &H,
+        claims: &C,
+    ) -> Result<String> {
         let header_b64 = base64_encode_type(header)?;
         let payload_b64 = base64_encode_type(claims)?;
         let mut signing_input = Vec::with_capacity(header_b64.len() + 1 + payload_b64.len());
@@ -253,7 +262,10 @@ impl KeyMaterial {
                 256 => Algorithm::PS256,
                 384 => Algorithm::PS384,
                 512 => Algorithm::PS512,
-                _ => Algorithm::PS256,
+                other => panic!(
+                    "unsupported RSA key size: {} bits (expected 2048, 3072, or 4096)",
+                    other * 8
+                ),
             },
         }
     }
