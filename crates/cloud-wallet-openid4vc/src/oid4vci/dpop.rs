@@ -90,12 +90,12 @@ impl DpopKeyPair {
         jwk_thumbprint(&self.public_jwk)
     }
 
-    #[cfg(test)]
-    fn verify_proof_signature(
-        &self,
-        signing_input: &[u8],
-        signature: &[u8],
-    ) -> Result<(), DpopError> {
+    /// Verify the signature of a DPoP proof's signing input against this key.
+    ///
+    /// This is intended for testing and validation purposes. The `signing_input`
+    /// is the `header_b64.claims_b64` portion of the JWT, and `signature` is the
+    /// decoded signature bytes.
+    pub fn verify_signature(&self, signing_input: &[u8], signature: &[u8]) -> Result<(), DpopError> {
         self.key
             .public_key()
             .verify_sha256(signing_input, signature)
@@ -332,6 +332,83 @@ pub fn htu_from_url(url: &url::Url) -> Result<String, DpopError> {
     Ok(htu)
 }
 
+impl DpopProofClaims {
+    /// Validate that the `htu` claim matches the expected endpoint URI.
+    ///
+    /// Per RFC 9449 §4.2, the `htu` claim MUST match the HTTP URI of the
+    /// token or credential endpoint, normalized per RFC 9449. Returns `Ok(())`
+    /// if the claim matches, or an error describing the mismatch.
+    pub fn validate_htu(&self, expected: &str) -> Result<(), DpopError> {
+        if self.htu == expected {
+            Ok(())
+        } else {
+            Err(DpopError::InvalidHtu(format!(
+                "htu claim '{}' does not match expected '{}'",
+                self.htu, expected
+            )))
+        }
+    }
+
+    /// Check whether this proof is expired relative to a maximum age.
+    ///
+    /// RFC 9449 recommends that receivers reject proofs with `iat` values
+    /// that are too far in the past. A typical `max_age` is 60 seconds.
+    /// Returns `true` if the proof is expired.
+    pub fn is_expired(&self, max_age: Duration) -> bool {
+        let now = time::UtcDateTime::now().unix_timestamp();
+        let age = now - self.iat;
+        age > max_age.as_secs() as i64
+    }
+}
+
+const DEFAULT_PROOF_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// Decode the claims from a DPoP proof JWT without verifying the signature.
+///
+/// This is useful for server-side validation where the claims are inspected
+/// before signature verification.
+pub fn decode_dpop_proof_claims(jwt: &str) -> Result<DpopProofClaims, DpopError> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return Err(DpopError::ProofGeneration(
+            "DPoP proof must be a 3-part JWT".into(),
+        ));
+    }
+    let claims_bytes = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| DpopError::ProofGeneration(format!("failed to decode claims: {e}")))?;
+    serde_json::from_slice(&claims_bytes)
+        .map_err(|e| DpopError::ProofGeneration(format!("failed to parse claims: {e}")))
+}
+
+/// Validate a DPoP proof against an expected endpoint URI and maximum age.
+///
+/// Checks:
+/// 1. The `htu` claim matches `expected_htu`
+/// 2. The proof is not expired (iat within `max_age` of now)
+/// 3. The `htm` claim is not empty
+///
+/// Returns the decoded claims on success.
+pub fn validate_dpop_proof(
+    jwt: &str,
+    expected_htu: &str,
+    max_age: Option<Duration>,
+) -> Result<DpopProofClaims, DpopError> {
+    let claims = decode_dpop_proof_claims(jwt)?;
+    claims.validate_htu(expected_htu)?;
+    if claims.is_expired(max_age.unwrap_or(DEFAULT_PROOF_MAX_AGE)) {
+        return Err(DpopError::ProofGeneration(
+            "DPoP proof is expired".into(),
+        ));
+    }
+    if claims.htm.is_empty() {
+        return Err(DpopError::ProofGeneration(
+            "DPoP proof htm claim must not be empty".into(),
+        ));
+    }
+    Ok(claims)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DpopError {
     #[error("key generation failed: {0}")]
@@ -540,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn dpop_proof_wrong_htu_differs_from_correct() {
+    fn dpop_proof_htu_differs_for_different_urls() {
         let key_pair = make_key_pair();
         let correct_htu = "https://issuer.example.com/token";
         let wrong_htu = "https://attacker.example.com/token";
@@ -558,7 +635,60 @@ mod tests {
     }
 
     #[test]
-    fn dpop_proof_expired_iat_rejected_by_timestamp() {
+    fn dpop_proof_wrong_htu_rejected_by_validation() {
+        let key_pair = make_key_pair();
+        let correct_htu = "https://issuer.example.com/token";
+        let proof = build_dpop_proof(&key_pair, "POST", correct_htu, None, None)
+            .expect("proof generation should succeed");
+
+        let claims = decode_dpop_proof_claims(&proof).expect("decoding should succeed");
+
+        claims
+            .validate_htu("https://issuer.example.com/token")
+            .expect("correct htu should validate");
+
+        let err = claims
+            .validate_htu("https://attacker.example.com/token")
+            .expect_err("wrong htu should be rejected");
+        assert!(
+            err.to_string().contains("does not match"),
+            "error should describe mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn dpop_proof_is_expired_rejects_stale_proof() {
+        let old_iat = time::UtcDateTime::now().unix_timestamp() - 3600;
+        let claims = DpopProofClaims {
+            jti: uuid::Uuid::new_v4().to_string(),
+            htm: "POST".to_string(),
+            htu: "https://issuer.example.com/token".to_string(),
+            iat: old_iat,
+            nonce: None,
+            ath: None,
+        };
+
+        assert!(
+            claims.is_expired(Duration::from_secs(60)),
+            "proof with iat 1 hour ago should be expired with 60s max age"
+        );
+
+        let fresh_claims = DpopProofClaims {
+            jti: uuid::Uuid::new_v4().to_string(),
+            htm: "POST".to_string(),
+            htu: "https://issuer.example.com/token".to_string(),
+            iat: time::UtcDateTime::now().unix_timestamp(),
+            nonce: None,
+            ath: None,
+        };
+        assert!(
+            !fresh_claims.is_expired(Duration::from_secs(60)),
+            "fresh proof should not be expired"
+        );
+    }
+
+    #[test]
+    fn validate_dpop_proof_rejects_expired_proof() {
         let key_pair = make_key_pair();
         let old_iat = time::UtcDateTime::now().unix_timestamp() - 3600;
         let claims = DpopProofClaims {
@@ -572,11 +702,13 @@ mod tests {
         let proof = key_pair
             .sign_dpop_proof(&claims)
             .expect("signing should succeed");
-        let decoded_claims: DpopProofClaims = decode_claims(&proof);
-        let now = time::UtcDateTime::now().unix_timestamp();
+
+        let result = validate_dpop_proof(&proof, "https://issuer.example.com/token", Some(Duration::from_secs(60)));
+        assert!(result.is_err(), "expired proof should be rejected");
+        let err = result.unwrap_err();
         assert!(
-            decoded_claims.iat < now - 300,
-            "proof with iat 1 hour ago should be considered expired"
+            err.to_string().contains("expired"),
+            "error should mention expiration: {err}"
         );
     }
 
@@ -714,12 +846,12 @@ mod tests {
             .expect("signature base64url decode");
 
         key_pair
-            .verify_proof_signature(signing_input.as_bytes(), &signature_bytes)
+            .verify_signature(signing_input.as_bytes(), &signature_bytes)
             .expect("signature should verify with public key");
 
         let tampered_input = format!("{}.TAMPERED", parts[0]);
         let tampered_result =
-            key_pair.verify_proof_signature(tampered_input.as_bytes(), &signature_bytes);
+            key_pair.verify_signature(tampered_input.as_bytes(), &signature_bytes);
         assert!(
             tampered_result.is_err(),
             "tampered input should fail verification"
@@ -759,5 +891,48 @@ mod tests {
                 "BTreeMap should produce canonical order (crv, kty, x, y), got: {canonical}"
             );
         }
+    }
+
+    #[test]
+    fn dpop_thumbprint_known_answer_rfc7638() {
+        use cloud_wallet_crypto::jwk::Key;
+
+        let key_pair = make_key_pair();
+        let thumbprint = key_pair.thumbprint().expect("thumbprint should succeed");
+
+        let public_jwk = key_pair.public_jwk();
+        let ec = match &public_jwk.key {
+            Key::Ec(ec) => ec,
+            _ => panic!("expected EC key"),
+        };
+
+        let canonical = serde_json::to_string(&serde_json::json!({
+            "crv": serde_json::to_value(ec.crv).unwrap(),
+            "kty": "EC",
+            "x": URL_SAFE_NO_PAD.encode(ec.x.as_ref()),
+            "y": URL_SAFE_NO_PAD.encode(ec.y.as_ref()),
+        }))
+        .unwrap();
+
+        let expected_thumbprint = {
+            let hash = HashAlg::Sha256.hash(canonical.as_bytes());
+            URL_SAFE_NO_PAD.encode(hash.as_ref())
+        };
+
+        assert_eq!(
+            thumbprint, expected_thumbprint,
+            "thumbprint must match independently computed SHA-256 of canonical form"
+        );
+
+        let key_order: Vec<String> = {
+            let parsed: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&canonical).unwrap();
+            parsed.keys().cloned().collect()
+        };
+        assert_eq!(
+            key_order,
+            vec!["crv", "kty", "x", "y"],
+            "canonical form must use RFC 7638 lexicographic order"
+        );
     }
 }

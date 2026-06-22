@@ -21,7 +21,9 @@ use cloud_wallet_openid4vc::formats::mdoc::{
     IacaTrustStore, ParsedMdoc, RevocationPolicy, StaticTrustStore, verify_mdoc_for_issuance,
 };
 use cloud_wallet_openid4vc::formats::sd_jwt::{SdJwt, SdJwtClaims, StatusClaim, X5cTrustAnchors};
-use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::client::{
+    CryptoSigner, DpopKeyPair, DpopNonceHandler, DpopOptions, Oid4vciClient, ResolvedOfferContext,
+};
 use cloud_wallet_openid4vc::oid4vci::credential::formats::{
     CredentialFormatDetails, MsoMdocCredentialConfiguration,
 };
@@ -395,6 +397,15 @@ impl IssuanceEngine {
         self.emit_processing(session_id, ProcessingStep::ExchangingToken)
             .await;
 
+        let dpop_key = DpopKeyPair::generate().map_err(|e| {
+            IssuanceError::internal_message(format!("DPoP key generation failed: {e}"))
+        })?;
+        let nonce_handler = DpopNonceHandler::new();
+        let dpop_opts = DpopOptions {
+            key: &dpop_key,
+            nonce_handler: Some(&nonce_handler),
+        };
+
         let token_response = match task.flow {
             FlowType::AuthorizationCode => {
                 let code = task
@@ -407,7 +418,13 @@ impl IssuanceEngine {
                     .ok_or(IssuanceError::token("missing pkce_verifier"))?;
 
                 self.client
-                    .exchange_authorization_code(context, code, verifier, selected_config_ids, None)
+                    .exchange_authorization_code(
+                        context,
+                        code,
+                        verifier,
+                        selected_config_ids,
+                        Some(&dpop_opts),
+                    )
                     .await?
             }
             FlowType::PreAuthorizedCode => {
@@ -422,7 +439,7 @@ impl IssuanceEngine {
                         pre_code,
                         task.tx_code.as_deref(),
                         selected_config_ids,
-                        None,
+                        Some(&dpop_opts),
                     )
                     .await?
             }
@@ -430,7 +447,13 @@ impl IssuanceEngine {
         debug!(session_id, tenant_id = %task.tenant_id, "token exchange successful");
 
         let (credential_ids, credential_types, notification_ids) = self
-            .request_and_store_credentials(session_id, &token_response, task, context)
+            .request_and_store_credentials(
+                session_id,
+                &token_response,
+                task,
+                context,
+                Some(&dpop_opts),
+            )
             .await?;
 
         let completed = IssuanceEvent::Completed(SseCompletedEvent::new(
@@ -455,6 +478,7 @@ impl IssuanceEngine {
         token: &TokenResponse,
         task: &IssuanceTask,
         context: &ResolvedOfferContext,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
         let signer = self.build_signer(task.tenant_id).await?;
         self.emit_processing(session_id, ProcessingStep::RequestingCredential)
@@ -462,7 +486,7 @@ impl IssuanceEngine {
 
         let responses = self
             .client
-            .request_credentials(context, token, &signer, None)
+            .request_credentials(context, token, &signer, dpop)
             .await?;
 
         debug!(

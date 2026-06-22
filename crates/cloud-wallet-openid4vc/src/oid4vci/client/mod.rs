@@ -5,8 +5,8 @@ mod tests;
 
 // Public Re-exports
 pub use crate::oid4vci::dpop::{
-    DpopError, DpopKeyPair, DpopNonceHandler, DpopOptions, build_dpop_proof, compute_ath,
-    htu_from_url,
+    DpopError, DpopKeyPair, DpopNonceHandler, DpopOptions, DpopProofClaims,
+    build_dpop_proof, compute_ath, decode_dpop_proof_claims, htu_from_url, validate_dpop_proof,
 };
 pub use error::ClientError;
 use reqwest_middleware::ClientWithMiddleware;
