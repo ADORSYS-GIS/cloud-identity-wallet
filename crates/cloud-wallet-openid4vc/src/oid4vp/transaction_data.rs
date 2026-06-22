@@ -240,6 +240,35 @@ impl<'a> TransactionData<'a> {
         }
     }
 
+    /// Converts borrowed lifetime to `'static` by owning all data.
+    ///
+    /// This ensures that adding a new `TransactionData` variant forces updating
+    /// this method, preventing silent data loss.
+    pub fn into_owned(self) -> TransactionData<'static> {
+        match self {
+            TransactionData::Openid4vp {
+                data,
+                original_encoded,
+            } => TransactionData::Openid4vp {
+                data,
+                original_encoded: Cow::Owned(original_encoded.into_owned()),
+            },
+            TransactionData::Other {
+                transaction_type,
+                credential_ids,
+                transaction_data_hashes_alg,
+                additional_params,
+                original_encoded,
+            } => TransactionData::Other {
+                transaction_type,
+                credential_ids,
+                transaction_data_hashes_alg,
+                additional_params,
+                original_encoded: Cow::Owned(original_encoded.into_owned()),
+            },
+        }
+    }
+
     /// Checks if this transaction data applies to the given credential query ID.
     pub fn applies_to_credential(&self, credential_query_id: &str) -> bool {
         self.credential_ids()
