@@ -1,8 +1,7 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_wallet_crypto::jwk::Jwk;
-use cloud_wallet_crypto::rand;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
+use uuid::Uuid;
 
 use crate::oid4vci::client::Algorithm;
 use crate::oid4vci::client::ClientError;
@@ -21,8 +20,10 @@ pub struct WalletAttestation {
 
     pub sub: String,
 
+    /// Issued-at time (Unix epoch seconds).
     pub iat: i64,
 
+    /// Expiration time (Unix epoch seconds).
     pub exp: i64,
 
     pub nbf: Option<i64>,
@@ -85,6 +86,12 @@ pub struct WalletAttestationSigner {
     attestation_claims: WalletAttestation,
     wallet_key: JwtSigner,
     provider_public_jwk: Jwk,
+    /// Caches the signature verification result. The crypto verification is only
+    /// performed once and cached, but expiry is checked on every call.
+    signature_verified: std::sync::Once,
+    /// Stores the result of signature verification (None = not yet verified,
+    /// Some(true) = verified, Some(false) = failed).
+    signature_valid: std::sync::atomic::AtomicBool,
 }
 
 impl WalletAttestationSigner {
@@ -115,6 +122,8 @@ impl WalletAttestationSigner {
             attestation_claims,
             wallet_key,
             provider_public_jwk: provider_key.public_jwk().clone(),
+            signature_verified: std::sync::Once::new(),
+            signature_valid: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -144,10 +153,7 @@ impl WalletAttestationSigner {
             jwk,
         };
 
-        let mut bytes = [0u8; 16];
-        rand::fill_bytes(&mut bytes)
-            .map_err(|e| ClientError::internal(format!("failed to generate random jti: {e}")))?;
-        let jti = URL_SAFE_NO_PAD.encode(bytes);
+        let jti = Uuid::new_v4().to_string();
 
         let claims = ClientAttestationPop {
             jti: format!("pop-{jti}"),
@@ -161,7 +167,37 @@ impl WalletAttestationSigner {
 
     /// Validates the attestation JWT by verifying its signature against the wallet
     /// provider public key and checking that it is not expired.
+    ///
+    /// Signature verification is performed lazily and cached: the first call performs
+    /// the expensive crypto verification, and subsequent calls skip signature verification.
+    /// However, the expiry check is always performed on every call to detect expired
+    /// attestations.
+    ///
+    /// Note: Callers should periodically check attestation expiry and recreate the
+    /// signer with a fresh attestation when needed.
     pub fn validate_attestation(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        // Perform signature verification only once (cached via Once)
+        self.signature_verified.call_once(|| {
+            let result = self.verify_signature();
+            if result.is_ok() {
+                self.signature_valid.store(true, Ordering::SeqCst);
+            }
+        });
+
+        // Check if signature verification succeeded
+        if !self.signature_valid.load(Ordering::SeqCst) {
+            // First-time failure - try again to get the actual error
+            return self.verify_signature();
+        }
+
+        // Always check expiry (not cached)
+        self.check_expiry()
+    }
+
+    /// Verifies the attestation JWT signature without checking expiry.
+    fn verify_signature(&self) -> Result<()> {
         let header = jsonwebtoken::decode_header(&self.attestation_jwt)
             .map_err(|e| ClientError::validation(format!("invalid attestation JWT header: {e}")))?;
         let jwk_json = serde_json::to_value(&self.provider_public_jwk).map_err(|e| {
@@ -171,22 +207,38 @@ impl WalletAttestationSigner {
             .map_err(|e| ClientError::validation(format!("invalid provider JWK: {e}")))?;
         let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&jwt_jwk)
             .map_err(|e| ClientError::validation(format!("invalid provider JWK: {e}")))?;
+
+        // Verify signature without checking expiry
         let mut validation = jsonwebtoken::Validation::new(header.alg);
-        validation.set_required_spec_claims(&["exp"]);
-        let _ = jsonwebtoken::decode::<WalletAttestation>(
+        validation.set_required_spec_claims(&[] as &[&str]);
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
+
+        let _ = jsonwebtoken::decode::<serde_json::Value>(
             &self.attestation_jwt,
             &decoding_key,
             &validation,
         )
-        .map_err(|e| match e.kind() {
-            jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
-                ClientError::validation("wallet attestation has expired")
-            }
-            jsonwebtoken::errors::ErrorKind::ImmatureSignature => {
-                ClientError::validation("wallet attestation is not yet valid")
-            }
-            _ => ClientError::validation(format!("attestation JWT validation failed: {e}")),
+        .map_err(|e| {
+            ClientError::validation(format!("attestation JWT signature validation failed: {e}"))
         })?;
+
+        Ok(())
+    }
+
+    /// Checks if the attestation is expired or not yet valid.
+    fn check_expiry(&self) -> Result<()> {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
+        if now > self.attestation_claims.exp {
+            return Err(ClientError::validation("wallet attestation has expired"));
+        }
+        if let Some(nbf) = self.attestation_claims.nbf
+            && now < nbf
+        {
+            return Err(ClientError::validation(
+                "wallet attestation is not yet valid",
+            ));
+        }
         Ok(())
     }
 }
@@ -194,6 +246,7 @@ impl WalletAttestationSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
     use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode, decode_header};
 
