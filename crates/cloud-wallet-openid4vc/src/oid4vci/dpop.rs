@@ -95,7 +95,11 @@ impl DpopKeyPair {
     /// This is intended for testing and validation purposes. The `signing_input`
     /// is the `header_b64.claims_b64` portion of the JWT, and `signature` is the
     /// decoded signature bytes.
-    pub fn verify_signature(&self, signing_input: &[u8], signature: &[u8]) -> Result<(), DpopError> {
+    pub fn verify_signature(
+        &self,
+        signing_input: &[u8],
+        signature: &[u8],
+    ) -> Result<(), DpopError> {
         self.key
             .public_key()
             .verify_sha256(signing_input, signature)
@@ -397,9 +401,7 @@ pub fn validate_dpop_proof(
     let claims = decode_dpop_proof_claims(jwt)?;
     claims.validate_htu(expected_htu)?;
     if claims.is_expired(max_age.unwrap_or(DEFAULT_PROOF_MAX_AGE)) {
-        return Err(DpopError::ProofGeneration(
-            "DPoP proof is expired".into(),
-        ));
+        return Err(DpopError::ProofGeneration("DPoP proof is expired".into()));
     }
     if claims.htm.is_empty() {
         return Err(DpopError::ProofGeneration(
@@ -703,7 +705,11 @@ mod tests {
             .sign_dpop_proof(&claims)
             .expect("signing should succeed");
 
-        let result = validate_dpop_proof(&proof, "https://issuer.example.com/token", Some(Duration::from_secs(60)));
+        let result = validate_dpop_proof(
+            &proof,
+            "https://issuer.example.com/token",
+            Some(Duration::from_secs(60)),
+        );
         assert!(result.is_err(), "expired proof should be rejected");
         let err = result.unwrap_err();
         assert!(

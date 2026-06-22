@@ -453,10 +453,7 @@ async fn test_dpop_proof_attached_to_token_request() {
         serde_json::from_slice(&header_bytes).expect("header should be valid JSON");
     assert_eq!(header["typ"], "dpop+jwt", "header typ must be dpop+jwt");
     assert_eq!(header["alg"], "ES256", "header alg must be ES256");
-    assert!(
-        header["jwk"]["kty"] == "EC",
-        "header jwk must be an EC key"
-    );
+    assert!(header["jwk"]["kty"] == "EC", "header jwk must be an EC key");
 
     let claims_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1])
@@ -464,18 +461,9 @@ async fn test_dpop_proof_attached_to_token_request() {
     let claims: serde_json::Value =
         serde_json::from_slice(&claims_bytes).expect("claims should be valid JSON");
     assert_eq!(claims["htm"], "POST", "claims htm must be POST");
-    assert!(
-        claims["htu"].is_string(),
-        "claims htu must be present"
-    );
-    assert!(
-        claims["jti"].is_string(),
-        "claims jti must be present"
-    );
-    assert!(
-        claims["iat"].is_number(),
-        "claims iat must be present"
-    );
+    assert!(claims["htu"].is_string(), "claims htu must be present");
+    assert!(claims["jti"].is_string(), "claims jti must be present");
+    assert!(claims["iat"].is_number(), "claims iat must be present");
     assert!(
         claims.get("ath").is_none(),
         "token request should not include ath claim"
@@ -649,7 +637,8 @@ async fn test_dpop_use_nonce_retry_flow() {
     );
     assert_eq!(result.unwrap().access_token, "dpop_retry_access_token");
 
-    let stored_nonce = nonce_handler.get_nonce(&htu_from_url(&Url::parse(&format!("{issuer_url}/token")).unwrap()).unwrap());
+    let stored_nonce = nonce_handler
+        .get_nonce(&htu_from_url(&Url::parse(&format!("{issuer_url}/token")).unwrap()).unwrap());
     assert_eq!(
         stored_nonce,
         Some("server-provided-nonce-123".to_string()),
