@@ -99,9 +99,12 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
     let nonce: [u8; NONCE_LENGTH] = iv_bytes
         .try_into()
         .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;
-    let tag: [u8; TAG_LENGTH] = tag_bytes
-        .try_into()
-        .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE authentication tag length mismatch"))?;
+    let tag: [u8; TAG_LENGTH] = tag_bytes.try_into().map_err(|_| {
+        error_msg(
+            ErrorKind::WrongLength,
+            "JWE authentication tag length mismatch",
+        )
+    })?;
 
     let cek_key = recover_cek(&header, &key, &enc_key_bytes)?;
 
