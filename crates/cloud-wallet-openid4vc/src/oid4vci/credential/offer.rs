@@ -333,52 +333,35 @@ impl CredentialOfferUri {
     /// - The URI is malformed
     /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
-        let normalized_link = if link.to_lowercase().starts_with("haip-vci://") {
-            let idx = link
-                .find("://")
-                .expect("starts_with haip-vci:// guarantees '://' exists");
-            format!("openid-credential-offer://{}", &link[idx + 3..])
+        let parsed_url = if link.contains("://") {
+            Url::parse(link).map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidCredentialOffer,
+                    format!("invalid offer link: {e}"),
+                )
+            })?
         } else {
-            link.to_string()
+            Url::parse(&format!("openid-credential-offer://?{link}")).map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidCredentialOffer,
+                    format!("invalid offer link: {e}"),
+                )
+            })?
         };
 
-        // Prepend scheme if not already present
-        let parsed_url = if normalized_link.contains("://") {
-            Url::parse(&normalized_link)
+        let normalized_url = if parsed_url.scheme().eq_ignore_ascii_case("haip-vci") {
+            let mut reconstructed = parsed_url.clone();
+            reconstructed
+                .set_scheme("openid-credential-offer")
+                .map_err(|_| {
+                    Error::message(ErrorKind::InvalidCredentialOffer, "failed to set scheme")
+                })?;
+            reconstructed
         } else {
-            Url::parse(&format!("openid-credential-offer://?{normalized_link}"))
-        }
-        .map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidCredentialOffer,
-                format!("invalid offer link: {e}"),
-            )
-        })?;
+            parsed_url
+        };
 
-        let mut credential_offer: Option<String> = None;
-        let mut credential_offer_uri: Option<String> = None;
-
-        for (k, v) in parsed_url.query_pairs() {
-            if k == "credential_offer" {
-                if credential_offer.is_some() {
-                    return Err(Error::message(
-                        ErrorKind::InvalidCredentialOffer,
-                        "duplicate credential_offer parameter",
-                    ));
-                }
-                credential_offer = Some(v.into_owned());
-            } else if k == "credential_offer_uri" {
-                if credential_offer_uri.is_some() {
-                    return Err(Error::message(
-                        ErrorKind::InvalidCredentialOffer,
-                        "duplicate credential_offer_uri parameter",
-                    ));
-                }
-                credential_offer_uri = Some(v.into_owned());
-            }
-        }
-
-        Self::parse_params(credential_offer.as_deref(), credential_offer_uri.as_deref())
+        Self::from_url(&normalized_url)
     }
 
     /// Parses credential offer URI parameters from a query string.
@@ -398,13 +381,22 @@ impl CredentialOfferUri {
     /// - Duplicate `credential_offer` or `credential_offer_uri` parameters are present
     /// - Parsing the credential offer fails (for by-value)
     pub fn from_query(query: &str) -> Result<Self, Error> {
-        // Strip leading '?' if present (common when parsing raw query strings)
         let query = query.strip_prefix('?').unwrap_or(query);
+        let url = Url::parse(&format!("openid-credential-offer://?{query}")).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!("invalid query: {e}"),
+            )
+        })?;
+        Self::from_url(&url)
+    }
 
+    /// Extracts credential offer parameters from a parsed URL.
+    fn from_url(url: &Url) -> Result<Self, Error> {
         let mut credential_offer: Option<String> = None;
         let mut credential_offer_uri: Option<String> = None;
 
-        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        for (k, v) in url.query_pairs() {
             if k == "credential_offer" {
                 if credential_offer.is_some() {
                     return Err(Error::message(
