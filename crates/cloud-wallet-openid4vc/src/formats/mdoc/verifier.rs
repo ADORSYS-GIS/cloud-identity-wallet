@@ -27,12 +27,24 @@ const X5CHAIN_LABEL: i64 = 33;
 
 /// COSE algorithm identifier for ES256 (ECDSA P-256 + SHA-256).
 const ALG_ES256: i64 = -7;
+/// COSE algorithm identifier for ESP256 (ECDSA P-256 + SHA-256, fully-specified, RFC 9864).
+/// Same operation as `ALG_ES256`.
+const ALG_ESP256: i64 = -9;
 /// COSE algorithm identifier for ES384 (ECDSA P-384 + SHA-384).
 const ALG_ES384: i64 = -35;
+/// COSE algorithm identifier for ESP384 (ECDSA P-384 + SHA-384, fully-specified, RFC 9864).
+/// Same operation as `ALG_ES384`.
+const ALG_ESP384: i64 = -51;
 /// COSE algorithm identifier for ES512 (ECDSA P-521 + SHA-512).
 const ALG_ES512: i64 = -36;
+/// COSE algorithm identifier for ESP512 (ECDSA P-521 + SHA-512, fully-specified, RFC 9864).
+/// Same operation as `ALG_ES512`.
+const ALG_ESP512: i64 = -52;
 /// COSE algorithm identifier for EdDSA / Ed25519.
 const ALG_EDDSA: i64 = -8;
+/// COSE algorithm identifier for Ed25519 (fully-specified, RFC 9864).
+/// Same operation as `ALG_EDDSA`.
+const ALG_ED25519: i64 = -19;
 /// COSE algorithm identifier for ECDSA on Brainpool P-256r1 (ISO 18013-5 Annex B).
 const ALG_BRAINPOOL_P256: i64 = -38;
 /// COSE algorithm identifier for ECDSA on Brainpool P-384r1 (ISO 18013-5 Annex B).
@@ -148,8 +160,10 @@ pub struct IssuerInfo {
 /// # Errors
 ///
 /// - [`MdocError::MissingAlgorithm`] — algorithm field is absent or is not an integer label.
-/// - [`MdocError::UnsupportedAlgorithm`] — alg is not ES256 (-7), ES384 (-35),
-///   ES512 (-36), or EdDSA/Ed25519 (-8).
+/// - [`MdocError::UnsupportedAlgorithm`] — alg is not ES256 (-7), ESP256 (-9), ES384 (-35),
+///   ESP384 (-51), ES512 (-36), ESP512 (-52), EdDSA (-8), or Ed25519 (-19). ESPxxx and Ed25519
+///   are the RFC 9864 fully-specified identifiers and verify identically to their polymorphic
+///   predecessors.
 /// - [`MdocError::MissingX5Chain`] — COSE unprotected header label 33 is absent.
 /// - [`MdocError::InvalidCertificateChain`] — chain is malformed, untrusted, the IACA
 ///   root appears in the chain, or the DSC validity period exceeds 457 days.
@@ -223,7 +237,9 @@ pub(crate) fn verify_issuer_signature(
     // (already available in `dsc`) is safe against SPKI byte patterns that happen to
     // contain the OID bytes at a non-OID position.
     const ED448_OID: &str = "1.3.101.113";
-    if alg == ALG_EDDSA && dsc.public_key().algorithm.algorithm.to_id_string() == ED448_OID {
+    if (alg == ALG_EDDSA || alg == ALG_ED25519)
+        && dsc.public_key().algorithm.algorithm.to_id_string() == ED448_OID
+    {
         return Err(MdocError::UnsupportedAlgorithm { alg });
     }
 
@@ -267,8 +283,8 @@ fn read_cose_alg(parsed: &ParsedMdoc) -> Result<i64> {
     };
 
     match alg_i64 {
-        ALG_ES256 | ALG_ES384 | ALG_ES512 | ALG_EDDSA | ALG_BRAINPOOL_P256 | ALG_BRAINPOOL_P384
-        | ALG_BRAINPOOL_P512 => Ok(alg_i64),
+        ALG_ES256 | ALG_ESP256 | ALG_ES384 | ALG_ESP384 | ALG_ES512 | ALG_ESP512 | ALG_EDDSA
+        | ALG_ED25519 | ALG_BRAINPOOL_P256 | ALG_BRAINPOOL_P384 | ALG_BRAINPOOL_P512 => Ok(alg_i64),
         other => Err(MdocError::UnsupportedAlgorithm { alg: other }),
     }
 }
@@ -310,25 +326,25 @@ fn extract_x5chain(parsed: &ParsedMdoc) -> Result<Vec<Vec<u8>>> {
 /// Dispatches the COSE signature verification to the correct crypto backend.
 fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Result<()> {
     match alg {
-        ALG_ES256 => {
+        ALG_ES256 | ALG_ESP256 => {
             let key =
                 EcdsaKey::from_spki_der(spki).map_err(|_| MdocError::InvalidIssuerSignature)?;
             key.verify_sha256(tbs, signature)
                 .map_err(|_| MdocError::InvalidIssuerSignature)
         }
-        ALG_ES384 => {
+        ALG_ES384 | ALG_ESP384 => {
             let key =
                 EcdsaKey::from_spki_der(spki).map_err(|_| MdocError::InvalidIssuerSignature)?;
             key.verify_sha384(tbs, signature)
                 .map_err(|_| MdocError::InvalidIssuerSignature)
         }
-        ALG_ES512 => {
+        ALG_ES512 | ALG_ESP512 => {
             let key =
                 EcdsaKey::from_spki_der(spki).map_err(|_| MdocError::InvalidIssuerSignature)?;
             key.verify_sha512(tbs, signature)
                 .map_err(|_| MdocError::InvalidIssuerSignature)
         }
-        ALG_EDDSA => {
+        ALG_EDDSA | ALG_ED25519 => {
             // Ed448 is rejected earlier in `verify_issuer_signature` via the parsed OID.
             // By the time we reach here the key is guaranteed to be Ed25519.
             let key =

@@ -137,6 +137,29 @@ fn build_issuer_signed_with_issuer_auth(
     issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
+/// Builds an `issuerAuth` signed with ESP256 (-9), the RFC 9864 fully-specified
+/// P-256+SHA-256 identifier that replaces the polymorphic ES256 (-7).
+fn build_issuer_signed_esp256(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -9} (ESP256): a1 01 28
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x28],
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+        |tbs| {
+            signing_key
+                .sign_sha256(tbs)
+                .expect("ESP256 COSE signing must succeed")
+                .to_vec()
+        },
+        false,
+    );
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
+}
+
 /// Returns the MSO payload bytes as they appear inside the COSE_Sign1 `payload` field:
 /// `Tag(24, bstr(mso_cbor))` per ISO 18013-5 §9.1.2 MobileSecurityObjectBytes.
 fn minimal_mso_cbor() -> Vec<u8> {
@@ -797,6 +820,28 @@ fn verify_issuer_signature_accepts_valid_chain() {
     assert!(
         result.is_ok(),
         "valid COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+#[test]
+fn verify_issuer_signature_accepts_valid_esp256() {
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_esp256(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP256 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+
+    assert!(
+        result.is_ok(),
+        "valid ESP256 (-9, RFC 9864 fully-specified) COSE_Sign1 with trusted chain must be \
+         accepted, got: {result:?}"
     );
     let info = result.unwrap();
     assert_eq!(
