@@ -42,6 +42,13 @@ pub struct RequestObjectClaims {
     #[serde(flatten)]
     pub rfc7519: RFC7519Claims,
 
+    /// Wallet nonce for replay attack mitigation (OpenID4VP §5.10:
+    /// <https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5.10>).
+    ///
+    /// This is a JWT-only claim — it appears inside the signed Request Object,
+    /// not as a top-level OAuth parameter in the Authorization Request.
+    pub wallet_nonce: Option<String>,
+
     #[serde(flatten)]
     pub params: AuthorizationRequest,
 }
