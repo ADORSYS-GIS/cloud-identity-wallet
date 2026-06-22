@@ -230,7 +230,7 @@ for ECDH-ES with AES Key Wrap (JWE `ECDH-ES+A256KW`):
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 use cloud_wallet_crypto::{
     ecdh::{EcdhCurve, EphemeralEcdhKey, EcdhPublicKey},
-    kdf::{concat_kdf, ConcatKdfParams},
+    kdf::concat_kdf,
     aes_kek::{KeyEncryptionKey, KeyWrapAlgorithm},
     digest::HashAlg,
     rand,
@@ -255,13 +255,15 @@ let _epk_bytes = sender.public_key_bytes(&mut epk_buf)?;
 let shared = sender.agree(&peer)?;
 
 // Derive a 256-bit key-encryption key via ConcatKDF (RFC 7518 §4.6.2).
+let mut other_info = Vec::new();
+let alg_id: &[u8] = b"A256KW";
+other_info.extend_from_slice(&(alg_id.len() as u32).to_be_bytes());
+other_info.extend_from_slice(alg_id);
+other_info.extend_from_slice(&0u32.to_be_bytes()); // empty apu
+other_info.extend_from_slice(&0u32.to_be_bytes()); // empty apv
+other_info.extend_from_slice(&(32u32 * 8).to_be_bytes()); // keydatalen = 256 bits
 let mut kek_bytes = [0u8; 32];
-concat_kdf(
-    HashAlg::Sha256,
-    shared.as_bytes(),
-    &ConcatKdfParams { algorithm_id: b"A256KW", party_u_info: b"", party_v_info: b"" },
-    &mut kek_bytes,
-)?;
+concat_kdf(HashAlg::Sha256, shared.as_bytes(), &other_info, &mut kek_bytes)?;
 
 // Randomly generated content-encryption key — encrypts the actual payload;
 // AES-KW protects it for transport in the JWE encrypted key field.
