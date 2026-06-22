@@ -999,7 +999,8 @@ impl TryFrom<&Jwk> for crate::rsa::oaep::EncryptingKey {
                 const RSA_ALGO_ID: &[u8] = &[
                     0x30, 0x0d, // SEQUENCE, 13 bytes
                     0x06, 0x09, // OID, 9 bytes
-                    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, // 1.2.840.113549.1.1.1
+                    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01,
+                    0x01, // 1.2.840.113549.1.1.1
                     0x05, 0x00, // NULL
                 ];
 
