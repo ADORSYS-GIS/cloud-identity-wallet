@@ -2,6 +2,7 @@ pub mod authorization;
 pub mod client;
 pub mod credential;
 pub mod error;
+pub mod key_attestation;
 pub mod metadata;
 pub mod notification;
 pub mod proofs;
