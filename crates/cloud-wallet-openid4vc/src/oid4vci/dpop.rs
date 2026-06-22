@@ -736,7 +736,7 @@ mod tests {
         let public_jwk = key_pair.public_jwk();
         if let Key::Ec(ec) = &public_jwk.key {
             let mut map = BTreeMap::new();
-            map.insert("crv", serde_json::to_value(&ec.crv).unwrap());
+            map.insert("crv", serde_json::to_value(ec.crv).unwrap());
             map.insert("kty", serde_json::Value::String("EC".into()));
             map.insert("x", serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.x.as_ref())));
             map.insert("y", serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.y.as_ref())));
