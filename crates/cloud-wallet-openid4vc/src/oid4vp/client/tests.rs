@@ -481,10 +481,10 @@ async fn rejects_unsigned_request_for_non_redirect_uri_prefix() {
 
 #[tokio::test]
 async fn create_response_path_end_to_end() {
+    use crate::oid4vp::presentation::SelectedCredential;
+    use crate::oid4vp::selection::CredentialView;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-    use crate::oid4vp::selection::CredentialView;
-    use crate::oid4vp::presentation::SelectedCredential;
 
     let mock_server = MockServer::start().await;
     let mock_uri = format!("{}/response", mock_server.uri());
@@ -495,8 +495,9 @@ async fn create_response_path_end_to_end() {
         .and(body_string_contains("vp_token="))
         .and(body_string_contains("state=test-state"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"redirect_uri": "https://verifier.example.com/cb"})),
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"redirect_uri": "https://verifier.example.com/cb"}),
+            ),
         )
         .mount(&mock_server)
         .await;
@@ -524,8 +525,12 @@ async fn create_response_path_end_to_end() {
 
     let mut jwt_header = Header::new(Algorithm::HS256);
     jwt_header.typ = Some("oauth-authz-req+jwt".to_string());
-    let jwt = encode(&jwt_header, &payload, &EncodingKey::from_secret(b"test-secret"))
-        .expect("test JWT should encode");
+    let jwt = encode(
+        &jwt_header,
+        &payload,
+        &EncodingKey::from_secret(b"test-secret"),
+    )
+    .expect("test JWT should encode");
 
     let raw = serde_json::json!({
         "response_type": "vp_token",
@@ -541,12 +546,7 @@ async fn create_response_path_end_to_end() {
     };
 
     let context = client
-        .process_authz_request_full(
-            &raw.to_string(),
-            &StaticKeyResolver,
-            None,
-            &resolver,
-        )
+        .process_authz_request_full(&raw.to_string(), &StaticKeyResolver, None, &resolver)
         .await
         .expect("request should be valid");
 
