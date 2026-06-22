@@ -1,5 +1,5 @@
 use cloud_wallet_crypto::ecdh::EcdhPublicKey;
-use cloud_wallet_crypto::jwe::{AlgAlgorithm, EncAlgorithm, JweEncryptKey, JweHeader, encrypt as jwe_encrypt};
+use cloud_wallet_crypto::jwe::{KeyManagementAlgorithm, ContentEncryptionAlgorithm, JweEncryptKey, JweHeader, encrypt as jwe_encrypt};
 use cloud_wallet_crypto::jwk::{Algorithm, Jwk, Key, KeyManagement, KeyUse, Operations};
 use cloud_wallet_crypto::rsa::oaep::EncryptingKey as RsaEncryptingKey;
 use reqwest_middleware::ClientWithMiddleware;
@@ -47,7 +47,7 @@ use crate::oid4vp::{
 pub fn encrypt_authorization_response(
     response: &AuthorizationResponse,
     encryption_key: &Jwk,
-    enc: EncAlgorithm,
+    enc: ContentEncryptionAlgorithm,
 ) -> Result<DirectPostJwtResponse, JarmEncryptError> {
     // RFC 7517 §4.2: a key declared for signing must not be used for encryption.
     if let Some(KeyUse::Signing) = &encryption_key.prm.key_use {
@@ -170,7 +170,7 @@ pub async fn send_direct_post_jwt(
     expected_response_uri: &Url,
     response: &AuthorizationResponse,
     encryption_key: &Jwk,
-    enc: EncAlgorithm,
+    enc: ContentEncryptionAlgorithm,
 ) -> Result<DirectPostResponse, DirectPostError> {
     super::validate_response_uri(response_uri, expected_response_uri)?;
 
@@ -194,18 +194,18 @@ async fn execute_direct_post_jwt(
     super::parse_verifier_response(http_response).await
 }
 
-/// Maps a JWK `KeyManagement` algorithm to the corresponding JWE `AlgAlgorithm`.
+/// Maps a JWK `KeyManagement` algorithm to the corresponding JWE `KeyManagementAlgorithm`.
 ///
 /// Returns `UnsupportedAlgorithm` for variants not supported by the JWE encrypt primitive
 /// (`RsaOaep` without hash suffix, `EcdhEsA192Kw`, symmetric and PBES2 algorithms, etc.).
-fn jwk_km_to_jwe_alg(km: &KeyManagement) -> Result<AlgAlgorithm, JarmEncryptError> {
+fn jwk_km_to_jwe_alg(km: &KeyManagement) -> Result<KeyManagementAlgorithm, JarmEncryptError> {
     match km {
-        KeyManagement::RsaOaep256 => Ok(AlgAlgorithm::RsaOaep256),
-        KeyManagement::RsaOaep384 => Ok(AlgAlgorithm::RsaOaep384),
-        KeyManagement::RsaOaep512 => Ok(AlgAlgorithm::RsaOaep512),
-        KeyManagement::EcdhEs => Ok(AlgAlgorithm::EcdhEs),
-        KeyManagement::EcdhEsA128Kw => Ok(AlgAlgorithm::EcdhEsA128Kw),
-        KeyManagement::EcdhEsA256Kw => Ok(AlgAlgorithm::EcdhEsA256Kw),
+        KeyManagement::RsaOaep256 => Ok(KeyManagementAlgorithm::RsaOaep256),
+        KeyManagement::RsaOaep384 => Ok(KeyManagementAlgorithm::RsaOaep384),
+        KeyManagement::RsaOaep512 => Ok(KeyManagementAlgorithm::RsaOaep512),
+        KeyManagement::EcdhEs => Ok(KeyManagementAlgorithm::EcdhEs),
+        KeyManagement::EcdhEsA128Kw => Ok(KeyManagementAlgorithm::EcdhEsA128Kw),
+        KeyManagement::EcdhEsA256Kw => Ok(KeyManagementAlgorithm::EcdhEsA256Kw),
         other => Err(JarmEncryptError::UnsupportedAlgorithm(format!(
             "algorithm '{other}' is not supported for JWE key management"
         ))),
@@ -308,7 +308,7 @@ mod tests {
         let response = sample_response();
 
         let jwt_response =
-            encrypt_authorization_response(&response, &jwk, EncAlgorithm::A128Gcm).unwrap();
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A128Gcm).unwrap();
 
         let plaintext =
             jwe_decrypt(jwt_response.response(), JweDecryptKey::Ecdh(&static_key)).unwrap();
@@ -326,7 +326,7 @@ mod tests {
         let response = sample_response();
 
         let jwt_response =
-            encrypt_authorization_response(&response, &jwk, EncAlgorithm::A256Gcm).unwrap();
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A256Gcm).unwrap();
 
         let plaintext =
             jwe_decrypt(jwt_response.response(), JweDecryptKey::Ecdh(&static_key)).unwrap();
@@ -343,7 +343,7 @@ mod tests {
         let response = sample_response();
 
         let jwt_response =
-            encrypt_authorization_response(&response, &jwk, EncAlgorithm::A128Gcm).unwrap();
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A128Gcm).unwrap();
 
         let mut pkcs8_buf = vec![0u8; 4096];
         let pkcs8_der = key_pair.to_pkcs8_der(&mut pkcs8_buf).unwrap();
@@ -366,7 +366,7 @@ mod tests {
         let response = sample_response();
 
         let jwt_response =
-            encrypt_authorization_response(&response, &jwk, EncAlgorithm::A256Gcm).unwrap();
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A256Gcm).unwrap();
 
         let mut pkcs8_buf = vec![0u8; 4096];
         let pkcs8_der = key_pair.to_pkcs8_der(&mut pkcs8_buf).unwrap();
@@ -401,7 +401,7 @@ mod tests {
         let response = sample_response();
 
         let jwt_response =
-            encrypt_authorization_response(&response, &jwk, EncAlgorithm::A128Gcm).unwrap();
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A128Gcm).unwrap();
 
         // KW mode must produce a non-empty encrypted-key segment (part 2 of the compact JWE).
         let parts: Vec<&str> = jwt_response.response().split('.').collect();
@@ -426,7 +426,7 @@ mod tests {
         let jwk = ecdh_p256_jwk_with_alg(&static_key); // kid = "p256-key-1"
 
         let jwt_response =
-            encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+            encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
                 .unwrap();
 
         let header = decode_jwe_header(jwt_response.response());
@@ -445,7 +445,7 @@ mod tests {
         jwk.prm.kid = None;
 
         let jwt_response =
-            encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+            encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
                 .unwrap();
 
         let header = decode_jwe_header(jwt_response.response());
@@ -460,7 +460,7 @@ mod tests {
         let mut jwk = ecdh_p256_jwk_with_alg(&static_key);
         jwk.prm.alg = None;
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert_eq!(err, JarmEncryptError::MissingKeyAlgorithm);
@@ -470,10 +470,10 @@ mod tests {
     fn unsupported_alg_returns_error() {
         let static_key = StaticEcdhKey::generate(EcdhCurve::P256).unwrap();
         let mut jwk = ecdh_p256_jwk_with_alg(&static_key);
-        // RsaOaep (no hash suffix) has no AlgAlgorithm counterpart.
+        // RsaOaep (no hash suffix) has no KeyManagementAlgorithm counterpart.
         jwk.prm.alg = Some(Algorithm::KeyManagement(KeyManagement::RsaOaep));
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(matches!(err, JarmEncryptError::UnsupportedAlgorithm(_)));
@@ -494,7 +494,7 @@ mod tests {
             prm,
         };
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(matches!(err, JarmEncryptError::UnsupportedAlgorithm(_)));
@@ -506,7 +506,7 @@ mod tests {
         let mut jwk = ecdh_p256_jwk_with_alg(&static_key);
         jwk.prm.key_use = Some(KeyUse::Signing);
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(
@@ -524,7 +524,7 @@ mod tests {
         ops.insert(Operations::Sign);
         jwk.prm.ops = Some(ops);
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(
@@ -543,7 +543,7 @@ mod tests {
 
         // Should succeed — DeriveKey satisfies the ECDH requirement.
         assert!(
-            encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+            encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
                 .is_ok()
         );
     }
@@ -559,7 +559,7 @@ mod tests {
             ec.d = Some(Secret::new(vec![0u8; 32]));
         }
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(
@@ -578,7 +578,7 @@ mod tests {
             okp.d = Some(Secret::new(vec![0u8; 32]));
         }
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(
@@ -602,7 +602,7 @@ mod tests {
             });
         }
 
-        let err = encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+        let err = encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
             .unwrap_err();
 
         assert!(
@@ -632,7 +632,7 @@ mod tests {
         // wiremock URI is http:// so call execute_direct_post_jwt directly
         // to bypass the HTTPS check (which is tested separately below).
         let jwt_response =
-            encrypt_authorization_response(&sample_response(), &jwk, EncAlgorithm::A128Gcm)
+            encrypt_authorization_response(&sample_response(), &jwk, ContentEncryptionAlgorithm::A128Gcm)
                 .unwrap();
         let client = test_http_client();
         let result = execute_direct_post_jwt(&client, &uri, &jwt_response)
@@ -656,7 +656,7 @@ mod tests {
             &expected,
             &sample_response(),
             &jwk,
-            EncAlgorithm::A128Gcm,
+            ContentEncryptionAlgorithm::A128Gcm,
         )
         .await
         .unwrap_err();
@@ -678,7 +678,7 @@ mod tests {
             &expected,
             &sample_response(),
             &jwk,
-            EncAlgorithm::A128Gcm,
+            ContentEncryptionAlgorithm::A128Gcm,
         )
         .await
         .unwrap_err();
