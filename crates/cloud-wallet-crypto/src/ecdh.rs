@@ -3,7 +3,8 @@
 //! All private keys are ephemeral: generated fresh per operation and consumed
 //! on [`EphemeralEcdhKey::agree`]. RFC 7518 §4.6 mandates this
 //! for ECDH-ES, so no reuse is exposed. Feed [`SharedSecret`] bytes into
-//! [`crate::kdf::concat_kdf`] to derive a JWE content-encryption key.
+//! [`crate::kdf::concat_kdf`] to derive key material using the NIST
+//! ConcatKDF.
 
 use aws_lc_rs::agreement::{self, EphemeralPrivateKey, UnparsedPublicKey, agree_ephemeral};
 use aws_lc_rs::rand::SystemRandom;
@@ -272,7 +273,7 @@ impl EcdhPublicKey {
 /// Raw shared secret produced by ECDH.
 ///
 /// Do **not** use as an encryption key directly. Derive key material via
-/// [`crate::kdf::concat_kdf`] per RFC 7518 §4.6.2.
+/// [`crate::kdf::concat_kdf`] (NIST ConcatKDF).
 pub struct SharedSecret {
     secret: Secret,
     curve: EcdhCurve,
