@@ -126,7 +126,8 @@ impl Config {
             )?
             .set_default("oid4vci.use_system_proxy", true)?
             .set_default("oid4vci.preferred_display_locales", vec!["en"])?
-            .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())
+            .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())?
+            .set_default("oid4vci.revocation_policy", "soft_fail")
     }
 }
 

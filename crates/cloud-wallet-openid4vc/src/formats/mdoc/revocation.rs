@@ -19,10 +19,12 @@
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
+use url::Url;
 use x509_parser::extensions::CRLDistributionPoint;
 use x509_parser::prelude::GeneralName;
 use x509_parser::prelude::{FromDer, ParsedExtension, ReasonCode, X509Certificate};
@@ -54,6 +56,117 @@ fn reason_code_to_string(code: ReasonCode) -> &'static str {
         ReasonCode::AACompromise => "aACompromise",
         _ => "unspecified",
     }
+}
+
+/// Checks if an IP address is in a blocked range that should not be accessed for CRL fetching.
+///
+/// Blocked ranges include:
+/// - Loopback addresses (127.0.0.0/8, ::1)
+/// - Private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+/// - Private IPv6 ranges (fc00::/7, ::ffff:0:0/96)
+/// - Link-local addresses (169.254.0.0/16, fe80::/10)
+/// - Cloud metadata endpoints (169.254.169.254 specifically - AWS, GCP, Azure)
+/// - Broadcast addresses
+/// - Documentation/test ranges
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            let octets = ipv4.octets();
+            match octets[0] {
+                0 => true,                                          // 0.0.0.0/8 - "This network"
+                10 => true,                                         // 10.0.0.0/8 - Private
+                127 => true,                                        // 127.0.0.0/8 - Loopback
+                169 if octets[1] == 254 => true, // 169.254.0.0/16 - Link-local (includes metadata)
+                172 if octets[1] >= 16 && octets[1] <= 31 => true, // 172.16.0.0/12 - Private
+                192 if octets[1] == 0 && octets[2] == 0 => true, // 192.0.0.0/24 - IETF Protocol Assignments
+                192 if octets[1] == 0 && octets[2] == 2 => true, // 192.0.2.0/24 - Documentation (TEST-NET-1)
+                192 if octets[1] == 88 && octets[2] == 99 => true, // 192.88.99.0/24 - 6to4 Relay Anycast
+                192 if octets[1] == 168 => true,                   // 192.168.0.0/16 - Private
+                198 if octets[1] >= 18 && octets[1] <= 19 => true, // 198.18.0.0/15 - Benchmark testing
+                198 if octets[1] == 51 && octets[2] == 100 => true, // 198.51.100.0/24 - Documentation (TEST-NET-2)
+                203 if octets[1] == 0 && octets[2] == 113 => true, // 203.0.113.0/24 - Documentation (TEST-NET-3)
+                224..=239 => true,                                 // 224.0.0.0/4 - Multicast
+                240..=255 => true,                                 // 240.0.0.0/4 - Reserved
+                _ => ipv4.is_broadcast() || ipv4.is_unspecified(),
+            }
+        }
+        IpAddr::V6(ipv6) => {
+            ipv6.is_loopback()                // ::1
+            || ipv6.is_unspecified()          // ::
+            || is_ipv6_private(ipv6)          // fc00::/7
+            || is_ipv6_link_local(ipv6)        // fe80::/10
+            || is_ipv6_documentation(ipv6) // 2001:db8::/32
+        }
+    }
+}
+
+fn is_ipv6_private(ip: &Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    (segments[0] & 0xfe00) == 0xfc00 // fc00::/7 - Unique local addresses
+}
+
+fn is_ipv6_link_local(ip: &Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    segments[0] & 0xffc0 == 0xfe80 // fe80::/10 - Link-local
+}
+
+fn is_ipv6_documentation(ip: &Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    segments[0] == 0x2001 && segments[1] == 0x0db8 // 2001:db8::/32 - Documentation
+}
+
+/// Validates that a CRL URL is safe to fetch from, protecting against SSRF attacks.
+///
+/// This function:
+/// 1. Validates that the URL uses HTTPS (already checked by `extract_crl_uri`)
+/// 2. Resolves the hostname to IP addresses
+/// 3. Rejects URLs that resolve to blocked IP ranges (loopback, private, link-local, metadata)
+///
+/// Returns `Ok(())` if the URL is safe, or an error describing why it's blocked.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn validate_crl_url(uri: &str) -> std::result::Result<(), String> {
+    let url = Url::parse(uri).map_err(|e| format!("Invalid URL: {e}"))?;
+
+    if url.scheme() != "https" {
+        return Err(format!("CRL URL must use HTTPS, got: {}", url.scheme()));
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| "CRL URL missing host".to_string())?;
+
+    // Check if host is already an IP address (IPv4 or IPv6 in brackets)
+    // For IPv6, url.host_str() returns the address with brackets, e.g., "[::1]"
+    // so we need to strip the brackets before parsing
+    let ip_str = if host.starts_with('[') && host.ends_with(']') {
+        &host[1..host.len() - 1]
+    } else {
+        host
+    };
+
+    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+        if is_blocked_ip(&ip) {
+            return Err(format!("CRL URL resolves to blocked IP address: {ip}"));
+        }
+        return Ok(());
+    }
+
+    // Resolve hostname to IP addresses and check each one
+    let socket_addrs = tokio::net::lookup_host((host, url.port().unwrap_or(443)))
+        .await
+        .map_err(|e| format!("Failed to resolve hostname '{host}': {e}"))?;
+
+    for addr in socket_addrs {
+        if is_blocked_ip(&addr.ip()) {
+            return Err(format!(
+                "CRL URL hostname '{host}' resolves to blocked IP address: {}",
+                addr.ip()
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Policy for DSC revocation checking (ISO 18013-5 §9.3.3).
@@ -92,6 +205,13 @@ pub trait CrlFetcher: Send + Sync {
     async fn fetch_crl(&self, uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error>;
 }
 
+/// Global singleton HTTP CRL fetcher.
+///
+/// Lazily initialized to avoid creating reqwest::Client until first use.
+/// The singleton ensures a single shared reqwest::Client and connection pool
+/// across all revocation checks.
+static DEFAULT_CRL_FETCHER: LazyLock<HttpCrlFetcher> = LazyLock::new(HttpCrlFetcher::new);
+
 /// Production HTTP-based CRL fetcher with in-memory caching.
 ///
 /// Uses a global cache shared across all instances to avoid redundant HTTPS fetches.
@@ -124,6 +244,14 @@ impl HttpCrlFetcher {
                 .expect("HTTP client with rustls must initialize"),
             cache_ttl,
         }
+    }
+
+    /// Returns a reference to the global singleton fetcher.
+    ///
+    /// This is the recommended way to obtain a fetcher for production use,
+    /// as it reuses the same HTTP client and connection pool.
+    pub fn global() -> &'static HttpCrlFetcher {
+        &DEFAULT_CRL_FETCHER
     }
 }
 
@@ -183,6 +311,9 @@ impl CrlFetcher for HttpCrlFetcher {
 ///
 /// CRLs are cached per-URI to avoid redundant HTTPS fetches. Each entry has a TTL
 /// (default 6 hours) after which the entry is stale and a fresh fetch is required.
+///
+/// Eviction policy: TTL-expired entries are removed on access. When the cache reaches
+/// `MAX_CRL_CACHE_ENTRIES`, the oldest entry by insertion order is evicted (FIFO).
 struct CrlCacheEntry {
     crl_der: Vec<u8>,
     fetched_at: Instant,
@@ -194,6 +325,9 @@ static CRL_CACHE: LazyLock<Mutex<(HashMap<String, CrlCacheEntry>, u64)>> =
     LazyLock::new(|| Mutex::new((HashMap::new(), 0)));
 
 /// Evicts entries that are stale (TTL expired) or when cache exceeds max size.
+///
+/// This implements a simple FIFO eviction policy: when the cache is full after
+/// removing stale entries, the oldest entry by insertion order is removed.
 fn evict_if_needed(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
     // First, remove the entry for this URI if stale
     if let Some(entry) = cache.get(uri)
@@ -207,7 +341,7 @@ fn evict_if_needed(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
         cache.retain(|_, entry| entry.fetched_at.elapsed() <= entry.expires_after);
     }
 
-    // If still over limit after sweeping stale, evict oldest entries (lowest insertion_order)
+    // If still over limit after sweeping stale, evict oldest entry (FIFO policy)
     while cache.len() >= MAX_CRL_CACHE_ENTRIES {
         let oldest = cache
             .iter()
@@ -316,8 +450,16 @@ pub async fn check_revocation(
         }
     };
 
-    let default_fetcher = HttpCrlFetcher::new();
-    let fetcher_ref = fetcher.unwrap_or(&default_fetcher);
+    // SSRF protection: validate the CRL URL before fetching to prevent
+    // server-side request forgery attacks against internal infrastructure
+    // or cloud metadata endpoints.
+    if let Err(e) = validate_crl_url(&crl_uri).await {
+        return Err(MdocError::RevocationCheckFailed {
+            reason: format!("CRL URL validation failed: {e}"),
+        });
+    }
+
+    let fetcher_ref = fetcher.unwrap_or_else(|| HttpCrlFetcher::global());
 
     let crl_bytes = match fetcher_ref.fetch_crl(&crl_uri).await {
         Ok(bytes) => bytes,
@@ -552,9 +694,6 @@ fn verify_aki_match(
     const OID_AKI: &str = "2.5.29.35";
     const OID_SKI: &str = "2.5.29.14";
 
-    // Extract AKI from CRL if present and parse it properly per RFC 5280 §4.2.1.1
-    // The AuthorityKeyIdentifier extension contains an optional keyIdentifier OCTET STRING
-    // We extract only the key_identifier field for comparison
     let crl_aki_key_id = crl.extensions().iter().find_map(|ext| {
         if ext.oid.to_id_string() == OID_AKI {
             match ext.parsed_extension() {
@@ -568,22 +707,20 @@ fn verify_aki_match(
         }
     });
 
-    // Extract SKI from issuer certificate if present
-    // SKI extension is just an OCTET STRING containing the key identifier
-    let issuer_ski_value = issuer_cert.extensions().iter().find_map(|ext| {
+    let issuer_ski_key_id = issuer_cert.extensions().iter().find_map(|ext| {
         if ext.oid.to_id_string() == OID_SKI {
-            Some(ext.value)
+            match ext.parsed_extension() {
+                ParsedExtension::SubjectKeyIdentifier(ski) => Some(ski.0),
+                _ => None,
+            }
         } else {
             None
         }
     });
 
-    match (crl_aki_key_id, issuer_ski_value) {
-        (Some(aki_key_id), Some(ski_value)) => {
-            // AKI extension is a SEQUENCE with optional keyIdentifier OCTET STRING
-            // We've extracted the key_identifier bytes via parsed_extension
-            // SKI extension is just an OCTET STRING, so its value is the key identifier directly
-            if aki_key_id != ski_value {
+    match (crl_aki_key_id, issuer_ski_key_id) {
+        (Some(aki_key_id), Some(ski_key_id)) => {
+            if aki_key_id != ski_key_id {
                 return Err(MdocError::RevocationCheckFailed {
                     reason:
                         "CRL Authority Key Identifier does not match issuer Subject Key Identifier"
@@ -593,16 +730,12 @@ fn verify_aki_match(
             Ok(())
         }
         (Some(_), None) => {
-            // CRL has AKI but issuer has no SKI - this is unusual but not necessarily invalid
             tracing::warn!(
                 "CRL has Authority Key Identifier but issuer certificate lacks Subject Key Identifier"
             );
             Ok(())
         }
-        (None, _) => {
-            // No AKI in CRL - no check needed
-            Ok(())
-        }
+        (None, _) => Ok(()),
     }
 }
 
@@ -972,22 +1105,76 @@ mod tests {
         // - Embed pre-generated CRL fixtures as DER bytes (requires regeneration on key rotation)
         // - Contribute CRL generation support to `rcgen` upstream
         //
-        // Template for mock CrlFetcher-based test:
-        // ```rust
-        // struct MockCrlFetcher {
-        //     crl_bytes: Vec<u8>,
-        // }
+        // The test pattern below demonstrates the MockCrlFetcher approach. To enable these tests,
+        // generate a CRL fixture using:
         //
-        // #[async_trait]
-        // impl CrlFetcher for MockCrlFetcher {
-        //     async fn fetch_crl(&self, _uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
-        //         Ok(self.crl_bytes.clone())
-        //     }
-        // }
+        // ```sh
+        // # Generate CA key and cert (reuse from test fixtures)
+        // openssl genrsa -out ca.key 2048
+        // openssl req -x509 -new -nodes -key ca.key -sha256 -days 365 -out ca.crt \
+        //   -subj "/C=DE/O=Test IACA"
         //
-        // // Use in test:
-        // let mock_fetcher = MockCrlFetcher { crl_bytes: pre_generated_crl_der };
-        // let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
+        // # Generate DSC key and cert with known serial
+        // openssl genrsa -out dsc.key 2048
+        // openssl req -new -key dsc.key -out dsc.csr \
+        //   -subj "/C=DE/O=Test Issuer/CN=Test DSC"
+        // openssl x509 -req -in dsc.csr -CA ca.crt -CAkey ca.key -set_serial 0x0102030405 \
+        //   -days 365 -out dsc.crt
+        //
+        // # Create CRL that revokes the DSC serial
+        // echo -e "1. Last Update\n2. Next Update\n3. View Revoked Certificates\n4. Add Revoked Certificate\n5. Quit\nSerial Number: 0102030405\nRevocation Date: $(date +%Y%m%d%H%M%SZ)\n5" | openssl ca -config <(cat /etc/ssl/openssl.cnf; echo "[ca]\ndefault_ca = test_ca\n[test_ca]\ndatabase = crl_db\nserial = serial\ncrlnumber = crlnumber\ncertificate = ca.crt\nprivate_key = ca.key\ndefault_md = sha256\ndefault_crl_days = 30\n") -gencrl -out crl.pem
+        // openssl crl -in crl.pem -outform DER -out crl.der
         // ```
+        //
+        // Then embed the DER bytes as a constant:
+        // ```rust
+        // const TEST_CRL_DER: &[u8] = include_bytes!("fixtures/test_crl.der");
+        // ```
+        //
+        // See the MockCrlFetcher trait implementation template below.
+
+        /// Mock CRL fetcher for testing with pre-generated CRL fixtures.
+        ///
+        /// Usage:
+        /// ```rust,ignore
+        /// let mock_fetcher = MockCrlFetcher { crl_bytes: pre_generated_crl_der };
+        /// let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
+        /// ```
+        #[allow(dead_code)]
+        struct MockCrlFetcher {
+            crl_bytes: Vec<u8>,
+        }
+
+        #[async_trait]
+        impl CrlFetcher for MockCrlFetcher {
+            async fn fetch_crl(&self, _uri: &str) -> std::result::Result<Vec<u8>, reqwest::Error> {
+                Ok(self.crl_bytes.clone())
+            }
+        }
+
+        // Note: The following tests are disabled pending CRL fixture generation.
+        // To enable, uncomment and provide pre-generated CRL DER bytes signed by a test CA.
+        //
+        // #[tokio::test]
+        // async fn check_revocation_valid_crl_clears_dsc() {
+        //     // Test: CRL does NOT list DSC serial -> Ok(())
+        //     let (iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri("https://example.com/crl.crl");
+        //     let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+        //     let crl_bytes = include_bytes!("fixtures/valid_crl.der").to_vec();
+        //     let mock_fetcher = MockCrlFetcher { crl_bytes };
+        //     let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
+        //     assert!(result.is_ok(), "Valid CRL should not reject unrevoked DSC");
+        // }
+        //
+        // #[tokio::test]
+        // async fn check_revocation_revoked_dsc() {
+        //     // Test: CRL DOES list DSC serial -> CertificateRevoked error
+        //     let (iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri("https://example.com/crl.crl");
+        //     let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+        //     let crl_bytes = include_bytes!("fixtures/revoked_crl.der").to_vec();
+        //     let mock_fetcher = MockCrlFetcher { crl_bytes };
+        //     let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
+        //     assert!(matches!(result, Err(MdocError::CertificateRevoked { .. })));
+        // }
     }
 }

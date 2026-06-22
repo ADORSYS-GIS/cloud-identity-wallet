@@ -1,5 +1,6 @@
 mod annex_d;
 mod parser;
+mod revocation;
 mod verifier;
 
 pub use base64ct::{Base64UrlUnpadded, Encoding};
