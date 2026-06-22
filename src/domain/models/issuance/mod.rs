@@ -407,13 +407,7 @@ impl IssuanceEngine {
                     .ok_or(IssuanceError::token("missing pkce_verifier"))?;
 
                 self.client
-                    .exchange_authorization_code(
-                        context,
-                        code,
-                        verifier,
-                        selected_config_ids,
-                        None,
-                    )
+                    .exchange_authorization_code(context, code, verifier, selected_config_ids, None)
                     .await?
             }
             FlowType::PreAuthorizedCode => {

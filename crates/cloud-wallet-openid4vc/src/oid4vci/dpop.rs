@@ -91,7 +91,11 @@ impl DpopKeyPair {
     }
 
     #[cfg(test)]
-    fn verify_proof_signature(&self, signing_input: &[u8], signature: &[u8]) -> Result<(), DpopError> {
+    fn verify_proof_signature(
+        &self,
+        signing_input: &[u8],
+        signature: &[u8],
+    ) -> Result<(), DpopError> {
         self.key
             .public_key()
             .verify_sha256(signing_input, signature)
@@ -738,8 +742,14 @@ mod tests {
             let mut map = BTreeMap::new();
             map.insert("crv", serde_json::to_value(ec.crv).unwrap());
             map.insert("kty", serde_json::Value::String("EC".into()));
-            map.insert("x", serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.x.as_ref())));
-            map.insert("y", serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.y.as_ref())));
+            map.insert(
+                "x",
+                serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.x.as_ref())),
+            );
+            map.insert(
+                "y",
+                serde_json::Value::String(URL_SAFE_NO_PAD.encode(ec.y.as_ref())),
+            );
             let canonical = serde_json::to_string(&serde_json::Value::Object(
                 map.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
             ))

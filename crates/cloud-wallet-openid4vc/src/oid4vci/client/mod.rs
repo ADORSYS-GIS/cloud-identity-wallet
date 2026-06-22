@@ -469,14 +469,8 @@ impl Oid4vciClient {
         let dpop_proof = dpop
             .map(|opts| build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), None))
             .transpose()?;
-        self.post_token_request(
-            token_endpoint,
-            &request,
-            dpop_proof.as_deref(),
-            dpop,
-            &htu,
-        )
-        .await
+        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop, &htu)
+            .await
     }
 
     /// Exchange a pre-authorized code for an access token.
@@ -527,14 +521,8 @@ impl Oid4vciClient {
         let dpop_proof = dpop
             .map(|opts| build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), None))
             .transpose()?;
-        self.post_token_request(
-            token_endpoint,
-            &request,
-            dpop_proof.as_deref(),
-            dpop,
-            &htu,
-        )
-        .await
+        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop, &htu)
+            .await
     }
 
     /// Fetch a fresh `c_nonce` from the issuer's nonce endpoint.
@@ -606,13 +594,8 @@ impl Oid4vciClient {
             request = request.with_proofs(p);
         }
 
-        self.post_credential_request(
-            context,
-            access_token,
-            &request,
-            dpop,
-        )
-        .await
+        self.post_credential_request(context, access_token, &request, dpop)
+            .await
     }
 
     /// Request all credentials authorized by the token response.
@@ -639,14 +622,7 @@ impl Oid4vciClient {
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential(
-                    context,
-                    token,
-                    id,
-                    config_id,
-                    signer,
-                    dpop,
-                ));
+                futures.push(self.request_credential(context, token, id, config_id, signer, dpop));
             }
         }
 
@@ -879,7 +855,8 @@ impl Oid4vciClient {
                 if !retry_response.status().is_success() {
                     let retry_status = retry_response.status().as_u16();
                     let retry_body = retry_response.text().await.unwrap_or_default();
-                    if let Ok(error) = serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&retry_body)
+                    if let Ok(error) =
+                        serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&retry_body)
                     {
                         return Err(ClientError::Token(error));
                     }
