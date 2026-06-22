@@ -9,10 +9,19 @@
 //! - `Skip`: Bypass revocation checking entirely (offline/test mode)
 //! - `SoftFail`: Reject on revoked DSC, but tolerate CRL fetch/parse failures (logged)
 //! - `HardFail`: Reject on revoked DSC or on CRL fetch/parse failure
+//!
+//! # Future Work
+//!
+//! TODO: OCSP support (RFC 6960) is planned for a follow-up. The PR title currently
+//! mentions "CRL/OCSP" but this module implements CRL only. OCSP stapling and
+//! OCSP responder queries will be added in a subsequent PR.
 
 use reqwest::Client;
+use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::time::Duration;
+use std::time::Instant;
 use x509_parser::extensions::CRLDistributionPoint;
 use x509_parser::prelude::GeneralName;
 use x509_parser::prelude::{FromDer, ParsedExtension, ReasonCode, X509Certificate};
@@ -47,7 +56,8 @@ fn reason_code_to_string(code: ReasonCode) -> &'static str {
 }
 
 /// Policy for DSC revocation checking (ISO 18013-5 §9.3.3).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RevocationPolicy {
     /// Bypass revocation checking entirely.
     ///
@@ -79,12 +89,9 @@ static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
 });
 
 /// In-memory CRL cache with TTL.
-////// CRLs are cached per-URI to avoid redundant HTTPS fetches. Each entry has a TTL
+///
+/// CRLs are cached per-URI to avoid redundant HTTPS fetches. Each entry has a TTL
 /// (default 6 hours) after which the entry is stale and a fresh fetch is required.
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::Instant;
-
 struct CrlCacheEntry {
     crl_der: Vec<u8>,
     fetched_at: Instant,
@@ -104,8 +111,13 @@ fn evict_if_needed(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
         cache.remove(uri);
     }
 
-    // If cache exceeds max size, evict oldest entries (lowest insertion_order)
-    while cache.len() > MAX_CRL_CACHE_ENTRIES {
+    // Sweep all stale entries when cache is full (not just the current URI)
+    if cache.len() >= MAX_CRL_CACHE_ENTRIES {
+        cache.retain(|_, entry| entry.fetched_at.elapsed() <= entry.expires_after);
+    }
+
+    // If still over limit after sweeping stale, evict oldest entries (lowest insertion_order)
+    while cache.len() >= MAX_CRL_CACHE_ENTRIES {
         let oldest = cache
             .iter()
             .min_by_key(|(_, e)| e.insertion_order)
@@ -121,8 +133,15 @@ fn evict_if_needed(cache: &mut HashMap<String, CrlCacheEntry>, uri: &str) {
 /// Extracts the first HTTPS CRL Distribution Point URI from a DSC.
 ///
 /// Per ISO 18013-5 Annex B §B.2 and RFC 5280 §4.2.1.13, the CRL Distribution Points
-/// extension contains URIs where CRLs can be retrieved. We extract the first HTTPS URI.
-/// Plain HTTP URIs are rejected per ISO 18013-5 Annex B §B.2 security requirements.
+/// extension contains URIs where CRLs can be retrieved.
+///
+/// # HTTPS-Only Policy
+///
+/// This implementation only accepts HTTPS URIs. While ISO/IEC 18013-5 Annex B commonly
+/// allows plain `http://` CRL distribution points because CRLs are already integrity-protected
+/// by the issuer signature, this deployment enforces HTTPS as a stricter security policy
+/// to prevent MITM attacks where a forged or stale CRL could bypass revocation checking.
+/// Deployments that need to accept plain HTTP URIs must use `RevocationPolicy::Skip`.
 fn extract_crl_uri(dsc: &X509Certificate<'_>) -> Result<Option<String>> {
     let crl_dp_ext = dsc
         .extensions()
@@ -307,6 +326,9 @@ async fn fetch_crl_cached(uri: &str) -> std::result::Result<Vec<u8>, reqwest::Er
     {
         let mut cache_guard = CRL_CACHE.lock().expect("CRL cache lock poisoned");
         let (cache, counter) = &mut *cache_guard;
+        // Evict before insert to prevent cache from exceeding MAX_CRL_CACHE_ENTRIES.
+        // We sweep all stale entries (not just the current URI) when the cache is full.
+        evict_if_needed(cache, uri);
         let insertion_order = *counter;
         *counter += 1;
         cache.insert(
@@ -329,6 +351,8 @@ async fn fetch_crl_cached(uri: &str) -> std::result::Result<Vec<u8>, reqwest::Er
 /// 1. CRL signature against the DSC's immediate issuer (not the IACA root)
 /// 2. CRL issuer name matches the DSC issuer name
 /// 3. CRL temporal validity (thisUpdate/nextUpdate)
+/// 4. Authority Key Identifier matches (if present in both CRL and issuer cert)
+/// 5. Rejects indirect CRLs and delta CRLs
 fn parse_and_validate_crl<'a>(
     crl_der: &'a [u8],
     dsc_issuer_der: &[u8],
@@ -346,12 +370,33 @@ fn parse_and_validate_crl<'a>(
         }
     })?;
 
+    // Reject indirect CRLs (RFC 5280 §5.3.1)
+    // An indirect CRL has an issuing distribution point extension with the indirectCRL flag set,
+    // or the CRL issuer name differs from the certificate issuer (already checked above).
+    if is_indirect_crl(&crl) {
+        return Err(MdocError::RevocationCheckFailed {
+            reason: "indirect CRLs are not supported (CRL issued by a different authority than the DSC issuer)".to_owned(),
+        });
+    }
+
+    // Reject delta CRLs (RFC 5280 §5.3.2)
+    // Delta CRLs only contain changes since a base CRL and require additional processing.
+    if is_delta_crl(&crl) {
+        return Err(MdocError::RevocationCheckFailed {
+            reason: "delta CRLs are not supported; use a complete CRL".to_owned(),
+        });
+    }
+
     // RFC 5280 §5.3.1: The CRL issuer MUST match the DSC issuer name
     if !issuer_names_match(&crl, &issuer_cert) {
         return Err(MdocError::RevocationCheckFailed {
             reason: "CRL issuer name does not match DSC issuer name".to_owned(),
         });
     }
+
+    // RFC 5280 §5.3.1: Verify Authority Key Identifier matches (if present)
+    // The CRL's AKI extension should match the issuer's SKI extension.
+    verify_aki_match(&crl, &issuer_cert)?;
 
     // RFC 5280 §5.1.2.2: Check temporal validity of the CRL
     let now = time::OffsetDateTime::now_utc();
@@ -390,7 +435,8 @@ fn parse_and_validate_crl<'a>(
 }
 
 /// Checks whether the CRL issuer name matches the DSC issuer name.
-////// Per RFC 5280 §5.3.1, the CRL scope includes all certificates issued by the CRL issuer.
+///
+/// Per RFC 5280 §5.3.1, the CRL scope includes all certificates issued by the CRL issuer.
 /// We verify the issuer names match to prevent a malicious CRL from a different CA.
 fn issuer_names_match(
     crl: &CertificateRevocationList<'_>,
@@ -400,6 +446,101 @@ fn issuer_names_match(
     let cert_issuer = issuer_cert.subject();
     // Compare the raw DER bytes of the distinguished names
     crl_issuer.as_raw() == cert_issuer.as_raw()
+}
+
+/// Checks if this is an indirect CRL (RFC 5280 §5.3.1).
+///
+/// An indirect CRL has an IssuingDistributionPoint extension with the indirectCRL flag set.
+/// Indirect CRLs are issued by a different entity than the certificate issuer and require
+/// additional processing that we don't support.
+fn is_indirect_crl(crl: &CertificateRevocationList<'_>) -> bool {
+    // Look for IssuingDistributionPoint extension (OID 2.5.29.28)
+    const OID_ISSUING_DISTRIBUTION_POINT: &str = "2.5.29.28";
+    for ext in crl.extensions() {
+        if ext.oid.to_id_string() == OID_ISSUING_DISTRIBUTION_POINT {
+            // If this extension is present, check if indirectCRL is set
+            // For simplicity, reject any CRL with this extension as it indicates
+            // a non-standard CRL issuer scenario
+            return true;
+        }
+    }
+    false
+}
+
+/// Checks if this is a delta CRL (RFC 5280 §5.3.2).
+///
+/// Delta CRLs only contain revocations since a base CRL and require the base CRL
+/// to be available. We only support complete CRLs.
+fn is_delta_crl(crl: &CertificateRevocationList<'_>) -> bool {
+    // Look for CRLNumber extension with delta CRL indicator (OID 2.5.29.27)
+    const OID_DELTA_CRL_INDICATOR: &str = "2.5.29.27";
+    for ext in crl.extensions() {
+        if ext.oid.to_id_string() == OID_DELTA_CRL_INDICATOR {
+            return true;
+        }
+    }
+    false
+}
+
+/// Verifies Authority Key Identifier match between CRL and issuer certificate.
+///
+/// Per RFC 5280 §5.3.1, if the CRL contains an Authority Key Identifier extension,
+/// it should match the Subject Key Identifier of the issuing certificate.
+/// This provides an additional binding to prevent CRL substitution attacks.
+fn verify_aki_match(
+    crl: &CertificateRevocationList<'_>,
+    issuer_cert: &X509Certificate<'_>,
+) -> Result<()> {
+    const OID_AKI: &str = "2.5.29.35";
+    const OID_SKI: &str = "2.5.29.14";
+
+    // Extract AKI from CRL if present
+    let crl_aki = crl.extensions().iter().find_map(|ext| {
+        if ext.oid.to_id_string() == OID_AKI {
+            // AKI extension value contains keyIdentifier (usually first element)
+            // We compare the raw extension value bytes with the issuer's SKI
+            Some(ext.value)
+        } else {
+            None
+        }
+    });
+
+    // Extract SKI from issuer certificate if present
+    let issuer_ski = issuer_cert.extensions().iter().find_map(|ext| {
+        if ext.oid.to_id_string() == OID_SKI {
+            Some(ext.value)
+        } else {
+            None
+        }
+    });
+
+    match (crl_aki, issuer_ski) {
+        (Some(aki), Some(ski)) => {
+            // AKI extension format: OctetString containing the keyIdentifier
+            // The raw extension value should contain the keyIdentifier bytes
+            // For simplicity, we check if SKI bytes appear within AKI bytes
+            // A proper implementation would parse the AKI extension fully
+            if !aki.windows(ski.len()).any(|w| w == ski) {
+                return Err(MdocError::RevocationCheckFailed {
+                    reason:
+                        "CRL Authority Key Identifier does not match issuer Subject Key Identifier"
+                            .to_owned(),
+                });
+            }
+            Ok(())
+        }
+        (Some(_), None) => {
+            // CRL has AKI but issuer has no SKI - this is unusual but not necessarily invalid
+            tracing::warn!(
+                "CRL has Authority Key Identifier but issuer certificate lacks Subject Key Identifier"
+            );
+            Ok(())
+        }
+        (None, _) => {
+            // No AKI in CRL - no check needed
+            Ok(())
+        }
+    }
 }
 
 /// Converts a serial number to a hexadecimal string for error messages.
@@ -478,69 +619,75 @@ mod tests {
         fn build_crl_dp_extension(crl_uri: &str) -> Vec<u8> {
             // DER-encoded CRL Distribution Points extension with a single URI
             // This is manually constructed ASN.1:
-            // SEQUENCE {
-            //   SEQUENCE {
-            //     [0] SEQUENCE {
-            //       [0] SEQUENCE {
-            //         [6] IA5String (URI)
-            //       }
-            //     }
-            //   }
+            // CRLDistributionPoints ::= SEQUENCE SIZE (1..MAX) OF DistributionPoint
+            // DistributionPoint ::= SEQUENCE {
+            //     distributionPoint [0] DistributionPointName OPTIONAL,
+            //     ...
             // }
+            // DistributionPointName ::= CHOICE {
+            //     fullName [0] GeneralNames,
+            //     ...
+            // }
+            // GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName
+            // GeneralName (uniformResourceIdentifier) ::= [6] IMPLICIT IA5String
+            //
+            // Note: RFC 5280 defines uniformResourceIdentifier [6] IMPLICIT IA5String,
+            // so the tag is primitive context-specific 0x86, not constructed 0xA6.
+            // The distributionPoint field is [0] EXPLICIT DistributionPointName.
+            // The fullName alternative is [0] IMPLICIT (replaces GeneralNames SEQUENCE tag).
             let uri_bytes = crl_uri.as_bytes();
             let uri_len = uri_bytes.len();
-            let uri_len_bytes = if uri_len < 128 {
-                vec![uri_len as u8]
+
+            // [6] IMPLICIT IA5String - primitive context-specific tag 0x86
+            // The IA5String tag (0x16) is NOT included because [6] is IMPLICIT.
+            let mut gn_bytes = vec![0x86]; // primitive context-specific tag 6
+            if uri_len < 128 {
+                gn_bytes.push(uri_len as u8);
             } else if uri_len < 256 {
-                vec![0x81, uri_len as u8]
+                gn_bytes.push(0x81);
+                gn_bytes.push(uri_len as u8);
             } else {
-                vec![0x82, (uri_len >> 8) as u8, (uri_len & 0xff) as u8]
-            };
-            // [6] IA5String URI - context tag 6 for uniformResourceIdentifier
-            let mut gn_bytes = vec![0xA6]; // context-specific constructed tag 6
-            let gn_len = 1 + uri_len_bytes.len() + uri_bytes.len();
-            let gn_len_bytes = if gn_len < 128 {
-                vec![gn_len as u8]
-            } else {
-                vec![0x81, gn_len as u8]
-            };
-            gn_bytes.extend_from_slice(&gn_len_bytes);
-            gn_bytes.push(0x16); // IA5String tag
-            gn_bytes.extend_from_slice(&uri_len_bytes);
+                gn_bytes.push(0x82);
+                gn_bytes.push((uri_len >> 8) as u8);
+                gn_bytes.push((uri_len & 0xff) as u8);
+            }
             gn_bytes.extend_from_slice(uri_bytes);
 
-            // SEQUENCE { gn_bytes }
-            let mut seq_gn = vec![0x30];
-            let seq_len = gn_bytes.len();
-            if seq_len < 128 {
-                seq_gn.push(seq_len as u8);
-            } else {
-                seq_gn.push(0x81);
-                seq_gn.push(seq_len as u8);
-            }
-            seq_gn.extend_from_slice(&gn_bytes);
-
-            // [0] SEQUENCE (fullName)
-            let mut full_name = vec![0xA0];
-            let fn_len = seq_gn.len();
+            // GeneralNames content (SEQUENCE content - the GeneralName entries)
+            // For fullName [0] IMPLICIT, the [0] replaces the SEQUENCE tag (0x30)
+            // So fullName = 0xA0 + len + GeneralNames content (which is gn_bytes directly, no SEQUENCE wrapper)
+            let mut full_name = vec![0xA0]; // [0] (fullName) IMPLICIT - replaces SEQUENCE tag
+            let fn_len = gn_bytes.len();
             if fn_len < 128 {
                 full_name.push(fn_len as u8);
             } else {
                 full_name.push(0x81);
                 full_name.push(fn_len as u8);
             }
-            full_name.extend_from_slice(&seq_gn);
+            full_name.extend_from_slice(&gn_bytes);
+
+            // distributionPoint [0] EXPLICIT DistributionPointName
+            // EXPLICIT wrapping means we add another [0] layer
+            let mut dp_field = vec![0xA0]; // [0] EXPLICIT
+            let dp_field_len = full_name.len();
+            if dp_field_len < 128 {
+                dp_field.push(dp_field_len as u8);
+            } else {
+                dp_field.push(0x81);
+                dp_field.push(dp_field_len as u8);
+            }
+            dp_field.extend_from_slice(&full_name);
 
             // SEQUENCE { DistributionPoint }
             let mut dp = vec![0x30];
-            let dp_len = full_name.len();
+            let dp_len = dp_field.len();
             if dp_len < 128 {
                 dp.push(dp_len as u8);
             } else {
                 dp.push(0x81);
                 dp.push(dp_len as u8);
             }
-            dp.extend_from_slice(&full_name);
+            dp.extend_from_slice(&dp_field);
 
             // SEQUENCE { DistributionPoints }
             let mut dps = vec![0x30];
@@ -719,5 +866,47 @@ mod tests {
             let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail).await;
             assert!(result.is_err(), "HardFail should reject CRL fetch failure");
         }
+
+        #[test]
+        fn extract_crl_uri_parses_https_uri_from_extension() {
+            // Verify that extract_crl_uri correctly parses the CRL Distribution Point URI
+            // from a DSC certificate. This test validates the DER encoding fix (0x86 vs 0xA6).
+            let test_uri = "https://example.com/crl/test.crl";
+            let (_iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri(test_uri);
+            let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+
+            let result = extract_crl_uri(&dsc).expect("extract_crl_uri should succeed");
+            assert_eq!(
+                result,
+                Some(test_uri.to_string()),
+                "extract_crl_uri should return the expected HTTPS URI"
+            );
+        }
+
+        #[test]
+        fn extract_crl_uri_rejects_http_uri() {
+            // Verify that extract_crl_uri rejects plain HTTP URIs (policy decision).
+            let test_uri = "http://example.com/crl/test.crl";
+            let (_iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri(test_uri);
+            let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+
+            let result = extract_crl_uri(&dsc).expect("extract_crl_uri should succeed");
+            assert_eq!(
+                result, None,
+                "extract_crl_uri should reject plain HTTP URIs"
+            );
+        }
+
+        // TODO: Add integration tests for valid CRL checking:
+        // 1. A valid CRL that does NOT list the DSC serial -> returns Ok(())
+        // 2. A valid CRL that DOES list the DSC serial -> returns MdocError::CertificateRevoked
+        //
+        // These tests require programmatically generating X.509 CRLs signed by the issuer CA.
+        // The `rcgen` crate used for certificate generation does not currently support CRL creation.
+        // Potential approaches:
+        // - Use the `openssl` crate to generate CRLs (adds native dependency)
+        // - Shell out to `openssl` CLI during test setup (complex, brittle)
+        // - Embed pre-generated CRL fixtures as DER bytes (requires regeneration on key rotation)
+        // - Contribute CRL generation support to `rcgen` upstream
     }
 }

@@ -201,19 +201,6 @@ pub(crate) async fn verify_issuer_signature(
     // digitalSignature key usage bit required by ISO 18013-5 Annex B Table B.3.
     check_dsc_key_usage(&dsc)?;
 
-    // Revocation check (ISO 18013-5 §9.3.3) — fetches CRL and verifies DSC is not revoked.
-    // The CRL must be signed by the DSC's immediate issuer, not the IACA root.
-    // For single-level chains (DSC → IACA), the issuer is the anchoring root.
-    // For multi-level chains (DSC → Intermediate → IACA), the issuer is chain[1].
-    let dsc_issuer_der = if chain.len() > 1 {
-        // Multi-level chain: DSC issuer is the intermediate CA at chain[1]
-        chain[1].clone()
-    } else {
-        // Single-level chain: DSC is directly signed by the IACA root
-        anchoring_root_der.clone()
-    };
-    check_revocation(&dsc, &dsc_issuer_der, revocation_policy).await?;
-
     if parsed.doc_type != outer_doc_type {
         return Err(MdocError::DocTypeMismatch {
             mso: parsed.doc_type.clone(),
@@ -241,6 +228,20 @@ pub(crate) async fn verify_issuer_signature(
     }
 
     dispatch_verify(alg, &spki, &tbs, sig)?;
+
+    // Revocation check (ISO 18013-5 §9.3.3) — fetches CRL and verifies DSC is not revoked.
+    // Run after COSE signature verification to avoid network calls for tampered payloads.
+    // The CRL must be signed by the DSC's immediate issuer, not the IACA root.
+    // For single-level chains (DSC → IACA), the issuer is the anchoring root.
+    // For multi-level chains (DSC → Intermediate → IACA), the issuer is chain[1].
+    let dsc_issuer_der = if chain.len() > 1 {
+        // Multi-level chain: DSC issuer is the intermediate CA at chain[1]
+        chain[1].clone()
+    } else {
+        // Single-level chain: DSC is directly signed by the IACA root
+        anchoring_root_der.clone()
+    };
+    check_revocation(&dsc, &dsc_issuer_der, revocation_policy).await?;
 
     let issuer_subject = dsc.subject().to_string();
     let issuer_country = dsc
