@@ -1,11 +1,12 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use cloud_wallet_crypto::{ecdsa, ed25519, jwk::Jwk, rsa};
+use cloud_wallet_crypto::jwk::Jwk;
+use cloud_wallet_crypto::rand;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::oid4vci::client::Algorithm;
 use crate::oid4vci::client::ClientError;
+use crate::oid4vci::client::JwtSigner;
 
 type Result<T> = std::result::Result<T, ClientError>;
 
@@ -77,149 +78,13 @@ struct PopHeader {
     pub jwk: Jwk,
 }
 
-/// A cryptographic key used for signing JWTs in the wallet attestation flow.
-#[derive(Debug)]
-pub struct AttestationKey {
-    key: KeyMaterial,
-    algorithm: Algorithm,
-    public_jwk: Option<Jwk>,
-}
-
-#[derive(Debug)]
-enum KeyMaterial {
-    Ecdsa(ecdsa::KeyPair),
-    Ed25519(ed25519::KeyPair),
-    Rsa(rsa::KeyPair),
-}
-
-impl AttestationKey {
-    /// Creates an attestation key from an ECDSA private key in PKCS#8 format.
-    pub fn from_ecdsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
-        let ecdsa_key = ecdsa::KeyPair::from_pkcs8_der(der.as_ref())
-            .map_err(|e| ClientError::internal(format!("crypto error: {e}")))?;
-        let key = KeyMaterial::Ecdsa(ecdsa_key);
-        let algorithm = key.algorithm();
-        let public_jwk = match &key {
-            KeyMaterial::Ecdsa(k) => Some(Jwk::try_from(k).map_err(|e| {
-                ClientError::internal(format!("failed to convert key to JWK: {e}"))
-            })?),
-            _ => unreachable!(),
-        };
-        Ok(Self {
-            key,
-            algorithm,
-            public_jwk,
-        })
-    }
-
-    /// Creates an attestation key from an Ed25519 private key in PKCS#8 format.
-    pub fn from_ed25519_der(der: impl AsRef<[u8]>) -> Result<Self> {
-        let ed25519_key = ed25519::KeyPair::from_pkcs8_der(der.as_ref())
-            .map_err(|e| ClientError::internal(format!("crypto error: {e}")))?;
-        let key = KeyMaterial::Ed25519(ed25519_key);
-        let algorithm = key.algorithm();
-        let public_jwk = match &key {
-            KeyMaterial::Ed25519(k) => Some(Jwk::try_from(k).map_err(|e| {
-                ClientError::internal(format!("failed to convert key to JWK: {e}"))
-            })?),
-            _ => unreachable!(),
-        };
-        Ok(Self {
-            key,
-            algorithm,
-            public_jwk,
-        })
-    }
-
-    /// Creates an attestation key from an RSA private key in PKCS#8 format.
-    pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
-        let rsa_key = rsa::KeyPair::from_pkcs8_der(der.as_ref())
-            .map_err(|e| ClientError::internal(format!("crypto error: {e}")))?;
-        let modulus_len = rsa_key.modulus_len();
-        if !matches!(modulus_len, 256 | 384 | 512) {
-            return Err(ClientError::configuration(format!(
-                "unsupported RSA key size: {modulus_len} bytes (expected 2048, 3072, or 4096 bits)"
-            )));
-        }
-        let key = KeyMaterial::Rsa(rsa_key);
-        let algorithm = key.algorithm();
-        let public_jwk = match &key {
-            KeyMaterial::Rsa(k) => Some(Jwk::try_from(k).map_err(|e| {
-                ClientError::internal(format!("failed to convert key to JWK: {e}"))
-            })?),
-            _ => unreachable!(),
-        };
-        Ok(Self {
-            key,
-            algorithm,
-            public_jwk,
-        })
-    }
-
-    /// Returns the JWS algorithm.
-    pub fn algorithm(&self) -> Algorithm {
-        self.algorithm
-    }
-
-    /// Returns the public JWK, if available.
-    pub fn public_jwk(&self) -> Option<&Jwk> {
-        self.public_jwk.as_ref()
-    }
-
-    fn sign(&self, msg: &[u8]) -> Result<Vec<u8>> {
-        self.key.sign(msg)
-    }
-}
-
-impl KeyMaterial {
-    fn algorithm(&self) -> Algorithm {
-        match self {
-            KeyMaterial::Ecdsa(key) => match key.curve() {
-                ecdsa::Curve::P256 => Algorithm::ES256,
-                ecdsa::Curve::P384 => Algorithm::ES384,
-                ecdsa::Curve::P521 => Algorithm::ES512,
-                ecdsa::Curve::P256K1 => Algorithm::ES256K,
-            },
-            KeyMaterial::Ed25519(_) => Algorithm::EdDSA,
-            KeyMaterial::Rsa(key) => match key.modulus_len() {
-                256 => Algorithm::PS256,
-                384 => Algorithm::PS384,
-                512 => Algorithm::PS512,
-                _ => unreachable!("RSA key size validated at construction"),
-            },
-        }
-    }
-
-    fn sign(&self, msg: &[u8]) -> Result<Vec<u8>> {
-        use ecdsa::Curve;
-        match self {
-            KeyMaterial::Ecdsa(keypair) => match keypair.curve() {
-                Curve::P256 | Curve::P256K1 => Ok(keypair.sign_sha256(msg)?.to_vec()),
-                Curve::P384 => Ok(keypair.sign_sha384(msg)?.to_vec()),
-                Curve::P521 => Ok(keypair.sign_sha512(msg)?.to_vec()),
-            },
-            KeyMaterial::Ed25519(keypair) => Ok(keypair.sign(msg).to_vec()),
-            KeyMaterial::Rsa(keypair) => {
-                let sig_len = keypair.modulus_len();
-                let mut sig = vec![0u8; sig_len];
-                let sig = match sig_len {
-                    256 => keypair.sign_pss_sha256(msg, &mut sig)?,
-                    384 => keypair.sign_pss_sha384(msg, &mut sig)?,
-                    512 => keypair.sign_pss_sha512(msg, &mut sig)?,
-                    _ => unreachable!("RSA key size validated at construction"),
-                };
-                Ok(sig.to_vec())
-            }
-        }
-    }
-}
-
 /// Constructs and signs Wallet Attestation and Client Attestation PoP JWTs.
 #[derive(Debug)]
 pub struct WalletAttestationSigner {
     attestation_jwt: String,
     attestation_claims: WalletAttestation,
-    wallet_key: AttestationKey,
+    wallet_key: JwtSigner,
+    provider_public_jwk: Jwk,
 }
 
 impl WalletAttestationSigner {
@@ -229,13 +94,11 @@ impl WalletAttestationSigner {
     /// public JWK and is used to sign the PoP JWTs. The `cnf` claim is overwritten
     /// with the wallet key's public JWK.
     pub fn new(
-        provider_key: AttestationKey,
+        provider_key: JwtSigner,
         mut attestation_claims: WalletAttestation,
-        wallet_key: AttestationKey,
+        wallet_key: JwtSigner,
     ) -> Result<Self> {
-        let jwk = wallet_key.public_jwk().ok_or_else(|| {
-            ClientError::configuration("wallet key must have a public JWK for cnf claim")
-        })?;
+        let jwk = wallet_key.public_jwk().clone();
         attestation_claims.cnf = Cnf { jwk: jwk.clone() };
 
         let attestation_header = AttestationHeader {
@@ -245,12 +108,13 @@ impl WalletAttestationSigner {
             x5c: None,
         };
 
-        let attestation_jwt = sign_jwt(&provider_key, &attestation_header, &attestation_claims)?;
+        let attestation_jwt = provider_key.encode(&attestation_header, &attestation_claims)?;
 
         Ok(Self {
             attestation_jwt,
             attestation_claims,
             wallet_key,
+            provider_public_jwk: provider_key.public_jwk().clone(),
         })
     }
 
@@ -264,75 +128,67 @@ impl WalletAttestationSigner {
         &self.attestation_claims.sub
     }
 
+    /// Returns the provider's public JWK used to verify the attestation JWT.
+    pub fn provider_public_jwk(&self) -> &Jwk {
+        &self.provider_public_jwk
+    }
+
     /// Generates a Client Attestation PoP JWT for the given audience.
     pub fn pop_jwt(&self, audience: &str, nonce: Option<&str>) -> Result<String> {
-        let jwk = self
-            .wallet_key
-            .public_jwk()
-            .ok_or_else(|| ClientError::internal("wallet key must have a public JWK"))?;
+        let jwk = self.wallet_key.public_jwk().clone();
 
         let pop_header = PopHeader {
             alg: self.wallet_key.algorithm(),
             typ: OAUTH_CLIENT_ATTESTATION_POP_TYP,
             kid: None,
-            jwk: jwk.clone(),
+            jwk,
         };
 
+        let mut bytes = [0u8; 16];
+        rand::fill_bytes(&mut bytes)
+            .map_err(|e| ClientError::internal(format!("failed to generate random jti: {e}")))?;
+        let jti = URL_SAFE_NO_PAD.encode(bytes);
+
         let claims = ClientAttestationPop {
-            jti: format!("pop-{}", uuid::Uuid::new_v4()),
+            jti: format!("pop-{jti}"),
             aud: audience.to_string(),
-            iat: current_timestamp(),
+            iat: jsonwebtoken::get_current_timestamp() as i64,
             nonce: nonce.map(|s| s.to_string()),
         };
 
-        sign_jwt(&self.wallet_key, &pop_header, &claims)
+        self.wallet_key.encode(&pop_header, &claims)
     }
 
-    /// Validates that the attestation is not expired.
+    /// Validates the attestation JWT by verifying its signature against the wallet
+    /// provider public key and checking that it is not expired.
     pub fn validate_attestation(&self) -> Result<()> {
-        let now = current_timestamp();
-        if now >= self.attestation_claims.exp {
-            return Err(ClientError::validation("wallet attestation has expired"));
-        }
-        if let Some(nbf) = self.attestation_claims.nbf
-            && now < nbf
-        {
-            return Err(ClientError::validation(
-                "wallet attestation is not yet valid",
-            ));
-        }
-
+        let header = jsonwebtoken::decode_header(&self.attestation_jwt)
+            .map_err(|e| ClientError::validation(format!("invalid attestation JWT header: {e}")))?;
+        let jwk_json = serde_json::to_value(&self.provider_public_jwk).map_err(|e| {
+            ClientError::validation(format!("failed to serialize provider JWK: {e}"))
+        })?;
+        let jwt_jwk: jsonwebtoken::jwk::Jwk = serde_json::from_value(jwk_json)
+            .map_err(|e| ClientError::validation(format!("invalid provider JWK: {e}")))?;
+        let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&jwt_jwk)
+            .map_err(|e| ClientError::validation(format!("invalid provider JWK: {e}")))?;
+        let mut validation = jsonwebtoken::Validation::new(header.alg);
+        validation.set_required_spec_claims(&["exp"]);
+        let _ = jsonwebtoken::decode::<WalletAttestation>(
+            &self.attestation_jwt,
+            &decoding_key,
+            &validation,
+        )
+        .map_err(|e| match e.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
+                ClientError::validation("wallet attestation has expired")
+            }
+            jsonwebtoken::errors::ErrorKind::ImmatureSignature => {
+                ClientError::validation("wallet attestation is not yet valid")
+            }
+            _ => ClientError::validation(format!("attestation JWT validation failed: {e}")),
+        })?;
         Ok(())
     }
-}
-
-fn sign_jwt<T: Serialize, H: Serialize>(
-    key: &AttestationKey,
-    header: &H,
-    claims: &T,
-) -> Result<String> {
-    let header_b64 = base64_encode_type(header)?;
-    let payload_b64 = base64_encode_type(claims)?;
-    let signing_input = format!("{header_b64}.{payload_b64}");
-    let signature = key.sign(signing_input.as_bytes())?;
-    let sig_b64 = b64_encode(signature);
-    Ok(format!("{header_b64}.{payload_b64}.{sig_b64}"))
-}
-
-fn base64_encode_type<T: Serialize>(value: &T) -> Result<String> {
-    let serialized = serde_json::to_vec(value)?;
-    Ok(b64_encode(serialized))
-}
-
-fn b64_encode<T: AsRef<[u8]>>(value: T) -> String {
-    URL_SAFE_NO_PAD.encode(value)
-}
-
-fn current_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch")
-        .as_secs() as i64
 }
 
 #[cfg(test)]
@@ -341,23 +197,24 @@ mod tests {
     use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
     use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode, decode_header};
 
-    fn get_ecdsa_keys() -> (AttestationKey, AttestationKey) {
+    fn get_ecdsa_keys() -> (JwtSigner, JwtSigner) {
         let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
         let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
         let provider_der = provider_keypair.to_pkcs8_der().to_vec();
         let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
         (
-            AttestationKey::from_ecdsa_der(&provider_der).unwrap(),
-            AttestationKey::from_ecdsa_der(&wallet_der).unwrap(),
+            JwtSigner::from_ecdsa_der(&provider_der).unwrap(),
+            JwtSigner::from_ecdsa_der(&wallet_der).unwrap(),
         )
     }
 
     fn sample_attestation_claims() -> WalletAttestation {
+        let now = jsonwebtoken::get_current_timestamp() as i64;
         WalletAttestation {
             iss: "https://wallet-provider.example.com".to_string(),
             sub: "https://wallet.example.org".to_string(),
-            iat: current_timestamp(),
-            exp: current_timestamp() + 3600,
+            iat: now,
+            exp: now + 3600,
             nbf: None,
             wallet_name: Some("Test Wallet".to_string()),
             wallet_link: None,
@@ -427,7 +284,7 @@ mod tests {
     fn test_expired_attestation_rejection() {
         let (provider_key, wallet_key) = get_ecdsa_keys();
         let mut claims = sample_attestation_claims();
-        claims.exp = current_timestamp() - 3600; // expired 1 hour ago
+        claims.exp = jsonwebtoken::get_current_timestamp() as i64 - 3600; // expired 1 hour ago
         let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
 
         let result = signer.validate_attestation();
@@ -458,6 +315,31 @@ mod tests {
         wrong_validation.set_audience(&["https://other.example.com/par"]);
         wrong_validation.set_required_spec_claims(&["jti", "aud", "iat"]);
         let result = decode::<ClientAttestationPop>(&pop_jwt, &pop_decoding_key, &wrong_validation);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_attestation_signature_verification() {
+        let (provider_key, wallet_key) = get_ecdsa_keys();
+        let claims = sample_attestation_claims();
+        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+
+        // Should pass with the correct provider key
+        assert!(signer.validate_attestation().is_ok());
+    }
+
+    #[test]
+    fn test_tampered_attestation_rejected() {
+        let (provider_key, wallet_key) = get_ecdsa_keys();
+        let claims = sample_attestation_claims();
+        let mut signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+
+        // Tamper with the stored JWT payload (flip a byte in the base64 payload)
+        let parts: Vec<&str> = signer.attestation_jwt.split('.').collect();
+        // Reconstruct with a modified payload - just append a character to make it invalid
+        signer.attestation_jwt = format!("{}.{}x.{}", parts[0], parts[1], parts[2]);
+
+        let result = signer.validate_attestation();
         assert!(result.is_err());
     }
 }
