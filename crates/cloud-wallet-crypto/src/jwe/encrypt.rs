@@ -8,11 +8,11 @@ use crate::digest::HashAlg;
 use crate::ecdh::{EcdhCurve, EcdhPublicKey, EphemeralEcdhKey, SharedSecret};
 use crate::error::{ErrorKind, Result};
 use crate::jwk::Jwk;
-use crate::kdf::{ConcatKdfParams, concat_kdf};
+use crate::kdf::concat_kdf;
 use crate::rsa::oaep::EncryptingKey as RsaEncryptingKey;
 use crate::utils::error_msg;
 
-use super::compact::{b64url_encode, epk_bytes_to_jwk, serialize_header};
+use super::compact::{b64url_encode, concat_kdf_other_info, epk_bytes_to_jwk, serialize_header};
 use super::header::{JweHeader, KeyManagementAlgorithm};
 
 /// Key supplied by the caller for JWE encryption.
@@ -153,15 +153,14 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
             let apu_bytes: &[u8] = header.apu.as_ref().map_or(&[], |b| b.as_ref());
             let apv_bytes: &[u8] = header.apv.as_ref().map_or(&[], |b| b.as_ref());
 
-            let mut cek_bytes = Zeroizing::new(vec![0u8; header.enc.key_len()]);
+            let cek_len = header.enc.key_len();
+            let mut cek_bytes = Zeroizing::new(vec![0u8; cek_len]);
+            let other_info =
+                concat_kdf_other_info(header.enc.alg_id(), apu_bytes, apv_bytes, cek_len);
             concat_kdf(
                 HashAlg::Sha256,
                 shared_secret.as_bytes(),
-                &ConcatKdfParams {
-                    algorithm_id: header.enc.alg_id(),
-                    party_u_info: apu_bytes,
-                    party_v_info: apv_bytes,
-                },
+                &other_info,
                 &mut cek_bytes,
             )?;
 
@@ -203,14 +202,11 @@ fn ecdh_kw(
     let apv_bytes: &[u8] = header.apv.as_ref().map_or(&[], |b| b.as_ref());
 
     let mut kek_bytes = Zeroizing::new(vec![0u8; kek_len]);
+    let other_info = concat_kdf_other_info(kw_alg_id, apu_bytes, apv_bytes, kek_len);
     concat_kdf(
         HashAlg::Sha256,
         shared_secret.as_bytes(),
-        &ConcatKdfParams {
-            algorithm_id: kw_alg_id,
-            party_u_info: apu_bytes,
-            party_v_info: apv_bytes,
-        },
+        &other_info,
         &mut kek_bytes,
     )?;
 

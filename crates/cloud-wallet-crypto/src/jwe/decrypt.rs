@@ -7,11 +7,11 @@ use crate::aes_kek::KeyEncryptionKey;
 use crate::digest::HashAlg;
 use crate::ecdh::StaticEcdhKey;
 use crate::error::{ErrorKind, Result};
-use crate::kdf::{ConcatKdfParams, concat_kdf};
+use crate::kdf::concat_kdf;
 use crate::rsa::oaep::DecryptingKey as RsaDecryptingKey;
 use crate::utils::error_msg;
 
-use super::compact::{b64url_decode, epk_jwk_to_ecdh_pub, parse_compact};
+use super::compact::{b64url_decode, concat_kdf_other_info, epk_jwk_to_ecdh_pub, parse_compact};
 use super::header::{JweHeader, KeyManagementAlgorithm};
 
 /// Key supplied by the caller for JWE decryption.
@@ -170,15 +170,14 @@ fn recover_cek(
             }
             let shared_secret = ecdh_with_epk(header, static_key)?;
 
-            let mut cek_bytes = Zeroizing::new(vec![0u8; header.enc.key_len()]);
+            let cek_len = header.enc.key_len();
+            let mut cek_bytes = Zeroizing::new(vec![0u8; cek_len]);
+            let other_info =
+                concat_kdf_other_info(header.enc.alg_id(), apu_bytes, apv_bytes, cek_len);
             concat_kdf(
                 HashAlg::Sha256,
                 shared_secret.as_bytes(),
-                &ConcatKdfParams {
-                    algorithm_id: header.enc.alg_id(),
-                    party_u_info: apu_bytes,
-                    party_v_info: apv_bytes,
-                },
+                &other_info,
                 &mut cek_bytes,
             )?;
 
@@ -221,14 +220,11 @@ fn ecdh_kw_decrypt(
     let shared_secret = ecdh_with_epk(header, static_key)?;
 
     let mut kek_bytes = Zeroizing::new(vec![0u8; kek_len]);
+    let other_info = concat_kdf_other_info(kw_alg_id, apu_bytes, apv_bytes, kek_len);
     concat_kdf(
         HashAlg::Sha256,
         shared_secret.as_bytes(),
-        &ConcatKdfParams {
-            algorithm_id: kw_alg_id,
-            party_u_info: apu_bytes,
-            party_v_info: apv_bytes,
-        },
+        &other_info,
         &mut kek_bytes,
     )?;
 

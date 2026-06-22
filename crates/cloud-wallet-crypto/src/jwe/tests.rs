@@ -752,22 +752,14 @@ fn iv_wrong_length_rejected() {
 #[test]
 fn concat_kdf_rfc7518_appendix_c_sanity() {
     use crate::digest::HashAlg;
-    use crate::kdf::{ConcatKdfParams, concat_kdf};
+    use crate::jwe::compact::concat_kdf_other_info;
+    use crate::kdf::concat_kdf;
     use hex_literal::hex;
 
     let z = hex!("9e56d91d817135d372834283bf84269cfb316ea3da806a48f6daa7798cfe90c4");
     let mut output = [0u8; 16];
-    concat_kdf(
-        HashAlg::Sha256,
-        &z,
-        &ConcatKdfParams {
-            algorithm_id: b"A128GCM",
-            party_u_info: b"Alice",
-            party_v_info: b"Bob",
-        },
-        &mut output,
-    )
-    .unwrap();
+    let other_info = concat_kdf_other_info(b"A128GCM", b"Alice", b"Bob", output.len());
+    concat_kdf(HashAlg::Sha256, &z, &other_info, &mut output).unwrap();
     // Expected CEK: "VqqN6vgjbSBcIijNcacQGg" (base64url) — RFC 7518 Appendix C
     assert_eq!(output, hex!("56aa8deaf8236d205c2228cd71a7101a"));
 }

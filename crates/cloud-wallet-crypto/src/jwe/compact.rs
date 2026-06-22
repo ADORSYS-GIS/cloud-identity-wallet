@@ -48,6 +48,36 @@ pub(crate) fn b64url_encode(bytes: &[u8]) -> String {
     Base64UrlUnpadded::encode_string(bytes)
 }
 
+/// Builds the ConcatKDF `OtherInfo` byte sequence for JOSE ECDH-ES key derivation
+/// (RFC 7518 §4.6.2): `AlgorithmID || PartyUInfo || PartyVInfo || SuppPubInfo`.
+///
+/// `AlgorithmID`/`PartyUInfo`/`PartyVInfo` are each prefixed with their own
+/// 32-bit big-endian byte length; `SuppPubInfo` is the 32-bit big-endian
+/// `keydatalen` in *bits*, derived from `output_len_bytes` (the length of the
+/// buffer the caller is about to fill via [`crate::kdf::concat_kdf`]).
+///
+/// `crate::kdf` is a generic primitive that takes a flat `other_info` slice;
+/// this function is the JOSE-protocol-specific encoding layer that owns the
+/// OtherInfo structure, per `crate::kdf`'s own design note.
+pub(crate) fn concat_kdf_other_info(
+    algorithm_id: &[u8],
+    party_u_info: &[u8],
+    party_v_info: &[u8],
+    output_len_bytes: usize,
+) -> Vec<u8> {
+    let mut other_info =
+        Vec::with_capacity(12 + algorithm_id.len() + party_u_info.len() + party_v_info.len());
+    other_info.extend_from_slice(&(algorithm_id.len() as u32).to_be_bytes());
+    other_info.extend_from_slice(algorithm_id);
+    other_info.extend_from_slice(&(party_u_info.len() as u32).to_be_bytes());
+    other_info.extend_from_slice(party_u_info);
+    other_info.extend_from_slice(&(party_v_info.len() as u32).to_be_bytes());
+    other_info.extend_from_slice(party_v_info);
+    let keydatalen_bits = (output_len_bytes as u32) * 8;
+    other_info.extend_from_slice(&keydatalen_bits.to_be_bytes());
+    other_info
+}
+
 /// Base64url-decode a string, returning `ErrorKind::Serialization` on failure.
 pub(crate) fn b64url_decode(s: &str) -> Result<Vec<u8>> {
     Base64UrlUnpadded::decode_vec(s)
