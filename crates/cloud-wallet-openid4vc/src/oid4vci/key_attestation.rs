@@ -3,7 +3,7 @@
 //! Key attestations are JWTs signed by a secure key management backend that attest
 //! to properties of keys used for holder binding in credential requests.
 //!
-//! Reference: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-key-attestation
+//! Reference: <https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#name-key-attestation>
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cloud_wallet_crypto::jwk::Jwk;
@@ -348,7 +348,11 @@ impl KeyAttestationRequirements {
         {
             return Err(KeyAttestationError::InsufficientUserAuthentication {
                 required: required.clone(),
-                provided: attestation.claims.user_authentication.clone().unwrap_or_default(),
+                provided: attestation
+                    .claims
+                    .user_authentication
+                    .clone()
+                    .unwrap_or_default(),
             });
         }
 
