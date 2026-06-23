@@ -15,7 +15,7 @@ mod tests;
 pub use error::Error;
 
 use reqwest_middleware::ClientWithMiddleware;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::oid4vp::authorization::request_uri::{RequestUriResult, resolve_request_uri};
@@ -156,7 +156,7 @@ impl AuthzResponseSender for DirectPostResponseSender {
 }
 
 /// Validated intermediate state produced by [`Oid4vpClient::process_authz_request`].
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresentationContext {
     /// The validated authorization request.
     pub request: AuthorizationRequest,
