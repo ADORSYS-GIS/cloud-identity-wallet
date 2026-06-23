@@ -21,7 +21,9 @@ use cloud_wallet_openid4vc::formats::mdoc::{
     IacaTrustStore, ParsedMdoc, RevocationPolicy, StaticTrustStore, verify_mdoc_for_issuance,
 };
 use cloud_wallet_openid4vc::formats::sd_jwt::{SdJwt, SdJwtClaims, StatusClaim, X5cTrustAnchors};
-use cloud_wallet_openid4vc::oid4vci::client::{CryptoSigner, Oid4vciClient, ResolvedOfferContext};
+use cloud_wallet_openid4vc::oid4vci::client::{
+    CryptoSigner, DpopKeyPair, DpopNonceHandler, DpopOptions, Oid4vciClient, ResolvedOfferContext,
+};
 use cloud_wallet_openid4vc::oid4vci::credential::formats::{
     CredentialFormatDetails, MsoMdocCredentialConfiguration,
 };
@@ -395,6 +397,15 @@ impl IssuanceEngine {
         self.emit_processing(session_id, ProcessingStep::ExchangingToken)
             .await;
 
+        let dpop_key = DpopKeyPair::generate().map_err(|e| {
+            IssuanceError::internal_message(format!("DPoP key generation failed: {e}"))
+        })?;
+        let nonce_handler = DpopNonceHandler::new();
+        let dpop_opts = DpopOptions {
+            key: &dpop_key,
+            nonce_handler: Some(&nonce_handler),
+        };
+
         let token_response = match task.flow {
             FlowType::AuthorizationCode => {
                 let code = task
@@ -407,7 +418,13 @@ impl IssuanceEngine {
                     .ok_or(IssuanceError::token("missing pkce_verifier"))?;
 
                 self.client
-                    .exchange_authorization_code(context, code, verifier, selected_config_ids)
+                    .exchange_authorization_code(
+                        context,
+                        code,
+                        verifier,
+                        selected_config_ids,
+                        Some(&dpop_opts),
+                    )
                     .await?
             }
             FlowType::PreAuthorizedCode => {
@@ -422,6 +439,7 @@ impl IssuanceEngine {
                         pre_code,
                         task.tx_code.as_deref(),
                         selected_config_ids,
+                        Some(&dpop_opts),
                     )
                     .await?
             }
@@ -429,7 +447,13 @@ impl IssuanceEngine {
         debug!(session_id, tenant_id = %task.tenant_id, "token exchange successful");
 
         let (credential_ids, credential_types, notification_ids) = self
-            .request_and_store_credentials(session_id, &token_response, task, context)
+            .request_and_store_credentials(
+                session_id,
+                &token_response,
+                task,
+                context,
+                Some(&dpop_opts),
+            )
             .await?;
 
         let completed = IssuanceEvent::Completed(SseCompletedEvent::new(
@@ -441,8 +465,14 @@ impl IssuanceEngine {
         self.terminate_session(session_store, session_id).await?;
 
         // Best-effort notification: must not fail the flow.
-        self.send_notifications(context, &token_response.access_token, notification_ids)
-            .await;
+        self.send_notifications(
+            context,
+            &token_response.access_token,
+            &token_response.token_type,
+            notification_ids,
+            Some(&dpop_opts),
+        )
+        .await;
 
         info!(session_id, tenant_id = %task.tenant_id, "issuance completed successfully");
         Ok(())
@@ -454,6 +484,7 @@ impl IssuanceEngine {
         token: &TokenResponse,
         task: &IssuanceTask,
         context: &ResolvedOfferContext,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
         let signer = self.build_signer(task.tenant_id).await?;
         self.emit_processing(session_id, ProcessingStep::RequestingCredential)
@@ -461,7 +492,7 @@ impl IssuanceEngine {
 
         let responses = self
             .client
-            .request_credentials(context, token, &signer)
+            .request_credentials(context, token, &signer, dpop)
             .await?;
 
         debug!(
@@ -508,11 +539,10 @@ impl IssuanceEngine {
                     self.emit_processing(session_id, ProcessingStep::AwaitingDeferredCredential)
                         .await;
 
-                    let token = &token.access_token;
                     let tx_id = pending.transaction_id.clone();
                     let interval = pending.interval_seconds();
                     let immediate = self
-                        .poll_deferred(context, token, tx_id, interval, session_id)
+                        .poll_deferred(context, token, tx_id, interval, session_id, dpop)
                         .await?;
 
                     let notify_id = self
@@ -574,15 +604,18 @@ impl IssuanceEngine {
     }
 
     /// Poll the deferred credential endpoint.
-    #[instrument(skip(self, context, access_token))]
+    #[instrument(skip(self, context, token))]
     async fn poll_deferred(
         &self,
         context: &ResolvedOfferContext,
-        access_token: &str,
+        token: &TokenResponse,
         initial_tx_id: String,
         initial_interval: u64,
         session_id: &str,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<ImmediateCredentialResponse> {
+        let access_token = &token.access_token;
+        let token_type = &token.token_type;
         let mut tx_id = initial_tx_id;
         let mut interval_secs = initial_interval;
 
@@ -599,7 +632,7 @@ impl IssuanceEngine {
 
             let result = self
                 .client
-                .poll_deferred_credential(context, access_token, &tx_id)
+                .poll_deferred_credential(context, access_token, token_type, &tx_id, dpop)
                 .await?;
 
             match result {
@@ -775,11 +808,16 @@ impl IssuanceEngine {
     /// If the issuer's metadata declares a `notification_endpoint`, this sends
     /// a `credential_accepted` notification for each `notification_id` received
     /// in the credential responses.
+    ///
+    /// If `dpop` is provided, DPoP proofs are attached to notification requests
+    /// per RFC 9449, since the access token is DPoP-bound.
     async fn send_notifications(
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
+        token_type: &str,
         notification_ids: Vec<String>,
+        dpop: Option<&DpopOptions<'_>>,
     ) {
         let Some(endpoint) = context.issuer_metadata.notification_endpoint.as_ref() else {
             return;
@@ -788,7 +826,7 @@ impl IssuanceEngine {
             let req = NotificationRequest::new(id, NotificationEvent::CredentialAccepted);
             if let Err(e) = self
                 .client
-                .send_notification(endpoint, access_token, &req)
+                .send_notification(endpoint, access_token, token_type, &req, dpop)
                 .await
             {
                 warn!(error = %e, "notification to issuer failed");
