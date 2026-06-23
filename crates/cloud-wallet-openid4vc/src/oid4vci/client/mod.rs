@@ -52,6 +52,10 @@ type Result<T> = std::result::Result<T, ClientError>;
 const OAUTH_RESPONSE_TYPE: &str = "code";
 const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 const JSON_HEADER: &str = "application/json";
+const AUTHORIZATION_HEADER_NAME: &str = "Authorization";
+const DPOP_HEADER_NAME: &str = "DPoP";
+const AUTH_SCHEME_BEARER: &str = "Bearer";
+const AUTH_SCHEME_DPOP: &str = "DPoP";
 
 /// Fully resolved context from a single credential offer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -728,12 +732,12 @@ impl Oid4vciClient {
             .inner_client
             .http_client()
             .post(endpoint.as_str())
-            .header("Authorization", auth_header(token_type, access_token))
+            .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
             .json(&request);
 
         if let Some(opts) = dpop {
             let proof = build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), ath.as_deref())?;
-            http_request = http_request.header("DPoP", proof);
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
         }
 
         let response = http_request
@@ -761,9 +765,9 @@ impl Oid4vciClient {
                     .inner_client
                     .http_client()
                     .post(endpoint.as_str())
-                    .header("Authorization", auth_header(token_type, access_token))
+                    .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
                     .json(&request)
-                    .header("DPoP", retry_proof)
+                    .header(DPOP_HEADER_NAME, retry_proof)
                     .send()
                     .await
                     .map_err(|e| ClientError::http("Deferred credential DPoP retry failed", e))?;
@@ -843,12 +847,12 @@ impl Oid4vciClient {
             .inner_client
             .http_client()
             .post(notification_endpoint.as_str())
-            .header("Authorization", auth_header(token_type, access_token))
+            .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
             .json(&req);
 
         if let Some(opts) = dpop {
             let proof = build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), ath.as_deref())?;
-            http_request = http_request.header("DPoP", proof);
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
         }
 
         let response = http_request
@@ -1053,7 +1057,7 @@ impl Oid4vciClient {
             .body(body);
 
         if let Some(proof) = dpop_proof {
-            http_request = http_request.header("DPoP", proof);
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
         }
 
         http_request
@@ -1118,12 +1122,12 @@ impl Oid4vciClient {
             .inner_client
             .http_client()
             .post(credential_endpoint.as_str())
-            .header("Authorization", auth_header(token_type, access_token))
+            .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
             .json(request);
 
         if let Some(opts) = dpop {
             let proof = build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), ath.as_deref())?;
-            http_request = http_request.header("DPoP", proof);
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
         }
 
         let response = http_request
@@ -1151,9 +1155,9 @@ impl Oid4vciClient {
                     .inner_client
                     .http_client()
                     .post(credential_endpoint.as_str())
-                    .header("Authorization", auth_header(token_type, access_token))
+                    .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
                     .json(request)
-                    .header("DPoP", retry_proof)
+                    .header(DPOP_HEADER_NAME, retry_proof)
                     .send()
                     .await
                     .map_err(|e| ClientError::http("credential request retry failed", e))?;
@@ -1222,10 +1226,10 @@ impl Oid4vciClient {
 ///
 /// Per RFC 9449 §7.1, DPoP-bound tokens use the `DPoP` scheme instead of `Bearer`.
 fn auth_header(token_type: &str, access_token: &str) -> String {
-    if token_type.eq_ignore_ascii_case("DPoP") {
-        format!("DPoP {access_token}")
+    if token_type.eq_ignore_ascii_case(AUTH_SCHEME_DPOP) {
+        format!("{AUTH_SCHEME_DPOP} {access_token}")
     } else {
-        format!("Bearer {access_token}")
+        format!("{AUTH_SCHEME_BEARER} {access_token}")
     }
 }
 
