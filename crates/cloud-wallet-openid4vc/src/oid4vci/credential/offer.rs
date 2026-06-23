@@ -397,9 +397,7 @@ impl CredentialOfferUri {
         if scheme_lower != "openid-credential-offer" {
             return Err(Error::message(
                 ErrorKind::InvalidCredentialOffer,
-                format!(
-                    "unsupported scheme '{scheme}'; expected 'openid-credential-offer'"
-                ),
+                format!("unsupported scheme '{scheme}'; expected 'openid-credential-offer'"),
             ));
         }
 
