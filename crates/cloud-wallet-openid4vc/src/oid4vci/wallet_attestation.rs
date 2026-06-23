@@ -110,6 +110,11 @@ impl WalletAttestationSigner {
             x5c: None,
         };
 
+        // Ensure x5c is either None or contains at least one certificate
+        if let Some(ref x5c) = attestation_header.x5c {
+            debug_assert!(!x5c.is_empty(), "x5c must not be empty when present");
+        }
+
         let attestation_jwt = provider_key.encode(&attestation_header, &attestation_claims)?;
 
         Ok(Self {
@@ -346,5 +351,41 @@ mod tests {
 
         let result = signer.validate_attestation();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pop_jwt_jwk_does_not_leak_private_key() {
+        let (provider_key, wallet_key) = get_ecdsa_keys();
+        let claims = sample_attestation_claims();
+        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+
+        // Generate PoP JWT
+        let pop_jwt = signer.pop_jwt("https://as.example.com/par", None).unwrap();
+
+        // Decode the header and extract the jwk
+        let header = decode_header(&pop_jwt).unwrap();
+        let jwk = header.jwk.as_ref().unwrap();
+
+        // Serialize the JWK to JSON and verify no private key parameters are present
+        let jwk_value: serde_json::Value = serde_json::to_value(jwk).unwrap();
+
+        // For ECDSA keys, 'd' is the private key parameter that must NOT be present
+        assert!(
+            jwk_value.get("d").is_none(),
+            "PoP JWT jwk header must not contain private key parameter 'd'"
+        );
+
+        // Additional check: ensure public key parameters ARE present
+        assert!(
+            jwk_value.get("x").is_some() && jwk_value.get("y").is_some(),
+            "PoP JWT jwk header must contain public key parameters 'x' and 'y'"
+        );
+
+        // Verify the JWK represents an EC key
+        assert_eq!(
+            jwk_value.get("kty").and_then(|v| v.as_str()),
+            Some("EC"),
+            "PoP JWT jwk must have kty='EC'"
+        );
     }
 }

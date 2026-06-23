@@ -262,10 +262,14 @@ impl KeyMaterial {
                 256 => Algorithm::PS256,
                 384 => Algorithm::PS384,
                 512 => Algorithm::PS512,
-                other => panic!(
-                    "unsupported RSA key size: {} bits (expected 2048, 3072, or 4096)",
-                    other * 8
-                ),
+                other => {
+                    debug_assert!(
+                        false,
+                        "unsupported RSA key size: {} bits (expected 2048, 3072, or 4096)",
+                        other * 8
+                    );
+                    Algorithm::PS256 // safe fallback
+                }
             },
         }
     }
