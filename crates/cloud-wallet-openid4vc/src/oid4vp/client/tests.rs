@@ -579,3 +579,78 @@ async fn create_response_path_end_to_end() {
         Some(url::Url::parse("https://verifier.example.com/cb").unwrap())
     );
 }
+
+#[test]
+fn parse_haip_vp_uri() {
+    // Test haip-vp:// scheme (HAIP §5.1) - should be accepted
+    // Using request_uri to avoid DCQL JSON encoding complexity in URL
+    let client = Oid4vpClient::new(test_config());
+    let haip_uri = "haip-vp://?response_type=vp_token&client_id=test-verifier&nonce=abc123&response_mode=direct_post&response_uri=https%3A%2F%2Fverifier.example.com%2Fresponse&request_uri=https%3A%2F%2Fverifier.example.com%2Frequest";
+
+    // This should parse successfully at the URI level
+    let result = client.parse_authorization_request_envelope(haip_uri);
+    assert!(
+        result.is_ok(),
+        "haip-vp:// URI should parse envelope: {:?}",
+        result.err()
+    );
+    let envelope = result.unwrap();
+    assert_eq!(envelope.client_id, "test-verifier");
+    assert!(envelope.request_uri.is_some());
+}
+
+#[test]
+fn parse_openid4vp_uri_envelope() {
+    // Test openid4vp:// scheme - should be accepted
+    // Using request_uri to avoid DCQL JSON encoding complexity in URL
+    let client = Oid4vpClient::new(test_config());
+    let openid4vp_uri = "openid4vp://?response_type=vp_token&client_id=test-verifier&nonce=xyz789&response_mode=direct_post&response_uri=https%3A%2F%2Fverifier.example.com%2Fresponse&request_uri=https%3A%2F%2Fverifier.example.com%2Frequest";
+
+    let result = client.parse_authorization_request_envelope(openid4vp_uri);
+    assert!(
+        result.is_ok(),
+        "openid4vp:// URI should parse envelope: {:?}",
+        result.err()
+    );
+    let envelope = result.unwrap();
+    assert_eq!(envelope.client_id, "test-verifier");
+    assert!(envelope.request_uri.is_some());
+}
+
+#[test]
+fn parse_uri_rejects_unsupported_scheme_for_oid4vp() {
+    // Unsupported schemes like haip-vci:// should be rejected for OID4VP
+    let client = Oid4vpClient::new(test_config());
+
+    let haip_vci_uri = "haip-vci://?client_id=test&nonce=abc";
+    let result = client.parse_authorization_request_envelope(haip_vci_uri);
+    assert!(result.is_err(), "haip-vci:// URI should fail for OID4VP");
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("failed to parse"),
+        "Expected parse error for unsupported scheme: {}",
+        err
+    );
+}
+
+#[test]
+fn parse_uri_case_insensitive_scheme() {
+    // Scheme should be case-insensitive
+    let client = Oid4vpClient::new(test_config());
+
+    let uppercase = "HAIP-VP://?response_type=vp_token&client_id=test&nonce=abc&response_mode=direct_post&response_uri=https%3A%2F%2Fexample.com&request_uri=https%3A%2F%2Fexample.com%2Frequest";
+    let result = client.parse_authorization_request_envelope(uppercase);
+    assert!(
+        result.is_ok(),
+        "HAIP-VP:// should parse: {:?}",
+        result.err()
+    );
+
+    let mixed = "OpenId4Vp://?response_type=vp_token&client_id=test&nonce=abc&response_mode=direct_post&response_uri=https%3A%2F%2Fexample.com&request_uri=https%3A%2F%2Fexample.com%2Frequest";
+    let result = client.parse_authorization_request_envelope(mixed);
+    assert!(
+        result.is_ok(),
+        "OpenId4Vp:// should parse: {:?}",
+        result.err()
+    );
+}
