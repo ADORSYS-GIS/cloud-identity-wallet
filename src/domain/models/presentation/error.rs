@@ -6,8 +6,6 @@ use cloud_wallet_openid4vc::oid4vp::client::Error as Oid4vpClientError;
 use crate::domain::models::credential::CredentialError;
 use crate::session::SessionError;
 
-type DynError = Box<dyn StdError + Send + Sync>;
-
 /// Machine-readable error codes for the presentation flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresentationErrorCode {
