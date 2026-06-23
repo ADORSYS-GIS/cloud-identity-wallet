@@ -1,5 +1,5 @@
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
-use cloud_wallet_openid4vc::formats::mdoc::StaticTrustStore;
+use cloud_wallet_openid4vc::formats::mdoc::{RevocationPolicy, StaticTrustStore};
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 
 use crate::config::Config;
@@ -57,6 +57,15 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         );
     }
 
+    // Use revocation policy from config, defaulting to SoftFail if not specified.
+    let revocation_policy = config.oid4vci.revocation_policy;
+    if revocation_policy != RevocationPolicy::default() {
+        tracing::info!(
+            policy = ?revocation_policy,
+            "using non-default revocation policy from configuration"
+        );
+    }
+
     let engine = IssuanceEngine::new(
         client,
         task_queue,
@@ -69,6 +78,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     )
     .with_iaca_trust_store(StaticTrustStore::new(iaca_roots))
     .with_x5c_trust_anchors(x5c_anchors);
+    .with_revocation_policy(revocation_policy);
     Ok(engine)
 }
 
