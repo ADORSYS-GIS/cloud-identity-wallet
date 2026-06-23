@@ -836,15 +836,22 @@ async fn verify_issuer_signature_accepts_valid_chain() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_accepts_valid_esp256() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_esp256() {
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_esp256(mso_bytes, dsc_der.clone(), &signing_key);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP256 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),

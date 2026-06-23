@@ -633,7 +633,7 @@ impl Oid4vciClient {
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
-        credential_identifier: impl Into<String>,
+        credential_identifier: CredIdOrCredConfigId,
         credential_config_id: &str,
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
@@ -652,7 +652,7 @@ impl Oid4vciClient {
             )
             .await?;
 
-        let mut request = CredentialRequest::new(cred_id);
+        let mut request = CredentialRequest::new(credential_identifier);
         if let Some(p) = proofs {
             request = request.with_proofs(p);
         }
@@ -677,8 +677,6 @@ impl Oid4vciClient {
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
     ) -> Result<Vec<CredentialResponse>> {
-        let access_token = &token.access_token;
-
         if token.authorization_details.is_some() {
             let resolved = resolve_credential_ids(token)?;
             let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
@@ -688,14 +686,9 @@ impl Oid4vciClient {
             for (config_id, identifiers) in resolved {
                 for id in identifiers {
                     let cred_id = CredIdOrCredConfigId::credential_identifier(id);
-                    futures.push(self.request_credential(
-                        context,
-                        access_token,
-                        cred_id,
-                        config_id,
-                        signer,
-                        dpop,
-                    ));
+                    futures.push(
+                        self.request_credential(context, token, cred_id, config_id, signer, dpop),
+                    );
                 }
             }
 
@@ -720,7 +713,7 @@ impl Oid4vciClient {
 
             let cred_id = CredIdOrCredConfigId::credential_configuration_id(&config_id);
             let response = self
-                .request_credential(context, access_token, cred_id, &config_id, signer)
+                .request_credential(context, token, cred_id, &config_id, signer, dpop)
                 .await?;
             return Ok(vec![response]);
         }
@@ -731,13 +724,7 @@ impl Oid4vciClient {
 
         for config_id in config_ids {
             let cred_id = CredIdOrCredConfigId::credential_configuration_id(config_id);
-            futures.push(self.request_credential(
-                context,
-                access_token,
-                cred_id,
-                config_id,
-                signer,
-            ));
+            futures.push(self.request_credential(context, token, cred_id, config_id, signer, dpop));
         }
 
         while let Some(res) = futures.next().await {
