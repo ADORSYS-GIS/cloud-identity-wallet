@@ -194,7 +194,7 @@ async fn error_callback_fails_emits_event_and_discards_session() {
 
     let response = client
         .get(format!(
-            "{}/api/v1/issuance/callback?error=access_denied&error_description=No+thanks&state={session_id}",
+            "{}/api/v1/issuance/callback?error=access_denied&error_description=No+thanks&state={session_id}&iss=https://issuer.example.com/",
             app.base_url
         ))
         .send()
@@ -320,6 +320,70 @@ async fn callback_rejects_mismatched_iss_parameter() {
     let response = client
         .get(format!(
             "{}/api/v1/issuance/callback?code=auth-code&state={session_id}&iss=https://attacker.example.com/",
+            app.base_url
+        ))
+        .send()
+        .await
+        .expect("failed to send callback request");
+
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.expect("failed to parse response");
+    assert_eq!(body["error"], "invalid_request");
+    assert!(
+        body["error_description"]
+            .as_str()
+            .unwrap()
+            .contains("mismatch")
+    );
+}
+
+#[tokio::test]
+async fn error_callback_rejects_missing_iss_parameter() {
+    let session_id = "ses_error_missing_iss";
+    let session_store = MemorySession::new(Duration::from_secs(5));
+    let mock_session = mock_session(session_id, IssuanceState::AwaitingAuthorization);
+    session_store
+        .upsert(session_id, &mock_session)
+        .await
+        .unwrap();
+    let app = spawn_callback_test_app(session_store).await;
+    let client = Client::new();
+
+    let response = client
+        .get(format!(
+            "{}/api/v1/issuance/callback?error=access_denied&error_description=No+thanks&state={session_id}",
+            app.base_url
+        ))
+        .send()
+        .await
+        .expect("failed to send callback request");
+
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.expect("failed to parse response");
+    assert_eq!(body["error"], "invalid_request");
+    assert!(
+        body["error_description"]
+            .as_str()
+            .unwrap()
+            .contains("'iss'")
+    );
+}
+
+#[tokio::test]
+async fn error_callback_rejects_mismatched_iss_parameter() {
+    let session_id = "ses_error_mismatched_iss";
+    let session_store = MemorySession::new(Duration::from_secs(5));
+    let mock_session = mock_session(session_id, IssuanceState::AwaitingAuthorization);
+    session_store
+        .upsert(session_id, &mock_session)
+        .await
+        .unwrap();
+    let app = spawn_callback_test_app(session_store).await;
+    let client = Client::new();
+
+    let response = client
+        .get(format!(
+            "{}/api/v1/issuance/callback?error=access_denied&error_description=No+thanks&state={session_id}&iss=https://attacker.example.com/",
             app.base_url
         ))
         .send()

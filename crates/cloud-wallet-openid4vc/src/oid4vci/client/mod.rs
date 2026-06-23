@@ -398,7 +398,7 @@ impl Oid4vciClient {
     ///
     /// Per RFC 9207, the `iss` parameter identifies the Authorization Server.
     /// For FAPI2/HAIP compliance, the Wallet MUST validate `iss` against the
-    /// expected issuer from AS metadata.
+    /// expected issuer from AS metadata on both success and error responses.
     ///
     /// # Arguments
     ///
@@ -419,7 +419,25 @@ impl Oid4vciClient {
         const RECOGNIZED: &[&str] = &["code", "state", "iss", "error", "error_description"];
         let params = QueryParams::parse(query, RECOGNIZED)?;
 
+        // Extract iss parameter for validation on both success and error paths
+        let iss = params.get("iss");
+
         if let Some(error_code) = params.get("error") {
+            // Validate iss on error path too (RFC 9207 / HAIP security requirement)
+            if let Some(expected) = expected_issuer {
+                let iss_value = iss.ok_or_else(|| {
+                    ClientError::validation(
+                        "authorization error response is missing the required 'iss' parameter",
+                    )
+                })?;
+                if iss_value != expected {
+                    return Err(ClientError::validation(format!(
+                        "authorization error response 'iss' mismatch: expected '{}', got '{}'",
+                        expected, iss_value
+                    )));
+                }
+            }
+
             let error = serde_json::from_value(serde_json::Value::String(error_code.to_owned()))
                 .map_err(|e| ClientError::InvalidResponse {
                     message: format!("failed to parse authorization error: {e}").into(),
