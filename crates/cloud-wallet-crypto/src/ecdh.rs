@@ -7,6 +7,8 @@
 //! ConcatKDF.
 
 use aws_lc_rs::agreement::{self, EphemeralPrivateKey, UnparsedPublicKey, agree_ephemeral};
+#[cfg(feature = "jwe")]
+use aws_lc_rs::agreement::{PrivateKey, agree};
 use aws_lc_rs::rand::SystemRandom;
 
 use crate::error::{ErrorKind, Result};
@@ -305,6 +307,184 @@ impl SharedSecret {
     }
 }
 
+#[cfg(feature = "jwe")]
+#[cfg_attr(docsrs, doc(cfg(feature = "jwe")))]
+/// A static (long-term) ECDH private key for use as the recipient key in ECDH-ES JWE decryption.
+///
+/// Unlike [`EphemeralEcdhKey`], this key is not consumed on use and can be reused across
+/// multiple decryption operations. It corresponds to the "Static" half of the
+/// Ephemeral-Static ECDH-ES key agreement defined in RFC 7518 §4.6.
+///
+/// # Validation
+///
+/// Scalar range validation occurs at construction time for all constructors.
+/// For NIST curves, `from_pkcs8_der` and `from_private_key_bytes` both reject scalars that
+/// are zero or not in the valid field range via aws-lc-rs's internal checks.
+/// For X25519, any 32-byte value is a syntactically valid private key; the X25519 function
+/// applies the required clamping internally at agreement time.
+///
+/// # Thread Safety
+///
+/// `StaticEcdhKey` is `Send + Sync` — it can be shared across threads via
+/// `Arc<StaticEcdhKey>`. The inner key material is read-only after construction;
+/// no interior mutability is involved.
+pub struct StaticEcdhKey {
+    inner: PrivateKey,
+    curve: EcdhCurve,
+}
+
+#[cfg(feature = "jwe")]
+impl std::fmt::Debug for StaticEcdhKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticEcdhKey")
+            .field("curve", &self.curve)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "jwe")]
+impl StaticEcdhKey {
+    /// Generate a fresh static key pair for the given curve.
+    ///
+    /// Intended primarily for testing. In production, load a persisted key via
+    /// [`from_pkcs8_der`] or [`from_private_key_bytes`].
+    ///
+    /// [`from_pkcs8_der`]: StaticEcdhKey::from_pkcs8_der
+    /// [`from_private_key_bytes`]: StaticEcdhKey::from_private_key_bytes
+    ///
+    /// # Errors
+    /// [`ErrorKind::KeyGeneration`] on failure.
+    pub fn generate(curve: EcdhCurve) -> Result<Self> {
+        let inner = PrivateKey::generate(curve.into()).map_err(|_| key_gen_error("static ECDH"))?;
+        Ok(Self { inner, curve })
+    }
+
+    /// Load a static private key from a DER-encoded PKCS#8 `PrivateKeyInfo` structure.
+    ///
+    /// Supported for P-256, P-384, and P-521. **X25519 is not supported** by this
+    /// constructor because the underlying aws-lc-rs DER parser does not handle
+    /// X25519 PKCS#8; use [`from_private_key_bytes`] with the raw 32-byte seed instead.
+    ///
+    /// Scalar range validation occurs at construction time.
+    ///
+    /// [`from_private_key_bytes`]: StaticEcdhKey::from_private_key_bytes
+    ///
+    /// # Errors
+    /// - [`ErrorKind::UnsupportedAlgorithm`] if `curve` is [`EcdhCurve::X25519`].
+    /// - [`ErrorKind::KeyParsing`] if the DER is malformed or the scalar is invalid.
+    pub fn from_pkcs8_der(curve: EcdhCurve, bytes: &[u8]) -> Result<Self> {
+        if curve == EcdhCurve::X25519 {
+            return Err(error_msg(
+                ErrorKind::UnsupportedAlgorithm,
+                "X25519 PKCS#8 DER loading is not supported; \
+                 use from_private_key_bytes with the raw 32-byte seed",
+            ));
+        }
+        let inner = PrivateKey::from_private_key_der(curve.into(), bytes)
+            .map_err(|_| parse_error("invalid ECDH private key DER (PKCS#8 PrivateKeyInfo)"))?;
+        Ok(Self { inner, curve })
+    }
+
+    /// Load a static private key from a raw big-endian private scalar.
+    ///
+    /// Supported for all curves:
+    /// - P-256: 32 bytes
+    /// - P-384: 48 bytes
+    /// - P-521: 66 bytes
+    /// - X25519: 32 bytes (the seed/scalar; clamping is applied internally at agreement time)
+    ///
+    /// Scalar length and range validation occur at construction time.
+    ///
+    /// # Errors
+    /// [`ErrorKind::KeyParsing`] if the length is wrong or the scalar is invalid for
+    /// the curve.
+    pub fn from_private_key_bytes(curve: EcdhCurve, bytes: &[u8]) -> Result<Self> {
+        let inner = PrivateKey::from_private_key(curve.into(), bytes)
+            .map_err(|_| parse_error("invalid ECDH private key scalar bytes"))?;
+        Ok(Self { inner, curve })
+    }
+
+    /// The curve this key was generated for.
+    #[must_use]
+    pub fn curve(&self) -> EcdhCurve {
+        self.curve
+    }
+
+    /// Serialise the public key into `output`.
+    ///
+    /// `output.len()` must be `>= self.curve().public_key_len()`.
+    /// Encoding matches [`EphemeralEcdhKey::public_key_bytes`]: SEC1 uncompressed
+    /// (`04 || x || y`) for NIST curves, raw 32-byte little-endian scalar for X25519.
+    ///
+    /// # Errors
+    /// - [`ErrorKind::WrongLength`] if `output` is too small.
+    /// - [`ErrorKind::KeyGeneration`] on internal failure.
+    pub fn public_key_bytes<'o>(&self, output: &'o mut [u8]) -> Result<&'o [u8]> {
+        let key = self
+            .inner
+            .compute_public_key()
+            .map_err(|_| key_gen_error("static ECDH public key"))?;
+        let bytes = key.as_ref();
+        if output.len() < bytes.len() {
+            return Err(error_msg(
+                ErrorKind::WrongLength,
+                format!(
+                    "output buffer must be at least {} bytes for {:?} public key, got {}",
+                    bytes.len(),
+                    self.curve,
+                    output.len()
+                ),
+            ));
+        }
+        output[..bytes.len()].copy_from_slice(bytes);
+        Ok(&output[..bytes.len()])
+    }
+
+    /// Perform ECDH key agreement with a peer's public key and return the shared secret.
+    ///
+    /// Unlike [`EphemeralEcdhKey::agree`], this method borrows `self` and
+    /// can be called multiple times on the same key.
+    ///
+    /// The result must be fed into [`crate::kdf::concat_kdf`] before use as key material.
+    ///
+    /// This method is intentionally `pub(crate)` to enforce that the raw ECDH output is
+    /// always processed through ConcatKDF (RFC 7518 §4.6.2) before use. Use
+    /// [`fn@crate::jwe::decrypt`] with [`crate::jwe::JweDecryptKey::Ecdh`] to decrypt a JWE
+    /// token using this key.
+    ///
+    /// # Errors
+    /// [`ErrorKind::KeyParsing`] if the curves do not match or agreement fails
+    /// (low-order point, point not on curve, etc.).
+    pub(crate) fn agree_with(&self, peer: &EcdhPublicKey) -> Result<SharedSecret> {
+        if self.curve != peer.curve() {
+            return Err(error_msg(
+                ErrorKind::KeyParsing,
+                format!(
+                    "curve mismatch: static key is {:?} but peer key is {:?}",
+                    self.curve,
+                    peer.curve()
+                ),
+            ));
+        }
+        let peer_key = UnparsedPublicKey::new(self.curve.into(), peer.as_bytes());
+        let curve = self.curve;
+        agree(
+            &self.inner,
+            peer_key,
+            error_msg(
+                ErrorKind::KeyParsing,
+                "ECDH agreement failed: peer key is invalid or a low-order point",
+            ),
+            move |key_material| {
+                Ok(SharedSecret {
+                    secret: Secret::new(key_material),
+                    curve,
+                })
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,29 +534,6 @@ mod tests {
     #[test]
     fn round_trip_x25519() {
         round_trip(EcdhCurve::X25519);
-    }
-
-    // ECDH commutativity property
-
-    #[test]
-    fn ecdh_commutativity_property() {
-        // ECDH(a_priv, b_pub) == ECDH(b_priv, a_pub) for any two key pairs.
-        let a = PrivateKey::generate(&lc::ECDH_P256).unwrap();
-        let b = PrivateKey::generate(&lc::ECDH_P256).unwrap();
-        let a_pub = UnparsedPublicKey::new(
-            &lc::ECDH_P256,
-            a.compute_public_key().unwrap().as_ref().to_vec(),
-        );
-        let b_pub = UnparsedPublicKey::new(
-            &lc::ECDH_P256,
-            b.compute_public_key().unwrap().as_ref().to_vec(),
-        );
-
-        let a_secret = agree(&a, b_pub, (), |b| Ok::<Vec<u8>, ()>(b.to_vec())).unwrap();
-        let b_secret = agree(&b, a_pub, (), |b| Ok::<Vec<u8>, ()>(b.to_vec())).unwrap();
-
-        assert_eq!(a_secret, b_secret);
-        assert!(!a_secret.iter().all(|&byte| byte == 0));
     }
 
     // - NIST / Wycheproof known-answer tests
@@ -578,5 +735,133 @@ mod tests {
         let x_key = EcdhPublicKey::from_bytes(EcdhCurve::X25519, &x_bytes).unwrap();
         let p_key = EcdhPublicKey::from_bytes(EcdhCurve::P256, &bytes).unwrap();
         assert_ne!(x_key, p_key);
+    }
+
+    #[cfg(feature = "jwe")]
+    mod static_key_tests {
+        use super::*;
+        use aws_lc_rs::agreement::{self as lc, PrivateKey};
+
+        #[test]
+        fn static_round_trip_all_curves() {
+            for curve in [
+                EcdhCurve::P256,
+                EcdhCurve::P384,
+                EcdhCurve::P521,
+                EcdhCurve::X25519,
+            ] {
+                let static_key = StaticEcdhKey::generate(curve).unwrap();
+
+                let mut static_pub_buf = vec![0u8; curve.public_key_len()];
+                let static_pub_bytes = static_key.public_key_bytes(&mut static_pub_buf).unwrap();
+                let static_pub = EcdhPublicKey::from_bytes(curve, static_pub_bytes).unwrap();
+
+                let ephemeral = EphemeralEcdhKey::generate(curve).unwrap();
+                let mut ephem_pub_buf = vec![0u8; curve.public_key_len()];
+                let ephem_pub_bytes = ephemeral.public_key_bytes(&mut ephem_pub_buf).unwrap();
+                let ephem_pub = EcdhPublicKey::from_bytes(curve, ephem_pub_bytes).unwrap();
+
+                let sender_secret = ephemeral.agree(&static_pub).unwrap();
+                let recipient_secret = static_key.agree_with(&ephem_pub).unwrap();
+
+                assert_eq!(
+                    sender_secret.as_bytes(),
+                    recipient_secret.as_bytes(),
+                    "curve {curve:?}"
+                );
+                assert!(
+                    !recipient_secret.as_bytes().iter().all(|&b| b == 0),
+                    "curve {curve:?}"
+                );
+                assert_eq!(recipient_secret.curve(), curve, "curve {curve:?}");
+            }
+        }
+
+        #[test]
+        fn static_from_pkcs8_der_p256() {
+            // Load a P-256 key from PKCS#8 DER and confirm agree_with produces the
+            // same shared secret as the matching ephemeral direction (commutativity).
+            let key_der = include_bytes!("../test_data/secp256r1.pkcs8.der");
+            let static_key = StaticEcdhKey::from_pkcs8_der(EcdhCurve::P256, key_der).unwrap();
+            assert_eq!(static_key.curve(), EcdhCurve::P256);
+
+            let mut static_pub_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+            let static_pub_bytes = static_key.public_key_bytes(&mut static_pub_buf).unwrap();
+            let static_pub = EcdhPublicKey::from_bytes(EcdhCurve::P256, static_pub_bytes).unwrap();
+
+            let ephemeral = EphemeralEcdhKey::generate(EcdhCurve::P256).unwrap();
+            let mut ephem_pub_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+            let ephem_pub_bytes = ephemeral.public_key_bytes(&mut ephem_pub_buf).unwrap();
+            let ephem_pub = EcdhPublicKey::from_bytes(EcdhCurve::P256, ephem_pub_bytes).unwrap();
+            let sender_secret = ephemeral.agree(&static_pub).unwrap();
+            let recipient_secret = static_key.agree_with(&ephem_pub).unwrap();
+
+            assert_eq!(sender_secret.as_bytes(), recipient_secret.as_bytes());
+            assert!(!recipient_secret.as_bytes().iter().all(|&b| b == 0));
+        }
+
+        #[test]
+        fn static_from_pkcs8_der_x25519_rejected() {
+            let dummy = [0u8; 32];
+            let err = StaticEcdhKey::from_pkcs8_der(EcdhCurve::X25519, &dummy).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::UnsupportedAlgorithm);
+        }
+
+        #[test]
+        fn static_from_private_key_bytes_x25519() {
+            let mut seed = [0u8; 32];
+            crate::rand::fill_bytes(&mut seed).unwrap();
+            let key = StaticEcdhKey::from_private_key_bytes(EcdhCurve::X25519, &seed).unwrap();
+            assert_eq!(key.curve(), EcdhCurve::X25519);
+        }
+
+        #[test]
+        fn static_wrong_length_rejected() {
+            // One byte short for P-256 scalar (needs 32).
+            let err =
+                StaticEcdhKey::from_private_key_bytes(EcdhCurve::P256, &[0u8; 31]).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::KeyParsing);
+        }
+
+        #[test]
+        fn static_curve_mismatch_rejected() {
+            let static_key = StaticEcdhKey::generate(EcdhCurve::P256).unwrap();
+            let p384_priv = PrivateKey::generate(&lc::ECDH_P384).unwrap();
+            let p384_pub_raw = p384_priv.compute_public_key().unwrap();
+            let peer = EcdhPublicKey::from_bytes(EcdhCurve::P384, p384_pub_raw.as_ref()).unwrap();
+            let err = static_key.agree_with(&peer).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::KeyParsing);
+        }
+
+        #[test]
+        fn static_debug_hides_key_material() {
+            let key = StaticEcdhKey::generate(EcdhCurve::P256).unwrap();
+
+            let mut pub_buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+            let pub_bytes = key.public_key_bytes(&mut pub_buf).unwrap();
+
+            let dbg = format!("{key:?}");
+            assert!(dbg.contains("StaticEcdhKey"));
+            assert!(!dbg.contains("inner"));
+
+            // Sample 8 bytes from the middle of the 65-byte public key; the
+            // probability of a false positive is ~2^-64.
+            let hex_sample: String = pub_bytes[10..18]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            assert!(
+                !dbg.to_lowercase().contains(&hex_sample),
+                "Debug output must not contain raw key bytes"
+            );
+        }
+
+        // Compile-time proof of the thread-safety doc claim on StaticEcdhKey.
+        // If aws-lc-rs ever removes Send/Sync from PrivateKey, this will fail to compile.
+        #[test]
+        fn static_key_is_send_sync() {
+            fn assert_send_sync<T: Send + Sync>() {}
+            assert_send_sync::<StaticEcdhKey>();
+        }
     }
 }
