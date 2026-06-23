@@ -20,6 +20,17 @@ Enables support for JSON Web Keys (JWK), including serialization and deserializa
 cloud-wallet-crypto = { version = "0.1", features = ["jwk"] }
 ```
 
+**`jwe`**
+
+Enables JSON Web Encryption (JWE) compact serialization — high-level `encrypt` / `decrypt`
+covering RSA-OAEP-256/384/512, ECDH-ES, and ECDH-ES+A128KW/A256KW key management with
+A128GCM / A256GCM content encryption. Enables `jwk` transitively.
+
+```toml
+[dependencies]
+cloud-wallet-crypto = { version = "0.1", features = ["jwe"] }
+```
+
 **`fips`**
 
 Enables support for FIPS-validated cryptography (backed by AWS-LC).
@@ -221,7 +232,11 @@ Ok(())
 
 ### JWE Key Agreement (ECDH-ES)
 
-These four primitives - ephemeral ECDH, ConcatKDF, AES Key Wrap, and RSA-OAEP - are
+> For most use cases, prefer the high-level `jwe` module (enable the `jwe` feature) rather
+> than composing these primitives by hand. The example below shows the underlying primitive
+> flow for reference.
+
+These four primitives — ephemeral ECDH, ConcatKDF, AES Key Wrap, and RSA-OAEP — are
 low-level building blocks for JWE key-encryption. They are designed to be composed in
 sequence, not used independently. The example below shows the correct sender-side flow
 for ECDH-ES with AES Key Wrap (JWE `ECDH-ES+A256KW`):
@@ -244,7 +259,7 @@ use cloud_wallet_crypto::{
 // from their client metadata.
 let peer = EcdhPublicKey::from_bytes(EcdhCurve::P256, &peer_bytes)?;
 
-// Generate a fresh ephemeral key — consumed on agreement, never reused (RFC 7518 §4.6).
+// Generate a fresh ephemeral key - consumed on agreement, never reused (RFC 7518 §4.6).
 let sender = EphemeralEcdhKey::generate(EcdhCurve::P256)?;
 
 // Serialise the ephemeral public key; include this in the JWE `epk` header field.
@@ -277,11 +292,12 @@ let _wrapped_cek = kek.wrap_key(&cek, &mut wrap_buf)?;
 # }
 ```
 
-> **Scope note**: These primitives cover the **sender side** of JWE ECDH-ES (the
-> wallet's role in OpenID4VP encrypted responses). The recipient side requires
-> static-key ECDH agreement, which this crate does not currently provide. Full JWE
-> framing - header serialisation, CEK generation, and content encryption - is a
-> separate layer not yet provided by this crate.
+> These primitives are low-level building blocks. For full JWE compact serialization
+> (both sender and recipient sides), see the [`jwe`](src/jwe.rs) module, which
+> composes ECDH-ES, ConcatKDF, AES Key Wrap, RSA-OAEP, and AES-GCM into a
+> high-level `encrypt` / `decrypt` API covering all six key-management algorithms.
+> Recipient-side ECDH key agreement is provided by `StaticEcdhKey` (available with
+> the `jwe` feature).
 
 ### RSA-OAEP Key Encryption
 
