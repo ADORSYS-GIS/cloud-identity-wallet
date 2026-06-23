@@ -314,9 +314,10 @@ pub struct CredentialOfferUri {
 impl CredentialOfferUri {
     /// Parses a credential offer from a full offer link URI.
     ///
-    /// Accepts either:
-    /// - A full URI like `openid-credential-offer://?credential_offer=...`
-    /// - A query string like `credential_offer=...` (will prepend the scheme)
+    /// Accepts:
+    /// - `openid-credential-offer://?credential_offer=...` (OpenID4VCI standard)
+    /// - `haip-vci://?credential_offer=...` (HAIP §4.2 alternative)
+    /// - A query string like `credential_offer=...` (will prepend the OpenID scheme)
     ///
     /// # Mutual Exclusivity
     ///
@@ -328,34 +329,33 @@ impl CredentialOfferUri {
     /// Returns an error if:
     /// - Both `credential_offer` and `credential_offer_uri` are present
     /// - Neither parameter is present
-    /// - The URI is malformed
+    /// - Duplicate `credential_offer` or `credential_offer_uri` parameters are present
+    /// - The URI is malformed or uses an unsupported scheme
     /// - Parsing or validation of the credential offer fails (for by-value)
     pub fn from_offer_link(link: &str) -> Result<Self, Error> {
-        // Prepend scheme if not already present
-        let parsed_url = if link.contains("://") {
-            Url::parse(link)
+        let parsed_url = match Url::parse(link) {
+            Ok(url) => url,
+            Err(_) => Url::parse(&format!("openid-credential-offer://?{link}")).map_err(|e| {
+                Error::message(
+                    ErrorKind::InvalidCredentialOffer,
+                    format!("invalid offer link: {e}"),
+                )
+            })?,
+        };
+
+        let normalized_url = if parsed_url.scheme().eq_ignore_ascii_case("haip-vci") {
+            let mut reconstructed = parsed_url.clone();
+            reconstructed
+                .set_scheme("openid-credential-offer")
+                .map_err(|_| {
+                    Error::message(ErrorKind::InvalidCredentialOffer, "failed to set scheme")
+                })?;
+            reconstructed
         } else {
-            Url::parse(&format!("openid-credential-offer://?{link}"))
-        }
-        .map_err(|e| {
-            Error::message(
-                ErrorKind::InvalidCredentialOffer,
-                format!("invalid offer link: {e}"),
-            )
-        })?;
+            parsed_url
+        };
 
-        let mut credential_offer = None;
-        let mut credential_offer_uri = None;
-
-        for (k, v) in parsed_url.query_pairs() {
-            if k == "credential_offer" {
-                credential_offer = Some(v.into_owned());
-            } else if k == "credential_offer_uri" {
-                credential_offer_uri = Some(v.into_owned());
-            }
-        }
-
-        Self::parse_params(credential_offer.as_deref(), credential_offer_uri.as_deref())
+        Self::from_url(&normalized_url)
     }
 
     /// Parses credential offer URI parameters from a query string.
@@ -372,18 +372,54 @@ impl CredentialOfferUri {
     /// Returns an error if:
     /// - Both `credential_offer` and `credential_offer_uri` are present
     /// - Neither parameter is present
+    /// - Duplicate `credential_offer` or `credential_offer_uri` parameters are present
     /// - Parsing the credential offer fails (for by-value)
     pub fn from_query(query: &str) -> Result<Self, Error> {
-        // Strip leading '?' if present (common when parsing raw query strings)
         let query = query.strip_prefix('?').unwrap_or(query);
+        let url = Url::parse(&format!("openid-credential-offer://?{query}")).map_err(|e| {
+            Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!("invalid query: {e}"),
+            )
+        })?;
+        Self::from_url(&url)
+    }
 
-        let mut credential_offer = None;
-        let mut credential_offer_uri = None;
+    /// Extracts credential offer parameters from a parsed URL.
+    ///
+    /// Only accepts URLs with the `openid-credential-offer` scheme (case-insensitive).
+    /// Other schemes are rejected to prevent misinterpretation of non-credential-offer URLs.
+    /// Callers that need to support alternative schemes (e.g., `haip-vci`) must normalize
+    /// the scheme before calling this method — see `from_offer_link` for an example.
+    fn from_url(url: &Url) -> Result<Self, Error> {
+        let scheme = url.scheme();
+        let scheme_lower = scheme.to_lowercase();
+        if scheme_lower != "openid-credential-offer" {
+            return Err(Error::message(
+                ErrorKind::InvalidCredentialOffer,
+                format!("unsupported scheme '{scheme}'; expected 'openid-credential-offer'"),
+            ));
+        }
 
-        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        let mut credential_offer: Option<String> = None;
+        let mut credential_offer_uri: Option<String> = None;
+
+        for (k, v) in url.query_pairs() {
             if k == "credential_offer" {
+                if credential_offer.is_some() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "duplicate credential_offer parameter",
+                    ));
+                }
                 credential_offer = Some(v.into_owned());
             } else if k == "credential_offer_uri" {
+                if credential_offer_uri.is_some() {
+                    return Err(Error::message(
+                        ErrorKind::InvalidCredentialOffer,
+                        "duplicate credential_offer_uri parameter",
+                    ));
+                }
                 credential_offer_uri = Some(v.into_owned());
             }
         }
@@ -1111,5 +1147,195 @@ mod tests {
         );
         assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
         assert!(offer.grants.is_none());
+    }
+
+    #[test]
+    fn parse_haip_vci_offer_link_by_value() {
+        // Test haip-vci:// scheme (HAIP §4.2) - should normalize to openid-credential-offer://
+        let haip_uri = "haip-vci://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri).expect("should parse haip-vci URI");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+                assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_offer_link_by_reference() {
+        // Test haip-vci:// scheme with credential_offer_uri
+        let haip_uri =
+            "haip-vci://?credential_offer_uri=https%3A%2F%2Fissuer.example.com%2Foffer%2F123";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri).expect("should parse haip-vci URI");
+
+        match uri.source {
+            CredentialOfferSource::ByReference(url) => {
+                assert_eq!(url, "https://issuer.example.com/offer/123");
+            }
+            CredentialOfferSource::ByValue(_) => panic!("Expected by reference"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_case_insensitive_scheme() {
+        // Scheme should be case-insensitive
+        let haip_uri = "HAIP-VCI://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri).expect("should parse HAIP-VCI URI");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_mixed_case_scheme() {
+        // Mixed-case scheme like "Haip-Vci" should be normalized (RFC 3986 case-insensitivity)
+        let haip_uri = "Haip-Vci://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri)
+            .expect("should parse mixed-case HAIP-VCI URI");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn parse_haip_vci_rejects_both_parameters() {
+        // Both credential_offer and credential_offer_uri present - must be rejected
+        let haip_uri =
+            "haip-vci://?credential_offer=%7B%7D&credential_offer_uri=https%3A%2F%2Fexample.com";
+
+        let result = CredentialOfferUri::from_offer_link(haip_uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn from_offer_link_rejects_duplicate_credential_offer() {
+        // Duplicate credential_offer parameters should be rejected
+        let uri = "openid-credential-offer://?credential_offer=%7B%7D&credential_offer=%7B%7D";
+
+        let result = CredentialOfferUri::from_offer_link(uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn from_offer_link_rejects_duplicate_credential_offer_uri() {
+        // Duplicate credential_offer_uri parameters should be rejected
+        let uri = "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fexample.com&credential_offer_uri=https%3A%2F%2Fother.com";
+
+        let result = CredentialOfferUri::from_offer_link(uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn from_query_rejects_duplicate_credential_offer() {
+        // Duplicate credential_offer parameters should be rejected
+        let query = "credential_offer=%7B%7D&credential_offer=%7B%7D";
+
+        let result = CredentialOfferUri::from_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn from_query_rejects_duplicate_credential_offer_uri() {
+        // Duplicate credential_offer_uri parameters should be rejected
+        let query = "credential_offer_uri=https%3A%2F%2Fexample.com&credential_offer_uri=https%3A%2F%2Fother.com";
+
+        let result = CredentialOfferUri::from_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn from_offer_link_rejects_unsupported_scheme() {
+        // Unsupported schemes like http://, https://, openid4vp:// should be rejected
+        let http_uri = "http://example.com/?credential_offer=%7B%7D";
+        let result = CredentialOfferUri::from_offer_link(http_uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("unsupported scheme"));
+
+        let https_uri = "https://example.com/?credential_offer=%7B%7D";
+        let result = CredentialOfferUri::from_offer_link(https_uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("unsupported scheme"));
+
+        let openid4vp_uri = "openid4vp://?credential_offer=%7B%7D";
+        let result = CredentialOfferUri::from_offer_link(openid4vp_uri);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("unsupported scheme"));
+    }
+
+    #[test]
+    fn from_offer_link_query_string_with_colon_slash_slash() {
+        // A query string value containing :// should not be mistaken for a URI scheme
+        // (Comment 2: Using Url::parse instead of contains("://") fixes this brittleness)
+        let query_with_url = "credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri =
+            CredentialOfferUri::from_offer_link(query_with_url).expect("should parse query string");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+                assert_eq!(offer.credential_configuration_ids, vec!["MyCredential"]);
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
+    fn from_offer_link_rejects_unrecognized_scheme() {
+        // Verify that unrecognized schemes are rejected with "unsupported scheme" error
+        let malformed = "not-a-scheme://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+        let result = CredentialOfferUri::from_offer_link(malformed);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidCredentialOffer);
+        assert!(err.to_string().contains("unsupported scheme"));
     }
 }
