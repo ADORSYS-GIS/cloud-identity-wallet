@@ -26,3 +26,8 @@ implementation_plans/
 
 # Kilo config (may contain secrets)
 .kilo/**
+
+# Skills related files output
+graphify-out/**
+.agents/**
+
