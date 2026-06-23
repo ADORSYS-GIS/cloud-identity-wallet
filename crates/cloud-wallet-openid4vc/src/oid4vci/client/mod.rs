@@ -732,7 +732,10 @@ impl Oid4vciClient {
             .inner_client
             .http_client()
             .post(endpoint.as_str())
-            .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
+            .header(
+                AUTHORIZATION_HEADER_NAME,
+                auth_header(token_type, access_token),
+            )
             .json(&request);
 
         if let Some(opts) = dpop {
@@ -765,7 +768,10 @@ impl Oid4vciClient {
                     .inner_client
                     .http_client()
                     .post(endpoint.as_str())
-                    .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
+                    .header(
+                        AUTHORIZATION_HEADER_NAME,
+                        auth_header(token_type, access_token),
+                    )
                     .json(&request)
                     .header(DPOP_HEADER_NAME, retry_proof)
                     .send()
@@ -847,7 +853,10 @@ impl Oid4vciClient {
             .inner_client
             .http_client()
             .post(notification_endpoint.as_str())
-            .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
+            .header(
+                AUTHORIZATION_HEADER_NAME,
+                auth_header(token_type, access_token),
+            )
             .json(&req);
 
         if let Some(opts) = dpop {
@@ -1122,7 +1131,10 @@ impl Oid4vciClient {
             .inner_client
             .http_client()
             .post(credential_endpoint.as_str())
-            .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
+            .header(
+                AUTHORIZATION_HEADER_NAME,
+                auth_header(token_type, access_token),
+            )
             .json(request);
 
         if let Some(opts) = dpop {
@@ -1155,7 +1167,10 @@ impl Oid4vciClient {
                     .inner_client
                     .http_client()
                     .post(credential_endpoint.as_str())
-                    .header(AUTHORIZATION_HEADER_NAME, auth_header(token_type, access_token))
+                    .header(
+                        AUTHORIZATION_HEADER_NAME,
+                        auth_header(token_type, access_token),
+                    )
                     .json(request)
                     .header(DPOP_HEADER_NAME, retry_proof)
                     .send()
