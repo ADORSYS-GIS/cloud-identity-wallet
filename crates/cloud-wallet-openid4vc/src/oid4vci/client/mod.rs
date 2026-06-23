@@ -694,7 +694,7 @@ impl Oid4vciClient {
                         cred_id,
                         config_id,
                         signer,
-                       dpop
+                        dpop,
                     ));
                 }
             }

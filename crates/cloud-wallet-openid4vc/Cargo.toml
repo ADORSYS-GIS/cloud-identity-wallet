@@ -28,7 +28,6 @@ serde_urlencoded = "0.7"
 serde_with.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 time = { workspace = true, features = ["parsing", "std"] }
 tokio.workspace = true
 tracing.workspace = true

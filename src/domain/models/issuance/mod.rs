@@ -200,7 +200,6 @@ impl IssuanceEngine {
             // Fail-closed default: no mdoc credentials are accepted until IACA roots
             // are configured via `with_iaca_trust_store`.
             iaca_trust_store: Arc::new(RwLock::new(Arc::new(StaticTrustStore::new(vec![])))),
-            iaca_trust_store: Arc::new(StaticTrustStore::new(vec![])),
             // Default to SoftFail: reject revoked DSCs but tolerate CRL fetch failures.
             revocation_policy: RevocationPolicy::default(),
         };
@@ -227,6 +226,7 @@ impl IssuanceEngine {
 
     fn iaca_trust_store(&self) -> Arc<dyn IacaTrustStore> {
         Arc::clone(&*self.iaca_trust_store.read())
+    }
     /// Configure the revocation checking policy for mdoc DSC verification.
     ///
     /// - `Skip`: Bypass revocation checking (offline/test mode)
@@ -236,7 +236,6 @@ impl IssuanceEngine {
         self.revocation_policy = policy;
         self
     }
-
 
     /// Return the number of worker currently attached to this engine.
     pub fn worker_count(&self) -> usize {

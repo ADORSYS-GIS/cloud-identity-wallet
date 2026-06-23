@@ -77,7 +77,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         preferred_display_locales,
     )
     .with_iaca_trust_store(StaticTrustStore::new(iaca_roots))
-    .with_x5c_trust_anchors(x5c_anchors);
+    .with_x5c_trust_anchors(x5c_anchors)
     .with_revocation_policy(revocation_policy);
     Ok(engine)
 }

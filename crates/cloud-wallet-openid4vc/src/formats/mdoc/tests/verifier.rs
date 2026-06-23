@@ -858,7 +858,6 @@ fn verify_issuer_signature_accepts_valid_esp256() {
     );
 }
 
-
 #[tokio::test]
 async fn verify_issuer_signature_rejects_tampered_payload() {
     // covers different content than what the verifier sees.
