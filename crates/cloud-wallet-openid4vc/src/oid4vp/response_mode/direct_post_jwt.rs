@@ -416,7 +416,7 @@ mod tests {
         let y = B64::new(&pub_bytes[33..65]);
 
         let prm = Parameters {
-            alg: Some(Algorithm::KeyManagement(KeyManagement::A256Kw)),
+            alg: Some(Algorithm::KeyManagement(KeyManagement::EcdhEsA128Kw)), // Changed from A256Kw
             kid: Some("p256-key-1".to_string()),
             ..Default::default()
         };
