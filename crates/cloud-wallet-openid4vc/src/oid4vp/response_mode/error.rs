@@ -3,6 +3,12 @@ use thiserror::Error;
 /// Errors that can occur when building or encrypting a `direct_post.jwt` response.
 ///
 /// Covers the build/encrypt layer only. HTTP transport errors use [`DirectPostError`].
+///
+/// `PartialEq`/`Eq` compare string payloads verbatim. That's safe for variants whose
+/// string content this crate controls (e.g. [`Self::UnsupportedAlgorithm`]'s message),
+/// but [`Self::EncryptionFailed`] and [`Self::KeyConstruction`] may wrap text from an
+/// external crypto primitive's `Display` impl. Don't assert equality against those two
+/// variants with a hardcoded message — match on the variant instead.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum JarmEncryptError {
     /// The selected JWK has no `alg` parameter. OID4VP §8.3 requires `alg` in the JWK.
@@ -27,6 +33,13 @@ pub enum JarmEncryptError {
 }
 
 /// Errors that can occur when sending a `direct_post` Authorization Response.
+///
+/// `PartialEq`/`Eq` compare string payloads verbatim. [`Self::HttpRequestFailed`] and
+/// [`Self::ResponseParseError`] wrap `reqwest`/`serde_json` error text, which is not
+/// guaranteed stable across dependency upgrades — don't assert equality against those
+/// two variants with a hardcoded message in tests; match on the variant instead.
+/// [`Self::VerifierError`]/[`Self::HttpServerError`] are safe to compare exactly when
+/// the `body` comes from a controlled test fixture (e.g. a mock server response).
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DirectPostError {
     #[error("response_uri must use HTTPS")]

@@ -32,6 +32,10 @@ use crate::oid4vp::{
 /// this implementation; if it is required in future it should be a separate function
 /// (`sign_and_encrypt_authorization_response`) so this API remains stable.
 ///
+/// When that function is added: per JARM §3.1, the *inner* JWS (not this JWE) should
+/// include `iss` (Wallet identifier) and `aud` (Verifier `response_uri`) claims — do not
+/// reuse this function's "no iss/aud/exp" payload shape for the signed layer.
+///
 /// # Replay protection
 ///
 /// The JWE payload carries no freshness claims (`iat`, `exp`, nonce). Anti-replay

@@ -924,7 +924,7 @@ impl TryFrom<&Jwk> for crate::ecdh::EcdhPublicKey {
                     crate::ecdh::EcdhCurve::P256 => 32,
                     crate::ecdh::EcdhCurve::P384 => 48,
                     crate::ecdh::EcdhCurve::P521 => 66,
-                    crate::ecdh::EcdhCurve::X25519 => unreachable!(),
+                    _ => return Err(Error::from(ErrorKind::UnsupportedAlgorithm)),
                 };
                 if ec.x.len() != coord_size || ec.y.len() != coord_size {
                     return Err(error_msg(
