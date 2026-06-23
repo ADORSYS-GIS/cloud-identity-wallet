@@ -393,6 +393,10 @@ impl CredentialOfferUri {
     fn from_url(url: &Url) -> Result<Self, Error> {
         let scheme = url.scheme();
         let scheme_lower = scheme.to_lowercase();
+        // NOTE: haip-vci URLs are normalized to openid-credential-offer before
+        // reaching this method (by from_offer_link / from_query), so the haip-vci
+        // arm will not be exercised in practice. It is retained for defensive
+        // completeness in case new call paths are introduced.
         if !matches!(
             scheme_lower.as_str(),
             "openid-credential-offer" | "haip-vci"
