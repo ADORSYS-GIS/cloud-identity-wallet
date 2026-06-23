@@ -148,6 +148,46 @@ fn authorization_callback_iss_accessor() {
     assert_eq!(no_iss.iss(), None);
 }
 
+#[test]
+fn parse_authorization_callback_error_with_matching_iss() {
+    let callback = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123&iss=https://as.example.com/",
+        Some("https://as.example.com/"),
+    )
+    .unwrap();
+
+    match callback {
+        AuthorizationCallback::Error(response) => {
+            assert_eq!(response.error.error, AuthzErrorResponse::AccessDenied);
+            assert_eq!(response.iss.as_deref(), Some("https://as.example.com/"));
+        }
+        other => panic!("expected error callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_authorization_callback_error_rejects_missing_iss_when_expected() {
+    let err = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123",
+        Some("https://as.example.com/"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing"));
+    assert!(err.to_string().contains("'iss'"));
+}
+
+#[test]
+fn parse_authorization_callback_error_rejects_mismatched_iss() {
+    let err = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123&iss=https://attacker.example.com/",
+        Some("https://as.example.com/"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("mismatch"));
+}
+
 fn get_ecdsa_signer() -> CryptoSigner {
     let keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
     let der = keypair.to_pkcs8_der().to_vec();
