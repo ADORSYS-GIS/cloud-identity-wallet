@@ -11,6 +11,7 @@ use crate::domain::models::credential::CredentialError;
 use crate::domain::models::issuance::{
     ConsentError, IssuanceError, IssuanceErrorCode, TxCodeError,
 };
+use crate::domain::models::presentation::{PresentationError, PresentationErrorCode};
 use crate::domain::models::tenants::TenantError;
 use crate::session::SessionError;
 
@@ -211,6 +212,47 @@ impl IntoApiError for TxCodeError {
                 error_description: Some(description),
             },
             TxCodeError::SessionStore(source) => ApiError::internal(source),
+        }
+    }
+}
+
+impl IntoApiError for PresentationError {
+    fn into_api_error(self) -> ApiError {
+        let status = match &self.code {
+            PresentationErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::InvalidDcqlQuery => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::NoMatchingCredentials => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::VpFormatsNotSupported => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::InvalidClient => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::RequestUriFetchFailed => StatusCode::BAD_GATEWAY,
+            PresentationErrorCode::RequestObjectInvalid => StatusCode::BAD_GATEWAY,
+            PresentationErrorCode::KeyResolutionFailed => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
+            PresentationErrorCode::InvalidSessionState => StatusCode::CONFLICT,
+            PresentationErrorCode::ConsentRejected => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::ResponseDeliveryFailed => StatusCode::BAD_GATEWAY,
+            PresentationErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(
+                error = %self,
+                error.source = ?self.source,
+                "presentation internal error"
+            );
+        }
+        if status == StatusCode::BAD_GATEWAY {
+            tracing::warn!(
+                error = %self,
+                error.source = ?self.source,
+                "external system error during presentation"
+            );
+        }
+
+        ApiError {
+            status,
+            error: self.code.to_string().into(),
+            error_description: self.description,
         }
     }
 }

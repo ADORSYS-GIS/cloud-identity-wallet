@@ -144,6 +144,7 @@ impl From<&cloud_wallet_openid4vc::oid4vp::authorization::ResponseMode> for Pres
         match mode {
             ResponseMode::DirectPost | ResponseMode::DirectPostJwt => Self::CrossDevice,
             ResponseMode::DcApi | ResponseMode::DcApiJwt => Self::SameDevice,
+            ResponseMode::Other(s) if s == "fragment" => Self::SameDevice,
             ResponseMode::Other(_) => Self::CrossDevice, // Extension modes default to cross-device
         }
     }
