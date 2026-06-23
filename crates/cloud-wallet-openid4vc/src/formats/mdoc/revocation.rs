@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -63,41 +63,51 @@ fn reason_code_to_string(code: ReasonCode) -> &'static str {
 /// Blocked ranges include:
 /// - Loopback addresses (127.0.0.0/8, ::1)
 /// - Private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+/// - CGNAT/Shared address space 100.64.0.0/10 (RFC 6598)
 /// - Private IPv6 ranges (fc00::/7, ::ffff:0:0/96)
 /// - Link-local addresses (169.254.0.0/16, fe80::/10)
 /// - Cloud metadata endpoints (169.254.169.254 specifically - AWS, GCP, Azure)
 /// - Broadcast addresses
 /// - Documentation/test ranges
+/// - IPv4-mapped IPv6 addresses that resolve to blocked IPv4 ranges
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ipv4) => {
-            let octets = ipv4.octets();
-            match octets[0] {
-                0 => true,                                          // 0.0.0.0/8 - "This network"
-                10 => true,                                         // 10.0.0.0/8 - Private
-                127 => true,                                        // 127.0.0.0/8 - Loopback
-                169 if octets[1] == 254 => true, // 169.254.0.0/16 - Link-local (includes metadata)
-                172 if octets[1] >= 16 && octets[1] <= 31 => true, // 172.16.0.0/12 - Private
-                192 if octets[1] == 0 && octets[2] == 0 => true, // 192.0.0.0/24 - IETF Protocol Assignments
-                192 if octets[1] == 0 && octets[2] == 2 => true, // 192.0.2.0/24 - Documentation (TEST-NET-1)
-                192 if octets[1] == 88 && octets[2] == 99 => true, // 192.88.99.0/24 - 6to4 Relay Anycast
-                192 if octets[1] == 168 => true,                   // 192.168.0.0/16 - Private
-                198 if octets[1] >= 18 && octets[1] <= 19 => true, // 198.18.0.0/15 - Benchmark testing
-                198 if octets[1] == 51 && octets[2] == 100 => true, // 198.51.100.0/24 - Documentation (TEST-NET-2)
-                203 if octets[1] == 0 && octets[2] == 113 => true, // 203.0.113.0/24 - Documentation (TEST-NET-3)
-                224..=239 => true,                                 // 224.0.0.0/4 - Multicast
-                240..=255 => true,                                 // 240.0.0.0/4 - Reserved
-                _ => ipv4.is_broadcast() || ipv4.is_unspecified(),
-            }
-        }
+        IpAddr::V4(ipv4) => is_blocked_ipv4(ipv4),
         IpAddr::V6(ipv6) => {
-            ipv6.is_loopback()                // ::1
-            || ipv6.is_unspecified()          // ::
-            || is_ipv6_private(ipv6)          // fc00::/7
-            || is_ipv6_link_local(ipv6)        // fe80::/10
-            || is_ipv6_documentation(ipv6) // 2001:db8::/32
+            // Check for IPv4-mapped IPv6 addresses (::ffff:0:0/96)
+            // IPv6.is_loopback() does NOT treat IPv4-mapped loopback as loopback
+            if let Some(ipv4) = ipv6.to_ipv4_mapped() {
+                return is_blocked_ipv4(&ipv4);
+            }
+            ipv6.is_loopback()
+                || ipv6.is_unspecified()
+                || is_ipv6_private(ipv6)
+                || is_ipv6_link_local(ipv6)
+                || is_ipv6_documentation(ipv6)
         }
+    }
+}
+
+fn is_blocked_ipv4(ipv4: &Ipv4Addr) -> bool {
+    let octets = ipv4.octets();
+    match octets[0] {
+        0 => true,                                          // 0.0.0.0/8 - "This network"
+        10 => true,                                         // 10.0.0.0/8 - Private
+        100 if octets[1] >= 64 && octets[1] <= 127 => true, // 100.64.0.0/10 - CGNAT (RFC 6598)
+        127 => true,                                        // 127.0.0.0/8 - Loopback
+        169 if octets[1] == 254 => true, // 169.254.0.0/16 - Link-local (includes metadata)
+        172 if octets[1] >= 16 && octets[1] <= 31 => true, // 172.16.0.0/12 - Private
+        192 if octets[1] == 0 && octets[2] == 0 => true, // 192.0.0.0/24 - IETF Protocol Assignments
+        192 if octets[1] == 0 && octets[2] == 2 => true, // 192.0.2.0/24 - Documentation (TEST-NET-1)
+        192 if octets[1] == 88 && octets[2] == 99 => true, // 192.88.99.0/24 - 6to4 Relay Anycast
+        192 if octets[1] == 168 => true,                 // 192.168.0.0/16 - Private
+        198 if octets[1] >= 18 && octets[1] <= 19 => true, // 198.18.0.0/15 - Benchmark testing
+        198 if octets[1] == 51 && octets[2] == 100 => true, // 198.51.100.0/24 - Documentation (TEST-NET-2)
+        203 if octets[1] == 0 && octets[2] == 113 => true, // 203.0.113.0/24 - Documentation (TEST-NET-3)
+        224..=239 => true,                                 // 224.0.0.0/4 - Multicast
+        240..=255 => true,                                 // 240.0.0.0/4 - Reserved
+        _ => ipv4.is_broadcast() || ipv4.is_unspecified(),
     }
 }
 
@@ -596,9 +606,22 @@ fn parse_and_validate_crl<'a>(
 
     // RFC 5280 §5.1.2.2: Check temporal validity of the CRL
     let now = time::OffsetDateTime::now_utc();
+    let now_ts = now.unix_timestamp();
+
+    // RFC 5280 §5.1.2.4: Reject CRL with thisUpdate in the future
+    let this_update = crl.last_update();
+    let this_update_ts = this_update.timestamp();
+    if this_update_ts > now_ts {
+        return Err(MdocError::RevocationCheckFailed {
+            reason: format!(
+                "CRL thisUpdate is in the future (thisUpdate: {}, now: {})",
+                this_update_ts, now_ts
+            ),
+        });
+    }
+
     if let Some(next_update) = crl.next_update() {
         let next_update_ts = next_update.timestamp();
-        let now_ts = now.unix_timestamp();
         if now_ts > next_update_ts {
             return Err(MdocError::RevocationCheckFailed {
                 reason: format!(
@@ -610,9 +633,6 @@ fn parse_and_validate_crl<'a>(
     }
 
     // RFC 5280 §5.1.2.1: Log warning if CRL is older than expected (but don't reject)
-    let this_update = crl.last_update();
-    let this_update_ts = this_update.timestamp();
-    let now_ts = now.unix_timestamp();
     let age_hours = (now_ts - this_update_ts) / 3600;
     if age_hours > 24 {
         tracing::warn!(
@@ -1093,54 +1113,7 @@ mod tests {
             );
         }
 
-        // TODO: Add integration tests for valid CRL checking:
-        // 1. A valid CRL that does NOT list the DSC serial -> returns Ok(())
-        // 2. A valid CRL that DOES list the DSC serial -> returns MdocError::CertificateRevoked
-        //
-        // These tests require programmatically generating X.509 CRLs signed by the issuer CA.
-        // The `rcgen` crate used for certificate generation does not currently support CRL creation.
-        // Potential approaches:
-        // - Use the `openssl` crate to generate CRLs (adds native dependency)
-        // - Shell out to `openssl` CLI during test setup (complex, brittle)
-        // - Embed pre-generated CRL fixtures as DER bytes (requires regeneration on key rotation)
-        // - Contribute CRL generation support to `rcgen` upstream
-        //
-        // The test pattern below demonstrates the MockCrlFetcher approach. To enable these tests,
-        // generate a CRL fixture using:
-        //
-        // ```sh
-        // # Generate CA key and cert (reuse from test fixtures)
-        // openssl genrsa -out ca.key 2048
-        // openssl req -x509 -new -nodes -key ca.key -sha256 -days 365 -out ca.crt \
-        //   -subj "/C=DE/O=Test IACA"
-        //
-        // # Generate DSC key and cert with known serial
-        // openssl genrsa -out dsc.key 2048
-        // openssl req -new -key dsc.key -out dsc.csr \
-        //   -subj "/C=DE/O=Test Issuer/CN=Test DSC"
-        // openssl x509 -req -in dsc.csr -CA ca.crt -CAkey ca.key -set_serial 0x0102030405 \
-        //   -days 365 -out dsc.crt
-        //
-        // # Create CRL that revokes the DSC serial
-        // echo -e "1. Last Update\n2. Next Update\n3. View Revoked Certificates\n4. Add Revoked Certificate\n5. Quit\nSerial Number: 0102030405\nRevocation Date: $(date +%Y%m%d%H%M%SZ)\n5" | openssl ca -config <(cat /etc/ssl/openssl.cnf; echo "[ca]\ndefault_ca = test_ca\n[test_ca]\ndatabase = crl_db\nserial = serial\ncrlnumber = crlnumber\ncertificate = ca.crt\nprivate_key = ca.key\ndefault_md = sha256\ndefault_crl_days = 30\n") -gencrl -out crl.pem
-        // openssl crl -in crl.pem -outform DER -out crl.der
-        // ```
-        //
-        // Then embed the DER bytes as a constant:
-        // ```rust
-        // const TEST_CRL_DER: &[u8] = include_bytes!("fixtures/test_crl.der");
-        // ```
-        //
-        // See the MockCrlFetcher trait implementation template below.
-
         /// Mock CRL fetcher for testing with pre-generated CRL fixtures.
-        ///
-        /// Usage:
-        /// ```rust,ignore
-        /// let mock_fetcher = MockCrlFetcher { crl_bytes: pre_generated_crl_der };
-        /// let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
-        /// ```
-        #[allow(dead_code)]
         struct MockCrlFetcher {
             crl_bytes: Vec<u8>,
         }
@@ -1152,19 +1125,129 @@ mod tests {
             }
         }
 
-        // Note: The following tests are disabled pending CRL fixture generation.
-        // To enable, uncomment and provide pre-generated CRL DER bytes signed by a test CA.
-        //
-        // #[tokio::test]
-        // async fn check_revocation_valid_crl_clears_dsc() {
-        //     // Test: CRL does NOT list DSC serial -> Ok(())
-        //     let (iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri("https://example.com/crl.crl");
-        //     let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
-        //     let crl_bytes = include_bytes!("fixtures/valid_crl.der").to_vec();
-        //     let mock_fetcher = MockCrlFetcher { crl_bytes };
-        //     let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, Some(&mock_fetcher)).await;
-        //     assert!(result.is_ok(), "Valid CRL should not reject unrevoked DSC");
-        // }
+        /// Test fixtures generated by openssl (see test_data/mdoc/crl/README.md)
+        /// CA certificate (self-signed root, used as DSC issuer)
+        const CA_DER: &[u8] = include_bytes!("../../../test_data/mdoc/crl/ca.der");
+        /// DSC with serial 0x0102030405 (revoked in crl_revoked.crl)
+        const DSC_REVOKED_DER: &[u8] =
+            include_bytes!("../../../test_data/mdoc/crl/dsc_with_crl_dp.der");
+        /// DSC with serial 0xDEADBEEF (not revoked in any CRL)
+        const DSC_NONREVOKED_DER: &[u8] =
+            include_bytes!("../../../test_data/mdoc/crl/dsc_nonrevoked.der");
+        /// Empty CRL signed by CA (no revoked certificates)
+        const CRL_EMPTY_DER: &[u8] = include_bytes!("../../../test_data/mdoc/crl/crl_empty.crl");
+        /// CRL signed by CA with serial 0x0102030405 revoked
+        const CRL_REVOKED_DER: &[u8] =
+            include_bytes!("../../../test_data/mdoc/crl/crl_revoked.crl");
+        /// CRL signed by a different CA (invalid signature)
+        const CRL_INVALID_DER: &[u8] =
+            include_bytes!("../../../test_data/mdoc/crl/crl_invalid.crl");
+
+        #[tokio::test]
+        async fn check_revocation_empty_crl_clears_nonrevoked_dsc() {
+            let (_, dsc) = X509Certificate::from_der(DSC_NONREVOKED_DER).expect("DSC must parse");
+            let mock_fetcher = MockCrlFetcher {
+                crl_bytes: CRL_EMPTY_DER.to_vec(),
+            };
+            let result = check_revocation(
+                &dsc,
+                CA_DER,
+                RevocationPolicy::HardFail,
+                Some(&mock_fetcher),
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "Empty CRL should not reject non-revoked DSC: {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn check_revocation_revoked_crl_clears_nonrevoked_dsc() {
+            let (_, dsc) = X509Certificate::from_der(DSC_NONREVOKED_DER).expect("DSC must parse");
+            let mock_fetcher = MockCrlFetcher {
+                crl_bytes: CRL_REVOKED_DER.to_vec(),
+            };
+            let result = check_revocation(
+                &dsc,
+                CA_DER,
+                RevocationPolicy::HardFail,
+                Some(&mock_fetcher),
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "CRL with revoked DSC should not revoke different DSC: {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn check_revocation_revoked_dsc_returns_error() {
+            let (_, dsc) = X509Certificate::from_der(DSC_REVOKED_DER).expect("DSC must parse");
+            let mock_fetcher = MockCrlFetcher {
+                crl_bytes: CRL_REVOKED_DER.to_vec(),
+            };
+            let result = check_revocation(
+                &dsc,
+                CA_DER,
+                RevocationPolicy::HardFail,
+                Some(&mock_fetcher),
+            )
+            .await;
+            assert!(
+                matches!(result, Err(MdocError::CertificateRevoked { .. })),
+                "DSC revoked in CRL should return CertificateRevoked error: {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn check_revocation_invalid_crl_signature_rejected_hardfail() {
+            let (_, dsc) = X509Certificate::from_der(DSC_NONREVOKED_DER).expect("DSC must parse");
+            let mock_fetcher = MockCrlFetcher {
+                crl_bytes: CRL_INVALID_DER.to_vec(),
+            };
+            let result = check_revocation(
+                &dsc,
+                CA_DER,
+                RevocationPolicy::HardFail,
+                Some(&mock_fetcher),
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "CRL from wrong issuer should be rejected under HardFail: {:?}",
+                result
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("issuer name does not match")
+                    || err_msg.contains("signature verification failed"),
+                "Error should indicate issuer mismatch or signature failure: {err_msg}"
+            );
+        }
+
+        #[tokio::test]
+        async fn check_revocation_invalid_crl_signature_tolerated_softfail() {
+            let (_, dsc) = X509Certificate::from_der(DSC_NONREVOKED_DER).expect("DSC must parse");
+            let mock_fetcher = MockCrlFetcher {
+                crl_bytes: CRL_INVALID_DER.to_vec(),
+            };
+            let result = check_revocation(
+                &dsc,
+                CA_DER,
+                RevocationPolicy::SoftFail,
+                Some(&mock_fetcher),
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "SoftFail should tolerate CRL signature verification failure: {:?}",
+                result
+            );
+        }
         //
         // #[tokio::test]
         // async fn check_revocation_revoked_dsc() {

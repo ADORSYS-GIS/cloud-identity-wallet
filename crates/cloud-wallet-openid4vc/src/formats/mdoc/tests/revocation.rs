@@ -91,6 +91,41 @@ fn is_blocked_ip_accepts_public_ipv6() {
     assert!(!is_blocked_ip(&"2606:4700:4700::1111".parse().unwrap())); // Cloudflare DNS
 }
 
+#[test]
+fn is_blocked_ip_rejects_cgnat_range() {
+    // 100.64.0.0/10 - CGNAT/Shared address space (RFC 6598)
+    assert!(is_blocked_ip(&"100.64.0.1".parse().unwrap()));
+    assert!(is_blocked_ip(&"100.127.255.255".parse().unwrap()));
+    // Addresses outside CGNAT range
+    assert!(!is_blocked_ip(&"100.63.255.255".parse().unwrap()));
+    assert!(!is_blocked_ip(&"100.128.0.1".parse().unwrap()));
+}
+
+#[test]
+fn is_blocked_ip_rejects_ipv4_mapped_loopback() {
+    // IPv4-mapped loopback addresses (::ffff:127.0.0.0/8)
+    // Ipv6Addr::is_loopback() does NOT treat these as loopback
+    assert!(is_blocked_ip(&"::ffff:127.0.0.1".parse().unwrap()));
+    assert!(is_blocked_ip(&"::ffff:127.0.0.0".parse().unwrap()));
+    assert!(is_blocked_ip(&"::ffff:127.255.255.255".parse().unwrap()));
+}
+
+#[test]
+fn is_blocked_ip_rejects_ipv4_mapped_private_ranges() {
+    // IPv4-mapped private ranges
+    assert!(is_blocked_ip(&"::ffff:10.0.0.1".parse().unwrap())); // 10.0.0.0/8
+    assert!(is_blocked_ip(&"::ffff:172.16.0.1".parse().unwrap())); // 172.16.0.0/12
+    assert!(is_blocked_ip(&"::ffff:192.168.0.1".parse().unwrap())); // 192.168.0.0/16
+    assert!(is_blocked_ip(&"::ffff:100.64.0.1".parse().unwrap())); // CGNAT
+}
+
+#[test]
+fn is_blocked_ip_rejects_ipv4_mapped_link_local() {
+    // IPv4-mapped link-local
+    assert!(is_blocked_ip(&"::ffff:169.254.0.1".parse().unwrap()));
+    assert!(is_blocked_ip(&"::ffff:169.254.169.254".parse().unwrap())); // metadata
+}
+
 #[tokio::test]
 async fn validate_crl_url_rejects_localhost() {
     let err = validate_crl_url("https://127.0.0.1/crl.crl")
