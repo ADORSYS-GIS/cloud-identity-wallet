@@ -114,13 +114,6 @@ impl WalletAttestationSigner {
             x5c: None,
         };
 
-        // Ensure x5c is either None or contains at least one certificate
-        if matches!(attestation_header.x5c, Some(ref x5c) if x5c.is_empty()) {
-            return Err(ClientError::validation(
-                "x5c must contain at least one certificate when present",
-            ));
-        }
-
         let attestation_jwt = provider_key.encode(&attestation_header, &attestation_claims)?;
 
         Ok(Self {
@@ -175,6 +168,18 @@ impl WalletAttestationSigner {
 
     /// Validates the attestation JWT by verifying its signature against the wallet
     /// provider public key and checking that it is not expired.
+    ///
+    /// # Validation performed
+    /// - Signature verification using the provider's public key
+    /// - Expiration time (`exp`) check
+    /// - Not-before time (`nbf`) check (via jsonwebtoken's default validation)
+    ///
+    /// # Validation NOT performed
+    /// - `iss` (issuer) claim - expected issuer is not known at this layer
+    /// - `aud` (audience) claim - expected audience is not known at this layer
+    ///
+    /// Callers requiring full validation should decode the JWT and verify these
+    /// claims against expected values after calling this method.
     pub fn validate_attestation(&self) -> Result<()> {
         let header = jsonwebtoken::decode_header(&self.attestation_jwt)
             .map_err(|e| ClientError::validation(format!("invalid attestation JWT header: {e}")))?;

@@ -164,8 +164,19 @@ impl JwtSigner {
     }
 
     /// Creates a signer from an RSA private key in PKCS#8 format.
+    ///
+    /// Only 2048, 3072, 4096, and 8192-bit RSA keys are supported.
     pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
-        let key = KeyMaterial::Rsa(rsa::KeyPair::from_pkcs8_der(der.as_ref())?);
+        let rsa_keypair = rsa::KeyPair::from_pkcs8_der(der.as_ref())?;
+        // Validate RSA key size is supported
+        let modulus_len = rsa_keypair.modulus_len();
+        if !matches!(modulus_len, 256 | 384 | 512 | 1024) {
+            return Err(ClientError::configuration(format!(
+                "unsupported RSA key size: {} bits (expected 2048, 3072, 4096, or 8192)",
+                modulus_len * 8
+            )));
+        }
+        let key = KeyMaterial::Rsa(rsa_keypair);
         let algorithm = key.algorithm();
         let public_jwk = match &key {
             KeyMaterial::Rsa(k) => Jwk::try_from(k)?,
@@ -204,13 +215,8 @@ impl JwtSigner {
                 let sig = match sig_len {
                     256 => keypair.sign_pss_sha256(msg, &mut sig)?,
                     384 => keypair.sign_pss_sha384(msg, &mut sig)?,
-                    512 => keypair.sign_pss_sha512(msg, &mut sig)?,
-                    _ => {
-                        return Err(ClientError::configuration(format!(
-                            "unsupported RSA key size: {} bits (expected 2048, 3072, or 4096)",
-                            sig_len * 8
-                        )));
-                    }
+                    512 | 1024 => keypair.sign_pss_sha512(msg, &mut sig)?,
+                    _ => unreachable!("RSA key size validated at construction"),
                 };
                 Ok(sig.to_vec())
             }
@@ -261,7 +267,7 @@ impl KeyMaterial {
             KeyMaterial::Rsa(key) => match key.modulus_len() {
                 256 => Algorithm::PS256,
                 384 => Algorithm::PS384,
-                512 => Algorithm::PS512,
+                512 | 1024 => Algorithm::PS512,
                 _ => unreachable!("RSA key size validated at construction"),
             },
         }
