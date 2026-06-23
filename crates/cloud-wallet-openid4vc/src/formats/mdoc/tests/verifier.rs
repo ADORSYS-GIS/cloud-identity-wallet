@@ -798,6 +798,7 @@ async fn verify_issuer_signature_accepts_valid_chain() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
 
@@ -827,6 +828,7 @@ async fn verify_issuer_signature_rejects_tampered_payload() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("tampered payload must be rejected");
@@ -852,6 +854,7 @@ async fn verify_issuer_signature_rejects_untrusted_root() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("chain not anchored to trusted root must be rejected");
@@ -875,6 +878,7 @@ async fn verify_issuer_signature_rejects_missing_eku() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("DSC without ISO 18013-5 EKU must be rejected");
@@ -940,6 +944,7 @@ async fn verify_issuer_signature_rejects_missing_x5chain() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("missing x5chain must be rejected");
@@ -963,6 +968,7 @@ async fn verify_issuer_signature_rejects_doctype_mismatch() {
         "com.example.other.doctype",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("docType mismatch must be rejected");
@@ -997,6 +1003,7 @@ async fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("MSO signed before DSC notBefore must be rejected");
@@ -1021,6 +1028,7 @@ async fn verify_issuer_signature_rejects_country_mismatch() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("DSC/IACA country mismatch must be rejected");
@@ -1055,6 +1063,7 @@ async fn verify_issuer_signature_rejects_dsc_validity_too_long() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("DSC with 459-day validity must be rejected");
@@ -1078,6 +1087,7 @@ async fn verify_issuer_signature_accepts_valid_es512() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
 
@@ -1106,6 +1116,7 @@ async fn verify_issuer_signature_rejects_state_mismatch() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("DSC/IACA state mismatch must be rejected");
@@ -1130,6 +1141,7 @@ async fn verify_issuer_signature_rejects_missing_key_usage() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("DSC without digitalSignature key usage must be rejected");
@@ -1166,6 +1178,7 @@ async fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("MSO signed after DSC notAfter must be rejected");
@@ -1191,6 +1204,7 @@ async fn verify_issuer_signature_accepts_single_bstr_x5chain() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
 
@@ -1216,6 +1230,7 @@ async fn verify_issuer_signature_accepts_intermediate_ca_chain() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
 
@@ -1249,6 +1264,7 @@ async fn verify_issuer_signature_rejects_tampered_intermediate() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("chain with wrong intermediate must be rejected");
@@ -1273,6 +1289,7 @@ async fn verify_issuer_signature_rejects_empty_trust_store() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("empty trust store must reject all chains");
@@ -1309,6 +1326,7 @@ async fn verify_issuer_signature_rejects_brainpool_algorithms() {
             "org.iso.18013.5.1.mDL",
             &trust_store,
             RevocationPolicy::Skip,
+            OffsetDateTime::now_utc(),
         )
         .await
         .expect_err("Brainpool must be rejected as unsupported");
@@ -1341,6 +1359,7 @@ async fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("IACA root present in x5chain must be rejected");
@@ -1368,6 +1387,7 @@ async fn verify_issuer_signature_rejects_ed448_algorithm() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await
     .expect_err("Ed448 DSC must be rejected");
@@ -1391,6 +1411,7 @@ async fn verify_issuer_signature_accepts_valid_es384() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
 
@@ -1418,6 +1439,7 @@ async fn verify_issuer_signature_accepts_valid_ed25519() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
 
@@ -1507,6 +1529,7 @@ async fn tbs_data_preserves_original_protected_header_bytes() {
         "org.iso.18013.5.1.mDL",
         &trust_store,
         RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
     )
     .await;
     assert!(

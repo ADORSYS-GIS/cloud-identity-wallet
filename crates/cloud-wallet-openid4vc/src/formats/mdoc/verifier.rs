@@ -172,6 +172,7 @@ pub(crate) async fn verify_issuer_signature(
     outer_doc_type: &str,
     trust_store: &dyn IacaTrustStore,
     revocation_policy: RevocationPolicy,
+    now: OffsetDateTime,
 ) -> Result<IssuerInfo> {
     let alg = read_cose_alg(parsed)?;
 
@@ -246,7 +247,7 @@ pub(crate) async fn verify_issuer_signature(
         // Single-level chain: DSC is directly signed by the IACA root
         &anchoring_root_der
     };
-    check_revocation(&dsc, dsc_issuer_der, revocation_policy, None).await?;
+    check_revocation(&dsc, dsc_issuer_der, revocation_policy, None, now).await?;
 
     let issuer_subject = dsc.subject().to_string();
     let issuer_country = dsc
@@ -650,7 +651,8 @@ pub async fn verify_mdoc_for_issuance(
 ) -> Result<IssuerInfo> {
     parsed.check_temporal_validity(now)?;
     let issuer_info =
-        verify_issuer_signature(parsed, outer_doc_type, trust_store, revocation_policy).await?;
+        verify_issuer_signature(parsed, outer_doc_type, trust_store, revocation_policy, now)
+            .await?;
     verify_digests(parsed)?;
     verify_device_key_binding(parsed, holder_binding_public_jwk)?;
     Ok(issuer_info)

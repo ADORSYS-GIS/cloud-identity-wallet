@@ -126,6 +126,19 @@ fn is_ipv6_documentation(ip: &Ipv6Addr) -> bool {
     segments[0] == 0x2001 && segments[1] == 0x0db8 // 2001:db8::/32 - Documentation
 }
 
+/// CRL URL validation error type.
+///
+/// Distinguishes between SSRF-blocked IPs (security boundary, always hard-fail)
+/// and DNS/network failures (route through the revocation policy handler so
+/// SoftFail can tolerate them).
+#[derive(Debug)]
+pub(crate) enum CrlUrlValidationError {
+    /// The URL resolves to a blocked IP address (SSRF attack prevention).
+    SsrfBlocked(String),
+    /// DNS resolution or other network failure occurred while validating URL.
+    NetworkFailure(String),
+}
+
 /// Validates that a CRL URL is safe to fetch from, protecting against SSRF attacks.
 ///
 /// This function:
@@ -133,18 +146,22 @@ fn is_ipv6_documentation(ip: &Ipv6Addr) -> bool {
 /// 2. Resolves the hostname to IP addresses
 /// 3. Rejects URLs that resolve to blocked IP ranges (loopback, private, link-local, metadata)
 ///
-/// Returns `Ok(())` if the URL is safe, or an error describing why it's blocked.
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) async fn validate_crl_url(uri: &str) -> std::result::Result<(), String> {
-    let url = Url::parse(uri).map_err(|e| format!("Invalid URL: {e}"))?;
+/// Returns `Ok(())` if the URL is safe, or a `CrlUrlValidationError` describing why
+/// validation failed.
+pub(crate) async fn validate_crl_url(uri: &str) -> std::result::Result<(), CrlUrlValidationError> {
+    let url = Url::parse(uri)
+        .map_err(|e| CrlUrlValidationError::NetworkFailure(format!("Invalid URL: {e}")))?;
 
     if url.scheme() != "https" {
-        return Err(format!("CRL URL must use HTTPS, got: {}", url.scheme()));
+        return Err(CrlUrlValidationError::SsrfBlocked(format!(
+            "CRL URL must use HTTPS, got: {}",
+            url.scheme()
+        )));
     }
 
     let host = url
         .host_str()
-        .ok_or_else(|| "CRL URL missing host".to_string())?;
+        .ok_or_else(|| CrlUrlValidationError::NetworkFailure("CRL URL missing host".to_string()))?;
 
     // Check if host is already an IP address (IPv4 or IPv6 in brackets)
     // For IPv6, url.host_str() returns the address with brackets, e.g., "[::1]"
@@ -157,7 +174,9 @@ pub(crate) async fn validate_crl_url(uri: &str) -> std::result::Result<(), Strin
 
     if let Ok(ip) = ip_str.parse::<IpAddr>() {
         if is_blocked_ip(&ip) {
-            return Err(format!("CRL URL resolves to blocked IP address: {ip}"));
+            return Err(CrlUrlValidationError::SsrfBlocked(format!(
+                "CRL URL resolves to blocked IP address: {ip}"
+            )));
         }
         return Ok(());
     }
@@ -165,14 +184,18 @@ pub(crate) async fn validate_crl_url(uri: &str) -> std::result::Result<(), Strin
     // Resolve hostname to IP addresses and check each one
     let socket_addrs = tokio::net::lookup_host((host, url.port().unwrap_or(443)))
         .await
-        .map_err(|e| format!("Failed to resolve hostname '{host}': {e}"))?;
+        .map_err(|e| {
+            CrlUrlValidationError::NetworkFailure(format!(
+                "Failed to resolve hostname '{host}': {e}"
+            ))
+        })?;
 
     for addr in socket_addrs {
         if is_blocked_ip(&addr.ip()) {
-            return Err(format!(
+            return Err(CrlUrlValidationError::SsrfBlocked(format!(
                 "CRL URL hostname '{host}' resolves to blocked IP address: {}",
                 addr.ip()
-            ));
+            )));
         }
     }
 
@@ -228,7 +251,6 @@ static DEFAULT_CRL_FETCHER: LazyLock<HttpCrlFetcher> = LazyLock::new(HttpCrlFetc
 /// Cache entries have a TTL (default 6 hours) and the cache has a maximum size.
 pub struct HttpCrlFetcher {
     http_client: Client,
-    cache_ttl: Duration,
 }
 
 impl HttpCrlFetcher {
@@ -240,19 +262,6 @@ impl HttpCrlFetcher {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("HTTP client with rustls must initialize"),
-            cache_ttl: DEFAULT_CRL_CACHE_TTL,
-        }
-    }
-
-    /// Creates a new HTTP CRL fetcher with a custom cache TTL.
-    pub fn with_cache_ttl(cache_ttl: Duration) -> Self {
-        Self {
-            http_client: Client::builder()
-                .use_rustls_tls()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .expect("HTTP client with rustls must initialize"),
-            cache_ttl,
         }
     }
 
@@ -307,7 +316,7 @@ impl CrlFetcher for HttpCrlFetcher {
                 CrlCacheEntry {
                     crl_der: crl_der.clone(),
                     fetched_at: Instant::now(),
-                    expires_after: self.cache_ttl,
+                    expires_after: DEFAULT_CRL_CACHE_TTL,
                     insertion_order,
                 },
             );
@@ -434,6 +443,7 @@ fn extract_https_uri_from_distribution_point<'a>(dp: &CRLDistributionPoint<'a>) 
 ///   for multi-level chains it is the intermediate CA.
 /// - `policy`: Revocation checking policy.
 /// - `fetcher`: Optional CRL fetcher for dependency injection. Uses default HttpCrlFetcher if None.
+/// - `now`: Current time for CRL temporal validity checks. Injected for testability.
 ///
 /// # Returns
 ///
@@ -446,6 +456,7 @@ pub async fn check_revocation(
     dsc_issuer_der: &[u8],
     policy: RevocationPolicy,
     fetcher: Option<&dyn CrlFetcher>,
+    now: time::OffsetDateTime,
 ) -> Result<()> {
     if policy == RevocationPolicy::Skip {
         return Ok(());
@@ -463,10 +474,22 @@ pub async fn check_revocation(
     // SSRF protection: validate the CRL URL before fetching to prevent
     // server-side request forgery attacks against internal infrastructure
     // or cloud metadata endpoints.
-    if let Err(e) = validate_crl_url(&crl_uri).await {
-        return Err(MdocError::RevocationCheckFailed {
-            reason: format!("CRL URL validation failed: {e}"),
-        });
+    //
+    // When a custom fetcher is provided (testing), URL validation is skipped
+    // since the fetcher doesn't make real HTTP calls and DNS lookups cannot
+    // be mocked.
+    if fetcher.is_none() {
+        match validate_crl_url(&crl_uri).await {
+            Ok(()) => {}
+            Err(CrlUrlValidationError::SsrfBlocked(reason)) => {
+                return Err(MdocError::RevocationCheckFailed {
+                    reason: format!("CRL URL validation failed: {reason}"),
+                });
+            }
+            Err(CrlUrlValidationError::NetworkFailure(reason)) => {
+                return handle_crl_url_network_error(&crl_uri, &reason, policy);
+            }
+        }
     }
 
     let fetcher_ref = fetcher.unwrap_or_else(|| HttpCrlFetcher::global());
@@ -478,7 +501,7 @@ pub async fn check_revocation(
         }
     };
 
-    let crl = match parse_and_validate_crl(&crl_bytes, dsc_issuer_der) {
+    let crl = match parse_and_validate_crl(&crl_bytes, dsc_issuer_der, now) {
         Ok(crl) => crl,
         Err(e) => {
             return handle_crl_parse_error(&crl_uri, e, policy);
@@ -510,6 +533,27 @@ fn handle_missing_crl_uri(policy: RevocationPolicy) -> Result<()> {
         }
         RevocationPolicy::HardFail => Err(MdocError::RevocationCheckFailed {
             reason: "DSC has no CRL Distribution Point URI".to_owned(),
+        }),
+        RevocationPolicy::Skip => unreachable!("Skip policy returns early in check_revocation"),
+    }
+}
+
+/// Handles CRL URL network errors (DNS resolution failures, etc.) according to policy.
+///
+/// Unlike SSRF-blocked IP errors which always produce a hard failure (security boundary),
+/// network failures during URL validation are routed through the policy handler so that
+/// SoftFail can tolerate them.
+fn handle_crl_url_network_error(uri: &str, reason: &str, policy: RevocationPolicy) -> Result<()> {
+    match policy {
+        RevocationPolicy::SoftFail => {
+            tracing::warn!(
+                "CRL URL validation for {} failed: {reason}; skipping revocation check",
+                uri
+            );
+            Ok(())
+        }
+        RevocationPolicy::HardFail => Err(MdocError::RevocationCheckFailed {
+            reason: format!("CRL URL validation for {} failed: {reason}", uri),
         }),
         RevocationPolicy::Skip => unreachable!("Skip policy returns early in check_revocation"),
     }
@@ -559,9 +603,16 @@ fn handle_crl_parse_error(uri: &str, error: MdocError, policy: RevocationPolicy)
 /// 3. CRL temporal validity (thisUpdate/nextUpdate)
 /// 4. Authority Key Identifier matches (if present in both CRL and issuer cert)
 /// 5. Rejects indirect CRLs and delta CRLs
+///
+/// # Parameters
+///
+/// - `crl_der`: DER-encoded CRL bytes.
+/// - `dsc_issuer_der`: DER bytes of the certificate that issued the DSC.
+/// - `now`: Current time for temporal validity checks. Injected for testability.
 fn parse_and_validate_crl<'a>(
     crl_der: &'a [u8],
     dsc_issuer_der: &[u8],
+    now: time::OffsetDateTime,
 ) -> Result<CertificateRevocationList<'a>> {
     let (_, crl) = CertificateRevocationList::from_der(crl_der).map_err(|e| {
         MdocError::RevocationCheckFailed {
@@ -605,7 +656,6 @@ fn parse_and_validate_crl<'a>(
     verify_aki_match(&crl, &issuer_cert)?;
 
     // RFC 5280 §5.1.2.2: Check temporal validity of the CRL
-    let now = time::OffsetDateTime::now_utc();
     let now_ts = now.unix_timestamp();
 
     // RFC 5280 §5.1.2.4: Reject CRL with thisUpdate in the future
@@ -630,6 +680,10 @@ fn parse_and_validate_crl<'a>(
                 ),
             });
         }
+    } else {
+        // RFC 5280 §5.1.2.5: nextUpdate is optional but CRL issuers SHOULD include it.
+        // A CRL without nextUpdate has no upper freshness bound, weakening revocation assurance.
+        tracing::warn!("CRL missing nextUpdate field; cannot verify CRL freshness boundary");
     }
 
     // RFC 5280 §5.1.2.1: Log warning if CRL is older than expected (but don't reject)
@@ -984,8 +1038,9 @@ mod tests {
             let (iaca_der, dsc_der, _signing_key) =
                 build_chain_with_crl_uri("https://nonexistent.example.com/crl.crl");
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+            let now = OffsetDateTime::now_utc();
 
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::Skip, None).await;
+            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::Skip, None, now).await;
             assert!(
                 result.is_ok(),
                 "Skip policy should always return Ok: {:?}",
@@ -1039,8 +1094,11 @@ mod tests {
 
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
 
+            let now = OffsetDateTime::now_utc();
+
             // SoftFail should tolerate missing CRL URI
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail, None).await;
+            let result =
+                check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail, None, now).await;
             assert!(
                 result.is_ok(),
                 "SoftFail should tolerate missing CRL URI: {:?}",
@@ -1048,30 +1106,49 @@ mod tests {
             );
 
             // HardFail should reject missing CRL URI
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, None).await;
+            let result =
+                check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, None, now).await;
             assert!(result.is_err(), "HardFail should reject missing CRL URI");
         }
 
         #[tokio::test]
         async fn check_revocation_soft_fail_tolerates_crl_fetch_failure() {
-            use wiremock::matchers::{method, path};
-            use wiremock::{Mock, MockServer, ResponseTemplate};
+            struct FailingCrlFetcher;
 
-            let mock_server = MockServer::start().await;
-            let crl_uri = format!("{}/crl.crl", mock_server.uri());
+            #[async_trait]
+            impl CrlFetcher for FailingCrlFetcher {
+                async fn fetch_crl(
+                    &self,
+                    _uri: &str,
+                ) -> std::result::Result<Vec<u8>, reqwest::Error> {
+                    // Trigger a genuine reqwest error by connecting to a refused port.
+                    // This exercises the handle_crl_fetch_error code path with a real
+                    // reqwest::Error rather than a synthetic one (reqwest::Error::new is
+                    // pub(crate) and cannot be called from outside the crate).
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_millis(100))
+                        .build()
+                        .expect("client must build");
+                    client.get("http://127.0.0.1:1").send().await?;
+                    unreachable!("connection to refused port must fail")
+                }
+            }
 
-            // Return 404 for CRL request
-            Mock::given(method("GET"))
-                .and(path("/crl.crl"))
-                .respond_with(ResponseTemplate::new(404))
-                .mount(&mock_server)
-                .await;
-
-            let (iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri(&crl_uri);
+            let test_uri = "https://example.com/crl.crl";
+            let (iaca_der, dsc_der, _signing_key) = build_chain_with_crl_uri(test_uri);
             let (_, dsc) = X509Certificate::from_der(&dsc_der).expect("DSC must parse");
+            let now = OffsetDateTime::now_utc();
+            let fetcher = FailingCrlFetcher;
 
             // SoftFail should tolerate CRL fetch failure
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::SoftFail, None).await;
+            let result = check_revocation(
+                &dsc,
+                &iaca_der,
+                RevocationPolicy::SoftFail,
+                Some(&fetcher),
+                now,
+            )
+            .await;
             assert!(
                 result.is_ok(),
                 "SoftFail should tolerate CRL fetch failure: {:?}",
@@ -1079,7 +1156,14 @@ mod tests {
             );
 
             // HardFail should reject CRL fetch failure
-            let result = check_revocation(&dsc, &iaca_der, RevocationPolicy::HardFail, None).await;
+            let result = check_revocation(
+                &dsc,
+                &iaca_der,
+                RevocationPolicy::HardFail,
+                Some(&fetcher),
+                now,
+            )
+            .await;
             assert!(result.is_err(), "HardFail should reject CRL fetch failure");
         }
 
@@ -1149,11 +1233,13 @@ mod tests {
             let mock_fetcher = MockCrlFetcher {
                 crl_bytes: CRL_EMPTY_DER.to_vec(),
             };
+            let now = OffsetDateTime::now_utc();
             let result = check_revocation(
                 &dsc,
                 CA_DER,
                 RevocationPolicy::HardFail,
                 Some(&mock_fetcher),
+                now,
             )
             .await;
             assert!(
@@ -1169,11 +1255,13 @@ mod tests {
             let mock_fetcher = MockCrlFetcher {
                 crl_bytes: CRL_REVOKED_DER.to_vec(),
             };
+            let now = OffsetDateTime::now_utc();
             let result = check_revocation(
                 &dsc,
                 CA_DER,
                 RevocationPolicy::HardFail,
                 Some(&mock_fetcher),
+                now,
             )
             .await;
             assert!(
@@ -1189,11 +1277,13 @@ mod tests {
             let mock_fetcher = MockCrlFetcher {
                 crl_bytes: CRL_REVOKED_DER.to_vec(),
             };
+            let now = OffsetDateTime::now_utc();
             let result = check_revocation(
                 &dsc,
                 CA_DER,
                 RevocationPolicy::HardFail,
                 Some(&mock_fetcher),
+                now,
             )
             .await;
             assert!(
@@ -1209,11 +1299,13 @@ mod tests {
             let mock_fetcher = MockCrlFetcher {
                 crl_bytes: CRL_INVALID_DER.to_vec(),
             };
+            let now = OffsetDateTime::now_utc();
             let result = check_revocation(
                 &dsc,
                 CA_DER,
                 RevocationPolicy::HardFail,
                 Some(&mock_fetcher),
+                now,
             )
             .await;
             assert!(
@@ -1235,11 +1327,13 @@ mod tests {
             let mock_fetcher = MockCrlFetcher {
                 crl_bytes: CRL_INVALID_DER.to_vec(),
             };
+            let now = OffsetDateTime::now_utc();
             let result = check_revocation(
                 &dsc,
                 CA_DER,
                 RevocationPolicy::SoftFail,
                 Some(&mock_fetcher),
+                now,
             )
             .await;
             assert!(

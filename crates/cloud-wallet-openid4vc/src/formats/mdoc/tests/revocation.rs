@@ -1,4 +1,4 @@
-use crate::formats::mdoc::revocation::{is_blocked_ip, validate_crl_url};
+use crate::formats::mdoc::revocation::{CrlUrlValidationError, is_blocked_ip, validate_crl_url};
 
 #[test]
 fn is_blocked_ip_rejects_loopback_ipv4() {
@@ -131,7 +131,10 @@ async fn validate_crl_url_rejects_localhost() {
     let err = validate_crl_url("https://127.0.0.1/crl.crl")
         .await
         .expect_err("localhost IP should be rejected");
-    assert!(err.contains("blocked IP address"));
+    assert!(
+        matches!(err, CrlUrlValidationError::SsrfBlocked(ref msg) if msg.contains("blocked IP address")),
+        "Expected SsrfBlocked with 'blocked IP address', got: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -139,7 +142,10 @@ async fn validate_crl_url_rejects_private_ip() {
     let err = validate_crl_url("https://192.168.1.1/crl.crl")
         .await
         .expect_err("private IP should be rejected");
-    assert!(err.contains("blocked IP address"));
+    assert!(
+        matches!(err, CrlUrlValidationError::SsrfBlocked(ref msg) if msg.contains("blocked IP address")),
+        "Expected SsrfBlocked with 'blocked IP address', got: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -147,7 +153,10 @@ async fn validate_crl_url_rejects_metadata_endpoint() {
     let err = validate_crl_url("https://169.254.169.254/latest/meta-data/crl")
         .await
         .expect_err("metadata IP should be rejected");
-    assert!(err.contains("blocked IP address"));
+    assert!(
+        matches!(err, CrlUrlValidationError::SsrfBlocked(ref msg) if msg.contains("blocked IP address")),
+        "Expected SsrfBlocked with 'blocked IP address', got: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -155,7 +164,10 @@ async fn validate_crl_url_rejects_link_local() {
     let err = validate_crl_url("https://169.254.1.1/crl.crl")
         .await
         .expect_err("link-local IP should be rejected");
-    assert!(err.contains("blocked IP address"));
+    assert!(
+        matches!(err, CrlUrlValidationError::SsrfBlocked(ref msg) if msg.contains("blocked IP address")),
+        "Expected SsrfBlocked with 'blocked IP address', got: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -163,20 +175,20 @@ async fn validate_crl_url_rejects_http_scheme() {
     let err = validate_crl_url("http://example.com/crl.crl")
         .await
         .expect_err("HTTP scheme should be rejected");
-    assert!(err.contains("HTTPS"));
+    assert!(
+        matches!(err, CrlUrlValidationError::SsrfBlocked(ref msg) if msg.contains("HTTPS")),
+        "Expected SsrfBlocked with 'HTTPS', got: {err:?}"
+    );
 }
 
 #[tokio::test]
 async fn validate_crl_url_rejects_ipv6_loopback() {
     let err = validate_crl_url("https://[::1]/crl.crl")
         .await
-        .expect_err(&format!(
-            "IPv6 loopback should be rejected, got: {:?}",
-            validate_crl_url("https://[::1]/crl.crl").await
-        ));
+        .expect_err("IPv6 loopback should be rejected");
     assert!(
-        err.contains("blocked IP address"),
-        "Expected 'blocked IP address' in error, got: {err}"
+        matches!(err, CrlUrlValidationError::SsrfBlocked(ref msg) if msg.contains("blocked IP address")),
+        "Expected SsrfBlocked with 'blocked IP address', got: {err:?}"
     );
 }
 
@@ -188,8 +200,8 @@ async fn validate_crl_url_accepts_public_url() {
     // This will fail DNS resolution in CI environments without network,
     // but the IP validation would pass once DNS resolves
     match result {
-        Ok(()) => {}                                   // DNS resolved to public IPs
-        Err(e) if e.contains("resolve hostname") => {} // DNS failed - acceptable
-        Err(e) => panic!("Unexpected error: {e}"),
+        Ok(()) => {}                                        // DNS resolved to public IPs
+        Err(CrlUrlValidationError::NetworkFailure(_)) => {} // DNS failed - acceptable
+        Err(e) => panic!("Unexpected error: {e:?}"),
     }
 }
