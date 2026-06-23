@@ -16,6 +16,7 @@ const OAUTH_CLIENT_ATTESTATION_POP_TYP: &str = "oauth-client-attestation-pop+jwt
 /// Wallet Attestation JWT claims as defined in OID4VCI Appendix E.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WalletAttestation {
     pub iss: String,
 
@@ -40,6 +41,7 @@ pub struct WalletAttestation {
 
 /// Confirmation claim containing the public key used for PoP.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Cnf {
     pub jwk: Jwk,
 }
@@ -48,6 +50,7 @@ pub struct Cnf {
 /// I-D.ietf-oauth-attestation-based-client-auth Section 5.2.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ClientAttestationPop {
     /// Unique identifier for the PoP JWT.
     pub jti: String,
@@ -82,6 +85,7 @@ struct PopHeader {
 
 /// Constructs and signs Wallet Attestation and Client Attestation PoP JWTs.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct WalletAttestationSigner {
     attestation_jwt: String,
     attestation_claims: WalletAttestation,
@@ -111,8 +115,10 @@ impl WalletAttestationSigner {
         };
 
         // Ensure x5c is either None or contains at least one certificate
-        if let Some(ref x5c) = attestation_header.x5c {
-            debug_assert!(!x5c.is_empty(), "x5c must not be empty when present");
+        if matches!(attestation_header.x5c, Some(ref x5c) if x5c.is_empty()) {
+            return Err(ClientError::validation(
+                "x5c must contain at least one certificate when present",
+            ));
         }
 
         let attestation_jwt = provider_key.encode(&attestation_header, &attestation_claims)?;
