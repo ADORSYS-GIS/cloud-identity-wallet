@@ -964,7 +964,9 @@ impl TryFrom<&Jwk> for crate::ecdh::EcdhPublicKey {
 ///
 /// # Errors
 /// [`ErrorKind::UnsupportedAlgorithm`] for non-RSA keys.
-/// [`ErrorKind::Serialization`] or [`ErrorKind::KeyParsing`] on DER encoding failure.
+/// [`ErrorKind::KeyParsing`] if `n` exceeds the largest modulus this crate
+/// supports ([`crate::rsa::RsaKeySize::Rsa8192`]), or on DER encoding failure.
+/// [`ErrorKind::Serialization`] on DER encoding failure.
 #[cfg(feature = "jwe")]
 impl TryFrom<&Jwk> for crate::rsa::oaep::EncryptingKey {
     type Error = Error;
@@ -972,6 +974,24 @@ impl TryFrom<&Jwk> for crate::rsa::oaep::EncryptingKey {
     fn try_from(jwk: &Jwk) -> Result<Self> {
         match &jwk.key {
             Key::Rsa(rsa_key) => {
+                // `n`/`e` originate from the Verifier's JWK — untrusted input.
+                // Reject an oversized modulus before doing any BigInt/DER work
+                // on it, rather than letting `der_length` catch it after the
+                // fact. 1024 bytes = 8192 bits, the largest modulus this crate
+                // generates (`RsaKeySize::Rsa8192`); real keys never approach
+                // this bound, so the check costs legitimate callers nothing.
+                const MAX_RSA_MODULUS_BYTES: usize = 1024;
+                if rsa_key.n.len() > MAX_RSA_MODULUS_BYTES {
+                    return Err(error_msg(
+                        ErrorKind::KeyParsing,
+                        format!(
+                            "RSA modulus is {} bytes, exceeding the {MAX_RSA_MODULUS_BYTES}-byte \
+                             (8192-bit) maximum supported by this crate",
+                            rsa_key.n.len()
+                        ),
+                    ));
+                }
+
                 let n_big = asn1::BigInt::from_bytes_be(Sign::Plus, &rsa_key.n);
                 let e_big = asn1::BigInt::from_bytes_be(Sign::Plus, &rsa_key.e);
 
@@ -1007,14 +1027,14 @@ impl TryFrom<&Jwk> for crate::rsa::oaep::EncryptingKey {
                 // BIT STRING: unused-bits octet (0x00) + pkcs1_der
                 let bit_content_len = 1 + pkcs1_der.len();
                 let mut bit_string = vec![0x03]; // BIT STRING tag
-                bit_string.extend_from_slice(&der_length(bit_content_len));
+                bit_string.extend_from_slice(&der_length(bit_content_len)?);
                 bit_string.push(0x00); // unused bits
                 bit_string.extend_from_slice(&pkcs1_der);
 
                 // Outer SEQUENCE
                 let inner_len = RSA_ALGO_ID.len() + bit_string.len();
                 let mut spki = vec![0x30]; // SEQUENCE tag
-                spki.extend_from_slice(&der_length(inner_len));
+                spki.extend_from_slice(&der_length(inner_len)?);
                 spki.extend_from_slice(RSA_ALGO_ID);
                 spki.extend_from_slice(&bit_string);
 
@@ -1026,22 +1046,27 @@ impl TryFrom<&Jwk> for crate::rsa::oaep::EncryptingKey {
 }
 
 /// Encode `len` as a DER length field (minimal encoding, as required by DER).
+///
+/// `n`/`e` in the source JWK are untrusted (Verifier-supplied) input, so a JWK
+/// claiming an oversized modulus must fail with a [`Result::Err`], not panic.
+///
+/// # Errors
+/// [`ErrorKind::KeyParsing`] if `len` exceeds the two-byte DER length limit
+/// (RSA public key DER bodies fit comfortably within this limit; an RSA-8192
+/// SPKI body is ~1160 bytes).
 #[cfg(feature = "jwe")]
-fn der_length(len: usize) -> Vec<u8> {
+fn der_length(len: usize) -> Result<Vec<u8>> {
     if len < 0x80 {
-        vec![len as u8]
+        Ok(vec![len as u8])
     } else if len < 0x100 {
-        vec![0x81, len as u8]
+        Ok(vec![0x81, len as u8])
+    } else if len < 0x10000 {
+        Ok(vec![0x82, (len >> 8) as u8, (len & 0xff) as u8])
     } else {
-        // RSA public key DER bodies fit in two length bytes (< 65536 bytes).
-        // An RSA-8192 SPKI body is ~1160 bytes; assert here so that a future
-        // key type with a larger DER body fails loudly rather than silently
-        // producing truncated (invalid) DER.
-        assert!(
-            len < 0x10000,
-            "DER body length {len} exceeds two-byte limit; key type is unexpectedly large"
-        );
-        vec![0x82, (len >> 8) as u8, (len & 0xff) as u8]
+        Err(error_msg(
+            ErrorKind::KeyParsing,
+            format!("DER body length {len} exceeds the two-byte DER length limit"),
+        ))
     }
 }
 

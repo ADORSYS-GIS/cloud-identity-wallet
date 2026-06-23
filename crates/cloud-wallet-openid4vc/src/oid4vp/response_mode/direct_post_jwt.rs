@@ -39,6 +39,16 @@ use crate::oid4vp::{
 /// `state` in the `AuthorizationResponse` (via `.with_state(...)`) to enable the
 /// Verifier to detect replayed responses.
 ///
+/// # Algorithm negotiation
+///
+/// This function does not check `encryption_key`/`enc` against the Verifier's
+/// `encrypted_response_alg_values_supported` / `encrypted_response_enc_values_supported`
+/// (`VerifierMetadata`). It only enforces that the JWE `alg` matches `encryption_key`'s
+/// own `alg` parameter, per §8.3. Callers **must** select `encryption_key` and `enc` from
+/// the Verifier's advertised metadata themselves; passing a key or `enc` the Verifier never
+/// advertised will not be rejected here and may fail only when the Verifier processes the
+/// response.
+///
 /// # Errors
 /// [`JarmEncryptError::MissingKeyAlgorithm`] if the JWK has no `alg` field.
 /// [`JarmEncryptError::UnsupportedAlgorithm`] if the `alg` is not a supported JWE alg,
@@ -199,20 +209,18 @@ async fn execute_direct_post_jwt(
 
 /// Maps a JWK `KeyManagement` algorithm to the corresponding JWE `KeyManagementAlgorithm`.
 ///
-/// Returns `UnsupportedAlgorithm` for variants not supported by the JWE encrypt primitive
-/// (`RsaOaep` without hash suffix, `EcdhEsA192Kw`, symmetric and PBES2 algorithms, etc.).
+/// Delegates to `cloud_wallet_crypto`'s `TryFrom<KeyManagement> for KeyManagementAlgorithm`,
+/// which is implemented inside that crate with an exhaustive match (no wildcard arm) over
+/// `KeyManagement`. Both enums are `#[non_exhaustive]` at this crate boundary, so matching on
+/// either one here would silently swallow any algorithm `cloud_wallet_crypto` adds in the
+/// future; delegating means that addition fails to compile in the crypto crate until it is
+/// explicitly routed here, rather than silently being unreachable from this JARM layer.
 fn jwk_km_to_jwe_alg(km: &KeyManagement) -> Result<KeyManagementAlgorithm, JarmEncryptError> {
-    match km {
-        KeyManagement::RsaOaep256 => Ok(KeyManagementAlgorithm::RsaOaep256),
-        KeyManagement::RsaOaep384 => Ok(KeyManagementAlgorithm::RsaOaep384),
-        KeyManagement::RsaOaep512 => Ok(KeyManagementAlgorithm::RsaOaep512),
-        KeyManagement::EcdhEs => Ok(KeyManagementAlgorithm::EcdhEs),
-        KeyManagement::EcdhEsA128Kw => Ok(KeyManagementAlgorithm::EcdhEsA128Kw),
-        KeyManagement::EcdhEsA256Kw => Ok(KeyManagementAlgorithm::EcdhEsA256Kw),
-        other => Err(JarmEncryptError::UnsupportedAlgorithm(format!(
-            "algorithm '{other}' is not supported for JWE key management"
-        ))),
-    }
+    KeyManagementAlgorithm::try_from(*km).map_err(|_| {
+        JarmEncryptError::UnsupportedAlgorithm(format!(
+            "algorithm '{km}' is not supported for JWE key management"
+        ))
+    })
 }
 
 #[cfg(test)]
