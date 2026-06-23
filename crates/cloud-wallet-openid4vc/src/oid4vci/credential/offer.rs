@@ -343,17 +343,16 @@ impl CredentialOfferUri {
             })?,
         };
 
-        let normalized_url = match parsed_url.scheme() {
-            "haip-vci" | "HAIP-VCI" => {
-                let mut reconstructed = parsed_url.clone();
-                reconstructed
-                    .set_scheme("openid-credential-offer")
-                    .map_err(|_| {
-                        Error::message(ErrorKind::InvalidCredentialOffer, "failed to set scheme")
-                    })?;
-                reconstructed
-            }
-            _ => parsed_url,
+        let normalized_url = if parsed_url.scheme().eq_ignore_ascii_case("haip-vci") {
+            let mut reconstructed = parsed_url.clone();
+            reconstructed
+                .set_scheme("openid-credential-offer")
+                .map_err(|_| {
+                    Error::message(ErrorKind::InvalidCredentialOffer, "failed to set scheme")
+                })?;
+            reconstructed
+        } else {
+            parsed_url
         };
 
         Self::from_url(&normalized_url)
@@ -1208,6 +1207,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_haip_vci_mixed_case_scheme() {
+        // Mixed-case scheme like "Haip-Vci" should be normalized (RFC 3986 case-insensitivity)
+        let haip_uri = "Haip-Vci://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
+
+        let uri = CredentialOfferUri::from_offer_link(haip_uri)
+            .expect("should parse mixed-case HAIP-VCI URI");
+
+        match uri.source {
+            CredentialOfferSource::ByValue(offer) => {
+                assert_eq!(
+                    offer.credential_issuer,
+                    Url::parse("https://issuer.example.com").unwrap()
+                );
+            }
+            CredentialOfferSource::ByReference(_) => panic!("Expected by value"),
+        }
+    }
+
+    #[test]
     fn parse_haip_vci_rejects_both_parameters() {
         // Both credential_offer and credential_offer_uri present - must be rejected
         let haip_uri =
@@ -1315,11 +1333,9 @@ mod tests {
     }
 
     #[test]
-    fn from_offer_link_treats_near_uri_as_query() {
-        // If Url::parse fails, treat input as query string, not as having a scheme
+    fn from_offer_link_rejects_unrecognized_scheme() {
+        // Verify that unrecognized schemes are rejected with "unsupported scheme" error
         let malformed = "not-a-scheme://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%2C%22credential_configuration_ids%22%3A%5B%22MyCredential%22%5D%7D";
-        // Actually this parses as a URL, so let's use something that doesn't
-        // This test verifies that when parsed as URL but scheme is unsupported, we error
         let result = CredentialOfferUri::from_offer_link(malformed);
         assert!(result.is_err());
         let err = result.unwrap_err();

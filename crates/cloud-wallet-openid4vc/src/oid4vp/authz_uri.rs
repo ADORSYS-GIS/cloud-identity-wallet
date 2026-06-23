@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_rejects_http_scheme() {
+    fn rejects_http_scheme() {
         let uri = "http://example.com/auth?client_id=test";
         let result = parse_authz_uri(uri);
         assert!(result.is_err());
