@@ -468,6 +468,7 @@ impl IssuanceEngine {
         self.send_notifications(
             context,
             &token_response.access_token,
+            &token_response.token_type,
             notification_ids,
             Some(&dpop_opts),
         )
@@ -538,7 +539,6 @@ impl IssuanceEngine {
                     self.emit_processing(session_id, ProcessingStep::AwaitingDeferredCredential)
                         .await;
 
-                    let token = &token.access_token;
                     let tx_id = pending.transaction_id.clone();
                     let interval = pending.interval_seconds();
                     let immediate = self
@@ -604,16 +604,18 @@ impl IssuanceEngine {
     }
 
     /// Poll the deferred credential endpoint.
-    #[instrument(skip(self, context, access_token))]
+    #[instrument(skip(self, context, token))]
     async fn poll_deferred(
         &self,
         context: &ResolvedOfferContext,
-        access_token: &str,
+        token: &TokenResponse,
         initial_tx_id: String,
         initial_interval: u64,
         session_id: &str,
         dpop: Option<&DpopOptions<'_>>,
     ) -> Result<ImmediateCredentialResponse> {
+        let access_token = &token.access_token;
+        let token_type = &token.token_type;
         let mut tx_id = initial_tx_id;
         let mut interval_secs = initial_interval;
 
@@ -630,7 +632,7 @@ impl IssuanceEngine {
 
             let result = self
                 .client
-                .poll_deferred_credential(context, access_token, &tx_id, dpop)
+                .poll_deferred_credential(context, access_token, token_type, &tx_id, dpop)
                 .await?;
 
             match result {
@@ -813,6 +815,7 @@ impl IssuanceEngine {
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
+        token_type: &str,
         notification_ids: Vec<String>,
         dpop: Option<&DpopOptions<'_>>,
     ) {
@@ -823,7 +826,7 @@ impl IssuanceEngine {
             let req = NotificationRequest::new(id, NotificationEvent::CredentialAccepted);
             if let Err(e) = self
                 .client
-                .send_notification(endpoint, access_token, &req, dpop)
+                .send_notification(endpoint, access_token, token_type, &req, dpop)
                 .await
             {
                 warn!(error = %e, "notification to issuer failed");

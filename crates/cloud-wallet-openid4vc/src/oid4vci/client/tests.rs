@@ -1132,6 +1132,7 @@ async fn test_dpop_deferred_credential_request() {
         .poll_deferred_credential(
             &context,
             "deferred_access_token",
+            "DPoP",
             "txn_ready",
             Some(&DpopOptions {
                 key: &dpop_key,
