@@ -281,7 +281,7 @@ impl PresentationEngine {
             .and_then(|candidates| {
                 candidates
                     .iter()
-                    .find(|candidate| candidate.credential_id == &*credential_id)
+                    .find(|candidate| candidate.credential_id == *credential_id)
             })
             .ok_or_else(|| {
                 PresentationError::new(
