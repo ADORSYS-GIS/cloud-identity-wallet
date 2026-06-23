@@ -51,7 +51,7 @@ fn create_client() -> Oid4vciClient {
 #[test]
 fn parse_authorization_callback_success_query() {
     let callback =
-        Oid4vciClient::parse_authorization_callback("code=abc123&state=ses_123").unwrap();
+        Oid4vciClient::parse_authorization_callback("code=abc123&state=ses_123", None).unwrap();
 
     match callback {
         AuthorizationCallback::Success(response) => {
@@ -66,6 +66,7 @@ fn parse_authorization_callback_success_query() {
 fn parse_authorization_callback_error_query() {
     let callback = Oid4vciClient::parse_authorization_callback(
         "error=access_denied&error_description=User+cancelled&state=ses_123",
+        None,
     )
     .unwrap();
 
@@ -80,6 +81,123 @@ fn parse_authorization_callback_error_query() {
         }
         other => panic!("expected error callback, got {other:?}"),
     }
+}
+
+#[test]
+fn parse_authorization_callback_with_matching_iss() {
+    let callback = Oid4vciClient::parse_authorization_callback(
+        "code=abc123&state=ses_123&iss=https://as.example.com/",
+        Some("https://as.example.com/"),
+    )
+    .unwrap();
+
+    match callback {
+        AuthorizationCallback::Success(response) => {
+            assert_eq!(response.code, "abc123");
+            assert_eq!(response.iss.as_deref(), Some("https://as.example.com/"));
+        }
+        other => panic!("expected success callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_authorization_callback_rejects_missing_iss_when_expected() {
+    let err = Oid4vciClient::parse_authorization_callback(
+        "code=abc123&state=ses_123",
+        Some("https://as.example.com/"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing"));
+    assert!(err.to_string().contains("'iss'"));
+}
+
+#[test]
+fn parse_authorization_callback_rejects_mismatched_iss() {
+    let err = Oid4vciClient::parse_authorization_callback(
+        "code=abc123&state=ses_123&iss=https://attacker.example.com/",
+        Some("https://as.example.com/"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("mismatch"));
+}
+
+#[test]
+fn parse_authorization_callback_error_extracts_iss() {
+    let callback = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123&iss=https://as.example.com/",
+        None,
+    )
+    .unwrap();
+
+    match callback {
+        AuthorizationCallback::Error(response) => {
+            assert_eq!(response.error.error, AuthzErrorResponse::AccessDenied);
+            assert_eq!(response.iss.as_deref(), Some("https://as.example.com/"));
+        }
+        other => panic!("expected error callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn authorization_callback_iss_accessor() {
+    let success = Oid4vciClient::parse_authorization_callback(
+        "code=abc123&iss=https://as.example.com/",
+        None,
+    )
+    .unwrap();
+    assert_eq!(success.iss(), Some("https://as.example.com/"));
+
+    let error = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&iss=https://as.example.com/",
+        None,
+    )
+    .unwrap();
+    assert_eq!(error.iss(), Some("https://as.example.com/"));
+
+    let no_iss = Oid4vciClient::parse_authorization_callback("code=abc123", None).unwrap();
+    assert_eq!(no_iss.iss(), None);
+}
+
+#[test]
+fn parse_authorization_callback_error_with_matching_iss() {
+    let callback = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123&iss=https://as.example.com/",
+        Some("https://as.example.com/"),
+    )
+    .unwrap();
+
+    match callback {
+        AuthorizationCallback::Error(response) => {
+            assert_eq!(response.error.error, AuthzErrorResponse::AccessDenied);
+            assert_eq!(response.iss.as_deref(), Some("https://as.example.com/"));
+        }
+        other => panic!("expected error callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_authorization_callback_error_rejects_missing_iss_when_expected() {
+    let err = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123",
+        Some("https://as.example.com/"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing"));
+    assert!(err.to_string().contains("'iss'"));
+}
+
+#[test]
+fn parse_authorization_callback_error_rejects_mismatched_iss() {
+    let err = Oid4vciClient::parse_authorization_callback(
+        "error=access_denied&error_description=User+cancelled&state=ses_123&iss=https://attacker.example.com/",
+        Some("https://as.example.com/"),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("mismatch"));
 }
 
 fn get_ecdsa_signer() -> CryptoSigner {
