@@ -278,6 +278,7 @@ impl From<ClientError> for IssuanceError {
             ClientError::InvalidResponse { message } => Self::internal_message(message),
             ClientError::Configuration { message } => Self::internal_message(message),
             ClientError::Internal { message } => Self::internal_message(message),
+            ClientError::Dpop { message } => Self::internal_message(message),
         }
     }
 }
