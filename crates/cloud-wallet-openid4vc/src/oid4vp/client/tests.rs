@@ -478,3 +478,104 @@ async fn rejects_unsigned_request_for_non_redirect_uri_prefix() {
         other => panic!("expected InvalidRequest, got: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn create_response_path_end_to_end() {
+    use crate::oid4vp::presentation::SelectedCredential;
+    use crate::oid4vp::selection::CredentialView;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    let mock_uri = format!("{}/response", mock_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/response"))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .and(body_string_contains("vp_token="))
+        .and(body_string_contains("state=test-state"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"redirect_uri": "https://verifier.example.com/cb"}),
+            ),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let now = jsonwebtoken::get_current_timestamp() as i64;
+    let payload = serde_json::json!({
+        "iss": "redirect_uri:https://verifier.example.com/cb",
+        "aud": "https://self-issued.me/v2",
+        "exp": now + 300,
+        "iat": now,
+        "client_id": "redirect_uri:https://verifier.example.com/cb",
+        "response_type": "vp_token",
+        "response_mode": "direct_post",
+        "nonce": "test-nonce",
+        "state": "test-state",
+        "response_uri": mock_uri,
+        "dcql_query": {
+            "credentials": [{
+                "id": "pid_request",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": ["https://example.com/pid"] }
+            }]
+        }
+    });
+
+    let mut jwt_header = Header::new(Algorithm::HS256);
+    jwt_header.typ = Some("oauth-authz-req+jwt".to_string());
+    let jwt = encode(
+        &jwt_header,
+        &payload,
+        &EncodingKey::from_secret(b"test-secret"),
+    )
+    .expect("test JWT should encode");
+
+    let raw = serde_json::json!({
+        "response_type": "vp_token",
+        "client_id": "redirect_uri:https://verifier.example.com/cb",
+        "request": jwt
+    });
+
+    let client = Oid4vpClient::new(test_config());
+
+    let resolver = StaticRequestUriResolver {
+        result: RequestUriResult::new(String::new(), None),
+        saw_post: Arc::new(AtomicBool::new(false)),
+    };
+
+    let context = client
+        .process_authz_request_full(&raw.to_string(), &StaticKeyResolver, None, &resolver)
+        .await
+        .expect("request should be valid");
+
+    let my_cred = CredentialView {
+        id: "my-pid-1".into(),
+        format: CredentialFormat::DcSdJwt,
+        vct: Some("https://example.com/pid".into()),
+        doctype: None,
+        credential_types: vec![],
+        claims: serde_json::json!({"given_name": "Alice"}),
+        holder_binding_supported: true,
+        issuer: Some("did:example:issuer".into()),
+        trusted_authorities: vec![],
+    };
+    let selection = client.match_credentials(&context, &[my_cred]);
+    assert!(selection.satisfies_query);
+
+    let selected = vec![SelectedCredential::string(
+        "pid_request",
+        "eyJhbGciOiJFUzI1NiJ9.mock-vp-token",
+    )];
+
+    let response = client
+        .create_response(&context, selected)
+        .await
+        .expect("create_response should succeed");
+
+    assert_eq!(
+        response.redirect_uri,
+        Some(url::Url::parse("https://verifier.example.com/cb").unwrap())
+    );
+}

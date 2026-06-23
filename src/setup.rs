@@ -1,12 +1,13 @@
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
 use cloud_wallet_openid4vc::formats::mdoc::StaticTrustStore;
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
-use cloud_wallet_openid4vc::oid4vp::client::Oid4vpClient;
+use cloud_wallet_openid4vc::oid4vp::client::{Oid4vpClient, Oid4vpConfig};
+use cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode;
 
 use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::models::presentation::PresentationEngine;
-use crate::domain::ports::TenantRepo;
+use crate::domain::ports::{CredentialRepo, TenantRepo};
 use crate::domain::service::Service;
 use crate::outbound::{
     MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
@@ -22,6 +23,7 @@ use crate::utils::load_iaca_roots;
 /// fail-closed and all mso_mdoc issuances will be rejected.
 pub fn build_issuance_engine<S: SessionStore + Clone>(
     config: &Config,
+    credential_repo: impl CredentialRepo,
     tenant_repo: impl TenantRepo,
     session_store: &S,
 ) -> color_eyre::Result<IssuanceEngine> {
@@ -39,7 +41,6 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
-    let credential_repo = MemoryCredentialRepo::new();
     let preferred_display_locales = config.oid4vci.preferred_display_locales.clone();
 
     let iaca_roots = load_iaca_roots(&config.oid4vci.iaca_root_paths)?;
@@ -64,13 +65,9 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
 }
 
 /// Constructs a [`PresentationEngine`] from configuration.
-///
-/// Reuses the same IACA trust anchors for X.509-based verifier key resolution.
-/// The HTTP client is constructed via [`OidClient`] to share the same TLS
-/// and retry middleware configuration as the issuance flow.
 pub fn build_presentation_engine(
     config: &Config,
-    credential_repo: impl crate::domain::ports::CredentialRepo,
+    credential_repo: impl CredentialRepo,
     tenant_repo: impl TenantRepo,
 ) -> color_eyre::Result<PresentationEngine> {
     // Build an OidClient to get a properly configured ClientWithMiddleware.
@@ -84,9 +81,9 @@ pub fn build_presentation_engine(
 
     let oid_client = OidClient::new(oid_client_config)?;
 
-    let oid4vp_config = cloud_wallet_openid4vc::oid4vp::client::Oid4vpConfig {
+    let oid4vp_config = Oid4vpConfig {
         http_client: oid_client.http_client().clone(),
-        discovery_mode: cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode::Dynamic,
+        discovery_mode: DiscoveryMode::Static,
         wallet_metadata: None,
     };
     let oid4vp_client = Oid4vpClient::new(oid4vp_config);
@@ -115,9 +112,15 @@ pub fn build_service<S: SessionStore + Clone>(
     tenant_repo: impl TenantRepo + Clone,
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
-    let issuance_engine = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
+    let credential_repo = MemoryCredentialRepo::new();
+    let issuance_engine = build_issuance_engine(
+        config,
+        credential_repo.clone(),
+        tenant_repo.clone(),
+        &session_store,
+    )?;
     let presentation_engine =
-        build_presentation_engine(config, MemoryCredentialRepo::new(), tenant_repo.clone())?;
+        build_presentation_engine(config, credential_repo, tenant_repo.clone())?;
     Ok(Service::new(
         session_store,
         tenant_repo,

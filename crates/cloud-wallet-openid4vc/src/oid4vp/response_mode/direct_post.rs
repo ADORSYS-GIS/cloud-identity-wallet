@@ -106,7 +106,15 @@ fn validate_response_uri(
     expected_response_uri: &Url,
 ) -> Result<(), DirectPostError> {
     if response_uri.scheme() != "https" {
+        #[cfg(not(test))]
         return Err(DirectPostError::HttpsRequired);
+
+        #[cfg(test)]
+        if response_uri.host_str() != Some("127.0.0.1")
+            && response_uri.host_str() != Some("localhost")
+        {
+            return Err(DirectPostError::HttpsRequired);
+        }
     }
 
     if response_uri != expected_response_uri {

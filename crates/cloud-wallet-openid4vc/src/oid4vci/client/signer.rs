@@ -184,35 +184,18 @@ impl CryptoSigner {
         &self.holder_binding_public_jwk
     }
 
-    /// Encode to a JWT with the given claims.
-    fn encode(&self, claims: &Claims) -> Result<String> {
-        let header_len = self.header_b64.len();
-
-        let payload_b64 = base64_encode_type(claims)?;
-        let payload_len = payload_b64.len();
-
-        let mut signing_input = Vec::with_capacity(header_len + 1 + payload_len);
-        signing_input.extend_from_slice(self.header_b64.as_bytes());
-        signing_input.push(b'.');
-        signing_input.extend_from_slice(payload_b64.as_bytes());
-
-        let signature = self.sign_bytes(&signing_input)?;
-        let sig_b64 = b64_encode(signature);
-
-        let jwt_len = header_len + 1 + payload_len + 1 + sig_b64.len();
-        let mut jwt = String::with_capacity(jwt_len);
-        jwt.push_str(&self.header_b64);
-        jwt.push('.');
-        jwt.push_str(&payload_b64);
-        jwt.push('.');
-        jwt.push_str(&sig_b64);
-        Ok(jwt)
+    /// Sign arbitrary JWT claims with this key and a compact JOSE header using
+    /// the requested `typ`.
+    ///
+    /// This is used by presentation flows such as SD-JWT Key Binding JWTs,
+    /// where the same holder key must sign a different JWT profile than the
+    /// OpenID4VCI proof JWT.
+    pub fn sign_jwt<T: Serialize>(&self, header: &Header, claims: &T) -> Result<String> {
+        let header_b64 = base64_encode_type(&header)?;
+        self.encode_with_header_b64(&header_b64, claims)
     }
 
     /// Sign `msg`, returning raw signature bytes.
-    ///
-    /// This is exposed for credential-format-specific proof creation that needs
-    /// direct access to signature bytes (e.g., ISO mdoc `DeviceAuthentication`).
     pub fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
         use ecdsa::Curve;
         match &self.key {
@@ -234,6 +217,35 @@ impl CryptoSigner {
                 Ok(sig.to_vec())
             }
         }
+    }
+
+    /// Encode to a JWT with the given claims.
+    fn encode(&self, claims: &Claims) -> Result<String> {
+        self.encode_with_header_b64(&self.header_b64, claims)
+    }
+
+    fn encode_with_header_b64<T: Serialize>(&self, header_b64: &str, claims: &T) -> Result<String> {
+        let header_len = header_b64.len();
+
+        let payload_b64 = base64_encode_type(claims)?;
+        let payload_len = payload_b64.len();
+
+        let mut signing_input = Vec::with_capacity(header_len + 1 + payload_len);
+        signing_input.extend_from_slice(header_b64.as_bytes());
+        signing_input.push(b'.');
+        signing_input.extend_from_slice(payload_b64.as_bytes());
+
+        let signature = self.sign_bytes(&signing_input)?;
+        let sig_b64 = b64_encode(signature);
+
+        let jwt_len = header_len + 1 + payload_len + 1 + sig_b64.len();
+        let mut jwt = String::with_capacity(jwt_len);
+        jwt.push_str(header_b64);
+        jwt.push('.');
+        jwt.push_str(&payload_b64);
+        jwt.push('.');
+        jwt.push_str(&sig_b64);
+        Ok(jwt)
     }
 }
 
@@ -409,5 +421,40 @@ mod tests {
         assert_eq!(decoded_claims.aud, claims.aud);
         assert_eq!(decoded_claims.iss, claims.iss);
         assert_eq!(decoded_claims.nonce, claims.nonce);
+    }
+
+    #[test]
+    fn sign_jwt_uses_requested_profile_header() {
+        #[derive(Serialize)]
+        struct CustomClaims<'a> {
+            aud: &'a str,
+            nonce: &'a str,
+        }
+
+        let der = get_ecdsa_p256_der();
+        let signer = CryptoSigner::from_ecdsa_der(&der).unwrap();
+        let header = Header {
+            alg: signer.algorithm,
+            typ: "kb+jwt",
+            jwk: None,
+            kid: None,
+            x5c: None,
+            attestation: None,
+            trust_chain: None,
+        };
+        let jwt = signer
+            .sign_jwt(
+                &header,
+                &CustomClaims {
+                    aud: "https://verifier.example",
+                    nonce: "nonce-123",
+                },
+            )
+            .expect("custom JWT should sign");
+
+        let header = jsonwebtoken::decode_header(&jwt).expect("header should decode");
+        assert_eq!(header.typ.as_deref(), Some("kb+jwt"));
+        assert_eq!(header.alg, jsonwebtoken::Algorithm::ES256);
+        assert!(header.jwk.is_none());
     }
 }

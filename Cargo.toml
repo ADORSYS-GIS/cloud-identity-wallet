@@ -42,6 +42,7 @@ tracing = "0.1"
 # Other utilities
 base64 = "0.22"
 ciborium = "0.2"
+coset = "0.4"
 dashmap = "6"
 rand = "0.10"
 rustls-pki-types = "1.14"
@@ -82,7 +83,7 @@ cloud-wallet-kms = { path = "crates/cloud-wallet-kms", features = ["local-kms"] 
 cloud-wallet-openid4vc = { path = "crates/cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
-coset = "0.4"
+coset.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
@@ -103,6 +104,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url.workspace = true
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 webpki.workspace = true
+x509-parser = { version = "0.18", features = ["verify"] }
 
 [dependencies.redis]
 version = "1.2"

@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::fmt;
 
 use cloud_wallet_openid4vc::oid4vp::client::Error as Oid4vpClientError;
@@ -18,39 +19,43 @@ pub enum PresentationErrorCode {
     SessionNotFound,
     /// The session is not in the expected state.
     InvalidSessionState,
-    /// The consent was rejected by the user.
-    ConsentRejected,
     /// The VP token could not be built or sent.
     ResponseDeliveryFailed,
     /// An internal server error occurred.
     InternalError,
 }
 
-impl fmt::Display for PresentationErrorCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
+impl PresentationErrorCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
             Self::InvalidRequest => "invalid_request",
             Self::KeyResolutionFailed => "key_resolution_failed",
             Self::NoMatchingCredentials => "no_matching_credentials",
             Self::SessionNotFound => "session_not_found",
             Self::InvalidSessionState => "invalid_session_state",
-            Self::ConsentRejected => "consent_rejected",
             Self::ResponseDeliveryFailed => "response_delivery_failed",
             Self::InternalError => "internal_error",
-        };
-        f.write_str(s)
+        }
+    }
+}
+
+impl fmt::Display for PresentationErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
 /// The unified presentation error type.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub struct PresentationError {
     pub code: PresentationErrorCode,
     pub description: Option<String>,
+    #[source]
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 impl PresentationError {
+    /// Create a new presentation error with a code and description.
     pub fn new(code: PresentationErrorCode, description: impl Into<String>) -> Self {
         Self {
             code,
@@ -59,22 +64,29 @@ impl PresentationError {
         }
     }
 
-    pub fn with_source(
-        code: PresentationErrorCode,
-        description: impl Into<String>,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
+    /// Attach a source error to the presentation error.
+    pub fn with_source(self, source: impl StdError + Send + Sync + 'static) -> Self {
         Self {
-            code,
-            description: Some(description.into()),
+            source: Some(Box::new(source)),
+            ..self
+        }
+    }
+
+    /// Create an internal error with the given source.
+    pub fn internal(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self {
+            code: PresentationErrorCode::InternalError,
+            description: None,
             source: Some(Box::new(source)),
         }
     }
 
-    pub fn internal(msg: impl Into<String>) -> Self {
-        Self::new(PresentationErrorCode::InternalError, msg)
+    /// Create an internal error with a message.
+    pub fn internal_message(message: impl fmt::Display) -> Self {
+        Self::new(PresentationErrorCode::InternalError, message.to_string())
     }
 
+    /// Create a session not found error.
     pub fn session_not_found(session_id: &str) -> Self {
         Self::new(
             PresentationErrorCode::SessionNotFound,
@@ -82,26 +94,22 @@ impl PresentationError {
         )
     }
 
+    /// Create an invalid state error with a message.
     pub fn invalid_state(msg: impl Into<String>) -> Self {
-        Self::new(PresentationErrorCode::InvalidSessionState, msg)
+        Self::new(PresentationErrorCode::InvalidSessionState, msg.into())
     }
 }
 
 impl fmt::Display for PresentationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.code)?;
-        if let Some(ref desc) = self.description {
+        if let Some(desc) = &self.description {
             write!(f, ": {desc}")?;
         }
+        if let Some(source) = &self.source {
+            write!(f, "\n\ncaused by:\n\t{source}")?;
+        }
         Ok(())
-    }
-}
-
-impl std::error::Error for PresentationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_ref()
-            .map(|e| e.as_ref() as &(dyn std::error::Error + 'static))
     }
 }
 
@@ -123,10 +131,9 @@ impl From<Oid4vpClientError> for PresentationError {
             }
             _ => PresentationErrorCode::InternalError,
         };
-        let description = err.to_string();
         Self {
             code,
-            description: Some(description),
+            description: None,
             source: Some(Box::new(err)),
         }
     }
@@ -134,20 +141,12 @@ impl From<Oid4vpClientError> for PresentationError {
 
 impl From<SessionError> for PresentationError {
     fn from(err: SessionError) -> Self {
-        Self::with_source(
-            PresentationErrorCode::InternalError,
-            "session store error",
-            err,
-        )
+        Self::internal(err)
     }
 }
 
 impl From<CredentialError> for PresentationError {
     fn from(err: CredentialError) -> Self {
-        Self::with_source(
-            PresentationErrorCode::InternalError,
-            "credential store error",
-            err,
-        )
+        Self::internal(err)
     }
 }
