@@ -282,6 +282,7 @@ impl From<ClientError> for IssuanceError {
                 Self::offer_resolution("key attestation required but not provided")
             }
             ClientError::KeyAttestationValidation { message } => Self::offer_resolution(message),
+            ClientError::Dpop { message } => Self::internal_message(message),
         }
     }
 }

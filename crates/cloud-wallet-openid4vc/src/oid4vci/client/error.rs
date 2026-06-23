@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::errors::{Error, ErrorKind};
+use crate::oid4vci::dpop::DpopError;
 use crate::oid4vci::error::{
     AuthzErrorResponse, CredentialErrorResponse, DeferredCredentialErrorResponse,
     NotificationErrorResponse, Oid4vciError, TokenErrorResponse,
@@ -76,6 +77,10 @@ pub enum ClientError {
     /// Issuer metadata discovery failed (invalid or missing metadata).
     #[error("metadata discovery failed: {message}")]
     MetadataDiscovery { message: Cow<'static, str> },
+
+    /// DPoP proof generation or nonce-handling error.
+    #[error("dpop error: {message}")]
+    Dpop { message: Cow<'static, str> },
 
     /// Internal error that shouldn't happen (implementation bug or unexpected state).
     #[error("internal error: {message}")]
@@ -180,6 +185,14 @@ impl From<Error> for ClientError {
                 ClientError::validation(format!("invalid credential request: {err}"))
             }
             _ => ClientError::internal(format!("{err}")),
+        }
+    }
+}
+
+impl From<DpopError> for ClientError {
+    fn from(err: DpopError) -> Self {
+        ClientError::Dpop {
+            message: err.to_string().into(),
         }
     }
 }
