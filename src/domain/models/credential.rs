@@ -109,18 +109,6 @@ impl CredentialFormat {
             Self::LdpVc => "ldp_vc",
         }
     }
-
-    /// Maps a wallet wire format to the corresponding DCQL credential format
-    /// used by the OpenID4VP selection engine.
-    pub fn to_dcql_format(self) -> cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat {
-        use cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat as DcqlFormat;
-        match self {
-            Self::SdJwtVc => DcqlFormat::DcSdJwt,
-            Self::Mdoc => DcqlFormat::MsoMdoc,
-            Self::JwtVcJson | Self::JwtVcJsonLd => DcqlFormat::JwtVcJson,
-            Self::LdpVc => DcqlFormat::LdpVc,
-        }
-    }
 }
 
 impl std::fmt::Display for CredentialFormat {
