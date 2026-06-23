@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
+use cloud_wallet_openid4vc::formats::mdoc::RevocationPolicy;
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use redis::{
     Client as RedisClient, RedisResult,
@@ -48,6 +49,13 @@ pub struct Oid4vciConfig {
     /// Paths to DER- or PEM-encoded IACA root certificate files loaded at startup.
     #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
     pub iaca_root_paths: Vec<String>,
+    /// DSC revocation checking policy for mdoc verification.
+    /// - `skip`: Bypass revocation checking entirely (offline/test mode)
+    /// - `soft_fail`: Reject revoked DSCs, tolerate CRL fetch failures (default)
+    /// - `hard_fail`: Reject revoked DSCs or on any CRL fetch/parse failure
+    /// Configurable via `APP_OID4VCI__REVOCATION_POLICY=soft_fail`.
+    #[serde(default)]
+    pub revocation_policy: RevocationPolicy,
 }
 
 impl RedisConfig {
@@ -118,7 +126,8 @@ impl Config {
             )?
             .set_default("oid4vci.use_system_proxy", true)?
             .set_default("oid4vci.preferred_display_locales", vec!["en"])?
-            .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())
+            .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())?
+            .set_default("oid4vci.revocation_policy", "soft_fail")
     }
 }
 
