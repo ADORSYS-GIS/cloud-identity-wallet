@@ -209,8 +209,8 @@ impl CryptoSigner {
         Ok(jwt)
     }
 
-    /// Sign `msg`, returning signature bytes.
-    fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
+    /// Sign `msg`, returning raw signature bytes.
+    pub fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
         use ecdsa::Curve;
         match &self.key {
             KeyMaterial::Ecdsa(keypair) => match keypair.curve() {
