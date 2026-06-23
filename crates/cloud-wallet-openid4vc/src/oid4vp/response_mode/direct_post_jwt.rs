@@ -271,9 +271,11 @@ mod tests {
         let x = B64::new(&pub_bytes[1..33]);
         let y = B64::new(&pub_bytes[33..65]);
 
-        let mut prm = Parameters::default();
-        prm.alg = Some(Algorithm::KeyManagement(KeyManagement::EcdhEs));
-        prm.kid = Some("p256-key-1".to_string());
+        let prm = Parameters {
+            alg: Some(Algorithm::KeyManagement(KeyManagement::EcdhEs)),
+            kid: Some("p256-key-1".to_string()),
+            ..Default::default()
+        };
 
         Jwk {
             key: Key::Ec(Ec {
@@ -291,10 +293,11 @@ mod tests {
         let pub_bytes = static_key.public_key_bytes(&mut buf).unwrap();
         let x = B64::new(pub_bytes);
 
-        let mut prm = Parameters::default();
-        prm.alg = Some(Algorithm::KeyManagement(KeyManagement::EcdhEs));
-        prm.kid = Some("x25519-key-1".to_string());
-
+        let prm = Parameters {
+            alg: Some(Algorithm::KeyManagement(KeyManagement::EcdhEs)),
+            kid: Some("x25519-key-1".to_string()),
+            ..Default::default()
+        };
         Jwk {
             key: Key::Okp(Okp {
                 crv: OkpCurve::X25519,
@@ -320,8 +323,6 @@ mod tests {
         let bytes = Base64UrlUnpadded::decode_vec(b64).expect("valid base64url header");
         serde_json::from_slice(&bytes).expect("valid JSON header")
     }
-
-    // ── Roundtrip tests ─────────────────────────────────────────────────────
 
     #[test]
     fn encrypt_decrypt_roundtrip_ecdh_es_p256() {
@@ -414,9 +415,11 @@ mod tests {
         let x = B64::new(&pub_bytes[1..33]);
         let y = B64::new(&pub_bytes[33..65]);
 
-        let mut prm = Parameters::default();
-        prm.alg = Some(Algorithm::KeyManagement(KeyManagement::EcdhEsA128Kw));
-        prm.kid = Some("p256-a128kw-key".to_string());
+        let prm = Parameters {
+            alg: Some(Algorithm::KeyManagement(KeyManagement::A256Kw)),
+            kid: Some("p256-key-1".to_string()),
+            ..Default::default()
+        };
 
         let jwk = Jwk {
             key: Key::Ec(Ec {
@@ -447,8 +450,6 @@ mod tests {
         let recovered: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
         assert_eq!(recovered, expected);
     }
-
-    // ── Header parameter tests ───────────────────────────────────────────────
 
     #[test]
     fn kid_is_included_in_jwe_header_when_present_in_jwk() {
@@ -487,9 +488,6 @@ mod tests {
         let header = decode_jwe_header(jwt_response.response());
         assert!(header.get("kid").is_none());
     }
-
-    // ── Error path tests ─────────────────────────────────────────────────────
-
     #[test]
     fn missing_alg_parameter_returns_error() {
         let static_key = StaticEcdhKey::generate(EcdhCurve::P256).unwrap();
@@ -528,8 +526,10 @@ mod tests {
         use cloud_wallet_crypto::jwk::Oct;
         use cloud_wallet_crypto::secret::Secret;
 
-        let mut prm = Parameters::default();
-        prm.alg = Some(Algorithm::KeyManagement(KeyManagement::A256Kw));
+        let prm = Parameters {
+            alg: Some(Algorithm::KeyManagement(KeyManagement::A256Kw)),
+            ..Default::default()
+        };
 
         let jwk = Jwk {
             key: Key::Oct(Oct {
@@ -682,8 +682,6 @@ mod tests {
             "expected KeyConstruction mentioning 'private', got: {err:?}"
         );
     }
-
-    // ── HTTP layer tests ─────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn send_direct_post_jwt_posts_response_field_as_form_body() {
