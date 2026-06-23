@@ -16,6 +16,9 @@ pub mod ecdh;
 pub mod ecdsa;
 pub mod ed25519;
 pub mod error;
+#[cfg_attr(docsrs, doc(cfg(feature = "jwe")))]
+#[cfg(feature = "jwe")]
+pub mod jwe;
 #[cfg_attr(docsrs, doc(cfg(feature = "jwk")))]
 #[cfg(feature = "jwk")]
 pub mod jwk;
