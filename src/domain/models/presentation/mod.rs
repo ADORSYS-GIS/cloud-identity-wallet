@@ -265,16 +265,24 @@ impl PresentationEngine {
         &self,
         ctx: &PresentationContext,
         query_id: &str,
-        credential_id: &str,
         tenant_id: uuid::Uuid,
         credential: &Credential,
         dcql_result: &SelectionResult,
     ) -> Result<SelectedCredential> {
         // Ensure the selection is a valid candidate for the query.
+        let mut credential_id_buf = uuid::Uuid::encode_buffer();
+        let credential_id = credential
+            .id
+            .hyphenated()
+            .encode_lower(&mut credential_id_buf);
         let candidate = dcql_result
             .candidates
             .get(query_id)
-            .and_then(|candidates| candidates.iter().find(|c| c.credential_id == credential_id))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.credential_id == &*credential_id)
+            })
             .ok_or_else(|| {
                 PresentationError::new(
                     PresentationErrorCode::InvalidRequest,
@@ -328,7 +336,7 @@ impl PresentationEngine {
         )
         .requested_claims(matched_claim_paths);
 
-        if requires_holder_binding(ctx, query_id) {
+        if requires_holder_binding(ctx, query_id)? {
             let signer = tenant_crypto_signer(self.tenant_repo.as_ref(), tenant_id)
                 .await
                 .map_err(PresentationError::internal)?;
@@ -419,13 +427,20 @@ impl PresentationEngine {
     }
 }
 
-fn requires_holder_binding(ctx: &PresentationContext, query_id: &str) -> bool {
-    ctx.dcql_query
+fn requires_holder_binding(ctx: &PresentationContext, query_id: &str) -> Result<bool> {
+    let Some(query) = ctx
+        .dcql_query
         .credentials
         .iter()
         .find(|query| query.id == query_id)
-        .and_then(|query| query.require_cryptographic_holder_binding)
-        .unwrap_or(true)
+    else {
+        return Err(PresentationError::new(
+            PresentationErrorCode::InvalidRequest,
+            format!("credential query {query_id} does not exist in the DCQL request"),
+        ));
+    };
+
+    Ok(query.require_cryptographic_holder_binding.unwrap_or(true))
 }
 
 fn sign_key_binding_jwt(
@@ -692,7 +707,7 @@ impl From<ciborium::de::Error<std::io::Error>> for PresentationError {
 
 impl From<serde_json::Error> for PresentationError {
     fn from(err: serde_json::Error) -> Self {
-        Self::internal_message(format!("failed to decode mdoc CBOR: {err}"))
+        Self::internal(err)
     }
 }
 
@@ -705,5 +720,101 @@ impl From<cloud_wallet_openid4vc::formats::sd_jwt::Error> for PresentationError 
 impl From<cloud_wallet_openid4vc::formats::mdoc::MdocError> for PresentationError {
     fn from(err: cloud_wallet_openid4vc::formats::mdoc::MdocError) -> Self {
         Self::internal(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cloud_wallet_openid4vc::oauth::authorization::OAuthAuthorizationRequest;
+    use cloud_wallet_openid4vc::oid4vp::authorization::{
+        AuthorizationRequest, ResponseMode, ResponseType,
+    };
+    use cloud_wallet_openid4vc::oid4vp::client::PresentationContext;
+    use cloud_wallet_openid4vc::oid4vp::client_id::ParsedClientId;
+    use cloud_wallet_openid4vc::oid4vp::dcql::{
+        CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
+    };
+
+    use super::*;
+
+    fn presentation_context(require_holder_binding: Option<bool>) -> PresentationContext {
+        let dcql_query = DcqlQuery {
+            credentials: vec![CredentialQuery {
+                id: "pid".to_string(),
+                format: CredentialFormat::DcSdJwt,
+                multiple: None,
+                meta: CredentialMeta::SdJwt {
+                    vct_values: vec!["https://example.com/vct".to_string()],
+                },
+                claims: None,
+                claim_sets: None,
+                trusted_authorities: None,
+                require_cryptographic_holder_binding: require_holder_binding,
+            }],
+            credential_sets: None,
+        };
+        let client_id = ParsedClientId::parse("redirect_uri:https://verifier.example.com").unwrap();
+        let response_uri = url::Url::parse("https://verifier.example.com/response").unwrap();
+
+        PresentationContext {
+            request: AuthorizationRequest {
+                response_type: ResponseType::VpToken,
+                nonce: "test-nonce".to_string(),
+                response_mode: ResponseMode::DirectPost,
+                oauth: OAuthAuthorizationRequest {
+                    client_id: client_id.value().to_string(),
+                    redirect_uri: None,
+                    scope: None,
+                    state: None,
+                    nonce: None,
+                    code_challenge: None,
+                    code_challenge_method: None,
+                },
+                response_uri: Some(response_uri.clone()),
+                request_uri: None,
+                request_uri_method: None,
+                dcql_query: Some(dcql_query.clone()),
+                client_metadata: None,
+                client_metadata_uri: None,
+                request: None,
+                transaction_data: None,
+                verifier_info: None,
+                expected_origins: None,
+            },
+            verifier_metadata: None,
+            client_id,
+            nonce: "test-nonce".to_string(),
+            state: None,
+            response_uri: Some(response_uri),
+            response_mode: ResponseMode::DirectPost,
+            dcql_query,
+            transaction_data: vec![],
+        }
+    }
+
+    #[test]
+    fn holder_binding_defaults_to_required_when_query_omits_flag() {
+        let ctx = presentation_context(None);
+
+        assert!(requires_holder_binding(&ctx, "pid").unwrap());
+    }
+
+    #[test]
+    fn holder_binding_honors_explicit_false() {
+        let ctx = presentation_context(Some(false));
+
+        assert!(!requires_holder_binding(&ctx, "pid").unwrap());
+    }
+
+    #[test]
+    fn holder_binding_rejects_unknown_query_id() {
+        let ctx = presentation_context(None);
+        let err = requires_holder_binding(&ctx, "missing").unwrap_err();
+
+        assert_eq!(err.error, PresentationErrorCode::InvalidRequest);
+        assert_eq!(
+            err.error_description.as_deref(),
+            Some("credential query missing does not exist in the DCQL request")
+        );
     }
 }

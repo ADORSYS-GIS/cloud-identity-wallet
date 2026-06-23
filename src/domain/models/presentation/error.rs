@@ -2,12 +2,14 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use cloud_wallet_openid4vc::oid4vp::client::Error as Oid4vpClientError;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::models::credential::CredentialError;
 use crate::session::SessionError;
 
 /// Machine-readable error codes for the presentation flow.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PresentationErrorCode {
     /// The raw authorization request could not be parsed or validated.
     InvalidRequest,
@@ -48,18 +50,18 @@ impl fmt::Display for PresentationErrorCode {
 /// The unified presentation error type.
 #[derive(Debug, thiserror::Error)]
 pub struct PresentationError {
-    pub code: PresentationErrorCode,
-    pub description: Option<String>,
+    pub error: PresentationErrorCode,
+    pub error_description: Option<String>,
     #[source]
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 impl PresentationError {
     /// Create a new presentation error with a code and description.
-    pub fn new(code: PresentationErrorCode, description: impl Into<String>) -> Self {
+    pub fn new(error: PresentationErrorCode, error_description: impl Into<String>) -> Self {
         Self {
-            code,
-            description: Some(description.into()),
+            error,
+            error_description: Some(error_description.into()),
             source: None,
         }
     }
@@ -75,8 +77,8 @@ impl PresentationError {
     /// Create an internal error with the given source.
     pub fn internal(source: impl StdError + Send + Sync + 'static) -> Self {
         Self {
-            code: PresentationErrorCode::InternalError,
-            description: None,
+            error: PresentationErrorCode::InternalError,
+            error_description: None,
             source: Some(Box::new(source)),
         }
     }
@@ -98,12 +100,22 @@ impl PresentationError {
     pub fn invalid_state(msg: impl Into<String>) -> Self {
         Self::new(PresentationErrorCode::InvalidSessionState, msg.into())
     }
+
+    /// Returns the machine-readable presentation error code.
+    pub fn error(&self) -> &str {
+        self.error.as_str()
+    }
+
+    /// Returns the human-readable error details if any.
+    pub fn error_description(&self) -> Option<&str> {
+        self.error_description.as_deref()
+    }
 }
 
 impl fmt::Display for PresentationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.code)?;
-        if let Some(desc) = &self.description {
+        write!(f, "{}", self.error)?;
+        if let Some(desc) = &self.error_description {
             write!(f, ": {desc}")?;
         }
         if let Some(source) = &self.source {
@@ -115,7 +127,7 @@ impl fmt::Display for PresentationError {
 
 impl From<Oid4vpClientError> for PresentationError {
     fn from(err: Oid4vpClientError) -> Self {
-        let code = match &err {
+        let error = match &err {
             Oid4vpClientError::InvalidRequest(_) | Oid4vpClientError::NoDcqlQuery => {
                 PresentationErrorCode::InvalidRequest
             }
@@ -132,8 +144,8 @@ impl From<Oid4vpClientError> for PresentationError {
             _ => PresentationErrorCode::InternalError,
         };
         Self {
-            code,
-            description: None,
+            error,
+            error_description: None,
             source: Some(Box::new(err)),
         }
     }
@@ -148,5 +160,28 @@ impl From<SessionError> for PresentationError {
 impl From<CredentialError> for PresentationError {
     fn from(err: CredentialError) -> Self {
         Self::internal(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[test]
+    fn error_code_serializes_to_oauth_style_snake_case() {
+        let json = serde_json::to_string(&PresentationErrorCode::KeyResolutionFailed).unwrap();
+
+        assert_eq!(json, "\"key_resolution_failed\"");
+    }
+
+    #[test]
+    fn internal_error_keeps_source_without_external_description() {
+        let err = PresentationError::internal(std::io::Error::other("database unavailable"));
+
+        assert_eq!(err.error(), "internal_error");
+        assert!(err.error_description().is_none());
+        assert!(err.source().is_some());
     }
 }

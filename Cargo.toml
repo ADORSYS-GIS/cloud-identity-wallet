@@ -77,7 +77,7 @@ async-stream = "0.3"
 async-trait.workspace = true
 axum = { version = "0.8", features = ["macros"] }
 base64.workspace = true
-base64ct.workspace = true
+base64ct = { workspace = true, features = ["alloc"] }
 ciborium.workspace = true
 cloud-wallet-crypto = { path = "crates/cloud-wallet-crypto", features = ["jwk"] }
 cloud-wallet-kms = { path = "crates/cloud-wallet-kms", features = ["local-kms"] }
