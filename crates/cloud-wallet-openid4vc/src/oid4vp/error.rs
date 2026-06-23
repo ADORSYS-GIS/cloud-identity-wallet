@@ -159,6 +159,20 @@ pub enum AuthorizationErrorCode {
     /// Defined in [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5)
     #[error("The transaction data is invalid")]
     InvalidTransactionData,
+
+    /// The Wallet does not support any of the Verifiable Presentation formats
+    /// requested by the Verifier.
+    ///
+    /// Defined in [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5)
+    #[error("The wallet does not support any of the requested VP formats")]
+    VpFormatsNotSupported,
+
+    /// The value of the request_uri_method request parameter is neither
+    /// `get` nor `post` (case-sensitive).
+    ///
+    /// Defined in [OpenID4VP §8.5](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.5)
+    #[error("The request_uri_method value is invalid")]
+    InvalidRequestUriMethod,
 }
 
 /// Error type for Request Object JWT validation failures.
