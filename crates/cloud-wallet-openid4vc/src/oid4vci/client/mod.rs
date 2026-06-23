@@ -661,6 +661,7 @@ impl Oid4vciClient {
     /// # Errors
     /// * `ClientError::MissingKeyAttestation` - If attestation is required but not provided.
     /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_credential_with_attestation<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
@@ -730,6 +731,7 @@ impl Oid4vciClient {
     /// * `ClientError::MissingKeyAttestation` - If attestation is required but not provided.
     /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation or
     ///   doesn't contain all required signer keys in `attested_keys`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_credentials_with_attestation<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
