@@ -1,4 +1,5 @@
 use super::*;
+use crate::formats::mdoc::revocation::RevocationPolicy;
 
 /// ISO 18013-5 Document Signer Certificate EKU OID (arc 1.0.18013.5.1.2).
 /// Encoded as relative OID component integers for rcgen `ExtendedKeyUsagePurpose::Other`.
@@ -807,15 +808,22 @@ fn parsed_with_device_key(cose_key: Value) -> ParsedMdoc {
 
 // ── Verifier tests ───────────────────────────────────────────────────────────
 
-#[test]
-fn verify_issuer_signature_accepts_valid_chain() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_chain() {
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der.clone(), &signing_key, false);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -850,8 +858,9 @@ fn verify_issuer_signature_accepts_valid_esp256() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_tampered_payload() {
+
+#[tokio::test]
+async fn verify_issuer_signature_rejects_tampered_payload() {
     // covers different content than what the verifier sees.
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
@@ -860,8 +869,15 @@ fn verify_issuer_signature_rejects_tampered_payload() {
         ParsedMdoc::parse(&raw).expect("tampered mdoc must still parse (parser is not a verifier)");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("tampered payload must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("tampered payload must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidIssuerSignature),
@@ -869,8 +885,8 @@ fn verify_issuer_signature_rejects_tampered_payload() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_untrusted_root() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_untrusted_root() {
     let (_, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
@@ -879,8 +895,15 @@ fn verify_issuer_signature_rejects_untrusted_root() {
     let (unrelated_iaca_der, _, _) = build_chain(true);
     let trust_store = StaticTrustStore::new(vec![unrelated_iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("chain not anchored to trusted root must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("chain not anchored to trusted root must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -888,16 +911,23 @@ fn verify_issuer_signature_rejects_untrusted_root() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_missing_eku() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_missing_eku() {
     let (iaca_der, dsc_der, signing_key) = build_chain(false); // no EKU
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("DSC without ISO 18013-5 EKU must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("DSC without ISO 18013-5 EKU must be rejected");
 
     assert!(
         matches!(err, MdocError::MissingDocSignerEku),
@@ -905,8 +935,8 @@ fn verify_issuer_signature_rejects_missing_eku() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_missing_x5chain() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_missing_x5chain() {
     let (iaca_der, _dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
 
@@ -955,8 +985,15 @@ fn verify_issuer_signature_rejects_missing_x5chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc without x5chain must still parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("missing x5chain must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("missing x5chain must be rejected");
 
     assert!(
         matches!(err, MdocError::MissingX5Chain),
@@ -964,16 +1001,23 @@ fn verify_issuer_signature_rejects_missing_x5chain() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_doctype_mismatch() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_doctype_mismatch() {
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_with_issuer_auth(mso_bytes, dsc_der, &signing_key, false);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "com.example.other.doctype", &trust_store)
-        .expect_err("docType mismatch must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "com.example.other.doctype",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("docType mismatch must be rejected");
 
     assert!(
         matches!(err, MdocError::DocTypeMismatch { .. }),
@@ -981,8 +1025,8 @@ fn verify_issuer_signature_rejects_doctype_mismatch() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
     // signed timestamp is "2024-01-01T00:00:00Z" — before the DSC notBefore.
     let (iaca_der, dsc_der, signing_key) = build_chain_params(
         true,
@@ -1000,8 +1044,15 @@ fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("MSO signed before DSC notBefore must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("MSO signed before DSC notBefore must be rejected");
 
     assert!(
         matches!(err, MdocError::SignedOutsideDscValidity { .. }),
@@ -1009,8 +1060,8 @@ fn verify_issuer_signature_rejects_signed_outside_dsc_validity() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_country_mismatch() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_country_mismatch() {
     let (iaca_der, dsc_der, signing_key) =
         build_chain_params(true, None, Some("DE"), Some("FR"), None, None);
     let mso_bytes = minimal_mso_cbor();
@@ -1018,8 +1069,15 @@ fn verify_issuer_signature_rejects_country_mismatch() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("DSC/IACA country mismatch must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("DSC/IACA country mismatch must be rejected");
 
     assert!(
         matches!(err, MdocError::CountryMismatch { .. }),
@@ -1027,8 +1085,8 @@ fn verify_issuer_signature_rejects_country_mismatch() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_dsc_validity_too_long() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_dsc_validity_too_long() {
     // MSO signed="2024-01-01T00:00:00Z" = DSC notBefore (would be within-window if allowed).
     let (iaca_der, dsc_der, signing_key) = build_chain_params(
         true,
@@ -1046,8 +1104,15 @@ fn verify_issuer_signature_rejects_dsc_validity_too_long() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("DSC with 459-day validity must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("DSC with 459-day validity must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1055,15 +1120,22 @@ fn verify_issuer_signature_rejects_dsc_validity_too_long() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_accepts_valid_es512() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_es512() {
     let (iaca_der, dsc_der, signing_key) = build_chain_p521();
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_with_issuer_auth_es512(mso_bytes, dsc_der.clone(), &signing_key);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid ES512 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1076,8 +1148,8 @@ fn verify_issuer_signature_accepts_valid_es512() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_state_mismatch() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_state_mismatch() {
     let (iaca_der, dsc_der, signing_key) =
         build_chain_params(true, None, None, None, Some("California"), Some("NewYork"));
     let mso_bytes = minimal_mso_cbor();
@@ -1085,8 +1157,15 @@ fn verify_issuer_signature_rejects_state_mismatch() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("DSC/IACA state mismatch must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("DSC/IACA state mismatch must be rejected");
 
     assert!(
         matches!(err, MdocError::StateMismatch { .. }),
@@ -1094,8 +1173,8 @@ fn verify_issuer_signature_rejects_state_mismatch() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_missing_key_usage() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_missing_key_usage() {
     // the digitalSignature bit required by ISO 18013-5 Annex B Table B.3 is absent.
     let (iaca_der, dsc_der, signing_key) = build_chain_dsc_wrong_key_usage();
     let mso_bytes = minimal_mso_cbor();
@@ -1103,8 +1182,15 @@ fn verify_issuer_signature_rejects_missing_key_usage() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("DSC without digitalSignature key usage must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("DSC without digitalSignature key usage must be rejected");
 
     assert!(
         matches!(err, MdocError::MissingDigitalSignatureKeyUsage),
@@ -1112,8 +1198,8 @@ fn verify_issuer_signature_rejects_missing_key_usage() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     // 457-day limit).  The minimal_mso_cbor() fixture has signed = "2024-01-01",
     // which is after notAfter (2023-06-30), so check_signed_within_dsc_validity
     // must reject the credential.
@@ -1133,8 +1219,15 @@ fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("MSO signed after DSC notAfter must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("MSO signed after DSC notAfter must be rejected");
 
     assert!(
         matches!(err, MdocError::SignedOutsideDscValidity { .. }),
@@ -1142,8 +1235,8 @@ fn verify_issuer_signature_rejects_signed_after_dsc_expiry() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_accepts_single_bstr_x5chain() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_single_bstr_x5chain() {
     // RFC 9360 §2 permits x5chain to be either a single bstr or an array of
     // bstr.  Both forms must be accepted.
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
@@ -1152,7 +1245,14 @@ fn verify_issuer_signature_accepts_single_bstr_x5chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1160,8 +1260,8 @@ fn verify_issuer_signature_accepts_single_bstr_x5chain() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_accepts_intermediate_ca_chain() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_intermediate_ca_chain() {
     // x5chain = [dsc_der, int_der] (leaf first; IACA root not included per
     // ISO 18013-5 Annex B §B.1).  validate_cert_chain must walk the full path.
     let (iaca_der, int_der, dsc_der, signing_key) = build_three_cert_chain();
@@ -1171,7 +1271,14 @@ fn verify_issuer_signature_accepts_intermediate_ca_chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1179,8 +1286,8 @@ fn verify_issuer_signature_accepts_intermediate_ca_chain() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_tampered_intermediate() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_tampered_intermediate() {
     // Replace the real intermediate with a fresh IACA root (different key).
     // chain[0].verify_signature(chain[1].public_key()) will fail because the
     // DSC was signed by the real intermediate, not by the replacement.
@@ -1198,8 +1305,15 @@ fn verify_issuer_signature_rejects_tampered_intermediate() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc must still parse structurally");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("chain with wrong intermediate must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("chain with wrong intermediate must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1207,8 +1321,8 @@ fn verify_issuer_signature_rejects_tampered_intermediate() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_empty_trust_store() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_empty_trust_store() {
     // An empty trust store cannot anchor any chain.
     let (_iaca_der, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
@@ -1216,8 +1330,15 @@ fn verify_issuer_signature_rejects_empty_trust_store() {
     let mdoc = ParsedMdoc::parse(&raw).expect("valid mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("empty trust store must reject all chains");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("empty trust store must reject all chains");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1225,8 +1346,8 @@ fn verify_issuer_signature_rejects_empty_trust_store() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_brainpool_algorithms() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_brainpool_algorithms() {
     // ISO 18013-5 Table 22 names three Brainpool curves; all are currently rejected as
     // UnsupportedAlgorithm. Each iteration uses a fresh chain so cert generation is
     // isolated per case. When aws-lc-rs adds Brainpool support, split this back into
@@ -1246,8 +1367,15 @@ fn verify_issuer_signature_rejects_brainpool_algorithms() {
         let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Brainpool alg must parse");
         let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-        let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-            .expect_err("Brainpool must be rejected as unsupported");
+        let err = verify_issuer_signature(
+            &mdoc,
+            "org.iso.18013.5.1.mDL",
+            &trust_store,
+            RevocationPolicy::Skip,
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect_err("Brainpool must be rejected as unsupported");
 
         assert!(
             matches!(err, MdocError::UnsupportedAlgorithm { alg } if alg == expected_alg),
@@ -1256,8 +1384,8 @@ fn verify_issuer_signature_rejects_brainpool_algorithms() {
     }
 }
 
-#[test]
-fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     // ISO 18013-5 Annex B §B.1: the IACA root must NOT appear in x5chain.
     // Placing it as the second entry causes validate_cert_chain to find the
     // trusted root inside the chain and reject the credential.
@@ -1272,8 +1400,15 @@ fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with IACA root in chain must still parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("IACA root present in x5chain must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("IACA root present in x5chain must be rejected");
 
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
@@ -1281,8 +1416,8 @@ fn verify_issuer_signature_rejects_iaca_root_in_x5chain() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_rejects_ed448_algorithm() {
+#[tokio::test]
+async fn verify_issuer_signature_rejects_ed448_algorithm() {
     // Ed448 (OID 1.3.101.113) is not supported even when the COSE alg field is
     // EdDSA (-8). The check fires after chain validation but before the crypto
     // backend, so a dummy signature is sufficient to reach the rejection.
@@ -1293,8 +1428,15 @@ fn verify_issuer_signature_rejects_ed448_algorithm() {
     let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Ed448 DSC must still parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let err = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store)
-        .expect_err("Ed448 DSC must be rejected");
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("Ed448 DSC must be rejected");
 
     assert!(
         matches!(err, MdocError::UnsupportedAlgorithm { alg: -8 }),
@@ -1302,15 +1444,22 @@ fn verify_issuer_signature_rejects_ed448_algorithm() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_accepts_valid_es384() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_es384() {
     let (iaca_der, dsc_der, signing_key) = build_chain_p384();
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_es384(mso_bytes, dsc_der.clone(), &signing_key);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid ES384 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1323,15 +1472,22 @@ fn verify_issuer_signature_accepts_valid_es384() {
     );
 }
 
-#[test]
-fn verify_issuer_signature_accepts_valid_ed25519() {
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_ed25519() {
     let (iaca_der, dsc_der, signing_key) = build_chain_ed25519();
     let mso_bytes = minimal_mso_cbor();
     let raw = build_issuer_signed_ed25519(mso_bytes, dsc_der.clone(), &signing_key);
     let mdoc = ParsedMdoc::parse(&raw).expect("valid Ed25519 issuer-signed mdoc must parse");
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
 
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -1344,8 +1500,8 @@ fn verify_issuer_signature_accepts_valid_ed25519() {
     );
 }
 
-#[test]
-fn tbs_data_preserves_original_protected_header_bytes() {
+#[tokio::test]
+async fn tbs_data_preserves_original_protected_header_bytes() {
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
     let mso_bytes = minimal_mso_cbor();
 
@@ -1414,7 +1570,14 @@ fn tbs_data_preserves_original_protected_header_bytes() {
     // End-to-end confirmation: the signature was created over `expected_tbs`; if
     // tbs_data() had re-encoded the header, verification would fail with InvalidIssuerSignature.
     let trust_store = StaticTrustStore::new(vec![iaca_der]);
-    let result = verify_issuer_signature(&mdoc, "org.iso.18013.5.1.mDL", &trust_store);
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
     assert!(
         result.is_ok(),
         "signature over original protected-header bytes must verify: {result:?}"
