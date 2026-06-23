@@ -374,7 +374,7 @@ impl PresentationEngine {
 
         let handover =
             OpenID4VPHandover::new(ctx.client_id.value(), &response_uri, ctx.nonce.clone())
-                .map_err(|e| PresentationError::internal(e))?;
+                .map_err(PresentationError::internal)?;
         let session_transcript = SessionTranscript::new(handover);
 
         let issuer_signed_bytes =
@@ -383,7 +383,7 @@ impl PresentationEngine {
 
         let signer = tenant_crypto_signer(self.tenant_repo.as_ref(), tenant_id)
             .await
-            .map_err(|e| PresentationError::internal(e))?;
+            .map_err(PresentationError::internal)?;
         let algorithm = match signer.algorithm() {
             cloud_wallet_openid4vc::oid4vci::client::Algorithm::ES256 => {
                 coset::iana::Algorithm::ES256
