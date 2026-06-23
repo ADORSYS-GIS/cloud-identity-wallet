@@ -450,8 +450,13 @@ impl IssuanceEngine {
         self.terminate_session(session_store, session_id).await?;
 
         // Best-effort notification: must not fail the flow.
-        self.send_notifications(context, &token_response.access_token, notification_ids)
-            .await;
+        self.send_notifications(
+            context,
+            &token_response.access_token,
+            notification_ids,
+            Some(&dpop_opts),
+        )
+        .await;
 
         info!(session_id, tenant_id = %task.tenant_id, "issuance completed successfully");
         Ok(())
@@ -522,7 +527,7 @@ impl IssuanceEngine {
                     let tx_id = pending.transaction_id.clone();
                     let interval = pending.interval_seconds();
                     let immediate = self
-                        .poll_deferred(context, token, tx_id, interval, session_id)
+                        .poll_deferred(context, token, tx_id, interval, session_id, dpop)
                         .await?;
 
                     let notify_id = self
@@ -592,6 +597,7 @@ impl IssuanceEngine {
         initial_tx_id: String,
         initial_interval: u64,
         session_id: &str,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<ImmediateCredentialResponse> {
         let mut tx_id = initial_tx_id;
         let mut interval_secs = initial_interval;
@@ -609,7 +615,7 @@ impl IssuanceEngine {
 
             let result = self
                 .client
-                .poll_deferred_credential(context, access_token, &tx_id)
+                .poll_deferred_credential(context, access_token, &tx_id, dpop)
                 .await?;
 
             match result {
@@ -783,11 +789,15 @@ impl IssuanceEngine {
     /// If the issuer's metadata declares a `notification_endpoint`, this sends
     /// a `credential_accepted` notification for each `notification_id` received
     /// in the credential responses.
+    ///
+    /// If `dpop` is provided, DPoP proofs are attached to notification requests
+    /// per RFC 9449, since the access token is DPoP-bound.
     async fn send_notifications(
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
         notification_ids: Vec<String>,
+        dpop: Option<&DpopOptions<'_>>,
     ) {
         let Some(endpoint) = context.issuer_metadata.notification_endpoint.as_ref() else {
             return;
@@ -796,7 +806,7 @@ impl IssuanceEngine {
             let req = NotificationRequest::new(id, NotificationEvent::CredentialAccepted);
             if let Err(e) = self
                 .client
-                .send_notification(endpoint, access_token, &req)
+                .send_notification(endpoint, access_token, &req, dpop)
                 .await
             {
                 warn!(error = %e, "notification to issuer failed");

@@ -9,6 +9,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::core::client::Config;
+use crate::oid4vci::credential::DeferredCredentialResult;
 use crate::oid4vci::credential::offer::{Grants, PreAuthorizedCodeGrant};
 
 // Basic test server setup
@@ -685,4 +686,394 @@ async fn test_htu_from_url_validation() {
         htu_from_url(&url_with_port).unwrap(),
         "https://issuer.example.com:8443/credential"
     );
+}
+
+#[tokio::test]
+async fn test_dpop_proof_attached_to_credential_request() {
+    use base64::Engine;
+
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    let metadata_json = serde_json::json!({
+        "credential_issuer": issuer_url,
+        "credential_endpoint": format!("{issuer_url}/credential"),
+        "nonce_endpoint": format!("{issuer_url}/nonce"),
+        "authorization_servers": [issuer_url],
+        "credential_configurations_supported": {
+            "UniversityDegreeCredential": {
+                "format": "jwt_vc_json",
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256"]
+                    }
+                }
+            }
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-credential-issuer"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    let as_metadata_json = serde_json::json!({
+        "issuer": issuer_url.replace("http://", "https://"),
+        "authorization_endpoint": format!("{issuer_url}/authorize").replace("http://", "https://"),
+        "token_endpoint": format!("{issuer_url}/token").replace("http://", "https://"),
+        "pushed_authorization_request_endpoint": format!("{issuer_url}/par").replace("http://", "https://"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(as_metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    let token_response = serde_json::json!({
+        "access_token": "dpop_credential_test_token",
+        "token_type": "DPoP",
+        "expires_in": 3600,
+        "authorization_details": [{
+            "type": "openid_credential",
+            "credential_configuration_id": "UniversityDegreeCredential",
+            "credential_identifiers": ["UniversityDegreeCredential"]
+        }]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(token_response))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/nonce"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "c_nonce": "test_nonce_credential_dpop"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let credential_guard = Mock::given(method("POST"))
+        .and(path("/credential"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "credentials": [{"credential": "test_dpop_credential_jwt"}]
+        })))
+        .named("credential_with_dpop")
+        .mount_as_scoped(&mock_server)
+        .await;
+
+    let client = create_client();
+
+    let offer = CredentialOffer {
+        credential_issuer: Url::parse(&issuer_url).unwrap(),
+        credential_configuration_ids: vec!["UniversityDegreeCredential".to_string()],
+        grants: Some(Grants {
+            authorization_code: None,
+            pre_authorized_code: Some(PreAuthorizedCodeGrant {
+                pre_authorized_code: "test_code_credential_dpop".to_string(),
+                tx_code: None,
+                authorization_server: None,
+            }),
+        }),
+    };
+
+    let issuer_metadata = client
+        .fetch_issuer_metadata(&Url::parse(&issuer_url).unwrap())
+        .await
+        .unwrap();
+
+    let mut as_metadata = client
+        .fetch_as_metadata(&Url::parse(&issuer_url).unwrap(), &issuer_metadata, &offer)
+        .await
+        .unwrap();
+
+    as_metadata.authorization_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/authorize")).unwrap());
+    as_metadata.token_endpoint = Some(Url::parse(&format!("{issuer_url}/token")).unwrap());
+    as_metadata.pushed_authorization_request_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/par")).unwrap());
+
+    let flow_type = IssuanceFlow::PreAuthorizedCode {
+        pre_authorized_code: "test_code_credential_dpop".to_string(),
+        tx_code: None,
+    };
+
+    let mut issuer_metadata = issuer_metadata;
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    issuer_metadata.nonce_endpoint = Some(Url::parse(&format!("{issuer_url}/nonce")).unwrap());
+
+    let context = ResolvedOfferContext {
+        offer,
+        issuer_metadata,
+        as_metadata,
+        flow: flow_type,
+    };
+
+    let dpop_key = DpopKeyPair::generate().expect("DPoP key generation should succeed");
+    let nonce_handler = DpopNonceHandler::new();
+    let dpop_opts = DpopOptions {
+        key: &dpop_key,
+        nonce_handler: Some(&nonce_handler),
+    };
+
+    let token = client
+        .exchange_pre_authorized_code(
+            &context,
+            "test_code_credential_dpop",
+            None::<String>,
+            &["UniversityDegreeCredential".to_string()],
+            Some(&dpop_opts),
+        )
+        .await
+        .expect("token exchange with DPoP should succeed");
+
+    let signer = get_ecdsa_signer();
+    let credentials = client
+        .request_credentials(&context, &token, &signer, Some(&dpop_opts))
+        .await
+        .expect("credential request with DPoP should succeed");
+    assert_eq!(credentials.len(), 1);
+
+    // Verify the DPoP header on the credential request
+    let requests = credential_guard.received_requests().await;
+    let cred_request = requests
+        .into_iter()
+        .find(|r| r.url.path().ends_with("/credential"))
+        .expect("should find credential request");
+
+    let dpop_header = cred_request
+        .headers
+        .get("DPoP")
+        .expect("credential request must have DPoP header")
+        .to_str()
+        .unwrap();
+
+    let parts: Vec<&str> = dpop_header.split('.').collect();
+    assert_eq!(parts.len(), 3, "DPoP header must be a 3-part JWT");
+
+    // Verify header
+    let header_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[0])
+        .expect("header should be valid base64url");
+    let header: serde_json::Value =
+        serde_json::from_slice(&header_bytes).expect("header should be valid JSON");
+    assert_eq!(header["typ"], "dpop+jwt");
+    assert_eq!(header["alg"], "ES256");
+    assert!(header["jwk"]["kty"] == "EC");
+
+    // Verify claims, specifically the ath claim (SHA-256 of access token)
+    let claims_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .expect("claims should be valid base64url");
+    let claims: serde_json::Value =
+        serde_json::from_slice(&claims_bytes).expect("claims should be valid JSON");
+    assert_eq!(claims["htm"], "POST");
+    assert!(claims["htu"].is_string(), "claims htu must be present");
+    assert!(claims["jti"].is_string(), "claims jti must be present");
+    assert!(claims["iat"].is_number(), "claims iat must be present");
+
+    // ath must be present on credential requests and equal SHA-256(access_token)
+    let expected_ath = compute_ath(&token.access_token);
+    assert!(
+        claims.get("ath").is_some(),
+        "credential request DPoP proof must include ath claim"
+    );
+    assert_eq!(
+        claims["ath"].as_str().unwrap(),
+        expected_ath,
+        "ath claim must be SHA-256 hash of access token"
+    );
+
+    // Verify signature
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    let signature_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[2])
+        .expect("signature should be valid base64url");
+    dpop_key
+        .verify_signature(signing_input.as_bytes(), &signature_bytes)
+        .expect("DPoP proof signature should verify with public key");
+}
+
+#[tokio::test]
+async fn test_dpop_deferred_credential_request() {
+    use base64::Engine;
+
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    let metadata_json = serde_json::json!({
+        "credential_issuer": issuer_url,
+        "credential_endpoint": format!("{issuer_url}/credential"),
+        "deferred_credential_endpoint": format!("{issuer_url}/credential/deferred"),
+        "nonce_endpoint": format!("{issuer_url}/nonce"),
+        "authorization_servers": [issuer_url],
+        "credential_configurations_supported": {
+            "UniversityDegreeCredential": {
+                "format": "jwt_vc_json",
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256"]
+                    }
+                }
+            }
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-credential-issuer"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    let as_metadata_json = serde_json::json!({
+        "issuer": issuer_url.replace("http://", "https://"),
+        "authorization_endpoint": format!("{issuer_url}/authorize").replace("http://", "https://"),
+        "token_endpoint": format!("{issuer_url}/token").replace("http://", "https://"),
+        "pushed_authorization_request_endpoint": format!("{issuer_url}/par").replace("http://", "https://"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(as_metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+
+    let offer = CredentialOffer {
+        credential_issuer: Url::parse(&issuer_url).unwrap(),
+        credential_configuration_ids: vec!["UniversityDegreeCredential".to_string()],
+        grants: Some(Grants {
+            authorization_code: None,
+            pre_authorized_code: Some(PreAuthorizedCodeGrant {
+                pre_authorized_code: "test_code_deferred".to_string(),
+                tx_code: None,
+                authorization_server: None,
+            }),
+        }),
+    };
+
+    let issuer_metadata = client
+        .fetch_issuer_metadata(&Url::parse(&issuer_url).unwrap())
+        .await
+        .unwrap();
+
+    let mut as_metadata = client
+        .fetch_as_metadata(&Url::parse(&issuer_url).unwrap(), &issuer_metadata, &offer)
+        .await
+        .unwrap();
+
+    as_metadata.authorization_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/authorize")).unwrap());
+    as_metadata.token_endpoint = Some(Url::parse(&format!("{issuer_url}/token")).unwrap());
+    as_metadata.pushed_authorization_request_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/par")).unwrap());
+
+    let mut issuer_metadata = issuer_metadata;
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    issuer_metadata.nonce_endpoint = Some(Url::parse(&format!("{issuer_url}/nonce")).unwrap());
+    issuer_metadata.deferred_credential_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/credential/deferred")).unwrap());
+
+    let context = ResolvedOfferContext {
+        offer,
+        issuer_metadata,
+        as_metadata,
+        flow: IssuanceFlow::PreAuthorizedCode {
+            pre_authorized_code: "test_code_deferred".to_string(),
+            tx_code: None,
+        },
+    };
+
+    let dpop_key = DpopKeyPair::generate().expect("DPoP key generation should succeed");
+    let nonce_handler = DpopNonceHandler::new();
+
+    let deferred_guard = Mock::given(method("POST"))
+        .and(path("/credential/deferred"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "credentials": [{"credential": "deferred_credential_jwt"}]
+        })))
+        .named("deferred_with_dpop")
+        .mount_as_scoped(&mock_server)
+        .await;
+
+    let result = client
+        .poll_deferred_credential(
+            &context,
+            "deferred_access_token",
+            "txn_ready",
+            Some(&DpopOptions {
+                key: &dpop_key,
+                nonce_handler: Some(&nonce_handler),
+            }),
+        )
+        .await
+        .expect("deferred credential poll with DPoP should succeed");
+
+    match result {
+        DeferredCredentialResult::Ready(response) => {
+            assert_eq!(
+                response.credentials[0].credential.as_str().unwrap(),
+                "deferred_credential_jwt"
+            );
+        }
+        DeferredCredentialResult::Pending(_) => panic!("expected Ready, got Pending"),
+    }
+
+    // Verify the DPoP header on the deferred credential request
+    let requests = deferred_guard.received_requests().await;
+    let deferred_req = requests
+        .into_iter()
+        .find(|r| r.url.path().ends_with("/credential/deferred"))
+        .expect("should find deferred credential request");
+
+    let dpop_header = deferred_req
+        .headers
+        .get("DPoP")
+        .expect("deferred credential request must have DPoP header")
+        .to_str()
+        .unwrap();
+
+    let parts: Vec<&str> = dpop_header.split('.').collect();
+    assert_eq!(parts.len(), 3, "DPoP header must be a 3-part JWT");
+
+    let claims_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .expect("claims should be valid base64url");
+    let claims: serde_json::Value =
+        serde_json::from_slice(&claims_bytes).expect("claims should be valid JSON");
+
+    assert_eq!(claims["htm"], "POST");
+    assert!(claims["htu"].is_string());
+    assert!(
+        claims["ath"].is_string(),
+        "deferred DPoP proof must include ath"
+    );
+    let expected_ath = compute_ath("deferred_access_token");
+    assert_eq!(
+        claims["ath"].as_str().unwrap(),
+        expected_ath,
+        "ath must match SHA-256 of access token"
+    );
+
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    let signature_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[2])
+        .expect("signature should be valid base64url");
+    dpop_key
+        .verify_signature(signing_input.as_bytes(), &signature_bytes)
+        .expect("DPoP proof signature should verify");
 }

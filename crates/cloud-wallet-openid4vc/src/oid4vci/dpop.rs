@@ -275,6 +275,7 @@ impl Default for DpopNonceHandler {
 /// The nonce handler is used for pre-emptive nonce lookup (RFC 9449 §7):
 /// the library automatically calls `handler.get_nonce(htu)` when building
 /// proofs, so callers never need to compute `htu` or manage nonces manually.
+#[derive(Debug)]
 pub struct DpopOptions<'a> {
     pub key: &'a DpopKeyPair,
     pub nonce_handler: Option<&'a DpopNonceHandler>,
