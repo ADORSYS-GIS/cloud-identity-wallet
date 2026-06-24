@@ -33,7 +33,7 @@ pub async fn start_presentation<S: SessionStore + Clone>(
         .process_request(&payload.request)
         .await?;
 
-    let credentials = state
+    let (credentials, credential_displays) = state
         .service
         .presentation_engine
         .load_credential_views(tenant_id)
@@ -53,7 +53,7 @@ pub async fn start_presentation<S: SessionStore + Clone>(
     }
 
     let session = PresentationSession::new(tenant_id, context, dcql_result);
-    let response = StartPresentationResponse::from_session(&session)?;
+    let response = StartPresentationResponse::from_session(&session, &credential_displays)?;
 
     state
         .service

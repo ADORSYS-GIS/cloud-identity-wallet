@@ -1,8 +1,11 @@
-use cloud_wallet_openid4vc::oid4vp::dcql::CredentialQuery;
+use std::collections::HashMap;
+
+use cloud_wallet_openid4vc::oid4vp::dcql::{CredentialQuery, CredentialSet};
 use cloud_wallet_openid4vc::oid4vp::selection::SelectionResult;
 use serde::Serialize;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
+use crate::domain::models::credential::CredentialDisplayMetadata;
 use super::PresentationError;
 use crate::session::{PresentationFlow, PresentationSession};
 
@@ -24,65 +27,146 @@ pub struct StartPresentationResponse {
     pub expires_at: String,
     pub flow: PresentationFlow,
     pub verifier: VerifierDisplay,
-    pub credential_matches: Vec<CredentialMatchInfo>,
-    pub has_transaction_data: bool,
-    pub satisfies_query: bool,
+    pub purpose: Option<String>,
+    pub credential_matches: Vec<CredentialMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_set_options: Option<Vec<Vec<String>>>,
+    pub transaction_data: Option<Vec<TransactionDataDisplay>>,
+    pub requires_consent: bool,
 }
 
 /// Verifier display information extracted from the presentation context.
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifierDisplay {
-    /// The verifier's client_id value (without prefix).
-    pub client_id: String,
-    /// Optional verifier name from metadata.
-    pub name: Option<String>,
-    /// Optional verifier logo URI from metadata.
+    pub name: String,
     pub logo_uri: Option<String>,
+    pub policy_uri: Option<String>,
+    pub verified: bool,
+    pub verification_method: Option<String>,
 }
 
-/// Information about a credential query match.
+/// A credential query match as defined by the API spec.
 #[derive(Debug, Clone, Serialize)]
-pub struct CredentialMatchInfo {
-    /// The DCQL credential query ID.
+pub struct CredentialMatch {
     pub query_id: String,
-    /// The credential format requested.
-    pub format: String,
-    /// Number of matching wallet credentials.
-    pub candidate_count: usize,
-    /// Whether multiple selections are allowed for this query.
-    pub multiple_allowed: bool,
-    /// Candidate credential summaries.
-    pub candidates: Vec<CandidateInfo>,
+    pub required: bool,
+    pub candidates: Vec<CredentialCandidate>,
 }
 
 /// A candidate credential that matches a query.
 #[derive(Debug, Clone, Serialize)]
-pub struct CandidateInfo {
-    /// Credential identifier in the wallet.
+pub struct CredentialCandidate {
     pub credential_id: String,
-    /// Claim paths requested from this credential.
-    pub requested_claims: Vec<String>,
+    pub display: CredentialDisplayMetadata,
+    pub requested_claims: Vec<RequestedClaim>,
+}
+
+/// A requested claim with its path and metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestedClaim {
+    pub path: cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathPointer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_required: Option<bool>,
+}
+
+/// Transaction data display entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct TransactionDataDisplay {
+    #[serde(rename = "type")]
+    pub data_type: String,
+    pub credential_ids: Vec<String>,
+    pub display_data: serde_json::Value,
+}
+
+impl From<&cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData<'_>> for TransactionDataDisplay {
+    fn from(td: &cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData<'_>) -> Self {
+        use cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData;
+        match td {
+            TransactionData::Openid4vp { data, .. } => {
+                let mut display_data = serde_json::Map::new();
+                if let Some(algs) = &data.transaction_data_hashes_alg {
+                    display_data.insert(
+                        "transaction_data_hashes_alg".to_string(),
+                        serde_json::to_value(algs).unwrap_or_default(),
+                    );
+                }
+                Self {
+                    data_type: data.data_type.to_string(),
+                    credential_ids: data.credential_ids.clone(),
+                    display_data: serde_json::Value::Object(display_data),
+                }
+            }
+            TransactionData::Other { transaction_type, credential_ids, additional_params, .. } => Self {
+                data_type: transaction_type.clone(),
+                credential_ids: credential_ids.clone(),
+                display_data: additional_params.clone(),
+            },
+        }
+    }
 }
 
 impl StartPresentationResponse {
-    /// Builds the start response from a presentation session.
-    pub fn from_session(session: &PresentationSession) -> Result<Self, PresentationError> {
+    /// Builds the start response from a presentation session and credential
+    /// display metadata.
+    pub fn from_session(
+        session: &PresentationSession,
+        credential_displays: &HashMap<String, CredentialDisplayMetadata>,
+    ) -> Result<Self, PresentationError> {
         let ctx = &session.context;
 
         let verifier = VerifierDisplay {
-            client_id: ctx.client_id.value().to_string(),
             name: ctx
                 .verifier_metadata
                 .as_ref()
-                .and_then(|m| m.client_metadata.client_name.clone()),
+                .and_then(|m| m.client_metadata.client_name.clone())
+                .unwrap_or_else(|| ctx.client_id.value().to_string()),
             logo_uri: ctx
                 .verifier_metadata
                 .as_ref()
                 .and_then(|m| m.client_metadata.logo_uri.as_ref().map(|u| u.to_string())),
+            policy_uri: ctx
+                .verifier_metadata
+                .as_ref()
+                .and_then(|m| m.client_metadata.policy_uri.as_ref().map(|u| u.to_string())),
+            verified: ctx.verifier_metadata.is_some(),
+            verification_method: ctx.client_id.prefix().map(|p| p.as_str().to_string()),
         };
 
-        let credential_matches =
-            build_credential_matches(&ctx.dcql_query.credentials, &session.dcql_result);
+        let credential_matches = build_credential_matches(
+            &ctx.dcql_query.credentials,
+            &session.dcql_result,
+            credential_displays,
+            ctx.dcql_query.credential_sets.as_deref(),
+        );
+
+        let credential_set_options = ctx
+            .dcql_query
+            .credential_sets
+            .as_ref()
+            .and_then(|sets| {
+                let all_options: Vec<Vec<String>> = sets
+                    .iter()
+                    .flat_map(|set| set.options.clone())
+                    .collect();
+                if !all_options.is_empty() {
+                    Some(all_options)
+                } else {
+                    None
+                }
+            });
+
+        let transaction_data = if ctx.transaction_data.is_empty() {
+            None
+        } else {
+            Some(
+                ctx.transaction_data
+                    .iter()
+                    .map(TransactionDataDisplay::from)
+                    .collect(),
+            )
+        };
 
         let expires_at = (OffsetDateTime::now_utc() + SESSION_TTL)
             .format(&Rfc3339)
@@ -95,9 +179,11 @@ impl StartPresentationResponse {
             expires_at,
             flow: session.flow,
             verifier,
+            purpose: None,
             credential_matches,
-            has_transaction_data: ctx.has_transaction_data(),
-            satisfies_query: session.dcql_result.satisfies_query,
+            credential_set_options,
+            transaction_data,
+            requires_consent: true,
         })
     }
 }
@@ -105,7 +191,9 @@ impl StartPresentationResponse {
 fn build_credential_matches(
     queries: &[CredentialQuery],
     result: &SelectionResult,
-) -> Vec<CredentialMatchInfo> {
+    credential_displays: &HashMap<String, CredentialDisplayMetadata>,
+    credential_sets: Option<&[CredentialSet]>,
+) -> Vec<CredentialMatch> {
     queries
         .iter()
         .map(|query| {
@@ -115,31 +203,78 @@ fn build_credential_matches(
                 .map(|candidates| {
                     candidates
                         .iter()
-                        .map(|c| CandidateInfo {
-                            credential_id: c.credential_id.clone(),
-                            requested_claims: c
+                        .map(|c| {
+                            let display = credential_displays
+                                .get(&c.credential_id)
+                                .cloned()
+                                .unwrap_or_default();
+
+                            let requested_claims = c
                                 .matched_claims
                                 .iter()
-                                .map(|m| format!("{:?}", m.path))
-                                .collect(),
+                                .map(|m| RequestedClaim {
+                                    path: m.path.clone(),
+                                    display_name: None,
+                                    value_required: lookup_value_required(
+                                        query,
+                                        &m.path,
+                                    ),
+                                })
+                                .collect();
+
+                            CredentialCandidate {
+                                credential_id: c.credential_id.clone(),
+                                display,
+                                requested_claims,
+                            }
                         })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
 
-            let multiple_allowed = result
-                .multiple_allowed_by_query_id
-                .get(&query.id)
-                .copied()
-                .unwrap_or(false);
-
-            CredentialMatchInfo {
+            CredentialMatch {
                 query_id: query.id.clone(),
-                format: query.format.to_string(),
-                candidate_count: candidates_list.len(),
-                multiple_allowed,
+                required: is_query_required(&query.id, credential_sets),
                 candidates: candidates_list,
             }
         })
         .collect()
+}
+
+/// Determines whether a query is required based on credential set membership.
+fn is_query_required(query_id: &str, credential_sets: Option<&[CredentialSet]>) -> bool {
+    let Some(sets) = credential_sets else {
+        return true;
+    };
+    let mut in_any_set = false;
+    let mut in_required_set = false;
+    for set in sets {
+        for option in &set.options {
+            if option.iter().any(|id| id == query_id) {
+                in_any_set = true;
+                if set.required.unwrap_or(true) {
+                    in_required_set = true;
+                }
+            }
+        }
+    }
+    if !in_any_set {
+        true // standalone queries are required
+    } else {
+        in_required_set
+    }
+}
+
+/// Looks up whether a claims query had a `values` constraint for a given path.
+fn lookup_value_required(
+    query: &CredentialQuery,
+    path: &cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathPointer,
+) -> Option<bool> {
+    let claims = query.claims.as_ref()?;
+    for claim in claims {
+        if &claim.path == path {
+            return Some(claim.values.is_some());
+        }
+    }
+    None
 }

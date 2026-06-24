@@ -214,20 +214,29 @@ async fn valid_request_with_matching_credentials_returns_201() {
     assert_eq!(flow, "cross_device");
 
     let verifier = body.get("verifier").unwrap();
+    assert_eq!(verifier.get("name").unwrap(), "https://verifier.example.com");
+    assert_eq!(verifier.get("verified").unwrap(), false);
     assert_eq!(
-        verifier.get("client_id").unwrap(),
-        "https://verifier.example.com"
+        verifier.get("verification_method").unwrap(),
+        "redirect_uri"
     );
 
     let credential_matches = body.get("credential_matches").unwrap().as_array().unwrap();
     assert_eq!(credential_matches.len(), 1);
     let match_info = &credential_matches[0];
     assert_eq!(match_info.get("query_id").unwrap(), "pid");
-    assert_eq!(match_info.get("format").unwrap(), "jwt_vc_json");
-    assert_eq!(match_info.get("candidate_count").unwrap(), 1);
+    assert_eq!(match_info.get("required").unwrap(), true);
 
-    assert_eq!(body.get("has_transaction_data").unwrap(), false);
-    assert_eq!(body.get("satisfies_query").unwrap(), true);
+    let candidates = match_info.get("candidates").unwrap().as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    let candidate = &candidates[0];
+    let display = candidate.get("display").unwrap();
+    assert_eq!(display.get("name").unwrap(), "Employee Badge");
+    assert_eq!(display.get("issuer_name").unwrap(), "Test Issuer");
+    assert_eq!(display.get("credential_type").unwrap(), "EmployeeBadge");
+
+    assert_eq!(body.get("requires_consent").unwrap(), true);
+    assert!(body.get("transaction_data").unwrap().is_null());
 }
 
 #[tokio::test]

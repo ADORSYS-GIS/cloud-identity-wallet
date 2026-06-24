@@ -214,14 +214,15 @@ impl PresentationEngine {
     }
 
     /// Loads the tenant's credentials and converts them to [`CredentialView`]
-    /// for DCQL matching.
+    /// for DCQL matching, together with a map of display metadata keyed by
+    /// credential id.
     ///
     /// Credentials that fail format-specific decoding (e.g., malformed SD-JWT)
     /// are logged and skipped rather than failing the entire operation.
     pub async fn load_credential_views(
         &self,
         tenant_id: uuid::Uuid,
-    ) -> Result<Vec<CredentialView>> {
+    ) -> Result<(Vec<CredentialView>, std::collections::HashMap<String, crate::domain::models::credential::CredentialDisplayMetadata>)> {
         use crate::domain::models::credential::CredentialFilter;
 
         let filter = CredentialFilter {
@@ -240,10 +241,14 @@ impl PresentationEngine {
             .map_err(|e| PresentationError::internal(e.to_string()))?;
 
         let mut views = Vec::with_capacity(summaries.len());
+        let mut display_map = std::collections::HashMap::with_capacity(summaries.len());
         for summary in &summaries {
             match self.credential_repo.find_by_id(summary.id, tenant_id).await {
                 Ok(cred) => match credential_to_view(&cred) {
-                    Ok(view) => views.push(view),
+                    Ok(view) => {
+                        display_map.insert(view.id.clone(), summary.display.clone());
+                        views.push(view);
+                    }
                     Err(err) => {
                         tracing::warn!(
                             credential_id = %cred.id,
@@ -263,7 +268,7 @@ impl PresentationEngine {
         }
 
         debug!(count = views.len(), "loaded credential views for matching");
-        Ok(views)
+        Ok((views, display_map))
     }
 
     /// Builds a [`SelectedCredential`] from a raw credential payload and its

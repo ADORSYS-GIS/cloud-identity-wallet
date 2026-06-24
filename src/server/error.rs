@@ -249,10 +249,17 @@ impl IntoApiError for PresentationError {
             );
         }
 
+        // Do not leak internal error details to the client.
+        let error_description = if self.code == PresentationErrorCode::InternalError {
+            None
+        } else {
+            self.description
+        };
+
         ApiError {
             status,
             error: self.code.to_string().into(),
-            error_description: self.description,
+            error_description,
         }
     }
 }
