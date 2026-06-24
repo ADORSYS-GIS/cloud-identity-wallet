@@ -448,6 +448,38 @@ fn wrong_tag_length_rejected_cbc_hmac() {
     assert_eq!(err.kind(), ErrorKind::WrongLength);
 }
 
+/// CBC-HMAC requires a 16-byte IV regardless of variant; both shorter and
+/// longer IVs must be rejected before any HMAC/decrypt work runs. Mirrors
+/// `iv_wrong_length_rejected` (GCM) for the CBC-HMAC dispatch path in decrypt().
+#[test]
+fn iv_wrong_length_rejected_cbc_hmac() {
+    let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
+    let header = ecdh_header(
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A128CbcHs256,
+    );
+    let token = encrypt(header, b"iv-test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
+
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let parts: Vec<&str> = token.splitn(6, '.').collect();
+
+    for bad_iv in [
+        Base64UrlUnpadded::encode_string(&[0u8; 12]), // GCM-sized, wrong for CBC
+        Base64UrlUnpadded::encode_string(&[0u8; 20]),
+    ] {
+        let tampered = format!(
+            "{}.{}.{}.{}.{}",
+            parts[0], parts[1], bad_iv, parts[3], parts[4]
+        );
+        let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            ErrorKind::WrongLength,
+            "expected WrongLength for iv len, got {err:?}"
+        );
+    }
+}
+
 /// Modifying the protected header (changing `alg`) must cause AEAD tag failure
 /// because the AAD changes.
 #[test]

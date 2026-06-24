@@ -88,6 +88,13 @@ impl Algorithm {
 
     /// Authentication tag length — equal to the MAC key length, i.e. half the
     /// HMAC's native output length (RFC 7518 §5.2.2.1).
+    ///
+    /// This equality (`mac_key_len() == hmac_algorithm().tag_len() / 2`) holds
+    /// for all three RFC-defined combinations by construction — it is not
+    /// re-derived from `hmac_algorithm()` here. A future variant that paired a
+    /// MAC key size with a hash whose output isn't exactly double that size
+    /// would silently get the wrong truncation length; there is no
+    /// existing combination where that applies.
     #[must_use]
     pub fn tag_len(self) -> usize {
         self.mac_key_len()
@@ -236,6 +243,8 @@ impl Key {
     ) -> Result<(Vec<u8>, Vec<u8>)> {
         let mut buf = Zeroizing::new(pkcs7_pad(plaintext));
 
+        // aws-lc-rs flags raw CBC as dangerous alone; it's safe here because
+        // it's always paired with the HMAC compute/verify around it (RFC 7518 §5.2).
         let cipher_key = UnboundCipherKey::new(self.alg.cipher_algorithm(), self.enc_key.expose())
             .map_err(|_| error_msg(ErrorKind::Encryption, "failed to construct AES-CBC key"))?;
         let encrypting_key = EncryptingKey::cbc(cipher_key).map_err(|_| {
@@ -269,14 +278,19 @@ impl Key {
         tag: &[u8],
         ciphertext: &[u8],
     ) -> Result<Zeroizing<Vec<u8>>> {
+        // Explicit length check: `cbc_hmac::Key` is public API reachable
+        // without the JWE layer's pre-validation, so this must hold here too.
+        if tag.len() != self.alg.tag_len() {
+            return Err(tag_error());
+        }
+
         let expected = self.compute_tag(iv, aad, ciphertext);
         let tag_ok: bool = expected.as_slice().ct_eq(tag).into();
         if !tag_ok {
             return Err(tag_error());
         }
-        // SECURITY: everything below this line only ever runs on a
-        // MAC-verified ciphertext. Do not move decryption/unpadding above
-        // the check above — see the module docs.
+        // Everything below only ever runs on a MAC-verified ciphertext —
+        // do not reorder (see module docs).
 
         if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(IV_LENGTH) {
             return Err(tag_error());
@@ -322,20 +336,17 @@ mod tests {
     const KAT_TAG: [u8; 16] = hex!("652c3fa36b0a7c5b3219fab3a30bc1c4");
 
     #[test]
-    fn rfc7518_aes128cbc_hs256_known_answer_decrypt() {
+    fn rfc7518_aes128cbc_hs256_known_answer() {
         let key = Key::new(Algorithm::Aes128CbcHmacSha256, &KAT_CEK).unwrap();
+
+        let (ciphertext, tag) = key.encrypt(&KAT_IV, KAT_AAD, KAT_PLAINTEXT).unwrap();
+        assert_eq!(ciphertext, KAT_CIPHERTEXT);
+        assert_eq!(tag, KAT_TAG);
+
         let plaintext = key
             .decrypt_with_tag(&KAT_IV, KAT_AAD, &KAT_TAG, &KAT_CIPHERTEXT)
             .unwrap();
         assert_eq!(&*plaintext, KAT_PLAINTEXT);
-    }
-
-    #[test]
-    fn rfc7518_aes128cbc_hs256_known_answer_encrypt() {
-        let key = Key::new(Algorithm::Aes128CbcHmacSha256, &KAT_CEK).unwrap();
-        let (ciphertext, tag) = key.encrypt(&KAT_IV, KAT_AAD, KAT_PLAINTEXT).unwrap();
-        assert_eq!(ciphertext, KAT_CIPHERTEXT);
-        assert_eq!(tag, KAT_TAG);
     }
 
     // `AL` worked example, hand-computed independently of the function under
@@ -389,16 +400,26 @@ mod tests {
         let iv = [0u8; IV_LENGTH];
         let (ciphertext, tag) = key.encrypt(&iv, b"aad", b"").unwrap();
         assert_eq!(ciphertext.len(), IV_LENGTH);
-        let got = key.decrypt_with_tag(&iv, b"aad", &tag, &ciphertext).unwrap();
+        let got = key
+            .decrypt_with_tag(&iv, b"aad", &tag, &ciphertext)
+            .unwrap();
         assert_eq!(&*got, b"");
     }
 
     #[test]
     fn wrong_cek_length_rejected() {
-        let err = Key::new(Algorithm::Aes128CbcHmacSha256, &[0u8; 16])
-            .unwrap_err()
-            .kind();
-        assert_eq!(err, ErrorKind::WrongLength);
+        for alg in [
+            Algorithm::Aes128CbcHmacSha256,
+            Algorithm::Aes192CbcHmacSha384,
+            Algorithm::Aes256CbcHmacSha512,
+        ] {
+            let err = Key::new(alg, &[0u8; 16]).unwrap_err().kind();
+            assert_eq!(
+                err,
+                ErrorKind::WrongLength,
+                "expected WrongLength for {alg:?} with a wrong-length CEK"
+            );
+        }
     }
 
     /// A MAC failure must be reported, and the padding/decryption code must
@@ -416,9 +437,6 @@ mod tests {
         let iv = [0u8; IV_LENGTH];
         let (mut ciphertext, mut tag) = key.encrypt(&iv, b"aad", b"some plaintext").unwrap();
 
-        // Corrupt the last ciphertext block: under CBC this scrambles the
-        // last decrypted plaintext block (and its PKCS#7 padding), and also
-        // invalidates the tag since the tag covers the ciphertext.
         let last = ciphertext.len() - 1;
         ciphertext[last] ^= 0xff;
         let err_corrupted_ct = key
@@ -437,15 +455,52 @@ mod tests {
         assert_eq!(err_corrupted_ct.to_string(), err_bad_tag.to_string());
     }
 
+    /// `cbc_hmac::Key` is public API reachable without the JWE layer's own
+    /// pre-validation, so it must reject malformed tag/ciphertext lengths
+    /// itself: a too-short or too-long tag (not merely relying on `ct_eq`'s
+    /// own length handling), and an empty ciphertext.
     #[test]
-    fn empty_ciphertext_rejected() {
-        let cek = vec![0u8; Algorithm::Aes128CbcHmacSha256.key_len()];
-        let key = Key::new(Algorithm::Aes128CbcHmacSha256, &cek).unwrap();
-        let iv = [0u8; IV_LENGTH];
-        let tag = key.compute_tag(&iv, b"aad", b"");
-        let err = key
-            .decrypt_with_tag(&iv, b"aad", &tag, b"")
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Decryption);
+    fn decrypt_with_tag_rejects_malformed_lengths() {
+        for alg in [
+            Algorithm::Aes128CbcHmacSha256,
+            Algorithm::Aes192CbcHmacSha384,
+            Algorithm::Aes256CbcHmacSha512,
+        ] {
+            let cek = vec![0u8; alg.key_len()];
+            let key = Key::new(alg, &cek).unwrap();
+            let iv = [0u8; IV_LENGTH];
+            let (ciphertext, tag) = key.encrypt(&iv, b"aad", b"some plaintext").unwrap();
+            assert_eq!(tag.len(), alg.tag_len());
+
+            let err = key
+                .decrypt_with_tag(&iv, b"aad", &tag[..tag.len() / 2], &ciphertext)
+                .unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ErrorKind::Decryption,
+                "expected rejection for {alg:?} with a too-short tag"
+            );
+
+            let mut too_long = tag.clone();
+            too_long.push(0);
+            let err = key
+                .decrypt_with_tag(&iv, b"aad", &too_long, &ciphertext)
+                .unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ErrorKind::Decryption,
+                "expected rejection for {alg:?} with a too-long tag"
+            );
+
+            let empty_tag = key.compute_tag(&iv, b"aad", b"");
+            let err = key
+                .decrypt_with_tag(&iv, b"aad", &empty_tag, b"")
+                .unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ErrorKind::Decryption,
+                "expected rejection for {alg:?} with an empty ciphertext"
+            );
+        }
     }
 }
