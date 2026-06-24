@@ -4,6 +4,7 @@
 //! enabling the Wallet to respond to presentation requests from Verifiers.
 
 pub mod authorization;
+pub(crate) mod authz_uri;
 pub mod client;
 pub mod client_id;
 pub mod dcql;

@@ -22,6 +22,7 @@ use crate::oid4vp::authorization::request_uri::{RequestUriResult, resolve_reques
 use crate::oid4vp::authorization::{
     AuthorizationRequest, AuthorizationResponse, DirectPostResponse, RequestUriMethod, ResponseMode,
 };
+use crate::oid4vp::authz_uri;
 use crate::oid4vp::client_id::{ClientIdPrefix, ParsedClientId};
 use crate::oid4vp::dcql::{CredentialQuery, DcqlQuery};
 use crate::oid4vp::error::{AuthorizationErrorCode, RequestObjectError, RequestUriError};
@@ -282,8 +283,6 @@ impl Oid4vpClient {
             )
             .await?;
 
-        request.validate().map_err(Error::ValidationFailed)?;
-
         let client_id = ParsedClientId::parse(&request.oauth.client_id)?;
         let verifier_metadata = match verifier_resolver {
             Some(resolver) => resolver.resolve_metadata(&client_id, &request).await?,
@@ -372,7 +371,9 @@ impl Oid4vpClient {
     ///
     /// Supports:
     /// - Direct JSON: `{"response_type":"vp_token",...}`
-    /// - `{custom}://` URI: extracts query params and deserializes
+    /// - URL-encoded query string: `response_type=vp_token&client_id=...`
+    /// - `openid4vp://` URI: extracts query params and deserializes
+    /// - `haip-vp://` URI: extracts query params and deserializes (HAIP §5.1)
     fn parse_authorization_request(
         &self,
         raw_request: &str,
@@ -381,31 +382,30 @@ impl Oid4vpClient {
 
         // Try parsing as URI with query params
         if let Ok(url) = Url::parse(trimmed) {
-            // Collect query params into a JSON map for deserialization
-            let params: Vec<(String, String)> = url
-                .query_pairs()
-                .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                .collect();
-
-            if params.is_empty() {
-                return Err(Error::InvalidRequest(
-                    "authorization request URI has no query parameters".into(),
-                ));
+            let scheme_lower = url.scheme().to_lowercase();
+            if matches!(scheme_lower.as_str(), "openid4vp" | "haip-vp") {
+                let query = authz_uri::parse_authz_uri(trimmed)
+                    .map_err(|e| Error::InvalidRequest(e.to_string()))?;
+                return serde_urlencoded::from_str(&query).map_err(|e| {
+                    Error::InvalidRequest(format!(
+                        "failed to deserialize authorization request from URI query: {e}"
+                    ))
+                });
             }
-
-            serde_urlencoded::from_str(url.query().unwrap_or_default()).map_err(|e| {
-                Error::InvalidRequest(format!(
-                    "failed to deserialize authorization request from URI query: {e}"
-                ))
-            })
-        } else {
-            // Try direct JSON parsing
-            serde_json::from_str(trimmed).map_err(|e| {
-                Error::InvalidRequest(format!(
-                    "failed to parse authorization request as JSON: {e}"
-                ))
-            })
+            // For other schemes, fall through to try JSON or query string parsing
         }
+
+        // Try direct JSON parsing
+        if let Ok(req) = serde_json::from_str(trimmed) {
+            return Ok(req);
+        }
+
+        // Try parsing as URL-encoded query string
+        serde_urlencoded::from_str(trimmed).map_err(|e| {
+            Error::InvalidRequest(format!(
+                "failed to parse authorization request as JSON or query string: {e}"
+            ))
+        })
     }
 
     fn parse_authorization_request_envelope(
@@ -414,24 +414,32 @@ impl Oid4vpClient {
     ) -> Result<AuthorizationRequestEnvelope, Error> {
         let trimmed = raw_request.trim();
 
+        // Try parsing as a well-known URI scheme first
         if let Ok(url) = Url::parse(trimmed) {
-            if url.query().is_none() {
-                return Err(Error::InvalidRequest(
-                    "authorization request URI has no query parameters".into(),
-                ));
+            let scheme_lower = url.scheme().to_lowercase();
+            if matches!(scheme_lower.as_str(), "openid4vp" | "haip-vp") {
+                let query = authz_uri::parse_authz_uri(trimmed)
+                    .map_err(|e| Error::InvalidRequest(e.to_string()))?;
+                return serde_urlencoded::from_str(&query).map_err(|e| {
+                    Error::InvalidRequest(format!(
+                        "failed to deserialize authorization request envelope from URI query: {e}"
+                    ))
+                });
             }
-            serde_urlencoded::from_str(url.query().unwrap_or_default()).map_err(|e| {
-                Error::InvalidRequest(format!(
-                    "failed to deserialize authorization request envelope from URI query: {e}"
-                ))
-            })
-        } else {
-            serde_json::from_str(trimmed).map_err(|e| {
-                Error::InvalidRequest(format!(
-                    "failed to parse authorization request envelope as JSON: {e}"
-                ))
-            })
+            // For other schemes, fall through to try JSON or query string parsing
         }
+
+        // Try direct JSON parsing
+        if let Ok(env) = serde_json::from_str(trimmed) {
+            return Ok(env);
+        }
+
+        // Try parsing as URL-encoded query string
+        serde_urlencoded::from_str(trimmed).map_err(|e| {
+            Error::InvalidRequest(format!(
+                "failed to parse authorization request envelope as JSON or query string: {e}"
+            ))
+        })
     }
 
     async fn parse_and_resolve_authorization_request(
