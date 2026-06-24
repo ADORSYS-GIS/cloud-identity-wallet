@@ -10,6 +10,7 @@ use crate::oid4vci::client::JwtSigner;
 
 type Result<T> = std::result::Result<T, ClientError>;
 
+#[cfg(test)]
 const OAUTH_CLIENT_ATTESTATION_TYP: &str = "oauth-client-attestation+jwt";
 const OAUTH_CLIENT_ATTESTATION_POP_TYP: &str = "oauth-client-attestation-pop+jwt";
 
@@ -63,6 +64,7 @@ pub struct ClientAttestationPop {
 }
 
 /// JOSE header for the Wallet Attestation JWT.
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AttestationHeader {
     pub alg: Algorithm,
@@ -84,7 +86,12 @@ struct PopHeader {
     pub jwk: Jwk,
 }
 
-/// Constructs and signs Wallet Attestation and Client Attestation PoP JWTs.
+/// Holds an opaque, pre-issued Wallet Attestation JWT and signs
+/// Client Attestation PoP JWTs with the wallet instance key.
+///
+/// The `attestation_jwt` field is a pre-signed JWT delivered out-of-band
+/// by the Wallet Provider; the wallet instance never holds the provider's
+/// private signing key.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct WalletAttestationSigner {
@@ -94,35 +101,52 @@ pub struct WalletAttestationSigner {
     provider_public_jwk: Jwk,
 }
 
+fn decode_attestation_claims(jwt: &str) -> Result<WalletAttestation> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return Err(ClientError::validation(
+            "invalid JWT format: expected 3 parts",
+        ));
+    }
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| ClientError::validation(format!("invalid attestation JWT payload: {e}")))?;
+    serde_json::from_slice(&payload_bytes)
+        .map_err(|e| ClientError::validation(format!("invalid attestation JWT claims: {e}")))
+}
+
 impl WalletAttestationSigner {
-    /// Creates a new signer.
+    /// Creates a new signer from a pre-issued Wallet Attestation JWT.
     ///
-    /// The `provider_key` signs the attestation JWT. The `wallet_key` must have a
-    /// public JWK and is used to sign the PoP JWTs. The `cnf` claim in
-    /// `attestation_claims` is unconditionally replaced with the wallet key's public
-    /// JWK; any caller-provided value is ignored.
+    /// The `attestation_jwt` is an opaque, pre-signed JWT issued by the Wallet
+    /// Provider out-of-band. The `wallet_key` is used to sign PoP JWTs. The
+    /// `provider_public_jwk` is the trusted public key for verifying the
+    /// attestation signature.
     pub fn new(
-        provider_key: JwtSigner,
-        mut attestation_claims: WalletAttestation,
+        attestation_jwt: String,
         wallet_key: JwtSigner,
+        provider_public_jwk: Jwk,
     ) -> Result<Self> {
-        let jwk = wallet_key.public_jwk().clone();
-        attestation_claims.cnf = Some(Cnf { jwk: jwk.clone() });
+        let claims = decode_attestation_claims(&attestation_jwt)?;
 
-        let attestation_header = AttestationHeader {
-            alg: provider_key.algorithm(),
-            typ: OAUTH_CLIENT_ATTESTATION_TYP,
-            kid: None,
-            x5c: None,
-        };
-
-        let attestation_jwt = provider_key.encode(&attestation_header, &attestation_claims)?;
+        let wallet_jwk = wallet_key.public_jwk();
+        if let Some(ref cnf) = claims.cnf {
+            if &cnf.jwk != wallet_jwk {
+                return Err(ClientError::validation(
+                    "wallet attestation cnf does not match wallet key",
+                ));
+            }
+        } else {
+            return Err(ClientError::validation(
+                "wallet attestation missing required cnf claim",
+            ));
+        }
 
         Ok(Self {
             attestation_jwt,
-            attestation_claims,
+            attestation_claims: claims,
             wallet_key,
-            provider_public_jwk: provider_key.public_jwk().clone(),
+            provider_public_jwk,
         })
     }
 
@@ -219,24 +243,39 @@ impl WalletAttestationSigner {
 }
 
 #[cfg(test)]
+pub(crate) fn create_test_attestation_jwt(
+    provider_key: &JwtSigner,
+    claims: &WalletAttestation,
+) -> String {
+    let header = AttestationHeader {
+        alg: provider_key.algorithm(),
+        typ: OAUTH_CLIENT_ATTESTATION_TYP,
+        kid: None,
+        x5c: None,
+    };
+    provider_key.encode(&header, claims).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
     use cloud_wallet_crypto::ecdsa::{Curve, KeyPair as EcdsaKeyPair};
     use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode, decode_header};
 
-    fn get_ecdsa_keys() -> (JwtSigner, JwtSigner) {
+    fn get_provider_key() -> JwtSigner {
         let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
-        let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
         let provider_der = provider_keypair.to_pkcs8_der().to_vec();
-        let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
-        (
-            JwtSigner::from_ecdsa_der(&provider_der).unwrap(),
-            JwtSigner::from_ecdsa_der(&wallet_der).unwrap(),
-        )
+        JwtSigner::from_ecdsa_der(&provider_der).unwrap()
     }
 
-    fn sample_attestation_claims() -> WalletAttestation {
+    fn get_wallet_key() -> JwtSigner {
+        let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+        let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
+        JwtSigner::from_ecdsa_der(&wallet_der).unwrap()
+    }
+
+    fn sample_attestation_claims(wallet_jwk: &Jwk) -> WalletAttestation {
         let now = jsonwebtoken::get_current_timestamp() as i64;
         WalletAttestation {
             iss: "https://wallet-provider.example.com".to_string(),
@@ -247,7 +286,9 @@ mod tests {
             wallet_name: Some("Test Wallet".to_string()),
             wallet_link: None,
             status: None,
-            cnf: None,
+            cnf: Some(Cnf {
+                jwk: wallet_jwk.clone(),
+            }),
         }
     }
 
@@ -262,9 +303,14 @@ mod tests {
 
     #[test]
     fn test_valid_attestation_and_pop() {
-        let (provider_key, wallet_key) = get_ecdsa_keys();
-        let claims = sample_attestation_claims();
-        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let claims = sample_attestation_claims(&wallet_jwk);
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let signer =
+            WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap();
 
         // Verify attestation JWT structure
         let attestation_jwt = signer.attestation_jwt();
@@ -308,10 +354,15 @@ mod tests {
 
     #[test]
     fn test_expired_attestation_rejection() {
-        let (provider_key, wallet_key) = get_ecdsa_keys();
-        let mut claims = sample_attestation_claims();
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let mut claims = sample_attestation_claims(&wallet_jwk);
         claims.exp = jsonwebtoken::get_current_timestamp() as i64 - 3600; // expired 1 hour ago
-        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let signer =
+            WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap();
 
         let result = signer.validate_attestation();
         assert!(result.is_err());
@@ -321,9 +372,14 @@ mod tests {
 
     #[test]
     fn test_wrong_aud_in_pop() {
-        let (provider_key, wallet_key) = get_ecdsa_keys();
-        let claims = sample_attestation_claims();
-        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let claims = sample_attestation_claims(&wallet_jwk);
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let signer =
+            WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap();
 
         let pop_jwt = signer.pop_jwt("https://as.example.com/par", None).unwrap();
         let pop_header = decode_header(&pop_jwt).unwrap();
@@ -346,9 +402,14 @@ mod tests {
 
     #[test]
     fn test_attestation_signature_verification() {
-        let (provider_key, wallet_key) = get_ecdsa_keys();
-        let claims = sample_attestation_claims();
-        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let claims = sample_attestation_claims(&wallet_jwk);
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let signer =
+            WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap();
 
         // Should pass with the correct provider key
         assert!(signer.validate_attestation().is_ok());
@@ -356,9 +417,14 @@ mod tests {
 
     #[test]
     fn test_tampered_attestation_rejected() {
-        let (provider_key, wallet_key) = get_ecdsa_keys();
-        let claims = sample_attestation_claims();
-        let mut signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let claims = sample_attestation_claims(&wallet_jwk);
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let mut signer =
+            WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap();
 
         // Tamper with the stored JWT payload (flip a byte in the base64 payload)
         let parts: Vec<&str> = signer.attestation_jwt.split('.').collect();
@@ -371,9 +437,14 @@ mod tests {
 
     #[test]
     fn test_pop_jwt_jwk_does_not_leak_private_key() {
-        let (provider_key, wallet_key) = get_ecdsa_keys();
-        let claims = sample_attestation_claims();
-        let signer = WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap();
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let claims = sample_attestation_claims(&wallet_jwk);
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let signer =
+            WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap();
 
         // Generate PoP JWT
         let pop_jwt = signer.pop_jwt("https://as.example.com/par", None).unwrap();
@@ -403,5 +474,35 @@ mod tests {
             Some("EC"),
             "PoP JWT jwk must have kty='EC'"
         );
+    }
+
+    #[test]
+    fn test_mismatched_cnf_rejected() {
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let other_wallet_key = get_wallet_key(); // different key
+        let other_wallet_jwk = other_wallet_key.public_jwk().clone();
+        let claims = sample_attestation_claims(&other_wallet_jwk);
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let result = WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("cnf does not match wallet key"));
+    }
+
+    #[test]
+    fn test_missing_cnf_rejected() {
+        let provider_key = get_provider_key();
+        let wallet_key = get_wallet_key();
+        let wallet_jwk = wallet_key.public_jwk().clone();
+        let mut claims = sample_attestation_claims(&wallet_jwk);
+        claims.cnf = None;
+        let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+        let provider_public_jwk = provider_key.public_jwk().clone();
+        let result = WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("missing required cnf claim"));
     }
 }

@@ -19,7 +19,10 @@ use crate::oid4vci::credential::formats::{
 use crate::oid4vci::metadata::{
     AuthorizationServerMetadata, CredentialConfiguration, CredentialIssuerMetadata,
 };
-use crate::oid4vci::wallet_attestation::{WalletAttestation, WalletAttestationSigner};
+use crate::oid4vci::wallet_attestation::{
+    ClientAttestationPop, Cnf, WalletAttestation, WalletAttestationSigner,
+    create_test_attestation_jwt,
+};
 use std::collections::HashMap;
 use wiremock::matchers::header_exists;
 
@@ -421,19 +424,17 @@ async fn test_issuance_flow() {
     }
 }
 
-fn get_wallet_attestation_keys() -> (JwtSigner, JwtSigner) {
-    let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
-    let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
-    let provider_der = provider_keypair.to_pkcs8_der().to_vec();
-    let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
-    (
-        JwtSigner::from_ecdsa_der(&provider_der).unwrap(),
-        JwtSigner::from_ecdsa_der(&wallet_der).unwrap(),
-    )
-}
-
 fn create_wallet_attestation_signer() -> WalletAttestationSigner {
-    let (provider_key, wallet_key) = get_wallet_attestation_keys();
+    let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+    let provider_der = provider_keypair.to_pkcs8_der().to_vec();
+    let provider_key = JwtSigner::from_ecdsa_der(&provider_der).unwrap();
+    let provider_public_jwk = provider_key.public_jwk().clone();
+
+    let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+    let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
+    let wallet_key = JwtSigner::from_ecdsa_der(&wallet_der).unwrap();
+    let wallet_jwk = wallet_key.public_jwk().clone();
+
     let now = jsonwebtoken::get_current_timestamp() as i64;
     let claims = WalletAttestation {
         iss: "https://wallet-provider.example.com".to_string(),
@@ -444,13 +445,23 @@ fn create_wallet_attestation_signer() -> WalletAttestationSigner {
         wallet_name: None,
         wallet_link: None,
         status: None,
-        cnf: None,
+        cnf: Some(Cnf { jwk: wallet_jwk }),
     };
-    WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
+    let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+    WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap()
 }
 
 fn create_expired_wallet_attestation_signer() -> WalletAttestationSigner {
-    let (provider_key, wallet_key) = get_wallet_attestation_keys();
+    let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+    let provider_der = provider_keypair.to_pkcs8_der().to_vec();
+    let provider_key = JwtSigner::from_ecdsa_der(&provider_der).unwrap();
+    let provider_public_jwk = provider_key.public_jwk().clone();
+
+    let wallet_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
+    let wallet_der = wallet_keypair.to_pkcs8_der().to_vec();
+    let wallet_key = JwtSigner::from_ecdsa_der(&wallet_der).unwrap();
+    let wallet_jwk = wallet_key.public_jwk().clone();
+
     let now = jsonwebtoken::get_current_timestamp() as i64;
     let claims = WalletAttestation {
         iss: "https://wallet-provider.example.com".to_string(),
@@ -461,9 +472,10 @@ fn create_expired_wallet_attestation_signer() -> WalletAttestationSigner {
         wallet_name: None,
         wallet_link: None,
         status: None,
-        cnf: None,
+        cnf: Some(Cnf { jwk: wallet_jwk }),
     };
-    WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
+    let attestation_jwt = create_test_attestation_jwt(&provider_key, &claims);
+    WalletAttestationSigner::new(attestation_jwt, wallet_key, provider_public_jwk).unwrap()
 }
 
 fn minimal_as_metadata(par_url: &str) -> AuthorizationServerMetadata {
@@ -630,6 +642,18 @@ async fn test_par_sends_wallet_attestation_headers() {
         .expect("missing OAuth-Client-Attestation-PoP header");
     let pop_decoded = jsonwebtoken::decode_header(pop_header).unwrap();
     assert!(pop_decoded.jwk.is_some());
+    let pop_decoding_key = jsonwebtoken::DecodingKey::from_jwk(&pop_decoded.jwk.unwrap()).unwrap();
+    let mut pop_validation = jsonwebtoken::Validation::new(pop_decoded.alg);
+    pop_validation.set_audience(&[&par_url]);
+    pop_validation.set_required_spec_claims(&["jti", "aud", "iat"]);
+    let pop_claims = jsonwebtoken::decode::<ClientAttestationPop>(
+        pop_header,
+        &pop_decoding_key,
+        &pop_validation,
+    )
+    .unwrap()
+    .claims;
+    assert_eq!(pop_claims.aud, par_url);
 }
 
 #[tokio::test]
@@ -783,31 +807,18 @@ async fn test_token_sends_wallet_attestation_headers() {
         .expect("missing OAuth-Client-Attestation-PoP header");
     let pop_decoded = jsonwebtoken::decode_header(pop_header).unwrap();
     assert!(pop_decoded.jwk.is_some());
-}
-
-#[tokio::test]
-async fn test_token_rejects_expired_attestation() {
-    let mock_server = setup_mock_server().await;
-    let token_url = format!("{}/token", mock_server.uri());
-
-    let mut client = create_client();
-    let signer = create_expired_wallet_attestation_signer();
-    client = client.with_wallet_attestation(signer);
-
-    let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
-        pre_authorized_code: "test_code".to_string(),
-        client_id: None,
-        tx_code: None,
-        authorization_details: None,
-    });
-
-    let htu = format!("{}/token", mock_server.uri());
-    let result = client
-        .post_token_request(&Url::parse(&token_url).unwrap(), &request, None, None, &htu)
-        .await;
-    assert!(result.is_err());
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("expired"));
+    let pop_decoding_key = jsonwebtoken::DecodingKey::from_jwk(&pop_decoded.jwk.unwrap()).unwrap();
+    let mut pop_validation = jsonwebtoken::Validation::new(pop_decoded.alg);
+    pop_validation.set_audience(&[&token_url]);
+    pop_validation.set_required_spec_claims(&["jti", "aud", "iat"]);
+    let pop_claims = jsonwebtoken::decode::<ClientAttestationPop>(
+        pop_header,
+        &pop_decoding_key,
+        &pop_validation,
+    )
+    .unwrap()
+    .claims;
+    assert_eq!(pop_claims.aud, token_url);
 }
 
 #[tokio::test]
