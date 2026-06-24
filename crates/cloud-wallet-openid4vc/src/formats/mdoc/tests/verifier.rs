@@ -260,6 +260,92 @@ fn build_chain_p521() -> (Vec<u8>, Vec<u8>, cloud_wallet_crypto::ecdsa::KeyPair)
     )
 }
 
+/// Like [`build_issuer_signed_with_issuer_auth`] but uses the RFC 9864 fully-specified
+/// ESP256 algorithm (-9) instead of the deprecated ES256 (-7).
+///
+/// ESP256 denotes the identical ECDSA P-256 + SHA-256 operation as ES256 (RFC 9864 §5);
+/// only the protected-header alg label differs: `{1: -9}` (CBOR: `a1 01 28`).
+///
+/// Synthetic equivalent of the `issuerAuth` shape reported from Animo's EUDI payments
+/// playground (alg: -9) — NOT a captured real-world fixture. This is signed and
+/// verified entirely within this codebase, so it proves `dispatch_verify` routes -9
+/// to the same `verify_sha256` path as -7; it cannot prove wire-format compatibility
+/// with real Animo-issued bytes (e.g. ASN.1-DER vs fixed-width r‖s signature encoding —
+/// see `SignatureEncoding::Fixed`/`::Asn1` in `cloud_wallet_crypto::ecdsa`). Replace with
+/// an actual captured fixture in `test_data/mdoc/` if real interop assurance is needed.
+fn build_issuer_signed_with_issuer_auth_esp256(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -9} (ESP256): a1 01 28
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x28],
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+        |tbs| {
+            signing_key
+                .sign_sha256(tbs)
+                .expect("ESP256 COSE signing must succeed")
+                .to_vec()
+        },
+        false,
+    );
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
+}
+
+/// Like [`build_issuer_signed_es384`] but uses the RFC 9864 fully-specified ESP384
+/// algorithm (-51) instead of the deprecated ES384 (-35).
+///
+/// ESP384 denotes the identical ECDSA P-384 + SHA-384 operation as ES384 (RFC 9864 §5);
+/// only the protected-header alg label differs: `{1: -51}` (CBOR: `a1 01 38 32`).
+fn build_issuer_signed_with_issuer_auth_esp384(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -51} (ESP384): a1 01 38 32
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x38, 0x32],
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+        |tbs| {
+            signing_key
+                .sign_sha384(tbs)
+                .expect("ESP384 COSE signing must succeed")
+                .to_vec()
+        },
+        false,
+    );
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
+}
+
+/// Like [`build_issuer_signed_with_issuer_auth_es512`] but uses the RFC 9864
+/// fully-specified ESP512 algorithm (-52) instead of the deprecated ES512 (-36).
+///
+/// ESP512 denotes the identical ECDSA P-521 + SHA-512 operation as ES512 (RFC 9864 §5);
+/// only the protected-header alg label differs: `{1: -52}` (CBOR: `a1 01 38 33`).
+fn build_issuer_signed_with_issuer_auth_esp512(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> String {
+    // {1: -52} (ESP512): a1 01 38 33
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x38, 0x33],
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+        |tbs| {
+            signing_key
+                .sign_sha512(tbs)
+                .expect("ESP512 COSE signing must succeed")
+                .to_vec()
+        },
+        false,
+    );
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
+}
+
 /// Like [`build_issuer_signed_with_issuer_auth`] but uses the ES512 algorithm (-36).
 ///
 /// Protected header encodes `{1: -36}` and the payload is signed with SHA-512.
@@ -813,6 +899,40 @@ async fn verify_issuer_signature_accepts_valid_chain() {
     );
 }
 
+/// Regression guard: RFC 9864 fully-specified ESP256 (-9) must verify via the same
+/// path as the deprecated ES256 (-7) tested in `verify_issuer_signature_accepts_valid_chain`
+/// above — both route to `verify_sha256`. Motivated by the Animo EUDI payments playground
+/// interop gap (`issuerAuth` signed with alg: -9), but built from a synthetic
+/// locally-signed chain, not a captured Animo fixture — see the doc comment on
+/// `build_issuer_signed_with_issuer_auth_esp256` for what this test does and doesn't prove.
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_esp256() {
+    let (iaca_der, dsc_der, signing_key) = build_chain(true);
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth_esp256(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP256 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "valid ESP256 (-9) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
 #[tokio::test]
 async fn verify_issuer_signature_rejects_tampered_payload() {
     // covers different content than what the verifier sees.
@@ -1071,6 +1191,37 @@ async fn verify_issuer_signature_rejects_dsc_validity_too_long() {
     assert!(
         matches!(err, MdocError::InvalidCertificateChain { .. }),
         "expected InvalidCertificateChain (457-day limit exceeded), got: {err:?}"
+    );
+}
+
+/// Executable proof (not inferred from reading the match arms) that ESP512 (-52)
+/// routes through `dispatch_verify` to `verify_sha512`, same as the deprecated
+/// ES512 (-36) tested below.
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_esp512() {
+    let (iaca_der, dsc_der, signing_key) = build_chain_p521();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth_esp512(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP512 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "valid ESP512 (-52) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
     );
 }
 
@@ -1395,6 +1546,66 @@ async fn verify_issuer_signature_rejects_ed448_algorithm() {
     assert!(
         matches!(err, MdocError::UnsupportedAlgorithm { alg: -8 }),
         "expected UnsupportedAlgorithm {{ alg: -8 }}, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn verify_issuer_signature_rejects_ed448_algorithm_ed25519_identifier() {
+    // Same Ed448-OID guard as verify_issuer_signature_rejects_ed448_algorithm above,
+    // but exercised via the RFC 9864 fully-specified Ed25519 (-19) identifier instead
+    // of the deprecated EdDSA (-8). Both must reject identically since they route to
+    // the same Ed25519 verification path and share the OID guard.
+    let (iaca_der, dsc_der) = build_ed448_dsc_chain();
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -19} (Ed25519): a1 01 32
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x32]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with Ed448 DSC must still parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("Ed448 DSC must be rejected under the Ed25519 (-19) identifier too");
+
+    assert!(
+        matches!(err, MdocError::UnsupportedAlgorithm { alg: -19 }),
+        "expected UnsupportedAlgorithm {{ alg: -19 }}, got: {err:?}"
+    );
+}
+
+/// Executable proof (not inferred from reading the match arms) that ESP384 (-51)
+/// routes through `dispatch_verify` to `verify_sha384`, same as the deprecated
+/// ES384 (-35) tested below.
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_esp384() {
+    let (iaca_der, dsc_der, signing_key) = build_chain_p384();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth_esp384(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP384 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "valid ESP384 (-51) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
     );
 }
 
