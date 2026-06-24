@@ -115,7 +115,10 @@ impl PresentationError {
 
     /// Create an invalid credential selection error.
     pub fn invalid_credential_selection(msg: impl Into<String>) -> Self {
-        Self::new(PresentationErrorCode::InvalidCredentialSelection, msg.into())
+        Self::new(
+            PresentationErrorCode::InvalidCredentialSelection,
+            msg.into(),
+        )
     }
 
     /// Create a transaction-data-not-acknowledged error.
@@ -181,8 +184,7 @@ impl From<Oid4vpClientError> for PresentationError {
             Oid4vpClientError::ResponseDeliveryFailed(_) => {
                 PresentationErrorCode::VerifierSubmissionFailed
             }
-            Oid4vpClientError::NoResponseUri
-            | Oid4vpClientError::UnsupportedResponseMode(_) => {
+            Oid4vpClientError::NoResponseUri | Oid4vpClientError::UnsupportedResponseMode(_) => {
                 PresentationErrorCode::ResponseDeliveryFailed
             }
             _ => PresentationErrorCode::InternalError,

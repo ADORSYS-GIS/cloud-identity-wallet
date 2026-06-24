@@ -251,9 +251,7 @@ impl IntoApiError for PresentationError {
             PresentationErrorCode::PresentationBuildFailed => {
                 Some("VP Token construction failed".into())
             }
-            PresentationErrorCode::InternalError => {
-                Some("An unexpected error occurred.".into())
-            }
+            PresentationErrorCode::InternalError => Some("An unexpected error occurred.".into()),
             _ => self.error_description,
         };
 

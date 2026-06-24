@@ -1,24 +1,23 @@
 use axum::{
+    Json,
     extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use tracing::{info, instrument, warn};
 
 use crate::domain::models::credential::CredentialError;
 use crate::domain::models::presentation::{
-    ConsentStatus, CredentialSelection, PresentationConsentRequest,
-    PresentationConsentResponse, PresentationError, PresentationErrorCode,
-    PresentationEngine, VerifierDirectPostResponse,
+    ConsentStatus, CredentialSelection, PresentationConsentRequest, PresentationConsentResponse,
+    PresentationEngine, PresentationError, PresentationErrorCode, VerifierDirectPostResponse,
 };
+use crate::server::AppState;
 use crate::server::error::{ApiError, IntoApiError};
 use crate::server::responses::ResponseBody;
 use crate::session::{
-    transition_presentation_session, PresentationFlow, PresentationSession, PresentationState,
-    SessionStore,
+    PresentationFlow, PresentationSession, PresentationState, SessionStore,
+    transition_presentation_session,
 };
-use crate::server::AppState;
 
 use cloud_wallet_openid4vc::oid4vp::error::AuthorizationErrorCode;
 
@@ -101,15 +100,12 @@ async fn handle_acceptance<S: SessionStore + Clone>(
     session: &mut PresentationSession,
     payload: &PresentationConsentRequest,
 ) -> Result<Response, ApiError> {
-    let selections = payload
-        .selected_credentials
-        .as_ref()
-        .ok_or_else(|| {
-            PresentationError::new(
-                PresentationErrorCode::InvalidRequest,
-                "selected_credentials is required when accepted is true",
-            )
-        })?;
+    let selections = payload.selected_credentials.as_ref().ok_or_else(|| {
+        PresentationError::new(
+            PresentationErrorCode::InvalidRequest,
+            "selected_credentials is required when accepted is true",
+        )
+    })?;
 
     if selections.is_empty() {
         return Err(PresentationError::new(
@@ -161,8 +157,7 @@ async fn handle_acceptance<S: SessionStore + Clone>(
         }
     }
 
-    if session.context.has_transaction_data()
-        && payload.transaction_data_acknowledged != Some(true)
+    if session.context.has_transaction_data() && payload.transaction_data_acknowledged != Some(true)
     {
         return Err(PresentationError::transaction_data_not_acknowledged().into_api_error());
     }
