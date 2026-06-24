@@ -19,7 +19,7 @@ use crate::oid4vci::credential::formats::{
 use crate::oid4vci::metadata::{
     AuthorizationServerMetadata, CredentialConfiguration, CredentialIssuerMetadata,
 };
-use crate::oid4vci::wallet_attestation::{Cnf, WalletAttestation, WalletAttestationSigner};
+use crate::oid4vci::wallet_attestation::{WalletAttestation, WalletAttestationSigner};
 use std::collections::HashMap;
 use wiremock::matchers::header_exists;
 
@@ -444,9 +444,7 @@ fn create_wallet_attestation_signer() -> WalletAttestationSigner {
         wallet_name: None,
         wallet_link: None,
         status: None,
-        cnf: Cnf {
-            jwk: wallet_key.public_jwk().clone(),
-        },
+        cnf: None,
     };
     WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
 }
@@ -463,9 +461,7 @@ fn create_expired_wallet_attestation_signer() -> WalletAttestationSigner {
         wallet_name: None,
         wallet_link: None,
         status: None,
-        cnf: Cnf {
-            jwk: wallet_key.public_jwk().clone(),
-        },
+        cnf: None,
     };
     WalletAttestationSigner::new(provider_key, claims, wallet_key).unwrap()
 }

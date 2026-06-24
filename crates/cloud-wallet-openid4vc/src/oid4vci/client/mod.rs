@@ -1117,14 +1117,7 @@ impl Oid4vciClient {
             .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
             .body(body);
 
-        // Apply wallet attestation headers if configured
-        if let Some(ref signer) = self.wallet_attestation {
-            signer.validate_attestation()?;
-            let pop = signer.pop_jwt(token_endpoint.as_str(), None)?;
-            http_request = http_request
-                .header("OAuth-Client-Attestation", signer.attestation_jwt())
-                .header("OAuth-Client-Attestation-PoP", pop);
-        }
+        http_request = self.apply_wallet_attestation(http_request, token_endpoint.as_str())?;
 
         if let Some(proof) = dpop_proof {
             http_request = http_request.header(DPOP_HEADER_NAME, proof);

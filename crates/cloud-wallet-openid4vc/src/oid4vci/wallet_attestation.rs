@@ -36,7 +36,7 @@ pub struct WalletAttestation {
 
     pub status: Option<serde_json::Value>,
 
-    pub cnf: Cnf,
+    pub cnf: Option<Cnf>,
 }
 
 /// Confirmation claim containing the public key used for PoP.
@@ -69,6 +69,7 @@ struct AttestationHeader {
     pub typ: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
+    /// X.509 certificate chain. If present, MUST contain at least one certificate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x5c: Option<Vec<String>>,
 }
@@ -97,15 +98,16 @@ impl WalletAttestationSigner {
     /// Creates a new signer.
     ///
     /// The `provider_key` signs the attestation JWT. The `wallet_key` must have a
-    /// public JWK and is used to sign the PoP JWTs. The `cnf` claim is overwritten
-    /// with the wallet key's public JWK.
+    /// public JWK and is used to sign the PoP JWTs. The `cnf` claim in
+    /// `attestation_claims` is unconditionally replaced with the wallet key's public
+    /// JWK; any caller-provided value is ignored.
     pub fn new(
         provider_key: JwtSigner,
         mut attestation_claims: WalletAttestation,
         wallet_key: JwtSigner,
     ) -> Result<Self> {
         let jwk = wallet_key.public_jwk().clone();
-        attestation_claims.cnf = Cnf { jwk: jwk.clone() };
+        attestation_claims.cnf = Some(Cnf { jwk: jwk.clone() });
 
         let attestation_header = AttestationHeader {
             alg: provider_key.algorithm(),
@@ -193,7 +195,7 @@ impl WalletAttestationSigner {
 
         let mut validation = jsonwebtoken::Validation::new(header.alg);
         validation.set_required_spec_claims(&["exp"]);
-        let _ = jsonwebtoken::decode::<WalletAttestation>(
+        let token_data = jsonwebtoken::decode::<WalletAttestation>(
             &self.attestation_jwt,
             &decoding_key,
             &validation,
@@ -207,6 +209,11 @@ impl WalletAttestationSigner {
             }
             _ => ClientError::validation(format!("attestation JWT validation failed: {e}")),
         })?;
+        if token_data.claims.cnf.is_none() {
+            return Err(ClientError::validation(
+                "wallet attestation missing required cnf claim",
+            ));
+        }
         Ok(())
     }
 }
@@ -240,9 +247,7 @@ mod tests {
             wallet_name: Some("Test Wallet".to_string()),
             wallet_link: None,
             status: None,
-            cnf: Cnf {
-                jwk: Jwk::try_from(&EcdsaKeyPair::generate(Curve::P256).unwrap()).unwrap(),
-            },
+            cnf: None,
         }
     }
 
@@ -273,7 +278,7 @@ mod tests {
         assert_eq!(decoded_claims.wallet_name, Some("Test Wallet".to_string()));
         assert!(decoded_claims.exp > decoded_claims.iat);
         assert!(matches!(
-            decoded_claims.cnf.jwk.key,
+            decoded_claims.cnf.as_ref().unwrap().jwk.key,
             cloud_wallet_crypto::jwk::Key::Ec(_)
         ));
 
