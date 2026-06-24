@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use cloud_wallet_openid4vc::formats::mdoc::ParsedMdoc;
 use cloud_wallet_openid4vc::formats::sd_jwt::SdJwt;
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
@@ -130,6 +131,11 @@ fn render_claims(c: &Credential) -> Result<serde_json::Value, ApiError> {
             .and_then(|sd_jwt| sd_jwt.to_rendered_claims())
             .map_err(|error| {
                 ApiError::internal(format!("failed to parse stored SD-JWT VC claims: {error}"))
+            }),
+        CredentialFormat::Mdoc => ParsedMdoc::parse(&c.raw_credential)
+            .map(|mdoc| mdoc.to_rendered_claims())
+            .map_err(|error| {
+                ApiError::internal(format!("failed to parse stored mdoc claims: {error}"))
             }),
         format => Err(unsupported_credential_format(format)),
     }
@@ -294,7 +300,7 @@ mod tests {
     #[test]
     fn rejects_claim_rendering_for_unsupported_formats() {
         let mut credential = credential("{}".to_string());
-        credential.format = CredentialFormat::Mdoc;
+        credential.format = CredentialFormat::JwtVcJson;
 
         let error = render_claims(&credential).unwrap_err();
 
@@ -304,7 +310,7 @@ mod tests {
             error
                 .error_description
                 .as_deref()
-                .is_some_and(|description| description.contains("mso_mdoc"))
+                .is_some_and(|description| description.contains("jwt_vc_json"))
         );
     }
 }

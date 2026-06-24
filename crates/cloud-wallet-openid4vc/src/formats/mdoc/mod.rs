@@ -12,6 +12,7 @@
 //! - [RFC 9052](https://www.rfc-editor.org/rfc/rfc9052) — COSE_Sign1
 
 mod cert_chain;
+pub mod claims;
 pub mod error;
 mod parser;
 pub mod revocation;
@@ -19,6 +20,10 @@ pub mod revocation;
 mod tests;
 pub mod verifier;
 
+pub use claims::{
+    ClaimDescriptionRef, ClaimDisplayRef, ClaimPathElementRef, ClaimPathRef, ClaimValueView,
+    MdocClaimExtractor, MdocClaimView,
+};
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
 pub use revocation::RevocationPolicy;
