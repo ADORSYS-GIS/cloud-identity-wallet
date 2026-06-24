@@ -409,6 +409,28 @@ mod tests {
         assert_eq!(recovered, expected);
     }
 
+    /// RSA-OAEP-512 exercises the SHA-512 OAEP path.
+    #[test]
+    fn encrypt_decrypt_roundtrip_rsa_oaep512() {
+        let key_pair = cloud_wallet_crypto::rsa::KeyPair::generate(RsaKeySize::Rsa2048).unwrap();
+        let jwk = rsa_jwk_from_keypair(&key_pair, KeyManagement::RsaOaep512);
+        let response = sample_response();
+
+        let jwt_response =
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A256Gcm)
+                .unwrap();
+
+        let mut pkcs8_buf = vec![0u8; 4096];
+        let pkcs8_der = key_pair.to_pkcs8_der(&mut pkcs8_buf).unwrap();
+        let dec_key = RsaDecryptingKey::from_pkcs8_der(pkcs8_der).unwrap();
+
+        let plaintext = jwe_decrypt(jwt_response.response(), JweDecryptKey::Rsa(&dec_key)).unwrap();
+
+        let expected: serde_json::Value = serde_json::to_value(&response).unwrap();
+        let recovered: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(recovered, expected);
+    }
+
     /// ECDH-ES+A128KW exercises the key-wrap path, which produces a non-empty
     /// encrypted-key segment (unlike direct ECDH-ES which produces an empty one).
     #[test]
@@ -445,6 +467,52 @@ mod tests {
         assert!(
             !parts[1].is_empty(),
             "ECDH-ES+A128KW must produce a non-empty encrypted-key segment"
+        );
+
+        let plaintext =
+            jwe_decrypt(jwt_response.response(), JweDecryptKey::Ecdh(&static_key)).unwrap();
+
+        let expected: serde_json::Value = serde_json::to_value(&response).unwrap();
+        let recovered: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(recovered, expected);
+    }
+
+    /// ECDH-ES+A256KW exercises the 256-bit key-wrap path, distinct from A128KW's
+    /// 128-bit KEK derivation.
+    #[test]
+    fn encrypt_decrypt_roundtrip_ecdh_es_a256kw() {
+        let static_key = StaticEcdhKey::generate(EcdhCurve::P256).unwrap();
+        let mut buf = vec![0u8; EcdhCurve::P256.public_key_len()];
+        let pub_bytes = static_key.public_key_bytes(&mut buf).unwrap();
+        let x = B64::new(&pub_bytes[1..33]);
+        let y = B64::new(&pub_bytes[33..65]);
+
+        let prm = Parameters {
+            alg: Some(Algorithm::KeyManagement(KeyManagement::EcdhEsA256Kw)),
+            kid: Some("p256-key-1".to_string()),
+            ..Default::default()
+        };
+
+        let jwk = Jwk {
+            key: Key::Ec(Ec {
+                crv: Curve::P256,
+                x,
+                y,
+                d: None,
+            }),
+            prm,
+        };
+        let response = sample_response();
+
+        let jwt_response =
+            encrypt_authorization_response(&response, &jwk, ContentEncryptionAlgorithm::A256Gcm)
+                .unwrap();
+
+        // KW mode must produce a non-empty encrypted-key segment (part 2 of the compact JWE).
+        let parts: Vec<&str> = jwt_response.response().split('.').collect();
+        assert!(
+            !parts[1].is_empty(),
+            "ECDH-ES+A256KW must produce a non-empty encrypted-key segment"
         );
 
         let plaintext =
