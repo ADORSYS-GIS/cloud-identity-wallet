@@ -51,6 +51,14 @@ pub struct ImmediateCredentialResponse {
     /// Identifier for notification requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_id: Option<String>,
+
+    /// Nonce for use in a subsequent proof JWT (OID4VCI draft backwards compatibility).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_nonce: Option<String>,
+
+    /// Lifetime of [`c_nonce`](Self::c_nonce) in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_nonce_expires_in: Option<u64>,
 }
 
 impl ImmediateCredentialResponse {
@@ -58,6 +66,8 @@ impl ImmediateCredentialResponse {
         Self {
             credentials,
             notification_id: None,
+            c_nonce: None,
+            c_nonce_expires_in: None,
         }
     }
 
@@ -231,6 +241,29 @@ mod tests {
                 );
             }
             DeferredCredentialResult::Pending(_) => panic!("Expected Ready variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_credential_response_with_c_nonce() {
+        let json = r#"{
+            "credentials": [
+                {"credential": "eyJhbGciOiJFUzI1NiJ9..."}
+            ],
+            "c_nonce": "some-nonce-value",
+            "c_nonce_expires_in": 60
+        }"#;
+
+        let response: CredentialResponse =
+            serde_json::from_str(json).expect("Failed to deserialize");
+
+        match response {
+            CredentialResponse::Immediate(resp) => {
+                assert_eq!(resp.credentials.len(), 1);
+                assert_eq!(resp.c_nonce.as_deref(), Some("some-nonce-value"));
+                assert_eq!(resp.c_nonce_expires_in, Some(60));
+            }
+            CredentialResponse::Deferred(_) => panic!("Expected Immediate response"),
         }
     }
 

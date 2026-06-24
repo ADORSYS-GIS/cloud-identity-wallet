@@ -49,6 +49,10 @@ pub struct Oid4vciConfig {
     /// Paths to DER- or PEM-encoded IACA root certificate files loaded at startup.
     #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
     pub iaca_root_paths: Vec<String>,
+    /// Paths to DER- or PEM-encoded extra x5c trust anchor files for SD-JWT VC issuer
+    /// signature verification. Mozilla WebPKI roots are always included; these are appended.
+    #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
+    pub x5c_trust_anchor_paths: Vec<String>,
     /// DSC revocation checking policy for mdoc verification.
     /// - `skip`: Bypass revocation checking entirely (offline/test mode)
     /// - `soft_fail`: Reject revoked DSCs, tolerate CRL fetch failures (default)
@@ -127,6 +131,7 @@ impl Config {
             .set_default("oid4vci.use_system_proxy", true)?
             .set_default("oid4vci.preferred_display_locales", vec!["en"])?
             .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())?
+            .set_default("oid4vci.x5c_trust_anchor_paths", Vec::<String>::new())?
             .set_default("oid4vci.revocation_policy", "soft_fail")
     }
 }

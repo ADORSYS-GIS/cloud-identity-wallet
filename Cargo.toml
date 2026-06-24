@@ -46,6 +46,7 @@ dashmap = "6"
 parking_lot = "0.12"
 rand = "0.10"
 rustls-pki-types = "1.14"
+webpki-roots = "1"
 sqlx = "0.9"
 time = "0.3"
 url = "2.5"
@@ -81,12 +82,15 @@ cloud-wallet-kms = { path = "crates/cloud-wallet-kms", features = ["local-kms"] 
 cloud-wallet-openid4vc = { path = "crates/cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
+dotenvy = "0.15"
 dashmap.workspace = true
 futures.workspace = true
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 parking_lot = "0.12"
 rand.workspace = true
 rustls-pki-types = { workspace = true, features = ["alloc"] }
+webpki.workspace = true
+webpki-roots.workspace = true
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

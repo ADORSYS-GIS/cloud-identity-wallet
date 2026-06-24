@@ -12,6 +12,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
+    dotenvy::dotenv().ok();
     telemetry::init_tracing();
 
     // Load configuration

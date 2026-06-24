@@ -571,8 +571,7 @@ impl Oid4vciClient {
             Some(self.inner_client.config().client_id.clone())
         };
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
+        // Include authorization_details per §6.2 so the AS can return credential_identifiers.
         let authz_details = build_authorization_details(context, credential_config_ids)?;
 
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
@@ -634,7 +633,7 @@ impl Oid4vciClient {
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
-        credential_identifier: impl Into<String>,
+        credential_identifier: CredIdOrCredConfigId,
         credential_config_id: &str,
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
@@ -653,8 +652,7 @@ impl Oid4vciClient {
             )
             .await?;
 
-        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
-        let mut request = CredentialRequest::new(id);
+        let mut request = CredentialRequest::new(credential_identifier);
         if let Some(p) = proofs {
             request = request.with_proofs(p);
         }
@@ -679,15 +677,54 @@ impl Oid4vciClient {
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
     ) -> Result<Vec<CredentialResponse>> {
-        let resolved = resolve_credential_ids(token)?;
-        let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
-        let mut results = Vec::with_capacity(total);
-        let mut futures = FuturesUnordered::new();
+        if token.authorization_details.is_some() {
+            let resolved = resolve_credential_ids(token)?;
+            let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
+            let mut results = Vec::with_capacity(total);
+            let mut futures = FuturesUnordered::new();
 
-        for (config_id, identifiers) in resolved {
-            for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer, dpop));
+            for (config_id, identifiers) in resolved {
+                for id in identifiers {
+                    let cred_id = CredIdOrCredConfigId::credential_identifier(id);
+                    futures.push(
+                        self.request_credential(context, token, cred_id, config_id, signer, dpop),
+                    );
+                }
             }
+
+            while let Some(res) = futures.next().await {
+                results.push(res?);
+            }
+            return Ok(results);
+        }
+
+        if let Some(scope) = token.scope.as_deref() {
+            let config_id = resolve_credential_configuration_id(
+                scope,
+                &context.offer,
+                &context.issuer_metadata,
+            )
+            .ok_or_else(|| ClientError::InvalidResponse {
+                message: format!(
+                    "no credential configuration matching scope '{scope}' found in offer or issuer metadata"
+                )
+                .into(),
+            })?;
+
+            let cred_id = CredIdOrCredConfigId::credential_configuration_id(&config_id);
+            let response = self
+                .request_credential(context, token, cred_id, &config_id, signer, dpop)
+                .await?;
+            return Ok(vec![response]);
+        }
+
+        let config_ids = &context.offer.credential_configuration_ids;
+        let mut futures = FuturesUnordered::new();
+        let mut results = Vec::with_capacity(config_ids.len());
+
+        for config_id in config_ids {
+            let cred_id = CredIdOrCredConfigId::credential_configuration_id(config_id);
+            futures.push(self.request_credential(context, token, cred_id, config_id, signer, dpop));
         }
 
         while let Some(res) = futures.next().await {
@@ -1213,12 +1250,16 @@ impl Oid4vciClient {
             handler.extract_and_store_nonce(&htu, response.headers());
         }
 
-        let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ClientError::http("failed to read credential response body", e))?;
+
+        serde_json::from_str::<CredentialResponse>(&body).map_err(|e| {
             ClientError::InvalidResponse {
-                message: format!("failed to parse credential response: {e}").into(),
+                message: format!("failed to parse credential response: {e}; body: {body}").into(),
             }
-        })?;
-        Ok(credential_response)
+        })
     }
 
     /// Resolve the `c_nonce` to use for proof construction.
@@ -1436,6 +1477,26 @@ pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[Stri
         });
     }
     Ok(result)
+}
+
+/// Returns the `credential_configuration_id` from the offer whose `scope` matches the given value,
+/// or `None` if no match is found.
+fn resolve_credential_configuration_id(
+    scope: &str,
+    offer: &CredentialOffer,
+    issuer_metadata: &CredentialIssuerMetadata,
+) -> Option<String> {
+    offer
+        .credential_configuration_ids
+        .iter()
+        .find(|id| {
+            issuer_metadata
+                .credential_configurations_supported
+                .get(*id)
+                .and_then(|config| config.scope.as_deref())
+                == Some(scope)
+        })
+        .cloned()
 }
 
 /// Build the minimal PAR redirect URL.

@@ -410,6 +410,138 @@ async fn test_issuance_flow() {
     }
 }
 
+#[test]
+fn resolve_credential_configuration_id_finds_match_by_scope() {
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["tax-id-sd-jwt", "other-credential"]
+    }"#,
+    )
+    .unwrap();
+
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "tax-id-sd-jwt": {
+                "format": "dc+sd-jwt",
+                "vct": "urn:example:tax-id",
+                "scope": "tax-id-sd-jwt"
+            },
+            "other-credential": {
+                "format": "dc+sd-jwt",
+                "vct": "urn:example:other",
+                "scope": "other-scope"
+            }
+        }
+    }"#,
+    )
+    .unwrap();
+
+    let id = resolve_credential_configuration_id("tax-id-sd-jwt", &offer, &metadata);
+    assert_eq!(id.as_deref(), Some("tax-id-sd-jwt"));
+}
+
+#[test]
+fn resolve_credential_configuration_id_scope_not_equal_to_config_id() {
+    // Verifies the lookup goes through metadata rather than comparing scope to config ID directly
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["TaxIdCredentialV2"]
+    }"#,
+    )
+    .unwrap();
+
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "TaxIdCredentialV2": {
+                "format": "dc+sd-jwt",
+                "vct": "urn:example:tax-id",
+                "scope": "tax_id"
+            }
+        }
+    }"#,
+    )
+    .unwrap();
+
+    let id = resolve_credential_configuration_id("tax_id", &offer, &metadata);
+    assert_eq!(id.as_deref(), Some("TaxIdCredentialV2"));
+
+    // A direct string comparison with the config ID would not find it
+    let no_match = resolve_credential_configuration_id("TaxIdCredentialV2", &offer, &metadata);
+    assert!(no_match.is_none());
+}
+
+#[test]
+fn resolve_credential_configuration_id_returns_none_when_no_match() {
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["tax-id-sd-jwt"]
+    }"#,
+    )
+    .unwrap();
+
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "tax-id-sd-jwt": {
+                "format": "dc+sd-jwt",
+                "vct": "urn:example:tax-id",
+                "scope": "other-scope"
+            }
+        }
+    }"#,
+    )
+    .unwrap();
+
+    let id = resolve_credential_configuration_id("tax-id-sd-jwt", &offer, &metadata);
+    assert!(id.is_none());
+}
+
+#[test]
+fn resolve_credential_configuration_id_ignores_configs_not_in_offer() {
+    // Even if metadata has a matching scope, configs absent from the offer are not returned
+    let offer: CredentialOffer = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_configuration_ids": ["other-credential"]
+    }"#,
+    )
+    .unwrap();
+
+    let metadata: crate::oid4vci::metadata::CredentialIssuerMetadata = serde_json::from_str(
+        r#"{
+        "credential_issuer": "https://issuer.example.com",
+        "credential_endpoint": "https://issuer.example.com/credential",
+        "credential_configurations_supported": {
+            "tax-id-sd-jwt": {
+                "format": "dc+sd-jwt",
+                "vct": "urn:example:tax-id",
+                "scope": "tax-id-sd-jwt"
+            },
+            "other-credential": {
+                "format": "dc+sd-jwt",
+                "vct": "urn:example:other",
+                "scope": "other-scope"
+            }
+        }
+    }"#,
+    )
+    .unwrap();
+
+    let id = resolve_credential_configuration_id("tax-id-sd-jwt", &offer, &metadata);
+    assert!(id.is_none());
+}
+
 #[tokio::test]
 async fn test_dpop_proof_attached_to_token_request() {
     use base64::Engine;

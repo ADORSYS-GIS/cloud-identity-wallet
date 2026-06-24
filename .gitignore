@@ -27,6 +27,9 @@ implementation_plans/
 # Kilo config (may contain secrets)
 .kilo/**
 
+.env
+animo-iaca-root.pem
+
 # Skills related files output
 graphify-out/**
 .agents/**
