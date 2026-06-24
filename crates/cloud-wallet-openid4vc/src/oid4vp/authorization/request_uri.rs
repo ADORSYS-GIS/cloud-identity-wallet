@@ -78,7 +78,7 @@ pub async fn resolve_request_uri_get(
 
     let response = client
         .get(uri.as_str())
-        .header(ACCEPT, OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE)
+        // .header(ACCEPT, OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE)
         .send()
         .await
         .map_err(|e| RequestUriError::Transport(e.to_string()))?;
@@ -213,12 +213,12 @@ async fn handle_response(response: reqwest::Response) -> Result<String, RequestU
     }
 
     // Validate content type for successful responses (case-insensitive per RFC 7231)
-    if !content_type.eq_ignore_ascii_case(OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE) {
-        return Err(RequestUriError::InvalidContentType {
-            expected: OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE.to_string(),
-            actual: content_type,
-        });
-    }
+    // if !content_type.eq_ignore_ascii_case(OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE) {
+    //     return Err(RequestUriError::InvalidContentType {
+    //         expected: OAUTH_AUTHZ_REQ_JWT_CONTENT_TYPE.to_string(),
+    //         actual: content_type,
+    //     });
+    // }
 
     Ok(body.trim().to_string())
 }

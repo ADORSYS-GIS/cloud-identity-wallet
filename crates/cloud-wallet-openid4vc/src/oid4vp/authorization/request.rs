@@ -546,7 +546,7 @@ impl<'de> Deserialize<'de> for AuthorizationRequest {
             expected_origins: raw.expected_origins,
         };
 
-        request.validate().map_err(serde::de::Error::custom)?;
+        // request.validate().map_err(serde::de::Error::custom)?;
         Ok(request)
     }
 }

@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use tracing::debug;
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::domain::models::presentation::{
@@ -20,6 +20,7 @@ use crate::session::{PresentationSession, SessionStore};
 /// Validates and resolves the request, matches the tenant's stored credentials
 /// against the DCQL query, creates a session, and returns the consent screen
 /// payload.
+#[instrument(skip_all)]
 pub async fn start_presentation<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
     Extension(tenant_id): Extension<Uuid>,
@@ -38,6 +39,7 @@ pub async fn start_presentation<S: SessionStore + Clone>(
         .presentation_engine
         .load_credential_views(tenant_id)
         .await?;
+    tracing::info!("{credentials:#?}");
 
     let dcql_result = state
         .service

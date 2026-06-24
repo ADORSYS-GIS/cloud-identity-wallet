@@ -24,6 +24,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     config: &Config,
     tenant_repo: impl TenantRepo,
     session_store: &S,
+    cred_repo: impl Sized + crate::domain::ports::CredentialRepo + Clone,
 ) -> color_eyre::Result<IssuanceEngine> {
     let client_config = Oid4vciClientConfig::new(
         config.oid4vci.client_id.clone(),
@@ -39,7 +40,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
-    let credential_repo = MemoryCredentialRepo::new();
+    // let credential_repo = MemoryCredentialRepo::new();
     let preferred_display_locales = config.oid4vci.preferred_display_locales.clone();
 
     let iaca_roots = load_iaca_roots(&config.oid4vci.iaca_root_paths)?;
@@ -54,7 +55,7 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         task_queue,
         publisher,
         subscriber,
-        credential_repo,
+        cred_repo,
         tenant_repo,
         session_store,
         preferred_display_locales,
@@ -86,7 +87,7 @@ pub fn build_presentation_engine(
 
     let oid4vp_config = cloud_wallet_openid4vc::oid4vp::client::Oid4vpConfig {
         http_client: oid_client.http_client().clone(),
-        discovery_mode: cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode::Dynamic,
+        discovery_mode: cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode::Static,
         wallet_metadata: None,
     };
     let oid4vp_client = Oid4vpClient::new(oid4vp_config);
@@ -115,9 +116,10 @@ pub fn build_service<S: SessionStore + Clone>(
     tenant_repo: impl TenantRepo + Clone,
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
-    let issuance_engine = build_issuance_engine(config, tenant_repo.clone(), &session_store)?;
+    let cred_repo = MemoryCredentialRepo::new();
+    let issuance_engine = build_issuance_engine(config, tenant_repo.clone(), &session_store, cred_repo.clone())?;
     let presentation_engine =
-        build_presentation_engine(config, MemoryCredentialRepo::new(), tenant_repo.clone())?;
+        build_presentation_engine(config, cred_repo, tenant_repo.clone())?;
     Ok(Service::new(
         session_store,
         tenant_repo,

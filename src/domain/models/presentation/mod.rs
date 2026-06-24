@@ -238,6 +238,7 @@ impl PresentationEngine {
             .list(filter)
             .await
             .map_err(|e| PresentationError::internal(e.to_string()))?;
+        tracing::info!("{summaries:#?}");
 
         let mut views = Vec::with_capacity(summaries.len());
         for summary in &summaries {

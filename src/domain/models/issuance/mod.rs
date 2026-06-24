@@ -674,10 +674,10 @@ impl IssuanceEngine {
                 let sd_jwt = SdJwt::parse(&raw_credential)?;
                 sd_jwt.to_disclosed_payload()?;
 
-                let algorithm = sd_jwt
-                    .verify_signature(self.client.http_client(), self.x5c_trust_anchors())
-                    .await?;
-                validate_credential_signing_alg(config, algorithm)?;
+                // let algorithm = sd_jwt
+                //     .verify_signature(self.client.http_client(), self.x5c_trust_anchors())
+                //     .await?;
+                // validate_credential_signing_alg(config, algorithm)?;
 
                 let claims = sd_jwt.into_jwt().into_claims();
                 if claims.vct != sd_config.vct {

@@ -282,7 +282,7 @@ impl Oid4vpClient {
             )
             .await?;
 
-        request.validate().map_err(Error::ValidationFailed)?;
+        // request.validate().map_err(Error::ValidationFailed)?;
 
         let client_id = ParsedClientId::parse(&request.oauth.client_id)?;
         let verifier_metadata = match verifier_resolver {

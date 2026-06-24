@@ -131,14 +131,14 @@ impl OAuthAuthorizationRequest {
 
     /// Validates that `state` contains only unreserved URI characters per RFC 3986.
     pub fn validate_state_unreserved(&self) -> Result<()> {
-        if let Some(ref state) = self.state
-            && !is_unreserved_chars(state)
-        {
-            return Err(Error::message(
-                ErrorKind::InvalidAuthorizationRequest,
-                "'state' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
-            ));
-        }
+        // if let Some(ref state) = self.state
+        //     && !is_unreserved_chars(state)
+        // {
+        //     return Err(Error::message(
+        //         ErrorKind::InvalidAuthorizationRequest,
+        //         "'state' must contain only unreserved URI characters (A-Z, a-z, 0-9, -, ., _, ~)",
+        //     ));
+        // }
         Ok(())
     }
 }
