@@ -10,7 +10,7 @@ use crate::domain::service::Service;
 use crate::server::handlers::{
     authorization_callback, delete_credential, get_credential, get_session_events, health_check,
     home, list_credentials, register_tenant, start_issuance, submit_consent,
-    submit_transaction_code,
+    submit_presentation_consent, submit_transaction_code,
 };
 use crate::session::SessionStore;
 
@@ -109,6 +109,10 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
         )
         .route("/issuance/start", post(start_issuance))
         .route("/issuance/{session_id}/consent", post(submit_consent))
+        .route(
+            "/presentation/{session_id}/consent",
+            post(submit_presentation_consent),
+        )
         .route("/credentials", get(list_credentials))
         .route("/credentials/{id}", get(get_credential))
         .route("/credentials/{id}", delete(delete_credential))

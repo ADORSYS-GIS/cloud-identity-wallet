@@ -21,6 +21,14 @@ pub enum PresentationErrorCode {
     SessionNotFound,
     /// The session is not in the expected state.
     InvalidSessionState,
+    /// Wrong credential_id or missing query_id in selection.
+    InvalidCredentialSelection,
+    /// Transaction data requires explicit user acknowledgment.
+    TransactionDataNotAcknowledged,
+    /// VP Token construction failed.
+    PresentationBuildFailed,
+    /// Verifier returned a non-2xx response or network error.
+    VerifierSubmissionFailed,
     /// The VP token could not be built or sent.
     ResponseDeliveryFailed,
     /// An internal server error occurred.
@@ -35,6 +43,10 @@ impl PresentationErrorCode {
             Self::NoMatchingCredentials => "no_matching_credentials",
             Self::SessionNotFound => "session_not_found",
             Self::InvalidSessionState => "invalid_session_state",
+            Self::InvalidCredentialSelection => "invalid_credential_selection",
+            Self::TransactionDataNotAcknowledged => "transaction_data_not_acknowledged",
+            Self::PresentationBuildFailed => "presentation_build_failed",
+            Self::VerifierSubmissionFailed => "verifier_submission_failed",
             Self::ResponseDeliveryFailed => "response_delivery_failed",
             Self::InternalError => "internal_error",
         }
@@ -101,6 +113,33 @@ impl PresentationError {
         Self::new(PresentationErrorCode::InvalidSessionState, msg.into())
     }
 
+    /// Create an invalid credential selection error.
+    pub fn invalid_credential_selection(msg: impl Into<String>) -> Self {
+        Self::new(PresentationErrorCode::InvalidCredentialSelection, msg.into())
+    }
+
+    /// Create a transaction-data-not-acknowledged error.
+    pub fn transaction_data_not_acknowledged() -> Self {
+        Self::new(
+            PresentationErrorCode::TransactionDataNotAcknowledged,
+            "Transaction data must be acknowledged",
+        )
+    }
+
+    /// Create a verifier-submission-failed error.
+    pub fn verifier_submission_failed(msg: impl Into<String>) -> Self {
+        Self::new(PresentationErrorCode::VerifierSubmissionFailed, msg.into())
+    }
+
+    /// Create a presentation-build-failed error with a source.
+    pub fn presentation_build_failed(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self {
+            error: PresentationErrorCode::PresentationBuildFailed,
+            error_description: Some("VP Token construction failed".into()),
+            source: Some(Box::new(source)),
+        }
+    }
+
     /// Returns the machine-readable presentation error code.
     pub fn error(&self) -> &str {
         self.error.as_str()
@@ -136,8 +175,13 @@ impl From<Oid4vpClientError> for PresentationError {
             | Oid4vpClientError::VerifierResolutionFailed(_) => {
                 PresentationErrorCode::KeyResolutionFailed
             }
-            Oid4vpClientError::ResponseDeliveryFailed(_)
-            | Oid4vpClientError::NoResponseUri
+            Oid4vpClientError::PresentationBuildFailed(_) => {
+                PresentationErrorCode::PresentationBuildFailed
+            }
+            Oid4vpClientError::ResponseDeliveryFailed(_) => {
+                PresentationErrorCode::VerifierSubmissionFailed
+            }
+            Oid4vpClientError::NoResponseUri
             | Oid4vpClientError::UnsupportedResponseMode(_) => {
                 PresentationErrorCode::ResponseDeliveryFailed
             }
