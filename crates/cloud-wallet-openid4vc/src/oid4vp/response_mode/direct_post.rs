@@ -27,7 +27,7 @@ pub async fn send_direct_post(
     expected_response_uri: &Url,
     response: &AuthorizationResponse,
 ) -> Result<DirectPostResponse, DirectPostError> {
-    validate_response_uri(response_uri, expected_response_uri)?;
+    super::validate_response_uri(response_uri, expected_response_uri)?;
     execute_direct_post(http_client, response_uri, response).await
 }
 
@@ -45,83 +45,7 @@ async fn execute_direct_post(
         .await
         .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
 
-    let status = http_response.status();
-
-    if status == reqwest::StatusCode::OK {
-        let content_type = http_response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        if let Some(ref ct) = content_type
-            && !is_json_content_type(ct)
-        {
-            return Err(DirectPostError::ResponseParseError(format!(
-                "expected application/json response, got content-type: {content_type:?}"
-            )));
-        }
-
-        let body_bytes = http_response
-            .bytes()
-            .await
-            .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
-
-        if body_bytes.is_empty() {
-            return Ok(DirectPostResponse { redirect_uri: None });
-        }
-
-        let parsed: DirectPostResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| DirectPostError::ResponseParseError(e.to_string()))?;
-        Ok(parsed)
-    } else {
-        let body_text = http_response.text().await.unwrap_or_default();
-        let status = status.as_u16();
-
-        if status >= 500 {
-            Err(DirectPostError::HttpServerError {
-                status,
-                body: body_text,
-            })
-        } else if (300..400).contains(&status) {
-            Err(DirectPostError::RedirectNotFollowed { status })
-        } else {
-            Err(DirectPostError::VerifierError {
-                status,
-                body: body_text,
-            })
-        }
-    }
-}
-
-/// Checks whether a `Content-Type` header value is `application/json`,
-/// ignoring ASCII case and any parameters after `;`.
-fn is_json_content_type(value: &str) -> bool {
-    let (media_type, _rest) = value.split_once(';').unwrap_or((value, ""));
-    media_type.trim().eq_ignore_ascii_case("application/json")
-}
-
-fn validate_response_uri(
-    response_uri: &Url,
-    expected_response_uri: &Url,
-) -> Result<(), DirectPostError> {
-    if response_uri.scheme() != "https" {
-        #[cfg(not(test))]
-        return Err(DirectPostError::HttpsRequired);
-
-        #[cfg(test)]
-        if response_uri.host_str() != Some("127.0.0.1")
-            && response_uri.host_str() != Some("localhost")
-        {
-            return Err(DirectPostError::HttpsRequired);
-        }
-    }
-
-    if response_uri != expected_response_uri {
-        return Err(DirectPostError::UriMismatch);
-    }
-
-    Ok(())
+    super::parse_verifier_response(http_response).await
 }
 
 #[cfg(test)]

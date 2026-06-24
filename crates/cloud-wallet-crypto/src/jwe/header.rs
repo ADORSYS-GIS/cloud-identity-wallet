@@ -5,8 +5,8 @@
 
 use crate::aead;
 use crate::aes_kek::KeyWrapAlgorithm;
-use crate::error::{ErrorKind, Result};
-use crate::jwk::B64;
+use crate::error::{Error, ErrorKind, Result};
+use crate::jwk::{self, B64};
 use crate::rsa::oaep::OaepAlgorithm;
 use crate::utils::error_msg;
 use serde::{Deserialize, Serialize};
@@ -102,6 +102,54 @@ impl KeyManagementAlgorithm {
             Self::EcdhEsA128Kw => Some(KeyWrapAlgorithm::A128Kw),
             Self::EcdhEsA256Kw => Some(KeyWrapAlgorithm::A256Kw),
             _ => None,
+        }
+    }
+}
+
+/// Converts a JWK `alg` (`jwk::KeyManagement`) into the JWE encrypt/decrypt
+/// primitive's `KeyManagementAlgorithm`.
+///
+/// Both enums are `#[non_exhaustive]` at the crate boundary, so a caller
+/// outside this crate matching on either one must always add a wildcard arm —
+/// silently swallowing any algorithm this crate adds in the future. This
+/// impl lives inside the crate, where `#[non_exhaustive]` does not apply, so
+/// the match below has **no wildcard arm**: adding a new `KeyManagement`
+/// variant fails this match at compile time until it is explicitly routed to
+/// a `KeyManagementAlgorithm` (or explicitly marked unsupported), instead of
+/// silently being unreachable from callers like the OID4VP JARM layer.
+///
+/// # Errors
+/// [`ErrorKind::UnsupportedAlgorithm`] for `KeyManagement` variants this
+/// crate's JWE encrypt/decrypt primitive does not implement (plain
+/// `RSA-OAEP`, `RSA1_5`, AES/PBES2 key-wrap variants, `dir`, `ECDH-ES+A192KW`).
+#[cfg(feature = "jwe")]
+impl TryFrom<jwk::KeyManagement> for KeyManagementAlgorithm {
+    type Error = Error;
+
+    fn try_from(km: jwk::KeyManagement) -> Result<Self> {
+        match km {
+            jwk::KeyManagement::RsaOaep256 => Ok(Self::RsaOaep256),
+            jwk::KeyManagement::RsaOaep384 => Ok(Self::RsaOaep384),
+            jwk::KeyManagement::RsaOaep512 => Ok(Self::RsaOaep512),
+            jwk::KeyManagement::EcdhEs => Ok(Self::EcdhEs),
+            jwk::KeyManagement::EcdhEsA128Kw => Ok(Self::EcdhEsA128Kw),
+            jwk::KeyManagement::EcdhEsA256Kw => Ok(Self::EcdhEsA256Kw),
+            jwk::KeyManagement::Rsa1_5
+            | jwk::KeyManagement::RsaOaep
+            | jwk::KeyManagement::A128Kw
+            | jwk::KeyManagement::A192Kw
+            | jwk::KeyManagement::A256Kw
+            | jwk::KeyManagement::Direct
+            | jwk::KeyManagement::EcdhEsA192Kw
+            | jwk::KeyManagement::A128GcmKw
+            | jwk::KeyManagement::A192GcmKw
+            | jwk::KeyManagement::A256GcmKw
+            | jwk::KeyManagement::Pbes2Hs256A128Kw
+            | jwk::KeyManagement::Pbes2Hs384A192Kw
+            | jwk::KeyManagement::Pbes2Hs512A256Kw => Err(error_msg(
+                ErrorKind::UnsupportedAlgorithm,
+                format!("JWE key management algorithm '{km}' is not implemented by this crate"),
+            )),
         }
     }
 }

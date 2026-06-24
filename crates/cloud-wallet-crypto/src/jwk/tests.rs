@@ -29,6 +29,56 @@ fn parses_jwe_key_management_algorithm_in_jwk_metadata() {
     assert_eq!(serde_json::to_value(&jwks).unwrap(), val);
 }
 
+/// A Verifier-supplied RSA JWK with an oversized modulus must be rejected with
+/// an error, not panic the caller. `n`/`e` are untrusted input (sourced from
+/// the Verifier's `jwks`/`jwks_uri`), so a malicious or buggy Verifier
+/// publishing a modulus whose DER encoding exceeds the two-byte DER length
+/// limit must not be able to crash the wallet's JARM encryption path.
+#[cfg(feature = "jwe")]
+#[test]
+fn rsa_jwk_with_oversized_modulus_is_rejected_not_panicking() {
+    // 70000 bytes comfortably exceeds the two-byte DER length limit (0xFFFF)
+    // once wrapped in the PKCS#1/SPKI envelope.
+    let oversized_n = vec![0xAAu8; 70_000];
+
+    let jwk = Jwk {
+        key: Key::Rsa(Rsa {
+            n: B64::new(oversized_n),
+            e: B64::new(vec![0x01, 0x00, 0x01]),
+            prv: None,
+        }),
+        prm: Parameters::default(),
+    };
+
+    let result = crate::rsa::oaep::EncryptingKey::try_from(&jwk);
+
+    let err = result.expect_err("oversized modulus must be rejected, not panic");
+    assert_eq!(err.kind(), ErrorKind::KeyParsing);
+}
+
+/// Boundary cases for `der_length`'s three encoding branches (RFC 8259/X.690
+/// DER length rules: short form below 0x80, one length-octet form below
+/// 0x100, two length-octet form below 0x10000, error beyond that).
+#[cfg(feature = "jwe")]
+#[test]
+fn der_length_encodes_each_boundary_correctly() {
+    // Short form: lengths 0..=0x7F encode as a single byte.
+    assert_eq!(der_length(0).unwrap(), vec![0x00]);
+    assert_eq!(der_length(0x7f).unwrap(), vec![0x7f]);
+
+    // One-octet long form: 0x80..=0xFF encode as [0x81, len].
+    assert_eq!(der_length(0x80).unwrap(), vec![0x81, 0x80]);
+    assert_eq!(der_length(0xff).unwrap(), vec![0x81, 0xff]);
+
+    // Two-octet long form: 0x100..=0xFFFF encode as [0x82, hi, lo].
+    assert_eq!(der_length(0x100).unwrap(), vec![0x82, 0x01, 0x00]);
+    assert_eq!(der_length(0xffff).unwrap(), vec![0x82, 0xff, 0xff]);
+
+    // Beyond the two-octet form: must error, not panic or silently truncate.
+    let err = der_length(0x10000).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::KeyParsing);
+}
+
 #[test]
 fn test_ec_rsa_set_1() {
     let val = serde_json::json!({
