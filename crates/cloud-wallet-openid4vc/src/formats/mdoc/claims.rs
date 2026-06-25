@@ -162,7 +162,8 @@ fn select_preferred_display<'a>(
     display.first().and_then(|e| e.name)
 }
 
-fn claim_view_from_item(namespace: &str, item: &IssuerSignedItem) -> MdocClaimView {
+/// Builds an `MdocClaimView` from a single `IssuerSignedItem`.
+pub(crate) fn claim_view_from_item(namespace: &str, item: &IssuerSignedItem) -> MdocClaimView {
     MdocClaimView {
         namespace: namespace.to_owned(),
         claim_name: item.element_identifier.clone(),
@@ -170,7 +171,8 @@ fn claim_view_from_item(namespace: &str, item: &IssuerSignedItem) -> MdocClaimVi
     }
 }
 
-fn classify_element_value(raw_cbor: &[u8]) -> ClaimValueView {
+/// Classifies the raw CBOR `element_value` bytes into a `ClaimValueView`.
+pub(crate) fn classify_element_value(raw_cbor: &[u8]) -> ClaimValueView {
     let cbor_val = match ciborium::de::from_reader::<CborValue, _>(raw_cbor) {
         Ok(v) => v,
         Err(_) => {
@@ -221,7 +223,8 @@ fn cbor_value_to_claim_view(cbor_val: &CborValue, raw_bytes: &[u8]) -> ClaimValu
     }
 }
 
-fn cbor_element_to_json(raw_cbor: &[u8]) -> Value {
+/// Decodes raw CBOR element bytes and converts to JSON.
+pub(crate) fn cbor_element_to_json(raw_cbor: &[u8]) -> Value {
     let cbor_val = match ciborium::de::from_reader::<CborValue, _>(raw_cbor) {
         Ok(v) => v,
         Err(_) => {
@@ -234,7 +237,8 @@ fn cbor_element_to_json(raw_cbor: &[u8]) -> Value {
     cbor_to_json(&cbor_val)
 }
 
-fn cbor_to_json(cbor_val: &CborValue) -> Value {
+/// Converts a `ciborium::Value` tree into a `serde_json::Value`.
+pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
     match cbor_val {
         CborValue::Text(s) => Value::String(s.clone()),
         CborValue::Integer(i) => {
@@ -284,172 +288,5 @@ impl ParsedMdoc {
 
     pub fn to_claim_views(&self) -> Vec<MdocClaimView> {
         MdocClaimExtractor::new(self).to_claim_views()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn cbor(val: &CborValue) -> Vec<u8> {
-        let mut buf = Vec::new();
-        ciborium::ser::into_writer(val, &mut buf).expect("CBOR encoding must succeed in tests");
-        buf
-    }
-
-    fn build_item(
-        digest_id: u64,
-        random: Vec<u8>,
-        name: &str,
-        value: CborValue,
-    ) -> IssuerSignedItem {
-        let raw_item = CborValue::Map(vec![
-            (
-                CborValue::Text("digestID".into()),
-                CborValue::Integer(digest_id.into()),
-            ),
-            (CborValue::Text("random".into()), CborValue::Bytes(random)),
-            (
-                CborValue::Text("elementIdentifier".into()),
-                CborValue::Text(name.into()),
-            ),
-            (CborValue::Text("elementValue".into()), value.clone()),
-        ]);
-        let tag24 = CborValue::Tag(24, Box::new(CborValue::Bytes(cbor(&raw_item))));
-        IssuerSignedItem {
-            digest_id,
-            element_identifier: name.to_owned(),
-            element_value: cbor(&value),
-            raw_tag24_bytes: cbor(&tag24),
-        }
-    }
-
-    fn create_test_mdoc(items: Vec<IssuerSignedItem>) -> ParsedMdoc {
-        ParsedMdoc {
-            doc_type: "org.iso.18013.5.1.mDL".to_owned(),
-            signed_at: time::OffsetDateTime::now_utc(),
-            valid_from: time::OffsetDateTime::now_utc(),
-            valid_until: time::OffsetDateTime::now_utc() + time::Duration::days(365),
-            digest_algorithm: super::super::DigestAlgorithm::Sha256,
-            value_digests: HashMap::new(),
-            device_key: vec![],
-            name_spaces: HashMap::from([("org.iso.18013.5.1".to_owned(), items)]),
-            cose_sign1: coset::CoseSign1 {
-                protected: coset::ProtectedHeader::default(),
-                unprotected: coset::Header::default(),
-                payload: Some(vec![]),
-                signature: vec![0u8; 64],
-            },
-            raw_issuer_signed_bytes: vec![],
-        }
-    }
-
-    #[test]
-    fn cbor_to_json_handles_core_types_and_bytes() {
-        assert_eq!(
-            cbor_to_json(&CborValue::Text("hello".into())),
-            Value::String("hello".into())
-        );
-        assert_eq!(
-            cbor_to_json(&CborValue::Integer(42.into())),
-            Value::Number(42.into())
-        );
-        assert_eq!(cbor_to_json(&CborValue::Bool(true)), Value::Bool(true));
-        assert_eq!(cbor_to_json(&CborValue::Null), Value::Null);
-        let b = cbor_to_json(&CborValue::Bytes(vec![0xDE, 0xAD]));
-        assert_eq!(b["type"], "binary");
-        assert_eq!(b["size"], 2);
-    }
-
-    #[test]
-    fn rendered_claims_produces_namespaced_json() {
-        let items = vec![
-            build_item(
-                0,
-                vec![0u8; 16],
-                "family_name",
-                CborValue::Text("Doe".into()),
-            ),
-            build_item(
-                1,
-                vec![0u8; 16],
-                "portrait",
-                CborValue::Bytes(vec![0xAA; 64]),
-            ),
-        ];
-        let json = create_test_mdoc(items).to_rendered_claims();
-        let ns = json.get("org.iso.18013.5.1").expect("namespace");
-        assert_eq!(ns["family_name"], "Doe");
-        assert_eq!(ns["portrait"]["type"], "binary");
-    }
-
-    #[test]
-    fn display_metadata_translates_and_falls_back() {
-        let items = vec![
-            build_item(
-                0,
-                vec![0u8; 16],
-                "family_name",
-                CborValue::Text("Doe".into()),
-            ),
-            build_item(
-                1,
-                vec![0u8; 16],
-                "given_name",
-                CborValue::Text("Jane".into()),
-            ),
-        ];
-        let mdoc = create_test_mdoc(items);
-        let descs = vec![
-            ClaimDescriptionRef {
-                path: ClaimPathRef::try_from_elements(vec![
-                    ClaimPathElementRef::String("org.iso.18013.5.1"),
-                    ClaimPathElementRef::String("family_name"),
-                ])
-                .unwrap(),
-                mandatory: true,
-                display: vec![
-                    ClaimDisplayRef {
-                        name: Some("Familienname"),
-                        locale: Some("de"),
-                    },
-                    ClaimDisplayRef {
-                        name: Some("Family Name"),
-                        locale: Some("en"),
-                    },
-                ],
-            },
-            ClaimDescriptionRef {
-                path: ClaimPathRef::try_from_elements(vec![
-                    ClaimPathElementRef::String("org.iso.18013.5.1"),
-                    ClaimPathElementRef::String("given_name"),
-                ])
-                .unwrap(),
-                mandatory: true,
-                display: vec![
-                    ClaimDisplayRef {
-                        name: Some("Vorname"),
-                        locale: Some("de"),
-                    },
-                    ClaimDisplayRef {
-                        name: Some("Given Name"),
-                        locale: Some("en"),
-                    },
-                ],
-            },
-        ];
-        let ext = MdocClaimExtractor::new(&mdoc);
-
-        let en = ext.to_namespaced_json_with_display(&descs, &["en".into()]);
-        assert_eq!(en["org.iso.18013.5.1"]["Family Name"], "Doe");
-        assert_eq!(en["org.iso.18013.5.1"]["Given Name"], "Jane");
-
-        let de = ext.to_namespaced_json_with_display(&descs, &["de".into()]);
-        assert_eq!(de["org.iso.18013.5.1"]["Familienname"], "Doe");
-
-        let no_desc =
-            MdocClaimExtractor::new(&mdoc).to_namespaced_json_with_display(&[], &["en".into()]);
-        assert_eq!(no_desc["org.iso.18013.5.1"]["family_name"], "Doe");
     }
 }
