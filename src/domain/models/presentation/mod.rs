@@ -105,41 +105,21 @@ impl std::fmt::Debug for PresentationEngine {
 impl PresentationEngine {
     /// Creates a new presentation engine with all required dependencies.
     ///
-    /// `x509_trust_anchor_der` are raw DER-encoded X.509 root certificates
-    /// used for `x509_san_dns` / `x509_hash` verifier key resolution.
-    pub fn new<C, T, I, V>(
+    /// `x5c_trust_anchors` are pre-validated X.509 root trust anchors used for
+    /// `x509_san_dns` / `x509_hash` verifier key resolution. They should be
+    /// loaded once at startup via [`crate::utils::load_root_truststore`] and
+    /// shared across engines.
+    pub fn new<C, T>(
         client: Oid4vpClient,
         credential_repo: C,
         tenant_repo: T,
-        x509_trust_anchor_der: I,
+        x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
     ) -> Self
     where
         C: CredentialRepo,
         T: TenantRepo,
-        I: IntoIterator<Item = V>,
-        V: AsRef<[u8]>,
     {
-        let trust_anchors: Vec<TrustAnchor<'static>> = x509_trust_anchor_der
-            .into_iter()
-            .filter_map(|der: V| {
-                let cert = rustls_pki_types::CertificateDer::from(der.as_ref());
-                match webpki::anchor_from_trusted_cert(&cert) {
-                    Ok(anchor) => {
-                        let anchor: TrustAnchor<'static> = anchor.to_owned();
-                        Some(anchor)
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            error = %err,
-                            "skipping malformed X.509 trust anchor"
-                        );
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        let x509_verifier = X509Verifier::new(Arc::new(trust_anchors));
+        let x509_verifier = X509Verifier::new(x5c_trust_anchors);
         let key_resolver = Arc::new(CompositeKeyResolver {
             x509: x509_verifier,
         });
