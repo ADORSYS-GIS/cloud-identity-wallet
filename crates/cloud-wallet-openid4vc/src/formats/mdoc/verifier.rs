@@ -16,8 +16,8 @@ use time::OffsetDateTime;
 use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use super::cert_chain::{
-    check_country_consistency, check_dsc_eku, check_dsc_key_usage, check_dsc_validity_period,
-    check_signed_within_dsc_validity, extract_spki, validate_cert_chain,
+    check_country_consistency, check_dsc_curve, check_dsc_eku, check_dsc_key_usage,
+    check_dsc_validity_period, check_signed_within_dsc_validity, extract_spki, validate_cert_chain,
 };
 use super::error::{MdocError, Result};
 use super::parser::ParsedMdoc;
@@ -174,6 +174,8 @@ pub struct IssuerInfo {
 ///   `digitalSignature` bit is not set.
 /// - [`MdocError::NonCriticalKeyUsage`] — DSC Key Usage extension is present and bit is set
 ///   but the extension is not marked critical.
+/// - [`MdocError::UnsupportedDscCurve`] — DSC EC public key curve is not P-256, P-384,
+///   or P-521 (ISO 18013-5 Table 22).
 /// - [`MdocError::DocTypeMismatch`] — outer `docType` differs from MSO `docType`.
 /// - [`MdocError::SignedOutsideDscValidity`] — MSO `signed` is outside DSC validity.
 /// - [`MdocError::InvalidIssuerSignature`] — signature does not verify.
@@ -214,6 +216,11 @@ pub(crate) async fn verify_issuer_signature(
 
     // digitalSignature key usage bit required by ISO 18013-5 Annex B Table B.3.
     check_dsc_key_usage(&dsc)?;
+
+    // EC curve must be on the ISO 18013-5 Table 22 permitted list (P-256/P-384/P-521).
+    // Closes the curve↔algorithm binding gap for every alg at once, rather than relying
+    // on the verification table to happen to fail for a disallowed curve.
+    check_dsc_curve(&dsc)?;
 
     if parsed.doc_type != outer_doc_type {
         return Err(MdocError::DocTypeMismatch {
