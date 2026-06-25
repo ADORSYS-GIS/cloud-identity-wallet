@@ -7,3 +7,4 @@ pub mod metadata;
 pub mod notification;
 pub mod proofs;
 pub mod token;
+pub mod wallet_attestation;
