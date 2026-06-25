@@ -683,7 +683,7 @@ impl Oid4vciClient {
     ) -> Result<CredentialResponse> {
         self.request_credential_with_attestation(
             context,
-            access_token,
+            token,
             credential_identifier,
             credential_config_id,
             signer,
@@ -711,7 +711,7 @@ impl Oid4vciClient {
     pub async fn request_credential_with_attestation<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
-        access_token: &str,
+        token: &TokenResponse,
         credential_identifier: impl Into<String>,
         credential_config_id: &str,
         signer: &S,
