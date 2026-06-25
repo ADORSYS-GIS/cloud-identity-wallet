@@ -20,6 +20,7 @@ use cloud_identity_wallet::{
     },
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
+    setup,
 };
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
@@ -85,7 +86,15 @@ async fn spawn_callback_test_app(session_store: MemorySession) -> CallbackTestAp
         &session_store,
         config.oid4vci.preferred_display_locales.clone(),
     );
-    let service = Service::new(session_store.clone(), tenant_repo, engine);
+    let presentation_engine =
+        setup::build_presentation_engine(&config, MemoryCredentialRepo::new(), tenant_repo.clone())
+            .expect("failed to build presentation engine");
+    let service = Service::new(
+        session_store.clone(),
+        tenant_repo,
+        engine,
+        presentation_engine,
+    );
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
 

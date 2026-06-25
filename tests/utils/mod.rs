@@ -22,6 +22,7 @@ use cloud_identity_wallet::{
     },
     server::Server,
     session::MemorySession,
+    setup,
 };
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
@@ -60,7 +61,7 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
-    let engine = IssuanceEngine::new(
+    let issuance_engine = IssuanceEngine::new(
         client,
         task_queue,
         publisher,
@@ -70,7 +71,15 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
         &session_store,
         config.oid4vci.preferred_display_locales.clone(),
     );
-    let service = Service::new(session_store, tenant_repo, engine);
+    let presentation_engine =
+        setup::build_presentation_engine(&config, credential_repo.clone(), tenant_repo.clone())
+            .expect("failed to build presentation engine");
+    let service = Service::new(
+        session_store,
+        tenant_repo,
+        issuance_engine,
+        presentation_engine,
+    );
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
     tokio::spawn(server.run());
