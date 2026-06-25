@@ -1,7 +1,7 @@
 use super::*;
 use crate::formats::mdoc::claims::{
-    ClaimDescriptionRef, ClaimDisplayRef, ClaimPathElementRef, ClaimPathRef,
-    MdocClaimExtractor, cbor_to_json,
+    ClaimDescriptionRef, ClaimDisplayRef, ClaimPathElementRef, ClaimPathRef, MdocClaimExtractor,
+    cbor_to_json,
 };
 use crate::formats::mdoc::parser::IssuerSignedItem;
 use std::collections::HashMap;
