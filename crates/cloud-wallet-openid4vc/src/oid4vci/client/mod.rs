@@ -676,7 +676,7 @@ impl Oid4vciClient {
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
-        credential_identifier: impl Into<String>,
+        selector: CredIdOrCredConfigId,
         credential_config_id: &str,
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
@@ -684,19 +684,13 @@ impl Oid4vciClient {
         let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
 
+        let config_id = resolve_credential_configuration_id(&selector, credential_config_id);
         let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
         let proofs = self
-            .build_proofs(
-                context,
-                c_nonce.as_deref(),
-                is_anonymous,
-                credential_config_id,
-                signer,
-            )
+            .build_proofs(context, c_nonce.as_deref(), is_anonymous, config_id, signer)
             .await?;
 
-        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
-        let mut request = CredentialRequest::new(id);
+        let mut request = CredentialRequest::new(selector);
         if let Some(p) = proofs {
             request = request.with_proofs(p);
         }
@@ -706,6 +700,13 @@ impl Oid4vciClient {
     }
 
     /// Request all credentials authorized by the token response.
+    ///
+    /// Issuers vary in how they convey which credentials were authorized, so the
+    /// targets to request are resolved with a 3-tier fallback per OID4VCI §6.2:
+    /// 1. `authorization_details` with `credential_identifiers` (RAR with per-credential ids).
+    /// 2. `scope`, matched against the `scope` advertised on each entry of
+    ///    `credential_configurations_supported`.
+    /// 3. The `credential_configuration_id`s from the original credential offer.
     ///
     /// The caller is responsible for handling individual failures (e.g. deferred
     /// issuance on some credentials while others succeed).
@@ -721,15 +722,12 @@ impl Oid4vciClient {
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
     ) -> Result<Vec<CredentialResponse>> {
-        let resolved = resolve_credential_ids(token)?;
-        let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
-        let mut results = Vec::with_capacity(total);
+        let targets = resolve_credential_targets(context, token)?;
+        let mut results = Vec::with_capacity(targets.len());
         let mut futures = FuturesUnordered::new();
 
-        for (config_id, identifiers) in resolved {
-            for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer, dpop));
-            }
+        for (selector, config_id) in &targets {
+            futures.push(self.request_credential(context, token, selector.clone(), config_id, signer, dpop));
         }
 
         while let Some(res) = futures.next().await {
@@ -1248,12 +1246,7 @@ impl Oid4vciClient {
                     handler.extract_and_store_nonce(&htu, retry_response.headers());
                 }
 
-                return retry_response
-                    .json::<CredentialResponse>()
-                    .await
-                    .map_err(|e| ClientError::InvalidResponse {
-                        message: format!("failed to parse credential response: {e}").into(),
-                    });
+                return parse_credential_response(retry_response).await;
             }
 
             if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body)
@@ -1267,12 +1260,7 @@ impl Oid4vciClient {
             handler.extract_and_store_nonce(&htu, response.headers());
         }
 
-        let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {
-            ClientError::InvalidResponse {
-                message: format!("failed to parse credential response: {e}").into(),
-            }
-        })?;
-        Ok(credential_response)
+        parse_credential_response(response).await
     }
 
     /// Resolve the `c_nonce` to use for proof construction.
@@ -1456,40 +1444,113 @@ fn should_sign_proof<S: ProofSigner>(
     )))
 }
 
-pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[String])>> {
-    let details =
-        token
-            .authorization_details
-            .as_ref()
-            .ok_or_else(|| ClientError::InvalidResponse {
-                message: "missing authorization_details in token response".into(),
-            })?;
-
-    let mut result = Vec::with_capacity(details.len());
-
-    for detail in details {
-        let Some(ids) = detail.credential_identifiers.as_deref() else {
-            continue;
-        };
-
-        if ids.is_empty() {
-            return Err(ClientError::InvalidResponse {
-                message: format!(
-                    "authorization_details entry for '{}' contains empty credential_identifiers",
-                    detail.credential_configuration_id
-                )
-                .into(),
-            });
-        }
-        result.push((detail.credential_configuration_id.as_str(), ids));
+/// Resolve the credential requests to issue for a token response, falling back
+/// across the grant-type shapes issuers use to convey authorized credentials,
+/// per OID4VCI §6.2:
+/// 1. `authorization_details` with `credential_identifiers`.
+/// 2. `scope`, matched against `credential_configurations_supported`.
+/// 3. The credential offer's `credential_configuration_ids`.
+fn resolve_credential_targets(
+    context: &ResolvedOfferContext,
+    token: &TokenResponse,
+) -> Result<Vec<(CredIdOrCredConfigId, String)>> {
+    if let Some(resolved) = resolve_via_authorization_details(token) {
+        return Ok(resolved
+            .into_iter()
+            .flat_map(|(config_id, identifiers)| {
+                identifiers.iter().map(move |id| {
+                    (
+                        CredIdOrCredConfigId::credential_identifier(id.clone()),
+                        config_id.to_owned(),
+                    )
+                })
+            })
+            .collect());
     }
 
-    if result.is_empty() {
+    if let Some(config_ids) = resolve_via_scope(context, token) {
+        return Ok(by_credential_configuration_id(config_ids));
+    }
+
+    let offer_ids = context.offer.credential_configuration_ids.clone();
+    if offer_ids.is_empty() {
         return Err(ClientError::InvalidResponse {
-            message: "no credential_identifiers found in authorization_details".into(),
+            message: "unable to resolve credential targets: no authorization_details, \
+                scope, or offered credential_configuration_ids"
+                .into(),
         });
     }
-    Ok(result)
+    Ok(by_credential_configuration_id(offer_ids))
+}
+
+fn by_credential_configuration_id(ids: Vec<String>) -> Vec<(CredIdOrCredConfigId, String)> {
+    ids.into_iter()
+        .map(|id| {
+            (
+                CredIdOrCredConfigId::credential_configuration_id(id.clone()),
+                id,
+            )
+        })
+        .collect()
+}
+
+/// Tier 1: resolve per-credential identifiers from `authorization_details`.
+///
+/// Returns `None` when `authorization_details` is absent or carries no usable
+/// `credential_identifiers`, so the caller can fall back to scope- or offer-based
+/// resolution.
+fn resolve_via_authorization_details(token: &TokenResponse) -> Option<Vec<(&str, &[String])>> {
+    let details = token.authorization_details.as_ref()?;
+
+    let result: Vec<(&str, &[String])> = details
+        .iter()
+        .filter_map(|detail| {
+            let ids = detail.credential_identifiers.as_deref()?;
+            (!ids.is_empty()).then_some((detail.credential_configuration_id.as_str(), ids))
+        })
+        .collect();
+
+    (!result.is_empty()).then_some(result)
+}
+
+/// Tier 2: resolve credential configuration ids granted via a plain `scope`
+/// token response, matching each space-delimited scope value (RFC 6749 §3.3)
+/// against the `scope` advertised by `credential_configurations_supported`.
+///
+/// Returns `None` when the token carries no `scope`, or no advertised
+/// configuration matches a granted scope, so the caller can fall back to
+/// offer-based resolution.
+fn resolve_via_scope(context: &ResolvedOfferContext, token: &TokenResponse) -> Option<Vec<String>> {
+    let scope = token.scope.as_deref()?;
+    let granted: std::collections::HashSet<&str> = scope.split_whitespace().collect();
+
+    let mut matched: Vec<String> = context
+        .issuer_metadata
+        .credential_configurations_supported
+        .iter()
+        .filter(|(_, config)| config.scope.as_deref().is_some_and(|s| granted.contains(s)))
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    if matched.is_empty() {
+        return None;
+    }
+    matched.sort();
+    Some(matched)
+}
+
+/// Resolve the `credential_configuration_id` to use for proof construction.
+///
+/// When `selector` already carries a `credential_configuration_id` (scope- or
+/// offer-based tiers), it is authoritative. Otherwise (identifier-based tier),
+/// the configuration id resolved separately from `authorization_details` is used.
+fn resolve_credential_configuration_id<'a>(
+    selector: &'a CredIdOrCredConfigId,
+    fallback_config_id: &'a str,
+) -> &'a str {
+    selector
+        .as_credential_configuration_id()
+        .unwrap_or(fallback_config_id)
 }
 
 /// Build the minimal PAR redirect URL.
@@ -1543,6 +1604,21 @@ async fn http_error_response(response: reqwest::Response) -> ClientError {
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
     ClientError::http_response(status, body)
+}
+
+/// Parse a successful credential endpoint response.
+///
+/// Reads the body as text first so a parse failure can surface the raw body
+/// for diagnostics, instead of only the serde error.
+async fn parse_credential_response(response: reqwest::Response) -> Result<CredentialResponse> {
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ClientError::http("failed to read credential response body", e))?;
+
+    serde_json::from_str(&body).map_err(|e| ClientError::InvalidResponse {
+        message: format!("failed to parse credential response: {e}; body: {body}").into(),
+    })
 }
 
 impl AlgorithmIdentifier {

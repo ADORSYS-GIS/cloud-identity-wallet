@@ -51,6 +51,17 @@ pub struct ImmediateCredentialResponse {
     /// Identifier for notification requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_id: Option<String>,
+
+    /// Fresh `c_nonce` for subsequent credential requests.
+    ///
+    /// Returned directly in the credential response by issuers on older
+    /// OID4VCI drafts, before the dedicated nonce endpoint was introduced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_nonce: Option<String>,
+
+    /// Lifetime in seconds of `c_nonce`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_nonce_expires_in: Option<u64>,
 }
 
 impl ImmediateCredentialResponse {
@@ -58,11 +69,19 @@ impl ImmediateCredentialResponse {
         Self {
             credentials,
             notification_id: None,
+            c_nonce: None,
+            c_nonce_expires_in: None,
         }
     }
 
     pub fn with_notification_id(mut self, id: impl Into<String>) -> Self {
         self.notification_id = Some(id.into());
+        self
+    }
+
+    pub fn with_c_nonce(mut self, c_nonce: impl Into<String>, expires_in: Option<u64>) -> Self {
+        self.c_nonce = Some(c_nonce.into());
+        self.c_nonce_expires_in = expires_in;
         self
     }
 }
@@ -266,5 +285,36 @@ mod tests {
         }"#;
 
         assert!(serde_json::from_str::<DeferredCredentialResult>(json).is_err());
+    }
+
+    #[test]
+    fn deserialize_immediate_response_with_c_nonce() {
+        // Older OID4VCI drafts returned a fresh c_nonce directly in the
+        // credential response, before the dedicated nonce endpoint existed.
+        let json = r#"{
+            "credentials": [
+                {"credential": "eyJhbGciOiJFUzI1NiJ9..."}
+            ],
+            "c_nonce": "fresh-nonce",
+            "c_nonce_expires_in": 86400
+        }"#;
+
+        let response: ImmediateCredentialResponse =
+            serde_json::from_str(json).expect("Failed to deserialize");
+
+        assert_eq!(response.c_nonce.as_deref(), Some("fresh-nonce"));
+        assert_eq!(response.c_nonce_expires_in, Some(86400));
+    }
+
+    #[test]
+    fn immediate_response_omits_c_nonce_when_absent() {
+        let response = ImmediateCredentialResponse::new(vec![CredentialObject::new_string(
+            "eyJhbGciOiJFUzI1NiJ9...",
+        )]);
+
+        let json = serde_json::to_value(&response).expect("Failed to serialize");
+
+        assert!(json.get("c_nonce").is_none());
+        assert!(json.get("c_nonce_expires_in").is_none());
     }
 }

@@ -547,6 +547,281 @@ fn minimal_issuer_metadata(issuer_url: &str) -> CredentialIssuerMetadata {
     }
 }
 
+/// Builds issuer metadata with one `CredentialConfiguration` entry per
+/// `(config_id, scope)` pair, for exercising scope-based resolution.
+fn issuer_metadata_with_configs(
+    issuer_url: &str,
+    configs: &[(&str, Option<&str>)],
+) -> CredentialIssuerMetadata {
+    let mut metadata = minimal_issuer_metadata(issuer_url);
+    metadata.credential_configurations_supported = configs
+        .iter()
+        .map(|(id, scope)| {
+            (
+                id.to_string(),
+                CredentialConfiguration {
+                    id: None,
+                    format_details: CredentialFormatDetails::JwtVcJson(
+                        JwtVcJsonCredentialConfiguration {
+                            credential_definition: CredentialDefinition {
+                                types: vec!["TestType".to_string()],
+                            },
+                        },
+                    ),
+                    scope: scope.map(str::to_string),
+                    cryptographic_binding_methods_supported: None,
+                    credential_signing_alg_values_supported: None,
+                    proof_types_supported: None,
+                    credential_metadata: None,
+                },
+            )
+        })
+        .collect();
+    metadata
+}
+
+fn minimal_offer(issuer_url: &str, credential_configuration_ids: Vec<String>) -> CredentialOffer {
+    CredentialOffer {
+        credential_issuer: Url::parse(issuer_url).unwrap(),
+        credential_configuration_ids,
+        grants: None,
+    }
+}
+
+fn minimal_context(
+    issuer_url: &str,
+    issuer_metadata: CredentialIssuerMetadata,
+    offer_config_ids: Vec<String>,
+) -> ResolvedOfferContext {
+    ResolvedOfferContext {
+        offer: minimal_offer(issuer_url, offer_config_ids),
+        issuer_metadata,
+        as_metadata: minimal_as_metadata(&format!("{issuer_url}/par")),
+        flow: IssuanceFlow::PreAuthorizedCode {
+            pre_authorized_code: "test_code".to_string(),
+            tx_code: None,
+        },
+    }
+}
+
+fn token_response(scope: Option<&str>, authorization_details: Option<Vec<AuthorizationDetails>>) -> TokenResponse {
+    TokenResponse {
+        access_token: "test_access_token".to_string(),
+        token_type: "Bearer".to_string(),
+        expires_in: Some(3600),
+        refresh_token: None,
+        scope: scope.map(str::to_string),
+        authorization_details,
+    }
+}
+
+#[test]
+fn resolve_via_authorization_details_returns_none_when_absent() {
+    let token = token_response(None, None);
+    assert!(resolve_via_authorization_details(&token).is_none());
+}
+
+#[test]
+fn resolve_via_authorization_details_skips_entries_without_identifiers() {
+    let details = AuthorizationDetails::for_configuration("NoIds");
+    let token = token_response(None, Some(vec![details]));
+
+    assert!(resolve_via_authorization_details(&token).is_none());
+}
+
+#[test]
+fn resolve_via_authorization_details_returns_targets_when_identifiers_present() {
+    let mut details = AuthorizationDetails::for_configuration("UniversityDegreeCredential");
+    details.credential_identifiers = Some(vec!["cred-1".to_string(), "cred-2".to_string()]);
+    let token = token_response(None, Some(vec![details]));
+
+    let resolved = resolve_via_authorization_details(&token).expect("tier 1 should resolve");
+    assert_eq!(resolved.len(), 1);
+    let (config_id, ids) = resolved[0];
+    assert_eq!(config_id, "UniversityDegreeCredential");
+    assert_eq!(ids, &["cred-1".to_string(), "cred-2".to_string()]);
+}
+
+#[test]
+fn resolve_via_scope_returns_none_when_no_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", Some("university_degree"))]),
+        vec!["UniversityDegreeCredential".to_string()],
+    );
+    let token = token_response(None, None);
+
+    assert!(resolve_via_scope(&context, &token).is_none());
+}
+
+#[test]
+fn resolve_via_scope_returns_none_when_no_configuration_matches() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", Some("university_degree"))]),
+        vec!["UniversityDegreeCredential".to_string()],
+    );
+    let token = token_response(Some("unrelated_scope"), None);
+
+    assert!(resolve_via_scope(&context, &token).is_none());
+}
+
+#[test]
+fn resolve_via_scope_matches_configurations_by_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[
+                ("UniversityDegreeCredential", Some("university_degree")),
+                ("DriversLicenseCredential", Some("drivers_license")),
+                ("UnrelatedCredential", Some("unrelated")),
+            ],
+        ),
+        vec![
+            "UniversityDegreeCredential".to_string(),
+            "DriversLicenseCredential".to_string(),
+        ],
+    );
+    // Scopes are space-delimited per RFC 6749 §3.3.
+    let token = token_response(Some("university_degree drivers_license"), None);
+
+    let mut matched = resolve_via_scope(&context, &token).expect("tier 2 should resolve");
+    matched.sort();
+    assert_eq!(
+        matched,
+        vec![
+            "DriversLicenseCredential".to_string(),
+            "UniversityDegreeCredential".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn resolve_credential_targets_uses_authorization_details_when_present() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", None)]),
+        vec!["UniversityDegreeCredential".to_string()],
+    );
+    let mut details = AuthorizationDetails::for_configuration("UniversityDegreeCredential");
+    details.credential_identifiers = Some(vec!["cred-1".to_string()]);
+    let token = token_response(Some("ignored_scope"), Some(vec![details]));
+
+    let targets = resolve_credential_targets(&context, &token).expect("should resolve");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].0.as_credential_identifier(), Some("cred-1"));
+    assert_eq!(targets[0].1, "UniversityDegreeCredential");
+}
+
+#[test]
+fn resolve_credential_targets_falls_back_to_scope_when_no_authorization_details() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", Some("university_degree"))]),
+        vec!["UniversityDegreeCredential".to_string()],
+    );
+    let token = token_response(Some("university_degree"), None);
+
+    let targets = resolve_credential_targets(&context, &token).expect("should resolve");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        targets[0].0.as_credential_configuration_id(),
+        Some("UniversityDegreeCredential")
+    );
+    assert_eq!(targets[0].1, "UniversityDegreeCredential");
+}
+
+#[test]
+fn resolve_credential_targets_falls_back_to_offer_when_no_authorization_details_or_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", None)]),
+        vec!["UniversityDegreeCredential".to_string()],
+    );
+    let token = token_response(None, None);
+
+    let targets = resolve_credential_targets(&context, &token).expect("should resolve");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        targets[0].0.as_credential_configuration_id(),
+        Some("UniversityDegreeCredential")
+    );
+}
+
+#[test]
+fn resolve_credential_targets_errors_when_nothing_resolvable() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", None)]),
+        vec![],
+    );
+    let token = token_response(None, None);
+
+    let result = resolve_credential_targets(&context, &token);
+    assert!(result.is_err());
+}
+
+#[test]
+fn resolve_credential_configuration_id_prefers_config_based_selector() {
+    let selector = CredIdOrCredConfigId::credential_configuration_id("FromSelector");
+    assert_eq!(
+        resolve_credential_configuration_id(&selector, "FromFallback"),
+        "FromSelector"
+    );
+}
+
+#[test]
+fn resolve_credential_configuration_id_falls_back_for_identifier_selector() {
+    let selector = CredIdOrCredConfigId::credential_identifier("cred-1");
+    assert_eq!(
+        resolve_credential_configuration_id(&selector, "FromFallback"),
+        "FromFallback"
+    );
+}
+
+#[tokio::test]
+async fn credential_response_parse_failure_includes_raw_body() {
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    Mock::given(method("POST"))
+        .and(path("/credential"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not valid json"))
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+    let mut issuer_metadata = issuer_metadata_with_configs(&issuer_url, &[("TestCredential", None)]);
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    let context = minimal_context(
+        &issuer_url,
+        issuer_metadata,
+        vec!["TestCredential".to_string()],
+    );
+    let token = token_response(None, None);
+    let signer = get_ecdsa_signer();
+
+    let selector = CredIdOrCredConfigId::credential_configuration_id("TestCredential");
+    let result = client
+        .request_credential(&context, &token, selector, "TestCredential", &signer, None)
+        .await;
+
+    let err = result.expect_err("expected a parse failure");
+    let message = err.to_string();
+    assert!(
+        message.contains("not valid json"),
+        "error should include the raw response body, got: {message}"
+    );
+}
+
 fn minimal_authz_request() -> AuthorizationRequest {
     AuthorizationRequest {
         response_type: "code".to_string(),
