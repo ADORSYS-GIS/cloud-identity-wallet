@@ -5,8 +5,8 @@ use cloud_wallet_openid4vc::oid4vp::selection::SelectionResult;
 use serde::Serialize;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::domain::models::credential::CredentialDisplayMetadata;
 use super::PresentationError;
+use crate::domain::models::credential::CredentialDisplayMetadata;
 use crate::session::{PresentationFlow, PresentationSession};
 
 const SESSION_TTL: Duration = Duration::minutes(15);
@@ -80,7 +80,9 @@ pub struct TransactionDataDisplay {
     pub display_data: serde_json::Value,
 }
 
-impl From<&cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData<'_>> for TransactionDataDisplay {
+impl From<&cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData<'_>>
+    for TransactionDataDisplay
+{
     fn from(td: &cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData<'_>) -> Self {
         use cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData;
         match td {
@@ -98,7 +100,12 @@ impl From<&cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData<'_>
                     display_data: serde_json::Value::Object(display_data),
                 }
             }
-            TransactionData::Other { transaction_type, credential_ids, additional_params, .. } => Self {
+            TransactionData::Other {
+                transaction_type,
+                credential_ids,
+                additional_params,
+                ..
+            } => Self {
                 data_type: transaction_type.clone(),
                 credential_ids: credential_ids.clone(),
                 display_data: additional_params.clone(),
@@ -141,21 +148,15 @@ impl StartPresentationResponse {
             ctx.dcql_query.credential_sets.as_deref(),
         );
 
-        let credential_set_options = ctx
-            .dcql_query
-            .credential_sets
-            .as_ref()
-            .and_then(|sets| {
-                let all_options: Vec<Vec<String>> = sets
-                    .iter()
-                    .flat_map(|set| set.options.clone())
-                    .collect();
-                if !all_options.is_empty() {
-                    Some(all_options)
-                } else {
-                    None
-                }
-            });
+        let credential_set_options = ctx.dcql_query.credential_sets.as_ref().and_then(|sets| {
+            let all_options: Vec<Vec<String>> =
+                sets.iter().flat_map(|set| set.options.clone()).collect();
+            if !all_options.is_empty() {
+                Some(all_options)
+            } else {
+                None
+            }
+        });
 
         let transaction_data = if ctx.transaction_data.is_empty() {
             None
@@ -215,10 +216,7 @@ fn build_credential_matches(
                                 .map(|m| RequestedClaim {
                                     path: m.path.clone(),
                                     display_name: None,
-                                    value_required: lookup_value_required(
-                                        query,
-                                        &m.path,
-                                    ),
+                                    value_required: lookup_value_required(query, &m.path),
                                 })
                                 .collect();
 

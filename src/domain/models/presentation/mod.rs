@@ -222,7 +222,13 @@ impl PresentationEngine {
     pub async fn load_credential_views(
         &self,
         tenant_id: uuid::Uuid,
-    ) -> Result<(Vec<CredentialView>, std::collections::HashMap<String, crate::domain::models::credential::CredentialDisplayMetadata>)> {
+    ) -> Result<(
+        Vec<CredentialView>,
+        std::collections::HashMap<
+            String,
+            crate::domain::models::credential::CredentialDisplayMetadata,
+        >,
+    )> {
         use crate::domain::models::credential::CredentialFilter;
 
         let filter = CredentialFilter {

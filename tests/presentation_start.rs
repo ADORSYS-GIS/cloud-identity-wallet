@@ -214,12 +214,12 @@ async fn valid_request_with_matching_credentials_returns_201() {
     assert_eq!(flow, "cross_device");
 
     let verifier = body.get("verifier").unwrap();
-    assert_eq!(verifier.get("name").unwrap(), "https://verifier.example.com");
-    assert_eq!(verifier.get("verified").unwrap(), false);
     assert_eq!(
-        verifier.get("verification_method").unwrap(),
-        "redirect_uri"
+        verifier.get("name").unwrap(),
+        "https://verifier.example.com"
     );
+    assert_eq!(verifier.get("verified").unwrap(), false);
+    assert_eq!(verifier.get("verification_method").unwrap(), "redirect_uri");
 
     let credential_matches = body.get("credential_matches").unwrap().as_array().unwrap();
     assert_eq!(credential_matches.len(), 1);
