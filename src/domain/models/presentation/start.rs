@@ -98,22 +98,7 @@ impl StartPresentationResponse {
         credentials: &[StoredCredentialView],
     ) -> Result<Self, PresentationError> {
         let ctx = &session.context;
-        let client_id_value = ctx.client_id.value().to_string();
-        let client_metadata = ctx.verifier_metadata.as_ref().map(|m| &m.client_metadata);
-
-        let verifier = VerifierDisplay {
-            name: client_metadata
-                .and_then(|m| m.client_name.clone())
-                .unwrap_or_else(|| client_id_value.clone()),
-            logo_uri: client_metadata.and_then(|m| m.logo_uri.as_ref().map(|u| u.to_string())),
-            policy_uri: client_metadata.and_then(|m| m.policy_uri.as_ref().map(|u| u.to_string())),
-            verified: ctx.verifier_metadata.is_some() && !ctx.client_id.is_redirect_uri(),
-            verification_method: ctx
-                .client_id
-                .prefix()
-                .map(|prefix| prefix.as_str().to_string())
-                .or_else(|| Some("pre-registered".to_string())),
-        };
+        let verifier = build_verifier_display(ctx);
 
         let display_by_id = credentials
             .iter()
@@ -148,6 +133,55 @@ impl StartPresentationResponse {
             requires_consent: true,
         })
     }
+}
+
+fn build_verifier_display(
+    ctx: &cloud_wallet_openid4vc::oid4vp::client::PresentationContext,
+) -> VerifierDisplay {
+    let client_metadata = ctx
+        .verifier_metadata
+        .as_ref()
+        .or(ctx.request.client_metadata.as_ref())
+        .map(|metadata| &metadata.client_metadata);
+
+    VerifierDisplay {
+        name: client_metadata
+            .and_then(|metadata| metadata.client_name.clone())
+            .unwrap_or_else(|| verifier_fallback_name(ctx)),
+        logo_uri: client_metadata
+            .and_then(|metadata| metadata.logo_uri.as_ref().map(|uri| uri.to_string())),
+        policy_uri: client_metadata
+            .and_then(|metadata| metadata.policy_uri.as_ref().map(|uri| uri.to_string())),
+        verified: ctx.verifier_metadata.is_some()
+            || ctx.client_id.is_x509_hash()
+            || ctx.client_id.is_x509_san_dns(),
+        verification_method: ctx
+            .client_id
+            .prefix()
+            .map(|prefix| prefix.as_str().to_string())
+            .or_else(|| Some("pre-registered".to_string())),
+    }
+}
+
+fn verifier_fallback_name(
+    ctx: &cloud_wallet_openid4vc::oid4vp::client::PresentationContext,
+) -> String {
+    if ctx.client_id.is_x509_hash() {
+        return ctx
+            .response_uri
+            .as_ref()
+            .and_then(|uri| uri.host_str())
+            .or_else(|| {
+                ctx.request
+                    .client_metadata_uri
+                    .as_ref()
+                    .and_then(|uri| uri.host_str())
+            })
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "Verified verifier".to_string());
+    }
+
+    ctx.client_id.value().to_string()
 }
 
 fn build_credential_matches(
@@ -199,13 +233,36 @@ fn build_candidate_info(
                     .iter()
                     .map(|claim| RequestedClaimInfo {
                         path: claim.path.elements().to_vec(),
-                        display_name: claim.claim_query_id.clone(),
+                        display_name: claim_display_name(claim.path.elements()),
                         value_required: claim.selected_values.iter().any(|value| !value.is_null()),
                     })
                     .collect(),
             })
         })
         .collect()
+}
+
+fn claim_display_name(path: &[ClaimPathElement]) -> Option<String> {
+    let mut label = String::new();
+
+    for element in path {
+        match element {
+            ClaimPathElement::String(segment) => {
+                if !label.is_empty() {
+                    label.push('.');
+                }
+                label.push_str(segment);
+            }
+            ClaimPathElement::Index(index) => {
+                label.push('[');
+                label.push_str(&index.to_string());
+                label.push(']');
+            }
+            ClaimPathElement::Null => label.push_str("[*]"),
+        }
+    }
+
+    (!label.is_empty()).then_some(label)
 }
 
 fn query_required(query_id: &str, credential_sets: Option<&[CredentialSet]>) -> bool {
@@ -261,4 +318,139 @@ fn transaction_data_display(
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use cloud_wallet_openid4vc::oauth::authorization::OAuthAuthorizationRequest;
+    use cloud_wallet_openid4vc::oid4vp::authorization::{
+        AuthorizationRequest, ResponseMode, ResponseType,
+    };
+    use cloud_wallet_openid4vc::oid4vp::client::PresentationContext;
+    use cloud_wallet_openid4vc::oid4vp::client_id::ParsedClientId;
+    use cloud_wallet_openid4vc::oid4vp::dcql::{
+        CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
+    };
+    use cloud_wallet_openid4vc::oid4vp::metadata::verifier::VerifierMetadata;
+    use serde_json::json;
+
+    use super::*;
+
+    fn presentation_context(client_id: &str) -> PresentationContext {
+        let parsed_client_id = ParsedClientId::parse(client_id).unwrap();
+        let response_uri = url::Url::parse("https://verifier.example.com/response").unwrap();
+        let dcql_query = DcqlQuery {
+            credentials: vec![CredentialQuery {
+                id: "pid".to_string(),
+                format: CredentialFormat::DcSdJwt,
+                multiple: None,
+                meta: CredentialMeta::SdJwt {
+                    vct_values: vec!["https://example.com/vct".to_string()],
+                },
+                claims: None,
+                claim_sets: None,
+                trusted_authorities: None,
+                require_cryptographic_holder_binding: None,
+            }],
+            credential_sets: None,
+        };
+
+        PresentationContext {
+            request: AuthorizationRequest {
+                response_type: ResponseType::VpToken,
+                nonce: "test-nonce".to_string(),
+                response_mode: ResponseMode::DirectPost,
+                oauth: OAuthAuthorizationRequest {
+                    client_id: parsed_client_id.raw().to_string(),
+                    redirect_uri: None,
+                    scope: None,
+                    state: None,
+                    nonce: None,
+                    code_challenge: None,
+                    code_challenge_method: None,
+                },
+                response_uri: Some(response_uri.clone()),
+                request_uri: None,
+                request_uri_method: None,
+                dcql_query: Some(dcql_query.clone()),
+                client_metadata: None,
+                client_metadata_uri: None,
+                request: None,
+                transaction_data: None,
+                verifier_info: None,
+                expected_origins: None,
+            },
+            verifier_metadata: None,
+            client_id: parsed_client_id,
+            nonce: "test-nonce".to_string(),
+            state: None,
+            response_uri: Some(response_uri),
+            response_mode: ResponseMode::DirectPost,
+            dcql_query,
+            transaction_data: vec![],
+        }
+    }
+
+    fn verifier_metadata(name: &str) -> VerifierMetadata {
+        serde_json::from_value(json!({
+            "client_name": name,
+            "vp_formats_supported": {
+                "dc+sd-jwt": {
+                    "sd-jwt_alg_values": ["ES256"],
+                    "kb-jwt_alg_values": ["ES256"]
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn verifier_display_uses_inline_client_metadata_name() {
+        let mut ctx = presentation_context("x509_hash:Uvo3HtuIxuhC92rShpgqcT3YXwrqRxWEviRiA0OZszk");
+        ctx.request.client_metadata = Some(verifier_metadata("DATEV Verifier"));
+
+        let display = build_verifier_display(&ctx);
+
+        assert_eq!(display.name, "DATEV Verifier");
+        assert!(display.verified);
+        assert_eq!(display.verification_method.as_deref(), Some("x509_hash"));
+    }
+
+    #[test]
+    fn verifier_display_does_not_fallback_to_x509_hash_value() {
+        let ctx = presentation_context("x509_hash:Uvo3HtuIxuhC92rShpgqcT3YXwrqRxWEviRiA0OZszk");
+
+        let display = build_verifier_display(&ctx);
+
+        assert_eq!(display.name, "verifier.example.com");
+        assert!(display.verified);
+    }
+
+    #[test]
+    fn claim_display_name_uses_path_segments_instead_of_claim_query_id() {
+        let path = vec![
+            ClaimPathElement::from("credentialSubject"),
+            "username".into(),
+        ];
+
+        assert_eq!(
+            claim_display_name(&path).as_deref(),
+            Some("credentialSubject.username")
+        );
+    }
+
+    #[test]
+    fn claim_display_name_formats_array_selectors() {
+        let path = vec![
+            ClaimPathElement::from("addresses"),
+            ClaimPathElement::Index(0),
+            ClaimPathElement::from("street"),
+            ClaimPathElement::Null,
+        ];
+
+        assert_eq!(
+            claim_display_name(&path).as_deref(),
+            Some("addresses[0].street[*]")
+        );
+    }
 }
