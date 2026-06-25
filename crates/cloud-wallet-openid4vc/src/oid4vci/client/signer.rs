@@ -327,6 +327,11 @@ impl CryptoSigner {
         &self.holder_binding_public_jwk
     }
 
+    /// Sign `msg`, returning signature bytes.
+    pub fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
+        self.signer.sign_bytes(msg)
+    }
+
     /// Encode to a JWT with the given claims.
     fn encode(&self, claims: &Claims) -> Result<String> {
         let payload_b64 = base64_encode_type(claims)?;
