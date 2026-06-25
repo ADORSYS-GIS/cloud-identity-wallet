@@ -1,26 +1,31 @@
-mod consent;
 mod error;
 mod start;
 
-pub use consent::{
-    ConsentOutcome, CredentialSelection, PresentationConsentRequest, PresentationConsentResponse,
-};
+use cloud_wallet_openid4vc::formats::mdoc::ParsedMdoc;
+use cloud_wallet_openid4vc::oid4vci::client::ProofSigner;
 pub use error::{PresentationError, PresentationErrorCode};
 pub use start::{StartPresentationRequest, StartPresentationResponse};
 
 use std::sync::Arc;
 
 use base64ct::Encoding as _;
+use cloud_wallet_openid4vc::errors::{Error as Oid4vcError, ErrorKind};
+use cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse;
 use cloud_wallet_openid4vc::oid4vp::client::{Oid4vpClient, PresentationContext};
+use cloud_wallet_openid4vc::oid4vp::client_id::ParsedClientId;
+use cloud_wallet_openid4vc::oid4vp::dcql::TrustedAuthorityType;
 use cloud_wallet_openid4vc::oid4vp::error::AuthorizationErrorCode;
 use cloud_wallet_openid4vc::oid4vp::key_resolution::x509::X509Verifier;
 use cloud_wallet_openid4vc::oid4vp::presentation::{PresentationFactory, SelectedCredential};
 use cloud_wallet_openid4vc::oid4vp::request_object::VerifierKeyResolver;
-use cloud_wallet_openid4vc::oid4vp::selection::{CredentialView, SelectionResult};
+use cloud_wallet_openid4vc::oid4vp::selection::{
+    CredentialAuthority, CredentialCandidate, CredentialView, SelectionResult,
+};
 use rustls_pki_types::TrustAnchor;
 use tracing::{debug, info, instrument};
 
 use crate::domain::keys::tenant_crypto_signer;
+use crate::domain::models::credential::{Credential, CredentialFormat};
 use crate::domain::ports::{CredentialRepo, TenantRepo};
 
 type Result<T> = std::result::Result<T, PresentationError>;
@@ -43,7 +48,7 @@ struct CompositeKeyResolver {
 impl VerifierKeyResolver for CompositeKeyResolver {
     async fn resolve_key(
         &self,
-        client_id: &cloud_wallet_openid4vc::oid4vp::client_id::ParsedClientId,
+        client_id: &ParsedClientId,
         header: &jsonwebtoken::Header,
     ) -> cloud_wallet_openid4vc::errors::Result<jsonwebtoken::DecodingKey> {
         // Dispatch based on client_id prefix
@@ -54,8 +59,8 @@ impl VerifierKeyResolver for CompositeKeyResolver {
         // For redirect_uri: prefix, unsigned requests are handled by the client
         // before reaching key resolution. If we get here, the request has a
         // signed Request Object with a prefix we don't yet support.
-        Err(cloud_wallet_openid4vc::errors::Error::message(
-            cloud_wallet_openid4vc::errors::ErrorKind::InvalidPresentationRequest,
+        Err(Oid4vcError::message(
+            ErrorKind::InvalidPresentationRequest,
             format!(
                 "unsupported client_id prefix for key resolution: {}",
                 client_id.raw()
@@ -104,20 +109,22 @@ impl PresentationEngine {
     ///
     /// `x509_trust_anchor_der` are raw DER-encoded X.509 root certificates
     /// used for `x509_san_dns` / `x509_hash` verifier key resolution.
-    pub fn new<C, T>(
+    pub fn new<C, T, I, V>(
         client: Oid4vpClient,
         credential_repo: C,
         tenant_repo: T,
-        x509_trust_anchor_der: Vec<Vec<u8>>,
+        x509_trust_anchor_der: I,
     ) -> Self
     where
         C: CredentialRepo,
         T: TenantRepo,
+        I: IntoIterator<Item = V>,
+        V: AsRef<[u8]>,
     {
         let trust_anchors: Vec<TrustAnchor<'static>> = x509_trust_anchor_der
-            .iter()
-            .filter_map(|der| {
-                let cert = rustls_pki_types::CertificateDer::from(der.as_slice());
+            .into_iter()
+            .filter_map(|der: V| {
+                let cert = rustls_pki_types::CertificateDer::from(der.as_ref());
                 match webpki::anchor_from_trusted_cert(&cert) {
                     Ok(anchor) => {
                         let anchor: TrustAnchor<'static> = anchor.to_owned();
@@ -149,10 +156,6 @@ impl PresentationEngine {
 
     /// Processes a raw OID4VP authorization request into a validated
     /// [`PresentationContext`].
-    ///
-    /// Delegates to the [`Oid4vpClient`] which handles request parsing,
-    /// Request Object resolution, JWT validation (using the verifier key
-    /// resolver), DCQL extraction, and transaction data decoding.
     #[instrument(skip_all)]
     pub async fn process_request(&self, raw_request: &str) -> Result<PresentationContext> {
         debug!("processing OID4VP authorization request");
@@ -162,7 +165,6 @@ impl PresentationEngine {
             .await?;
         info!(
             client_id = %context.client_id.value(),
-            nonce = %context.nonce,
             queries = context.dcql_query.credentials.len(),
             "authorization request validated"
         );
@@ -179,15 +181,12 @@ impl PresentationEngine {
     }
 
     /// Builds and sends a VP Token response to the verifier.
-    ///
-    /// The selected credentials are moved (not cloned) into the VP token
-    /// builder.
     #[instrument(skip_all)]
     pub async fn submit_presentation(
         &self,
         ctx: &PresentationContext,
         selected: Vec<SelectedCredential>,
-    ) -> Result<cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse> {
+    ) -> Result<DirectPostResponse> {
         info!(
             client_id = %ctx.client_id.value(),
             credentials = selected.len(),
@@ -203,7 +202,7 @@ impl PresentationEngine {
         &self,
         ctx: &PresentationContext,
         error_code: AuthorizationErrorCode,
-    ) -> Result<cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse> {
+    ) -> Result<DirectPostResponse> {
         info!(
             client_id = %ctx.client_id.value(),
             error = %error_code,
@@ -237,14 +236,10 @@ impl PresentationEngine {
             ..Default::default()
         };
 
-        // list() returns CredentialSummary (lightweight), but we need
-        // raw_credential payloads for DCQL claim matching.  Fetch each
-        // full credential individually.
-        let summaries = self
-            .credential_repo
-            .list(filter)
-            .await
-            .map_err(|e| PresentationError::internal(e.to_string()))?;
+        // list() returns CredentialSummary, but we need raw_credential
+        // payloads for DCQL claim matching.  Fetch each full credential
+        // individually.
+        let summaries = self.credential_repo.list(filter).await?;
 
         let mut views = Vec::with_capacity(summaries.len());
         let mut display_map = std::collections::HashMap::with_capacity(summaries.len());
@@ -263,25 +258,15 @@ impl PresentationEngine {
                         );
                     }
                 },
-                Err(err) => {
-                    tracing::warn!(
-                        credential_id = %summary.id,
-                        error = %err,
-                        "skipping credential: failed to load from repo"
-                    );
-                }
+                Err(err) => return Err(err.into()),
             }
         }
-
         debug!(count = views.len(), "loaded credential views for matching");
         Ok((views, display_map))
     }
 
     /// Builds a [`SelectedCredential`] from a raw credential payload and its
     /// format, using format-specific presentation factories.
-    ///
-    /// This is the real entry point called by the consent handler after loading
-    /// the credential from the repo.
     ///
     /// # Errors
     ///
@@ -293,16 +278,24 @@ impl PresentationEngine {
         &self,
         ctx: &PresentationContext,
         query_id: &str,
-        credential_id: &str,
         tenant_id: uuid::Uuid,
-        credential: &crate::domain::models::credential::Credential,
+        credential: &Credential,
         dcql_result: &SelectionResult,
     ) -> Result<SelectedCredential> {
         // Ensure the selection is a valid candidate for the query.
+        let mut credential_id_buf = uuid::Uuid::encode_buffer();
+        let credential_id = credential
+            .id
+            .hyphenated()
+            .encode_lower(&mut credential_id_buf);
         let candidate = dcql_result
             .candidates
             .get(query_id)
-            .and_then(|candidates| candidates.iter().find(|c| c.credential_id == credential_id))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.credential_id == *credential_id)
+            })
             .ok_or_else(|| {
                 PresentationError::new(
                     PresentationErrorCode::InvalidRequest,
@@ -314,20 +307,17 @@ impl PresentationEngine {
 
         match credential.format {
             crate::domain::models::credential::CredentialFormat::SdJwtVc => {
-                self.build_sd_jwt_presentation(ctx, query_id, credential, candidate)
+                self.build_sd_jwt_presentation(ctx, query_id, tenant_id, credential, candidate)
                     .await
             }
             crate::domain::models::credential::CredentialFormat::Mdoc => {
                 self.build_mdoc_presentation(ctx, query_id, tenant_id, credential)
                     .await
             }
-            _ => {
-                // jwt_vc_json, jwt_vc_json-ld, ldp_vc — pass raw credential through.
-                Ok(SelectedCredential::string(
-                    query_id,
-                    &credential.raw_credential,
-                ))
-            }
+            other => Err(PresentationError::new(
+                PresentationErrorCode::InvalidRequest,
+                format!("Unsupported credential format: {other}"),
+            )),
         }
     }
 
@@ -337,33 +327,40 @@ impl PresentationEngine {
         &self,
         ctx: &PresentationContext,
         query_id: &str,
-        credential: &crate::domain::models::credential::Credential,
-        candidate: &cloud_wallet_openid4vc::oid4vp::selection::CredentialCandidate,
+        tenant_id: uuid::Uuid,
+        credential: &Credential,
+        candidate: &CredentialCandidate,
     ) -> Result<SelectedCredential> {
+        use cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathPointer;
+        use cloud_wallet_openid4vc::formats::sd_jwt::KEY_BINDING_JWT_TYP;
+        use cloud_wallet_openid4vc::oid4vp::presentation::ProofError;
         use cloud_wallet_openid4vc::oid4vp::presentation::formats::sd_jwt::SdJwtPresentation;
 
-        let matched_claim_paths: Vec<
-            cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathPointer,
-        > = candidate
+        let matched_claim_paths: Vec<ClaimPathPointer> = candidate
             .matched_claims
             .iter()
             .map(|mc| mc.path.clone())
             .collect();
 
-        // TODO: wire tenant key holder binding when the credential declares
-        // `cnf` and the verifier requires cryptographic holder binding.
-        let presentation = SdJwtPresentation::builder(
+        let mut builder = SdJwtPresentation::builder(
             &credential.raw_credential,
             ctx.client_id.value(),
             &ctx.nonce,
         )
-        .requested_claims(matched_claim_paths)
-        .build()
-        .create_presentation()
-        .map_err(|e| {
-            PresentationError::internal(format!("SD-JWT presentation creation failed: {e}"))
-        })?;
+        .requested_claims(matched_claim_paths);
 
+        if requires_holder_binding(ctx, query_id)? {
+            let signer = tenant_crypto_signer(self.tenant_repo.as_ref(), tenant_id)
+                .await
+                .map_err(PresentationError::internal)?;
+            let signer = Arc::new(signer);
+            builder = builder.signer(move |claims| {
+                sign_key_binding_jwt(&signer, claims, KEY_BINDING_JWT_TYP)
+                    .map_err(|err| ProofError::SigningFailed(err.to_string()))
+            });
+        }
+
+        let presentation = builder.build().create_presentation()?;
         Ok(SelectedCredential::new(query_id, presentation))
     }
 
@@ -375,7 +372,7 @@ impl PresentationEngine {
         ctx: &PresentationContext,
         query_id: &str,
         tenant_id: uuid::Uuid,
-        credential: &crate::domain::models::credential::Credential,
+        credential: &Credential,
     ) -> Result<SelectedCredential> {
         use ciborium::value::Value as CborValue;
         use cloud_wallet_openid4vc::oid4vci::client::ProofSigner;
@@ -385,7 +382,7 @@ impl PresentationEngine {
         };
 
         let Some(doctype) = credential.credential_types.first() else {
-            return Err(PresentationError::internal(
+            return Err(PresentationError::internal_message(
                 "mdoc credential is missing doc_type",
             ));
         };
@@ -398,33 +395,16 @@ impl PresentationEngine {
 
         let handover =
             OpenID4VPHandover::new(ctx.client_id.value(), &response_uri, ctx.nonce.clone())
-                .map_err(|e| {
-                    PresentationError::internal(format!(
-                        "failed to build OpenID4VP handover for mdoc: {e}"
-                    ))
-                })?;
+                .map_err(PresentationError::internal)?;
         let session_transcript = SessionTranscript::new(handover);
 
         let issuer_signed_bytes =
-            base64ct::Base64UrlUnpadded::decode_vec(&credential.raw_credential).map_err(|e| {
-                PresentationError::internal(format!(
-                    "failed to decode base64url mdoc raw credential: {e}"
-                ))
-            })?;
-        let issuer_signed: CborValue = ciborium::de::from_reader(issuer_signed_bytes.as_slice())
-            .map_err(|e| {
-                PresentationError::internal(format!("failed to decode mdoc IssuerSigned CBOR: {e}"))
-            })?;
+            base64ct::Base64UrlUnpadded::decode_vec(&credential.raw_credential)?;
+        let issuer_signed: CborValue = ciborium::de::from_reader(issuer_signed_bytes.as_slice())?;
 
         let signer = tenant_crypto_signer(self.tenant_repo.as_ref(), tenant_id)
             .await
-            .map_err(|e| {
-                PresentationError::with_source(
-                    PresentationErrorCode::InternalError,
-                    "tenant key unavailable",
-                    e,
-                )
-            })?;
+            .map_err(PresentationError::internal)?;
         let algorithm = match signer.algorithm() {
             cloud_wallet_openid4vc::oid4vci::client::Algorithm::ES256 => {
                 coset::iana::Algorithm::ES256
@@ -433,7 +413,7 @@ impl PresentationEngine {
                 coset::iana::Algorithm::ES384
             }
             _ => {
-                return Err(PresentationError::internal(
+                return Err(PresentationError::internal_message(
                     "tenant key algorithm is incompatible with ISO mdoc DeviceSignature (ES256/ES384 required)",
                 ));
             }
@@ -453,195 +433,223 @@ impl PresentationEngine {
                     .sign_bytes(tbs)
                     .map_err(|e| ProofError::SigningFailed(e.to_string()))
             })
-            .build()
-            .map_err(|e| {
-                PresentationError::internal(format!("failed to build mdoc presentation: {e}"))
-            })?;
+            .build()?;
 
-        let presentation = presentation.create_presentation().map_err(|e| {
-            PresentationError::internal(format!("mdoc presentation creation failed: {e}"))
-        })?;
-
+        let presentation = presentation.create_presentation()?;
         Ok(SelectedCredential::new(query_id, presentation))
     }
 }
 
-/// Converts a domain [`Credential`](crate::domain::models::credential::Credential)
-/// to a [`CredentialView`] for DCQL matching.
+fn requires_holder_binding(ctx: &PresentationContext, query_id: &str) -> Result<bool> {
+    let Some(query) = ctx
+        .dcql_query
+        .credentials
+        .iter()
+        .find(|query| query.id == query_id)
+    else {
+        return Err(PresentationError::new(
+            PresentationErrorCode::InvalidRequest,
+            format!("credential query {query_id} does not exist in the DCQL request"),
+        ));
+    };
+
+    Ok(query.require_cryptographic_holder_binding.unwrap_or(true))
+}
+
+fn sign_key_binding_jwt(
+    signer: &cloud_wallet_openid4vc::oid4vci::client::CryptoSigner,
+    claims: &cloud_wallet_openid4vc::formats::sd_jwt::KeyBindingClaims,
+    typ: &'static str,
+) -> std::result::Result<String, cloud_wallet_openid4vc::oid4vci::client::ClientError> {
+    let header = cloud_wallet_openid4vc::oid4vci::client::ProofHeader {
+        alg: signer.algorithm(),
+        typ,
+        kid: None,
+        jwk: None,
+        x5c: None,
+        attestation: None,
+        trust_chain: None,
+    };
+    signer.sign_jwt(&header, claims)
+}
+
+/// Converts a domain [`Credential`] to a [`CredentialView`] for DCQL matching.
 ///
 /// Performs format-specific decoding to extract the claims JSON:
 /// - **`dc+sd-jwt`**: Parses the SD-JWT and produces the fully disclosed payload.
 /// - **`mso_mdoc`**: Decodes the base64url CBOR and extracts namespace/element pairs.
-/// - Other formats: Uses an empty JSON object as claims.
-fn credential_to_view(
-    credential: &crate::domain::models::credential::Credential,
-) -> std::result::Result<CredentialView, PresentationError> {
-    let dcql_format = credential.format.to_dcql_format();
-
-    let claims = decode_credential_claims(credential)?;
-
-    let vct = credential.credential_types.first().cloned();
+/// - Other formats: Unsupported.
+fn credential_to_view(credential: &Credential) -> Result<CredentialView> {
+    let dcql_format = credential.format.into();
+    let decoded = decode_credential_for_matching(credential)?;
+    let credential_type = credential.credential_types.first().cloned();
 
     Ok(CredentialView {
         id: credential.id.to_string(),
         format: dcql_format,
-        vct: if matches!(
-            credential.format,
-            crate::domain::models::credential::CredentialFormat::SdJwtVc
-        ) {
-            vct.clone()
+        vct: if matches!(credential.format, CredentialFormat::SdJwtVc) {
+            credential_type.clone()
         } else {
             None
         },
-        doctype: if matches!(
-            credential.format,
-            crate::domain::models::credential::CredentialFormat::Mdoc
-        ) {
-            vct.clone()
+        doctype: if matches!(credential.format, CredentialFormat::Mdoc) {
+            credential_type.clone()
         } else {
             None
         },
         credential_types: credential.credential_types.clone(),
-        claims,
+        claims: decoded.claims,
         issuer: Some(credential.issuer.clone()),
-        trusted_authorities: Vec::new(),
-        holder_binding_supported: true,
+        trusted_authorities: decoded.trusted_authorities,
+        holder_binding_supported: decoded.holder_binding_supported,
     })
+}
+
+struct DecodedCredential {
+    claims: serde_json::Value,
+    trusted_authorities: Vec<CredentialAuthority>,
+    holder_binding_supported: bool,
 }
 
 /// Decodes credential claims from the raw credential payload.
 ///
 /// Produces the JSON value needed for DCQL claim path matching.
-fn decode_credential_claims(
-    credential: &crate::domain::models::credential::Credential,
-) -> std::result::Result<serde_json::Value, PresentationError> {
+fn decode_credential_for_matching(credential: &Credential) -> Result<DecodedCredential> {
     use cloud_wallet_openid4vc::formats::sd_jwt::SdJwt;
 
     match credential.format {
-        crate::domain::models::credential::CredentialFormat::SdJwtVc => {
-            let sd_jwt = SdJwt::parse(&credential.raw_credential)
-                .map_err(|e| PresentationError::internal(format!("failed to parse SD-JWT: {e}")))?;
-            sd_jwt.to_disclosed_payload().map_err(|e| {
-                PresentationError::internal(format!("failed to disclose SD-JWT payload: {e}"))
+        CredentialFormat::SdJwtVc => {
+            let sd_jwt = SdJwt::parse(&credential.raw_credential)?;
+            let holder_binding_supported = sd_jwt.jwt().claims().cnf.is_some();
+            let trusted_authorities = trusted_authorities_from_sd_jwt(&sd_jwt);
+            let claims = sd_jwt.to_disclosed_payload()?;
+            Ok(DecodedCredential {
+                claims,
+                trusted_authorities,
+                holder_binding_supported,
             })
         }
-        crate::domain::models::credential::CredentialFormat::Mdoc => {
-            // For mdoc, decode the base64url CBOR IssuerSigned and extract
-            // namespace→element pairs as a JSON object.
-            let bytes = base64ct::Base64UrlUnpadded::decode_vec(&credential.raw_credential)
-                .map_err(|e| {
-                    PresentationError::internal(format!("failed to decode mdoc base64url: {e}"))
-                })?;
-            let cbor_value: ciborium::value::Value = ciborium::de::from_reader(bytes.as_slice())
-                .map_err(|e| {
-                    PresentationError::internal(format!("failed to decode mdoc CBOR: {e}"))
-                })?;
-            // Extract nameSpaces from IssuerSigned and convert to JSON
-            extract_mdoc_claims(&cbor_value)
+        CredentialFormat::Mdoc => {
+            let parsed = ParsedMdoc::parse(&credential.raw_credential)?;
+            let trusted_authorities = trusted_authorities_from_mdoc(&parsed);
+            let claims = extract_mdoc_claims(&parsed)?;
+            Ok(DecodedCredential {
+                claims,
+                trusted_authorities,
+                holder_binding_supported: true,
+            })
         }
-        _ => {
-            // For JWT-based formats, decode the payload from the JWT
-            let parts: Vec<&str> = credential.raw_credential.splitn(3, '.').collect();
-            if parts.len() >= 2 {
-                use base64ct::Encoding as _;
-                let payload_bytes =
-                    base64ct::Base64UrlUnpadded::decode_vec(parts[1]).map_err(|e| {
-                        PresentationError::internal(format!("failed to decode JWT payload: {e}"))
-                    })?;
-                serde_json::from_slice(&payload_bytes).map_err(|e| {
-                    PresentationError::internal(format!("failed to parse JWT payload JSON: {e}"))
-                })
-            } else {
-                Ok(serde_json::Value::Object(serde_json::Map::new()))
-            }
-        }
+        other => Err(PresentationError::internal_message(format!(
+            "unsupported credential format: {other}"
+        ))),
     }
 }
 
 /// Extracts claims from an mdoc IssuerSigned CBOR value as a JSON object.
 ///
 /// The result is keyed by namespace, each containing an object of
-/// `elementIdentifier → elementValue` pairs.
-fn extract_mdoc_claims(
-    issuer_signed: &ciborium::value::Value,
-) -> std::result::Result<serde_json::Value, PresentationError> {
-    use ciborium::value::Value as CborValue;
-
-    let CborValue::Map(top_map) = issuer_signed else {
-        return Ok(serde_json::Value::Object(serde_json::Map::new()));
-    };
-
-    let namespaces_entry = top_map
-        .iter()
-        .find(|(k, _)| matches!(k, CborValue::Text(t) if t == "nameSpaces"));
-
-    let Some((_, CborValue::Map(ns_map))) = namespaces_entry else {
-        return Ok(serde_json::Value::Object(serde_json::Map::new()));
-    };
-
+/// `elementIdentifier -> elementValue` pairs.
+fn extract_mdoc_claims(parsed: &ParsedMdoc) -> Result<serde_json::Value> {
     let mut result = serde_json::Map::new();
-    for (ns_key, ns_items) in ns_map {
-        let CborValue::Text(namespace) = ns_key else {
-            continue;
-        };
-        let CborValue::Array(items) = ns_items else {
-            continue;
-        };
-
-        let mut ns_claims = serde_json::Map::new();
+    for (namespace, items) in &parsed.name_spaces {
+        let mut ns_claims = serde_json::Map::with_capacity(items.len());
         for item in items {
-            // Each item is Tag(24, Bytes(cbor-encoded IssuerSignedItem))
-            let item_bytes = match item {
-                CborValue::Tag(24, inner) => match inner.as_ref() {
-                    CborValue::Bytes(b) => b.as_slice(),
-                    _ => continue,
-                },
-                _ => continue,
-            };
-
-            let Ok(item_value) = ciborium::de::from_reader::<CborValue, _>(item_bytes) else {
-                continue;
-            };
-
-            let CborValue::Map(item_map) = &item_value else {
-                continue;
-            };
-
-            let element_id = item_map.iter().find_map(|(k, v)| {
-                if matches!(k, CborValue::Text(t) if t == "elementIdentifier") {
-                    if let CborValue::Text(id) = v {
-                        Some(id.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            });
-
-            let element_value = item_map.iter().find_map(|(k, v)| {
-                if matches!(k, CborValue::Text(t) if t == "elementValue") {
-                    cbor_to_json(v).ok()
-                } else {
-                    None
-                }
-            });
-
-            if let (Some(id), Some(val)) = (element_id, element_value) {
-                ns_claims.insert(id, val);
-            }
+            let value: ciborium::value::Value =
+                ciborium::de::from_reader(item.element_value.as_slice())?;
+            ns_claims.insert(item.element_identifier.clone(), cbor_to_json(&value)?);
         }
-
         result.insert(namespace.clone(), serde_json::Value::Object(ns_claims));
     }
-
     Ok(serde_json::Value::Object(result))
 }
 
+fn trusted_authorities_from_sd_jwt(
+    sd_jwt: &cloud_wallet_openid4vc::formats::sd_jwt::SdJwt<'_>,
+) -> Vec<CredentialAuthority> {
+    let mut authorities = vec![];
+    if let Some(x5c) = sd_jwt.jwt().header().x5c.as_deref() {
+        extend_aki_authorities_from_x5c(&mut authorities, x5c.iter().map(String::as_str));
+    }
+    authorities
+}
+
+fn trusted_authorities_from_mdoc(parsed: &ParsedMdoc) -> Vec<CredentialAuthority> {
+    use ciborium::value::Value as CborValue;
+    use coset::Label;
+
+    const X5CHAIN_LABEL: i64 = 33;
+
+    let mut authorities = vec![];
+    let Some(x5chain) = parsed
+        .cose_sign1
+        .unprotected
+        .rest
+        .iter()
+        .find(|(label, _)| *label == Label::Int(X5CHAIN_LABEL))
+        .map(|(_, value)| value)
+    else {
+        return authorities;
+    };
+
+    match x5chain {
+        CborValue::Bytes(der) => push_aki_authority_from_der(&mut authorities, der),
+        CborValue::Array(chain) => {
+            for entry in chain {
+                if let CborValue::Bytes(der) = entry {
+                    push_aki_authority_from_der(&mut authorities, der);
+                }
+            }
+        }
+        _ => {}
+    }
+    authorities
+}
+
+fn extend_aki_authorities_from_x5c<'a>(
+    authorities: &mut Vec<CredentialAuthority>,
+    x5c: impl IntoIterator<Item = &'a str>,
+) {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    for encoded in x5c {
+        let Ok(der) = STANDARD.decode(encoded) else {
+            continue;
+        };
+        push_aki_authority_from_der(authorities, &der);
+    }
+}
+
+fn push_aki_authority_from_der(authorities: &mut Vec<CredentialAuthority>, der: &[u8]) {
+    use base64ct::Encoding as _;
+    use x509_parser::extensions::ParsedExtension;
+    use x509_parser::prelude::{FromDer as _, X509Certificate};
+
+    let Ok((_, cert)) = X509Certificate::from_der(der) else {
+        return;
+    };
+
+    for extension in cert.extensions() {
+        let ParsedExtension::AuthorityKeyIdentifier(aki) = extension.parsed_extension() else {
+            continue;
+        };
+        let Some(key_identifier) = &aki.key_identifier else {
+            continue;
+        };
+
+        let value = base64ct::Base64UrlUnpadded::encode_string(key_identifier.0);
+        if !authorities.iter().any(|authority| {
+            authority.authority_type == TrustedAuthorityType::Aki && authority.value == value
+        }) {
+            authorities.push(CredentialAuthority {
+                authority_type: TrustedAuthorityType::Aki,
+                value,
+            });
+        }
+    }
+}
+
 /// Best-effort conversion from CBOR to JSON for mdoc element values.
-fn cbor_to_json(
-    value: &ciborium::value::Value,
-) -> std::result::Result<serde_json::Value, PresentationError> {
+fn cbor_to_json(value: &ciborium::value::Value) -> Result<serde_json::Value> {
     use ciborium::value::Value as CborValue;
 
     match value {
@@ -677,5 +685,149 @@ fn cbor_to_json(
         // Tag values: unwrap the inner value
         CborValue::Tag(_, inner) => cbor_to_json(inner),
         _ => Ok(serde_json::Value::Null),
+    }
+}
+
+impl From<CredentialFormat> for cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat {
+    fn from(value: CredentialFormat) -> Self {
+        use cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat as DcqlFormat;
+        match value {
+            CredentialFormat::SdJwtVc => DcqlFormat::DcSdJwt,
+            CredentialFormat::Mdoc => DcqlFormat::MsoMdoc,
+            CredentialFormat::JwtVcJson | CredentialFormat::JwtVcJsonLd => DcqlFormat::JwtVcJson,
+            CredentialFormat::LdpVc => DcqlFormat::LdpVc,
+        }
+    }
+}
+
+impl From<cloud_wallet_openid4vc::oid4vp::presentation::ProofError> for PresentationError {
+    fn from(err: cloud_wallet_openid4vc::oid4vp::presentation::ProofError) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<base64ct::Error> for PresentationError {
+    fn from(err: base64ct::Error) -> Self {
+        Self::internal_message(format!("failed to decode mdoc base64url: {err}"))
+    }
+}
+
+impl From<ciborium::de::Error<std::io::Error>> for PresentationError {
+    fn from(err: ciborium::de::Error<std::io::Error>) -> Self {
+        Self::internal_message(format!("failed to decode mdoc CBOR: {err}"))
+    }
+}
+
+impl From<serde_json::Error> for PresentationError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<cloud_wallet_openid4vc::formats::sd_jwt::Error> for PresentationError {
+    fn from(err: cloud_wallet_openid4vc::formats::sd_jwt::Error) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<cloud_wallet_openid4vc::formats::mdoc::MdocError> for PresentationError {
+    fn from(err: cloud_wallet_openid4vc::formats::mdoc::MdocError) -> Self {
+        Self::internal(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cloud_wallet_openid4vc::oauth::authorization::OAuthAuthorizationRequest;
+    use cloud_wallet_openid4vc::oid4vp::authorization::{
+        AuthorizationRequest, ResponseMode, ResponseType,
+    };
+    use cloud_wallet_openid4vc::oid4vp::client::PresentationContext;
+    use cloud_wallet_openid4vc::oid4vp::client_id::ParsedClientId;
+    use cloud_wallet_openid4vc::oid4vp::dcql::{
+        CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
+    };
+
+    use super::*;
+
+    fn presentation_context(require_holder_binding: Option<bool>) -> PresentationContext {
+        let dcql_query = DcqlQuery {
+            credentials: vec![CredentialQuery {
+                id: "pid".to_string(),
+                format: CredentialFormat::DcSdJwt,
+                multiple: None,
+                meta: CredentialMeta::SdJwt {
+                    vct_values: vec!["https://example.com/vct".to_string()],
+                },
+                claims: None,
+                claim_sets: None,
+                trusted_authorities: None,
+                require_cryptographic_holder_binding: require_holder_binding,
+            }],
+            credential_sets: None,
+        };
+        let client_id = ParsedClientId::parse("redirect_uri:https://verifier.example.com").unwrap();
+        let response_uri = url::Url::parse("https://verifier.example.com/response").unwrap();
+
+        PresentationContext {
+            request: AuthorizationRequest {
+                response_type: ResponseType::VpToken,
+                nonce: "test-nonce".to_string(),
+                response_mode: ResponseMode::DirectPost,
+                oauth: OAuthAuthorizationRequest {
+                    client_id: client_id.value().to_string(),
+                    redirect_uri: None,
+                    scope: None,
+                    state: None,
+                    nonce: None,
+                    code_challenge: None,
+                    code_challenge_method: None,
+                },
+                response_uri: Some(response_uri.clone()),
+                request_uri: None,
+                request_uri_method: None,
+                dcql_query: Some(dcql_query.clone()),
+                client_metadata: None,
+                client_metadata_uri: None,
+                request: None,
+                transaction_data: None,
+                verifier_info: None,
+                expected_origins: None,
+            },
+            verifier_metadata: None,
+            client_id,
+            nonce: "test-nonce".to_string(),
+            state: None,
+            response_uri: Some(response_uri),
+            response_mode: ResponseMode::DirectPost,
+            dcql_query,
+            transaction_data: vec![],
+        }
+    }
+
+    #[test]
+    fn holder_binding_defaults_to_required_when_query_omits_flag() {
+        let ctx = presentation_context(None);
+
+        assert!(requires_holder_binding(&ctx, "pid").unwrap());
+    }
+
+    #[test]
+    fn holder_binding_honors_explicit_false() {
+        let ctx = presentation_context(Some(false));
+
+        assert!(!requires_holder_binding(&ctx, "pid").unwrap());
+    }
+
+    #[test]
+    fn holder_binding_rejects_unknown_query_id() {
+        let ctx = presentation_context(None);
+        let err = requires_holder_binding(&ctx, "missing").unwrap_err();
+
+        assert_eq!(err.error, PresentationErrorCode::InvalidRequest);
+        assert_eq!(
+            err.error_description.as_deref(),
+            Some("credential query missing does not exist in the DCQL request")
+        );
     }
 }

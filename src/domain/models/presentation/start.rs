@@ -172,7 +172,9 @@ impl StartPresentationResponse {
         let expires_at = (OffsetDateTime::now_utc() + SESSION_TTL)
             .format(&Rfc3339)
             .map_err(|e| {
-                PresentationError::internal(format!("failed to format expiration timestamp: {e}"))
+                PresentationError::internal_message(format!(
+                    "failed to format expiration timestamp: {e}"
+                ))
             })?;
 
         Ok(Self {

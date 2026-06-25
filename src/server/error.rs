@@ -218,7 +218,7 @@ impl IntoApiError for TxCodeError {
 
 impl IntoApiError for PresentationError {
     fn into_api_error(self) -> ApiError {
-        let status = match &self.code {
+        let status = match &self.error {
             PresentationErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InvalidDcqlQuery => StatusCode::BAD_REQUEST,
             PresentationErrorCode::NoMatchingCredentials => StatusCode::BAD_REQUEST,
@@ -229,7 +229,6 @@ impl IntoApiError for PresentationError {
             PresentationErrorCode::KeyResolutionFailed => StatusCode::BAD_REQUEST,
             PresentationErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
             PresentationErrorCode::InvalidSessionState => StatusCode::CONFLICT,
-            PresentationErrorCode::ConsentRejected => StatusCode::BAD_REQUEST,
             PresentationErrorCode::ResponseDeliveryFailed => StatusCode::BAD_GATEWAY,
             PresentationErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -250,15 +249,15 @@ impl IntoApiError for PresentationError {
         }
 
         // Do not leak internal error details to the client.
-        let error_description = if self.code == PresentationErrorCode::InternalError {
+        let error_description = if self.error == PresentationErrorCode::InternalError {
             None
         } else {
-            self.description
+            self.error_description
         };
 
         ApiError {
             status,
-            error: self.code.to_string().into(),
+            error: self.error.to_string().into(),
             error_description,
         }
     }
