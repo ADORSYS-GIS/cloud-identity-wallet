@@ -205,8 +205,8 @@ impl JwtSigner {
         self.encode_with_header_b64(&header_b64, claims)
     }
 
-    /// Sign `msg`, returning signature bytes.
-    pub(crate) fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
+    /// Sign `msg`, returning signature raw bytes.
+    pub fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
         use ecdsa::Curve;
         match &self.key {
             KeyMaterial::Ecdsa(keypair) => match keypair.curve() {
