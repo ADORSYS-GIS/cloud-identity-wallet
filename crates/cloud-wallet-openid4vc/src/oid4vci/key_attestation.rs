@@ -143,10 +143,26 @@ impl KeyAttestationClaims {
             return Err(KeyAttestationError::IssuedInFuture);
         }
 
+        if self.exp.is_none() {
+            return Err(KeyAttestationError::MissingExpiration);
+        }
+
         if let Some(exp) = self.exp
             && exp < now
         {
             return Err(KeyAttestationError::Expired);
+        }
+
+        if let Some(ref storage) = self.key_storage
+            && storage.is_empty()
+        {
+            return Err(KeyAttestationError::EmptyKeyStorage);
+        }
+
+        if let Some(ref auth) = self.user_authentication
+            && auth.is_empty()
+        {
+            return Err(KeyAttestationError::EmptyUserAuthentication);
         }
 
         Ok(())
@@ -532,11 +548,20 @@ pub enum KeyAttestationError {
     #[error("missing attested key")]
     MissingAttestedKey,
 
+    #[error("missing expiration time (exp is required for JWT proof type)")]
+    MissingExpiration,
+
     #[error("key attestation expired")]
     Expired,
 
     #[error("key attestation issued in the future")]
     IssuedInFuture,
+
+    #[error("key_storage array is empty (must be non-empty when present)")]
+    EmptyKeyStorage,
+
+    #[error("user_authentication array is empty (must be non-empty when present)")]
+    EmptyUserAuthentication,
 
     #[error("insufficient key storage: required {required:?}, provided {provided:?}")]
     InsufficientKeyStorage {
@@ -673,7 +698,8 @@ mod tests {
         let key1 = sample_ec_jwk();
         let key2 = sample_ec_jwk();
 
-        let claims = KeyAttestationClaims::new(vec![key1.clone(), key2.clone()]);
+        let claims = KeyAttestationClaims::new(vec![key1.clone(), key2.clone()])
+            .with_expiration(OffsetDateTime::now_utc().unix_timestamp() + 3600);
         let jwt = create_test_jwt(&claims);
 
         let result = validate_batch_attestation(&jwt, &[key1.clone(), key2]);
@@ -698,7 +724,8 @@ mod tests {
         assert!(requirements.is_required());
 
         let attestation = KeyAttestationJwt::decode_unverified(&create_test_jwt(
-            &KeyAttestationClaims::new(vec![sample_ec_jwk()]),
+            &KeyAttestationClaims::new(vec![sample_ec_jwk()])
+                .with_expiration(OffsetDateTime::now_utc().unix_timestamp() + 3600),
         ))
         .unwrap();
 
@@ -721,7 +748,8 @@ mod tests {
         assert!(!requirements.is_required());
 
         let attestation = KeyAttestationJwt::decode_unverified(&create_test_jwt(
-            &KeyAttestationClaims::new(vec![sample_ec_jwk()]),
+            &KeyAttestationClaims::new(vec![sample_ec_jwk()])
+                .with_expiration(OffsetDateTime::now_utc().unix_timestamp() + 3600),
         ))
         .unwrap();
 
