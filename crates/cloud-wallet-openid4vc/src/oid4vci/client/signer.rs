@@ -14,17 +14,8 @@ pub trait ProofSigner: Send + Sync + 'static {
     /// Sign `claims` with the provided header and return the compact JWT string.
     fn sign(&self, claims: &Claims) -> Result<String>;
 
-    /// Sign `claims` with a key attestation embedded in the proof JWT header.
-    ///
-    /// The attestation JWT is included in the `attestation` header field
-    /// per OID4VCI Appendix D and HAIP §4.5.1.
-    fn sign_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String>;
-
     /// Returns the algorithm used by this signer.
     fn algorithm(&self) -> Algorithm;
-
-    /// Returns the public JWK for holder binding.
-    fn holder_binding_public_jwk(&self) -> Jwk;
 }
 
 /// JOSE header for OpenID4VCI proof JWTs as defined in [OID4VCI Appendix F]
@@ -129,33 +120,31 @@ impl FromStr for Algorithm {
     }
 }
 
-/// [`ProofSigner`] implementation backed by cryptographic key material.
+/// Low-level cryptographic signer that can encode arbitrary JWTs.
+///
+/// Extracted from [`CryptoSigner`] so that wallet-attestation JWT signing
+/// can reuse the same key-material handling without duplicating the
+/// signing/encoding logic.
 #[derive(Debug)]
-pub struct CryptoSigner {
+pub struct JwtSigner {
     key: KeyMaterial,
     algorithm: Algorithm,
-    header_b64: String,
-    holder_binding_public_jwk: Jwk,
+    public_jwk: Jwk,
 }
 
-#[derive(Debug)]
-enum KeyMaterial {
-    Ecdsa(ecdsa::KeyPair),
-    Ed25519(ed25519::KeyPair),
-    Rsa(rsa::KeyPair),
-}
-
-impl CryptoSigner {
+impl JwtSigner {
     /// Creates a signer from an ECDSA private key in PKCS#8 format.
     pub fn from_ecdsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Ecdsa(ecdsa::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
-        let (header_b64, holder_binding_public_jwk) = build_header_b64(algorithm, &key)?;
+        let public_jwk = match &key {
+            KeyMaterial::Ecdsa(k) => Jwk::try_from(k)?,
+            _ => unreachable!(),
+        };
         Ok(Self {
             key,
             algorithm,
-            header_b64,
-            holder_binding_public_jwk,
+            public_jwk,
         })
     }
 
@@ -163,99 +152,55 @@ impl CryptoSigner {
     pub fn from_ed25519_der(der: impl AsRef<[u8]>) -> Result<Self> {
         let key = KeyMaterial::Ed25519(ed25519::KeyPair::from_pkcs8_der(der.as_ref())?);
         let algorithm = key.algorithm();
-        let (header_b64, holder_binding_public_jwk) = build_header_b64(algorithm, &key)?;
+        let public_jwk = match &key {
+            KeyMaterial::Ed25519(k) => Jwk::try_from(k)?,
+            _ => unreachable!(),
+        };
         Ok(Self {
             key,
             algorithm,
-            header_b64,
-            holder_binding_public_jwk,
+            public_jwk,
         })
     }
 
     /// Creates a signer from an RSA private key in PKCS#8 format.
+    ///
+    /// Only 2048, 3072, 4096, and 8192-bit RSA keys are supported.
     pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
-        let key = KeyMaterial::Rsa(rsa::KeyPair::from_pkcs8_der(der.as_ref())?);
+        let rsa_keypair = rsa::KeyPair::from_pkcs8_der(der.as_ref())?;
+        // Validate RSA key size is supported
+        let modulus_len = rsa_keypair.modulus_len();
+        if !matches!(modulus_len, 256 | 384 | 512 | 1024) {
+            return Err(ClientError::configuration(format!(
+                "unsupported RSA key size: {} bits (expected 2048, 3072, 4096, or 8192)",
+                modulus_len * 8
+            )));
+        }
+        let key = KeyMaterial::Rsa(rsa_keypair);
         let algorithm = key.algorithm();
-        let (header_b64, holder_binding_public_jwk) = build_header_b64(algorithm, &key)?;
+        let public_jwk = match &key {
+            KeyMaterial::Rsa(k) => Jwk::try_from(k)?,
+            _ => unreachable!(),
+        };
         Ok(Self {
             key,
             algorithm,
-            header_b64,
-            holder_binding_public_jwk,
+            public_jwk,
         })
     }
 
-    /// Returns the holder's public JWK embedded in the proof JWT header.
-    ///
-    /// Use this to obtain the holder binding key for mdoc device-key binding
-    /// verification via `verify_device_key_binding`.
-    pub fn holder_binding_public_jwk(&self) -> &Jwk {
-        &self.holder_binding_public_jwk
+    /// Returns the JWS algorithm.
+    pub fn algorithm(&self) -> Algorithm {
+        self.algorithm
     }
 
-    /// Encode to a JWT with the given claims.
-    fn encode(&self, claims: &Claims) -> Result<String> {
-        let header_len = self.header_b64.len();
-
-        let payload_b64 = base64_encode_type(claims)?;
-        let payload_len = payload_b64.len();
-
-        let mut signing_input = Vec::with_capacity(header_len + 1 + payload_len);
-        signing_input.extend_from_slice(self.header_b64.as_bytes());
-        signing_input.push(b'.');
-        signing_input.extend_from_slice(payload_b64.as_bytes());
-
-        let signature = self.sign_bytes(&signing_input)?;
-        let sig_b64 = b64_encode(signature);
-
-        let jwt_len = header_len + 1 + payload_len + 1 + sig_b64.len();
-        let mut jwt = String::with_capacity(jwt_len);
-        jwt.push_str(&self.header_b64);
-        jwt.push('.');
-        jwt.push_str(&payload_b64);
-        jwt.push('.');
-        jwt.push_str(&sig_b64);
-        Ok(jwt)
-    }
-
-    /// Encode to a JWT with a key attestation embedded in the header.
-    ///
-    /// The attestation JWT is included in the `attestation` header field
-    /// per OID4VCI Appendix D and HAIP §4.5.1.
-    fn encode_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String> {
-        let header = Header {
-            alg: self.algorithm,
-            typ: OPENID4VCI_PROOF_JWT_TYP,
-            kid: None,
-            jwk: Some(self.holder_binding_public_jwk.clone()),
-            x5c: None,
-            attestation: Some(attestation_jwt.to_string()),
-            trust_chain: None,
-        };
-        let header_b64 = base64_encode_type(&header)?;
-
-        let payload_b64 = base64_encode_type(claims)?;
-
-        let mut signing_input = Vec::with_capacity(header_b64.len() + 1 + payload_b64.len());
-        signing_input.extend_from_slice(header_b64.as_bytes());
-        signing_input.push(b'.');
-        signing_input.extend_from_slice(payload_b64.as_bytes());
-
-        let signature = self.sign_bytes(&signing_input)?;
-        let sig_b64 = b64_encode(signature);
-
-        let mut jwt =
-            String::with_capacity(header_b64.len() + 1 + payload_b64.len() + 1 + sig_b64.len());
-        jwt.push_str(&header_b64);
-        jwt.push('.');
-        jwt.push_str(&payload_b64);
-        jwt.push('.');
-        jwt.push_str(&sig_b64);
-        Ok(jwt)
+    /// Returns the public JWK derived from the private key material.
+    pub fn public_jwk(&self) -> &Jwk {
+        &self.public_jwk
     }
 
     /// Sign `msg`, returning signature bytes.
-    fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>> {
         use ecdsa::Curve;
         match &self.key {
             KeyMaterial::Ecdsa(keypair) => match keypair.curve() {
@@ -270,31 +215,43 @@ impl CryptoSigner {
                 let sig = match sig_len {
                     256 => keypair.sign_pss_sha256(msg, &mut sig)?,
                     384 => keypair.sign_pss_sha384(msg, &mut sig)?,
-                    512 => keypair.sign_pss_sha512(msg, &mut sig)?,
-                    _ => keypair.sign_pss_sha256(msg, &mut sig)?,
+                    512 | 1024 => keypair.sign_pss_sha512(msg, &mut sig)?,
+                    _ => unreachable!("RSA key size validated at construction"),
                 };
                 Ok(sig.to_vec())
             }
         }
     }
+
+    /// Encode the given `header` + `claims` into a compact JWT signed with this key.
+    pub(crate) fn encode<H: Serialize, C: Serialize>(
+        &self,
+        header: &H,
+        claims: &C,
+    ) -> Result<String> {
+        let header_b64 = base64_encode_type(header)?;
+        let payload_b64 = base64_encode_type(claims)?;
+        let mut signing_input = Vec::with_capacity(header_b64.len() + 1 + payload_b64.len());
+        signing_input.extend_from_slice(header_b64.as_bytes());
+        signing_input.push(b'.');
+        signing_input.extend_from_slice(payload_b64.as_bytes());
+        let signature = self.sign_bytes(&signing_input)?;
+        let sig_b64 = b64_encode(signature);
+        let mut jwt = String::with_capacity(signing_input.len() + 1 + sig_b64.len());
+        jwt.push_str(&header_b64);
+        jwt.push('.');
+        jwt.push_str(&payload_b64);
+        jwt.push('.');
+        jwt.push_str(&sig_b64);
+        Ok(jwt)
+    }
 }
 
-impl ProofSigner for CryptoSigner {
-    fn sign(&self, claims: &Claims) -> Result<String> {
-        self.encode(claims)
-    }
-
-    fn sign_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String> {
-        self.encode_with_attestation(claims, attestation_jwt)
-    }
-
-    fn algorithm(&self) -> Algorithm {
-        self.algorithm
-    }
-
-    fn holder_binding_public_jwk(&self) -> Jwk {
-        self.holder_binding_public_jwk.clone()
-    }
+#[derive(Debug)]
+enum KeyMaterial {
+    Ecdsa(ecdsa::KeyPair),
+    Ed25519(ed25519::KeyPair),
+    Rsa(rsa::KeyPair),
 }
 
 impl KeyMaterial {
@@ -310,10 +267,97 @@ impl KeyMaterial {
             KeyMaterial::Rsa(key) => match key.modulus_len() {
                 256 => Algorithm::PS256,
                 384 => Algorithm::PS384,
-                512 => Algorithm::PS512,
-                _ => Algorithm::PS256,
+                512 | 1024 => Algorithm::PS512,
+                _ => unreachable!("RSA key size validated at construction"),
             },
         }
+    }
+}
+
+/// [`ProofSigner`] implementation backed by cryptographic key material.
+#[derive(Debug)]
+pub struct CryptoSigner {
+    signer: JwtSigner,
+    header_b64: String,
+    holder_binding_public_jwk: Jwk,
+}
+
+impl CryptoSigner {
+    /// Creates a signer from an ECDSA private key in PKCS#8 format.
+    pub fn from_ecdsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
+        let signer = JwtSigner::from_ecdsa_der(der)?;
+        let (header_b64, holder_binding_public_jwk) =
+            build_proof_header_b64(signer.algorithm(), signer.public_jwk())?;
+        Ok(Self {
+            signer,
+            header_b64,
+            holder_binding_public_jwk,
+        })
+    }
+
+    /// Creates a signer from an Ed25519 private key in PKCS#8 format.
+    pub fn from_ed25519_der(der: impl AsRef<[u8]>) -> Result<Self> {
+        let signer = JwtSigner::from_ed25519_der(der)?;
+        let (header_b64, holder_binding_public_jwk) =
+            build_proof_header_b64(signer.algorithm(), signer.public_jwk())?;
+        Ok(Self {
+            signer,
+            header_b64,
+            holder_binding_public_jwk,
+        })
+    }
+
+    /// Creates a signer from an RSA private key in PKCS#8 format.
+    pub fn from_rsa_der(der: impl AsRef<[u8]>) -> Result<Self> {
+        let signer = JwtSigner::from_rsa_der(der)?;
+        let (header_b64, holder_binding_public_jwk) =
+            build_proof_header_b64(signer.algorithm(), signer.public_jwk())?;
+        Ok(Self {
+            signer,
+            header_b64,
+            holder_binding_public_jwk,
+        })
+    }
+
+    /// Returns the holder's public JWK embedded in the proof JWT header.
+    ///
+    /// Use this to obtain the holder binding key for mdoc device-key binding
+    /// verification via `verify_device_key_binding`.
+    pub fn holder_binding_public_jwk(&self) -> &Jwk {
+        &self.holder_binding_public_jwk
+    }
+
+    /// Encode to a JWT with the given claims.
+    fn encode(&self, claims: &Claims) -> Result<String> {
+        let payload_b64 = base64_encode_type(claims)?;
+        let payload_len = payload_b64.len();
+        let header_len = self.header_b64.len();
+
+        let mut signing_input = Vec::with_capacity(header_len + 1 + payload_len);
+        signing_input.extend_from_slice(self.header_b64.as_bytes());
+        signing_input.push(b'.');
+        signing_input.extend_from_slice(payload_b64.as_bytes());
+
+        let signature = self.signer.sign_bytes(&signing_input)?;
+        let sig_b64 = b64_encode(signature);
+
+        let mut jwt = String::with_capacity(signing_input.len() + 1 + sig_b64.len());
+        jwt.push_str(&self.header_b64);
+        jwt.push('.');
+        jwt.push_str(&payload_b64);
+        jwt.push('.');
+        jwt.push_str(&sig_b64);
+        Ok(jwt)
+    }
+}
+
+impl ProofSigner for CryptoSigner {
+    fn sign(&self, claims: &Claims) -> Result<String> {
+        self.encode(claims)
+    }
+
+    fn algorithm(&self) -> Algorithm {
+        self.signer.algorithm()
     }
 }
 
@@ -321,14 +365,7 @@ impl KeyMaterial {
 ///
 /// The JWK is constructed once here so it can be stored on [`CryptoSigner`]
 /// and later retrieved via [`CryptoSigner::holder_binding_public_jwk`] without re-deriving it.
-fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<(String, Jwk)> {
-    // Build minimal JWK from key material
-    let jwk = match key {
-        KeyMaterial::Ecdsa(keypair) => Jwk::try_from(keypair)?,
-        KeyMaterial::Ed25519(keypair) => Jwk::try_from(keypair)?,
-        KeyMaterial::Rsa(keypair) => Jwk::try_from(keypair)?,
-    };
-
+fn build_proof_header_b64(alg: Algorithm, jwk: &Jwk) -> Result<(String, Jwk)> {
     let header = Header {
         alg,
         typ: OPENID4VCI_PROOF_JWT_TYP,
@@ -339,7 +376,7 @@ fn build_header_b64(alg: Algorithm, key: &KeyMaterial) -> Result<(String, Jwk)> 
         trust_chain: None,
     };
     let encoded = base64_encode_type(&header)?;
-    Ok((encoded, jwk))
+    Ok((encoded, jwk.clone()))
 }
 
 fn base64_encode_type<T: Serialize>(value: &T) -> Result<String> {
@@ -459,58 +496,5 @@ mod tests {
         assert_eq!(decoded_claims.aud, claims.aud);
         assert_eq!(decoded_claims.iss, claims.iss);
         assert_eq!(decoded_claims.nonce, claims.nonce);
-    }
-
-    fn decode_and_validate_jwt_with_attestation(token: &str) -> (Claims, Option<String>) {
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3);
-
-        let header_bytes = URL_SAFE_NO_PAD.decode(parts[0]).unwrap();
-        let header_value: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
-        let attestation = header_value
-            .get("attestation")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let jwt_header = jsonwebtoken::decode_header(token).unwrap();
-        let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&jwt_header.jwk.unwrap()).unwrap();
-        let mut validation = jsonwebtoken::Validation::new(jwt_header.alg);
-        validation.set_audience(&["https://issuer.example.com"]);
-        validation.set_required_spec_claims(&["iat", "iss", "aud"]);
-        let token_data = jsonwebtoken::decode::<Claims>(token, &decoding_key, &validation).unwrap();
-        (token_data.claims, attestation)
-    }
-
-    #[test]
-    fn test_sign_with_attestation() {
-        let der = get_ecdsa_p256_der();
-        let signer = CryptoSigner::from_ecdsa_der(&der).unwrap();
-
-        let claims = sample_claims();
-        let attestation_jwt = "eyJ0eXAiOiJrZXktYXR0ZXN0YXRpb24rand0IiwiYWxnIjoiRVMyNTYifQ.eyJhdHRlc3RlZF9rZXlzIjpbeyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6InRlc3QifV19.signature";
-        let jwt = signer
-            .sign_with_attestation(&claims, attestation_jwt)
-            .expect("failed to sign with attestation");
-
-        let (decoded_claims, decoded_attestation) = decode_and_validate_jwt_with_attestation(&jwt);
-        assert_eq!(decoded_claims.aud, claims.aud);
-        assert_eq!(decoded_claims.iss, claims.iss);
-        assert_eq!(decoded_claims.nonce, claims.nonce);
-        assert!(decoded_attestation.is_some());
-        assert_eq!(decoded_attestation.unwrap(), attestation_jwt);
-    }
-
-    #[test]
-    fn test_sign_without_attestation() {
-        let der = get_ecdsa_p256_der();
-        let signer = CryptoSigner::from_ecdsa_der(&der).unwrap();
-
-        let claims = sample_claims();
-        let jwt = signer.sign(&claims).expect("failed to sign");
-
-        let (decoded_claims, decoded_attestation) = decode_and_validate_jwt_with_attestation(&jwt);
-        assert_eq!(decoded_claims.aud, claims.aud);
-        assert_eq!(decoded_claims.iss, claims.iss);
-        assert!(decoded_attestation.is_none());
     }
 }

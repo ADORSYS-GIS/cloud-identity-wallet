@@ -12,11 +12,12 @@ pub use error::ClientError;
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 pub use signer::{
-    Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
+    Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, JwtSigner, ProofSigner,
 };
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use reqwest::header::CONTENT_TYPE;
+use std::sync::Arc;
 use url::Url;
 
 use crate::core::client::OidClient;
@@ -44,6 +45,7 @@ use crate::oid4vci::proofs::Proofs;
 use crate::oid4vci::token::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest, TokenResponse,
 };
+use crate::oid4vci::wallet_attestation::WalletAttestationSigner;
 use crate::utils::QueryParams;
 use crate::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier};
 
@@ -163,6 +165,7 @@ impl AuthorizationCallback {
 #[derive(Debug, Clone)]
 pub struct Oid4vciClient {
     inner_client: OidClient,
+    wallet_attestation: Option<Arc<WalletAttestationSigner>>,
 }
 
 impl Oid4vciClient {
@@ -170,12 +173,53 @@ impl Oid4vciClient {
     pub fn new(client: OidClient) -> Self {
         Self {
             inner_client: client,
+            wallet_attestation: None,
         }
     }
 
     /// Returns the underlying HTTP client used for OID4VCI requests.
     pub fn http_client(&self) -> &ClientWithMiddleware {
         self.inner_client.http_client()
+    }
+
+    /// Configure wallet attestation for client authentication at PAR and Token endpoints.
+    pub fn with_wallet_attestation(mut self, signer: WalletAttestationSigner) -> Self {
+        self.wallet_attestation = Some(Arc::new(signer));
+        self
+    }
+
+    /// Returns the `client_id` from the base configuration.
+    fn base_client_id(&self) -> &str {
+        &self.inner_client.config().client_id
+    }
+
+    /// Returns the effective `client_id` for PAR and Token endpoints.
+    ///
+    /// When wallet attestation is configured, this is the `sub` claim from the
+    /// attestation JWT per HAIP §4.4.1. Otherwise, it falls back to the base
+    /// `client_id` from the configuration.
+    fn attestation_client_id(&self) -> &str {
+        self.wallet_attestation
+            .as_ref()
+            .map(|s| s.client_id())
+            .unwrap_or(self.base_client_id())
+    }
+
+    /// Applies wallet attestation headers to the request builder if configured.
+    fn apply_wallet_attestation(
+        &self,
+        req: reqwest_middleware::RequestBuilder,
+        endpoint: &str,
+    ) -> Result<reqwest_middleware::RequestBuilder> {
+        let mut req = req;
+        if let Some(signer) = self.wallet_attestation.as_ref() {
+            signer.validate_attestation()?;
+            let pop = signer.pop_jwt(endpoint, None)?;
+            req = req
+                .header("OAuth-Client-Attestation", signer.attestation_jwt())
+                .header("OAuth-Client-Attestation-PoP", pop);
+        }
+        Ok(req)
     }
 
     /// Resolve a raw credential offer string into a typed `CredentialOffer`.
@@ -363,11 +407,13 @@ impl Oid4vciClient {
         let pkce_verifier = generate_pkce_verifier();
         let code_challenge = derive_pkce_challenge(&pkce_verifier);
 
-        // Build the authorization request
+        // Build the authorization request using the base client_id.
+        // The attestation sub is only substituted at the PAR/Token endpoints
+        // per HAIP §4.4.1.
         let authz_request = AuthorizationRequest {
             response_type: OAUTH_RESPONSE_TYPE.into(),
             oauth: OAuthAuthorizationRequest {
-                client_id: self.inner_client.config().client_id.clone(),
+                client_id: self.base_client_id().to_owned(),
                 redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
                 state: Some(state.into()),
                 scope: None,
@@ -387,11 +433,7 @@ impl Oid4vciClient {
         {
             // PAR is advertised, use it.
             let par_response = self.send_par(context, &authz_request).await?;
-            build_par_redirect_url(
-                authz_endpoint,
-                &self.inner_client.config().client_id,
-                par_response,
-            )?
+            build_par_redirect_url(authz_endpoint, self.attestation_client_id(), par_response)?
         } else {
             build_plain_authz_url(authz_endpoint, authz_request)?
         };
@@ -525,7 +567,7 @@ impl Oid4vciClient {
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
             code: code.into(),
             redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
-            client_id: self.inner_client.config().client_id.clone(),
+            client_id: self.attestation_client_id().to_owned(),
             code_verifier: Some(pkce_verifier.into()),
             authorization_details: Some(authz_details),
         });
@@ -568,7 +610,7 @@ impl Oid4vciClient {
         let client_id = if context.as_metadata.allows_anonymous_pre_authorized_grant() {
             None
         } else {
-            Some(self.inner_client.config().client_id.clone())
+            Some(self.attestation_client_id().to_owned())
         };
 
         // Include authorization_details so the AS can return credential_identifiers
@@ -1025,14 +1067,24 @@ impl Oid4vciClient {
             .as_ref()
             .ok_or_else(|| ClientError::configuration("PAR endpoint not available"))?;
 
+        // Override client_id to attestation sub when wallet attestation is configured
+        let mut request = request.clone();
+        if let Some(ref signer) = self.wallet_attestation {
+            request.oauth.client_id = signer.client_id().to_owned();
+        }
+
         let body = serde_urlencoded::to_string(request)
             .map_err(|e| ClientError::internal(format!("Failed to serialize PAR request: {e}")))?;
 
-        let response = self
+        let req = self
             .inner_client
             .http_client()
             .post(par_endpoint.as_str())
-            .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
+            .header(CONTENT_TYPE, FORM_ENCODED_HEADER);
+
+        let req = self.apply_wallet_attestation(req, par_endpoint.as_str())?;
+
+        let response = req
             .body(body)
             .send()
             .await
@@ -1138,6 +1190,8 @@ impl Oid4vciClient {
             .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
             .body(body);
 
+        http_request = self.apply_wallet_attestation(http_request, token_endpoint.as_str())?;
+
         if let Some(proof) = dpop_proof {
             http_request = http_request.header(DPOP_HEADER_NAME, proof);
         }
@@ -1240,7 +1294,7 @@ impl Oid4vciClient {
         let client_id = if is_anonymous {
             None
         } else {
-            Some(self.inner_client.config().client_id.to_owned())
+            Some(self.attestation_client_id().to_owned())
         };
 
         let claims = ProofClaims {
