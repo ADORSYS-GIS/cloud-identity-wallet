@@ -1,12 +1,12 @@
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
-use cloud_wallet_openid4vc::formats::mdoc::StaticTrustStore;
+use cloud_wallet_openid4vc::formats::mdoc::{RevocationPolicy, StaticTrustStore};
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
-use cloud_wallet_openid4vc::oid4vp::client::Oid4vpClient;
+use cloud_wallet_openid4vc::oid4vp::client::{Oid4vpClient, Oid4vpConfig};
 
 use crate::config::Config;
 use crate::domain::models::issuance::IssuanceEngine;
 use crate::domain::models::presentation::PresentationEngine;
-use crate::domain::ports::TenantRepo;
+use crate::domain::ports::{CredentialRepo, TenantRepo};
 use crate::domain::service::Service;
 use crate::outbound::{
     MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
@@ -50,6 +50,15 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         );
     }
 
+    // Use revocation policy from config, defaulting to SoftFail if not specified.
+    let revocation_policy = config.oid4vci.revocation_policy;
+    if revocation_policy != RevocationPolicy::default() {
+        tracing::info!(
+            policy = ?revocation_policy,
+            "using non-default revocation policy from configuration"
+        );
+    }
+
     let engine = IssuanceEngine::new(
         client,
         task_queue,
@@ -60,18 +69,15 @@ pub fn build_issuance_engine<S: SessionStore + Clone>(
         session_store,
         preferred_display_locales,
     )
-    .with_iaca_trust_store(StaticTrustStore::new(iaca_roots));
+    .with_iaca_trust_store(StaticTrustStore::new(iaca_roots))
+    .with_revocation_policy(revocation_policy);
     Ok(engine)
 }
 
 /// Constructs a [`PresentationEngine`] from configuration.
-///
-/// Reuses the same IACA trust anchors for X.509-based verifier key resolution.
-/// The HTTP client is constructed via [`OidClient`] to share the same TLS
-/// and retry middleware configuration as the issuance flow.
 pub fn build_presentation_engine(
     config: &Config,
-    credential_repo: impl crate::domain::ports::CredentialRepo,
+    credential_repo: impl CredentialRepo,
     tenant_repo: impl TenantRepo,
 ) -> color_eyre::Result<PresentationEngine> {
     // Build an OidClient to get a properly configured ClientWithMiddleware.
@@ -85,7 +91,7 @@ pub fn build_presentation_engine(
 
     let oid_client = OidClient::new(oid_client_config)?;
 
-    let oid4vp_config = cloud_wallet_openid4vc::oid4vp::client::Oid4vpConfig {
+    let oid4vp_config = Oid4vpConfig {
         http_client: oid_client.http_client().clone(),
         discovery_mode: cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode::Static,
         wallet_metadata: None,

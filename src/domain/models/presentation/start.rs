@@ -2,16 +2,14 @@ use std::collections::HashMap;
 
 use cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathElement;
 use cloud_wallet_openid4vc::oid4vp::dcql::{CredentialQuery, CredentialSet};
-use cloud_wallet_openid4vc::oid4vp::selection::CredentialCandidate;
-use cloud_wallet_openid4vc::oid4vp::selection::SelectionResult;
+use cloud_wallet_openid4vc::oid4vp::selection::{CredentialCandidate, SelectionResult};
 use cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
-use super::PresentationError;
+use super::{PresentationError, StoredCredentialView};
 use crate::domain::models::credential::CredentialDisplayMetadata;
-use crate::domain::models::presentation::StoredCredentialView;
 use crate::session::{PresentationFlow, PresentationSession};
 
 const SESSION_TTL: Duration = Duration::minutes(15);
@@ -131,7 +129,9 @@ impl StartPresentationResponse {
         let expires_at = (OffsetDateTime::now_utc() + SESSION_TTL)
             .format(&Rfc3339)
             .map_err(|e| {
-                PresentationError::internal(format!("failed to format expiration timestamp: {e}"))
+                PresentationError::internal_message(format!(
+                    "failed to format expiration timestamp: {e}"
+                ))
             })?;
 
         Ok(Self {
@@ -185,7 +185,7 @@ fn build_candidate_info(
             let display = display_by_id
                 .get(candidate.credential_id.as_str())
                 .ok_or_else(|| {
-                    PresentationError::internal(format!(
+                    PresentationError::internal_message(format!(
                         "missing display metadata for credential {}",
                         candidate.credential_id
                     ))

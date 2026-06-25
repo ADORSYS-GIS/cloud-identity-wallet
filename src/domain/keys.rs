@@ -11,33 +11,23 @@ use cloud_wallet_openid4vc::oid4vci::client::CryptoSigner;
 pub enum TenantKeyError {
     /// The tenant key could not be loaded from the repository.
     #[error("tenant key lookup failed: {0}")]
-    Lookup(#[source] crate::domain::models::tenants::TenantError),
+    Lookup(#[from] crate::domain::models::tenants::TenantError),
 
     /// The key material was loaded but could not be turned into a signer.
     #[error("failed to build cryptographic signer from tenant key: {0}")]
-    Signer(#[source] cloud_wallet_openid4vc::oid4vci::client::ClientError),
+    Signer(#[from] cloud_wallet_openid4vc::oid4vci::client::ClientError),
 
     /// The blocking task building the signer panicked.
     #[error("signer construction panicked: {0}")]
-    Panic(#[source] tokio::task::JoinError),
+    Panic(#[from] tokio::task::JoinError),
 }
 
 /// Loads the tenant key material for `tenant_id` and builds a [`CryptoSigner`].
-///
-/// This helper is shared by all flows that need to sign with a tenant's key,
-/// currently issuance proof JWTs and presentation device signatures / key
-/// binding JWTs.
-///
-/// The heavy key parsing happens on the [`tokio::task::spawn_blocking`] pool to
-/// avoid blocking the async runtime.
 pub async fn tenant_crypto_signer(
     tenant_repo: &dyn TenantRepo,
     tenant_id: Uuid,
 ) -> Result<CryptoSigner, TenantKeyError> {
-    let key = tenant_repo
-        .find_key(tenant_id)
-        .await
-        .map_err(TenantKeyError::Lookup)?;
+    let key = tenant_repo.find_key(tenant_id).await?;
 
     tokio::task::spawn_blocking(move || {
         let der = key.der_bytes.expose();
@@ -47,7 +37,6 @@ pub async fn tenant_crypto_signer(
             SignAlgorithm::Rsa => CryptoSigner::from_rsa_der(der),
         }
     })
-    .await
-    .map_err(TenantKeyError::Panic)?
-    .map_err(TenantKeyError::Signer)
+    .await?
+    .map_err(Into::into)
 }

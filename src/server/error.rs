@@ -218,7 +218,7 @@ impl IntoApiError for TxCodeError {
 
 impl IntoApiError for PresentationError {
     fn into_api_error(self) -> ApiError {
-        let status = match &self.code {
+        let status = match &self.error {
             PresentationErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InvalidDcqlQuery => StatusCode::BAD_REQUEST,
             PresentationErrorCode::NoMatchingCredentials => StatusCode::BAD_REQUEST,
@@ -229,7 +229,10 @@ impl IntoApiError for PresentationError {
             PresentationErrorCode::KeyResolutionFailed => StatusCode::BAD_REQUEST,
             PresentationErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
             PresentationErrorCode::InvalidSessionState => StatusCode::CONFLICT,
-            PresentationErrorCode::ConsentRejected => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::InvalidCredentialSelection => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::TransactionDataNotAcknowledged => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::PresentationBuildFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            PresentationErrorCode::VerifierSubmissionFailed => StatusCode::BAD_GATEWAY,
             PresentationErrorCode::ResponseDeliveryFailed => StatusCode::BAD_GATEWAY,
             PresentationErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -251,8 +254,8 @@ impl IntoApiError for PresentationError {
 
         ApiError {
             status,
-            error: self.code.to_string().into(),
-            error_description: self.description,
+            error: self.error.to_string().into(),
+            error_description: self.error_description,
         }
     }
 }

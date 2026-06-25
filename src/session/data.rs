@@ -99,8 +99,7 @@ pub struct PresentationSession {
     pub tenant_id: Uuid,
     /// Current state of the presentation session.
     pub state: PresentationState,
-    /// The fully validated presentation context produced by
-    /// [`Oid4vpClient::process_authz_request`].
+    /// The fully validated presentation context.
     pub context: PresentationContext,
     /// The DCQL evaluation result: which wallet credentials match which
     /// credential queries, with requested claim paths.
@@ -154,7 +153,7 @@ impl PresentationSession {
     /// Creates a new presentation session in `AwaitingConsent` state.
     ///
     /// The `flow` is derived automatically from the `response_mode` field of
-    /// the presentation context. The context is moved into the session (no clone).
+    /// the presentation context.
     pub fn new(
         tenant_id: Uuid,
         context: PresentationContext,
@@ -238,70 +237,6 @@ mod tests {
         IssuanceSession::new(Uuid::new_v4(), context, flow)
     }
 
-    #[test]
-    fn test_auth_code_flow_transitions() {
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        assert_eq!(session.state, IssuanceState::AwaitingConsent);
-
-        // Valid transitions
-        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
-        transition(&mut session, IssuanceState::Processing).unwrap();
-        transition(&mut session, IssuanceState::Completed).unwrap();
-
-        // Already terminal
-        assert!(transition(&mut session, IssuanceState::Failed).is_err());
-    }
-
-    #[test]
-    fn test_pre_auth_flow_transitions() {
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        assert_eq!(session.state, IssuanceState::AwaitingConsent);
-
-        // Valid transition to TxCode
-        let mut s1 = session.clone();
-        transition(&mut s1, IssuanceState::AwaitingTxCode).unwrap();
-        transition(&mut s1, IssuanceState::Processing).unwrap();
-
-        // Valid transition directly to Processing
-        let mut s2 = session.clone();
-        transition(&mut s2, IssuanceState::Processing).unwrap();
-
-        // Invalid transition for this flow
-        assert!(transition(&mut session, IssuanceState::AwaitingAuthorization).is_err());
-    }
-
-    #[test]
-    fn test_failed_transitions() {
-        // Any non-terminal can fail
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        transition(&mut session, IssuanceState::Failed).unwrap();
-
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
-        transition(&mut session, IssuanceState::Failed).unwrap();
-
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        transition(&mut session, IssuanceState::AwaitingTxCode).unwrap();
-        transition(&mut session, IssuanceState::Failed).unwrap();
-
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        transition(&mut session, IssuanceState::Processing).unwrap();
-        transition(&mut session, IssuanceState::Failed).unwrap();
-    }
-
-    #[test]
-    fn test_invalid_flow_transitions() {
-        // AwaitingAuthorization -> Processing is NOT allowed in PreAuthorizedCode flow
-        let mut session = mock_session(FlowType::PreAuthorizedCode);
-        session.state = IssuanceState::AwaitingAuthorization;
-        assert!(transition(&mut session, IssuanceState::Processing).is_err());
-
-        // AwaitingTxCode -> Processing is NOT allowed in AuthorizationCode flow
-        let mut session = mock_session(FlowType::AuthorizationCode);
-        session.state = IssuanceState::AwaitingTxCode;
-        assert!(transition(&mut session, IssuanceState::Processing).is_err());
-    }
-
     fn mock_presentation_context(
         response_mode: ResponseMode,
     ) -> cloud_wallet_openid4vc::oid4vp::client::PresentationContext {
@@ -378,6 +313,70 @@ mod tests {
             selected_credential_query_ids: vec![],
             multiple_allowed_by_query_id: std::collections::HashMap::new(),
         }
+    }
+
+    #[test]
+    fn test_auth_code_flow_transitions() {
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        assert_eq!(session.state, IssuanceState::AwaitingConsent);
+
+        // Valid transitions
+        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
+        transition(&mut session, IssuanceState::Processing).unwrap();
+        transition(&mut session, IssuanceState::Completed).unwrap();
+
+        // Already terminal
+        assert!(transition(&mut session, IssuanceState::Failed).is_err());
+    }
+
+    #[test]
+    fn test_pre_auth_flow_transitions() {
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        assert_eq!(session.state, IssuanceState::AwaitingConsent);
+
+        // Valid transition to TxCode
+        let mut s1 = session.clone();
+        transition(&mut s1, IssuanceState::AwaitingTxCode).unwrap();
+        transition(&mut s1, IssuanceState::Processing).unwrap();
+
+        // Valid transition directly to Processing
+        let mut s2 = session.clone();
+        transition(&mut s2, IssuanceState::Processing).unwrap();
+
+        // Invalid transition for this flow
+        assert!(transition(&mut session, IssuanceState::AwaitingAuthorization).is_err());
+    }
+
+    #[test]
+    fn test_failed_transitions() {
+        // Any non-terminal can fail
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        transition(&mut session, IssuanceState::Failed).unwrap();
+
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        transition(&mut session, IssuanceState::AwaitingAuthorization).unwrap();
+        transition(&mut session, IssuanceState::Failed).unwrap();
+
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        transition(&mut session, IssuanceState::AwaitingTxCode).unwrap();
+        transition(&mut session, IssuanceState::Failed).unwrap();
+
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        transition(&mut session, IssuanceState::Processing).unwrap();
+        transition(&mut session, IssuanceState::Failed).unwrap();
+    }
+
+    #[test]
+    fn test_invalid_flow_transitions() {
+        // AwaitingAuthorization -> Processing is NOT allowed in PreAuthorizedCode flow
+        let mut session = mock_session(FlowType::PreAuthorizedCode);
+        session.state = IssuanceState::AwaitingAuthorization;
+        assert!(transition(&mut session, IssuanceState::Processing).is_err());
+
+        // AwaitingTxCode -> Processing is NOT allowed in AuthorizationCode flow
+        let mut session = mock_session(FlowType::AuthorizationCode);
+        session.state = IssuanceState::AwaitingTxCode;
+        assert!(transition(&mut session, IssuanceState::Processing).is_err());
     }
 
     #[test]

@@ -12,5 +12,6 @@ pub use issuance::{
     submit_transaction_code,
 };
 pub use presentation::start_presentation;
+pub use presentation::submit_presentation_consent;
 pub use root::home;
 pub use tenant::register_tenant;

@@ -4,15 +4,20 @@ mod signer;
 mod tests;
 
 // Public Re-exports
+pub use crate::oid4vci::dpop::{
+    DpopError, DpopKeyPair, DpopNonceHandler, DpopOptions, DpopProofClaims, build_dpop_proof,
+    compute_ath, decode_dpop_proof_claims, htu_from_url, validate_dpop_proof,
+};
 pub use error::ClientError;
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 pub use signer::{
-    Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, ProofSigner,
+    Algorithm, Claims as ProofClaims, CryptoSigner, Header as ProofHeader, JwtSigner, ProofSigner,
 };
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use reqwest::header::CONTENT_TYPE;
+use std::sync::Arc;
 use url::Url;
 
 use crate::core::client::OidClient;
@@ -40,6 +45,7 @@ use crate::oid4vci::proofs::Proofs;
 use crate::oid4vci::token::{
     AuthorizationCodeRequest, PreAuthorizedCodeRequest, TokenRequest, TokenResponse,
 };
+use crate::oid4vci::wallet_attestation::WalletAttestationSigner;
 use crate::utils::QueryParams;
 use crate::utils::pkce::{derive_pkce_challenge, generate_pkce_verifier};
 
@@ -48,6 +54,10 @@ type Result<T> = std::result::Result<T, ClientError>;
 const OAUTH_RESPONSE_TYPE: &str = "code";
 const FORM_ENCODED_HEADER: &str = "application/x-www-form-urlencoded";
 const JSON_HEADER: &str = "application/json";
+const AUTHORIZATION_HEADER_NAME: &str = "Authorization";
+const DPOP_HEADER_NAME: &str = "DPoP";
+const AUTH_SCHEME_BEARER: &str = "Bearer";
+const AUTH_SCHEME_DPOP: &str = "DPoP";
 
 /// Fully resolved context from a single credential offer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +122,8 @@ pub struct AuthorizationUrlResult {
 pub struct AuthorizationErrorCallback {
     pub error: Oid4vciError<AuthzErrorResponse>,
     pub state: Option<String>,
+    /// The issuer identifier of the Authorization Server (RFC 9207).
+    pub iss: Option<String>,
 }
 
 /// Parsed authorization callback outcome.
@@ -127,6 +139,14 @@ impl AuthorizationCallback {
         match self {
             Self::Success(response) => response.state.as_deref(),
             Self::Error(response) => response.state.as_deref(),
+        }
+    }
+
+    /// Return the callback `iss` value (Authorization Server issuer), when present.
+    pub fn iss(&self) -> Option<&str> {
+        match self {
+            Self::Success(response) => response.iss.as_deref(),
+            Self::Error(response) => response.iss.as_deref(),
         }
     }
 }
@@ -145,6 +165,7 @@ impl AuthorizationCallback {
 #[derive(Debug, Clone)]
 pub struct Oid4vciClient {
     inner_client: OidClient,
+    wallet_attestation: Option<Arc<WalletAttestationSigner>>,
 }
 
 impl Oid4vciClient {
@@ -152,12 +173,53 @@ impl Oid4vciClient {
     pub fn new(client: OidClient) -> Self {
         Self {
             inner_client: client,
+            wallet_attestation: None,
         }
     }
 
     /// Returns the underlying HTTP client used for OID4VCI requests.
     pub fn http_client(&self) -> &ClientWithMiddleware {
         self.inner_client.http_client()
+    }
+
+    /// Configure wallet attestation for client authentication at PAR and Token endpoints.
+    pub fn with_wallet_attestation(mut self, signer: WalletAttestationSigner) -> Self {
+        self.wallet_attestation = Some(Arc::new(signer));
+        self
+    }
+
+    /// Returns the `client_id` from the base configuration.
+    fn base_client_id(&self) -> &str {
+        &self.inner_client.config().client_id
+    }
+
+    /// Returns the effective `client_id` for PAR and Token endpoints.
+    ///
+    /// When wallet attestation is configured, this is the `sub` claim from the
+    /// attestation JWT per HAIP §4.4.1. Otherwise, it falls back to the base
+    /// `client_id` from the configuration.
+    fn attestation_client_id(&self) -> &str {
+        self.wallet_attestation
+            .as_ref()
+            .map(|s| s.client_id())
+            .unwrap_or(self.base_client_id())
+    }
+
+    /// Applies wallet attestation headers to the request builder if configured.
+    fn apply_wallet_attestation(
+        &self,
+        req: reqwest_middleware::RequestBuilder,
+        endpoint: &str,
+    ) -> Result<reqwest_middleware::RequestBuilder> {
+        let mut req = req;
+        if let Some(signer) = self.wallet_attestation.as_ref() {
+            signer.validate_attestation()?;
+            let pop = signer.pop_jwt(endpoint, None)?;
+            req = req
+                .header("OAuth-Client-Attestation", signer.attestation_jwt())
+                .header("OAuth-Client-Attestation-PoP", pop);
+        }
+        Ok(req)
     }
 
     /// Resolve a raw credential offer string into a typed `CredentialOffer`.
@@ -345,11 +407,13 @@ impl Oid4vciClient {
         let pkce_verifier = generate_pkce_verifier();
         let code_challenge = derive_pkce_challenge(&pkce_verifier);
 
-        // Build the authorization request
+        // Build the authorization request using the base client_id.
+        // The attestation sub is only substituted at the PAR/Token endpoints
+        // per HAIP §4.4.1.
         let authz_request = AuthorizationRequest {
             response_type: OAUTH_RESPONSE_TYPE.into(),
             oauth: OAuthAuthorizationRequest {
-                client_id: self.inner_client.config().client_id.clone(),
+                client_id: self.base_client_id().to_owned(),
                 redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
                 state: Some(state.into()),
                 scope: None,
@@ -369,11 +433,7 @@ impl Oid4vciClient {
         {
             // PAR is advertised, use it.
             let par_response = self.send_par(context, &authz_request).await?;
-            build_par_redirect_url(
-                authz_endpoint,
-                &self.inner_client.config().client_id,
-                par_response,
-            )?
+            build_par_redirect_url(authz_endpoint, self.attestation_client_id(), par_response)?
         } else {
             build_plain_authz_url(authz_endpoint, authz_request)?
         };
@@ -385,11 +445,49 @@ impl Oid4vciClient {
     }
 
     /// Parses authorization callback query parameters into success/error result.
-    pub fn parse_authorization_callback(query: &str) -> Result<AuthorizationCallback> {
-        const RECOGNIZED: &[&str] = &["code", "state", "error", "error_description"];
+    ///
+    /// Per RFC 9207, the `iss` parameter identifies the Authorization Server.
+    /// For FAPI2/HAIP compliance, the Wallet MUST validate `iss` against the
+    /// expected issuer from AS metadata on both success and error responses.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The raw query string from the redirect URI.
+    /// * `expected_issuer` - When provided, validates that `iss` matches this issuer.
+    ///   Required for FAPI2/HAIP compliance; pass `None` only for non-HAIP flows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The query cannot be parsed.
+    /// - `iss` is missing when `expected_issuer` is provided (strict mode).
+    /// - `iss` does not match `expected_issuer`.
+    pub fn parse_authorization_callback(
+        query: &str,
+        expected_issuer: Option<&str>,
+    ) -> Result<AuthorizationCallback> {
+        const RECOGNIZED: &[&str] = &["code", "state", "iss", "error", "error_description"];
         let params = QueryParams::parse(query, RECOGNIZED)?;
 
+        // Extract iss parameter for validation on both success and error paths
+        let iss = params.get("iss");
+
         if let Some(error_code) = params.get("error") {
+            // Validate iss on error path too (RFC 9207 / HAIP security requirement)
+            if let Some(expected) = expected_issuer {
+                let iss_value = iss.ok_or_else(|| {
+                    ClientError::validation(
+                        "authorization error response is missing the required 'iss' parameter",
+                    )
+                })?;
+                if iss_value != expected {
+                    return Err(ClientError::validation(format!(
+                        "authorization error response 'iss' mismatch: expected '{}', got '{}'",
+                        expected, iss_value
+                    )));
+                }
+            }
+
             let error = serde_json::from_value(serde_json::Value::String(error_code.to_owned()))
                 .map_err(|e| ClientError::InvalidResponse {
                     message: format!("failed to parse authorization error: {e}").into(),
@@ -401,29 +499,55 @@ impl Oid4vciClient {
             return Ok(AuthorizationCallback::Error(AuthorizationErrorCallback {
                 error,
                 state: params.get("state").map(ToOwned::to_owned),
+                iss: params.get("iss").map(ToOwned::to_owned),
             }));
         }
 
         let response = AuthorizationResponse::from_query(query)?;
+
+        if let Some(expected) = expected_issuer {
+            response.validate_iss(expected).map_err(|e| {
+                ClientError::validation(format!(
+                    "authorization response iss validation failed: {e}"
+                ))
+            })?;
+        }
+
         Ok(AuthorizationCallback::Success(response))
     }
 
     /// Parses authorization callback from redirect URI into success/error result.
+    ///
+    /// This is a convenience wrapper that extracts the query string and delegates
+    /// to [`Self::parse_authorization_callback`]. Does not validate `iss`.
     pub fn parse_authz_callback(&self, redirect_uri: &str) -> Result<AuthorizationCallback> {
         let url = Url::parse(redirect_uri)
             .map_err(|e| ClientError::validation(format!("invalid redirect uri: {e}")))?;
         let query = url.query().unwrap_or_default();
 
-        Self::parse_authorization_callback(query)
+        Self::parse_authorization_callback(query, None)
     }
 
     /// Exchange an authorization code for an access token (authorization code flow).
+    ///
+    /// If `dpop` is provided, a DPoP proof JWT is attached to the token request
+    /// per RFC 9449. **Callers are responsible for managing the key lifecycle**: the
+    /// same `DpopKeyPair` must be reused for all DPoP-bound requests (token + credential)
+    /// tied to a single access token, as required by RFC 9449 §3.1.
+    ///
+    /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`, any `DPoP-Nonce`
+    /// header observed in server responses will be stored for pre-emptive use in
+    /// subsequent requests, reducing round trips per RFC 9449 §7.
+    ///
+    /// If the server responds with a DPoP nonce error (`use_nonce`), this method
+    /// automatically retries once with the nonce from the `DPoP-Nonce` response header.
     pub async fn exchange_authorization_code(
         &self,
         context: &ResolvedOfferContext,
         code: impl Into<String>,
         pkce_verifier: impl Into<String>,
         credential_config_ids: &[String],
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<TokenResponse> {
         // Verify this is an authorization code flow
         if !matches!(context.flow, IssuanceFlow::AuthorizationCode { .. }) {
@@ -443,21 +567,33 @@ impl Oid4vciClient {
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
             code: code.into(),
             redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
-            client_id: self.inner_client.config().client_id.clone(),
+            client_id: self.attestation_client_id().to_owned(),
             code_verifier: Some(pkce_verifier.into()),
             authorization_details: Some(authz_details),
         });
-        self.post_token_request(token_endpoint, &request).await
+        let htu = htu_from_url(token_endpoint)?;
+        let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
+        let dpop_proof = dpop
+            .map(|opts| build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), None))
+            .transpose()?;
+        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop, &htu)
+            .await
     }
 
     /// Exchange a pre-authorized code for an access token.
     /// `tx_code` is included when the issuer requires one (OID4VCI §6.1).
+    ///
+    /// If `dpop` is provided, a DPoP proof JWT is attached to the token request
+    /// per RFC 9449. If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
+    /// server-provided nonces are stored for pre-emptive use on subsequent requests
+    /// per RFC 9449 §7.
     pub async fn exchange_pre_authorized_code(
         &self,
         context: &ResolvedOfferContext,
         pre_authorized_code: impl Into<String>,
         tx_code: Option<impl Into<String>>,
         credential_config_ids: &[String],
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<TokenResponse> {
         // Verify this is a pre-authorized code flow
         if !matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. }) {
@@ -474,7 +610,7 @@ impl Oid4vciClient {
         let client_id = if context.as_metadata.allows_anonymous_pre_authorized_grant() {
             None
         } else {
-            Some(self.inner_client.config().client_id.clone())
+            Some(self.attestation_client_id().to_owned())
         };
 
         // Include authorization_details so the AS can return credential_identifiers
@@ -487,7 +623,13 @@ impl Oid4vciClient {
             tx_code: tx_code.map(|t| t.into()),
             authorization_details: Some(authz_details),
         });
-        self.post_token_request(token_endpoint, &request).await
+        let htu = htu_from_url(token_endpoint)?;
+        let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
+        let dpop_proof = dpop
+            .map(|opts| build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), None))
+            .transpose()?;
+        self.post_token_request(token_endpoint, &request, dpop_proof.as_deref(), dpop, &htu)
+            .await
     }
 
     /// Fetch a fresh `c_nonce` from the issuer's nonce endpoint.
@@ -523,13 +665,21 @@ impl Oid4vciClient {
     ///
     /// Optionally builds the holder-binding proof using `signer`,
     /// submits the credential request.
+    ///
+    /// If `dpop` is provided and the access token was DPoP-bound
+    /// (`token_type=DPoP`), a fresh DPoP proof with `ath` (SHA-256 of
+    /// the access token) is attached to the credential request per RFC 9449.
+    /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
+    /// server-provided nonces are stored for pre-emptive use on subsequent
+    /// requests per RFC 9449 §7.
     pub async fn request_credential<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
-        access_token: &str,
+        token: &TokenResponse,
         credential_identifier: impl Into<String>,
         credential_config_id: &str,
         signer: &S,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<CredentialResponse> {
         let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
@@ -551,7 +701,7 @@ impl Oid4vciClient {
             request = request.with_proofs(p);
         }
 
-        self.post_credential_request(context, access_token, &request)
+        self.post_credential_request(context, token, &request, dpop)
             .await
     }
 
@@ -559,21 +709,26 @@ impl Oid4vciClient {
     ///
     /// The caller is responsible for handling individual failures (e.g. deferred
     /// issuance on some credentials while others succeed).
+    ///
+    /// If `dpop` is provided, DPoP proofs are attached to all credential requests
+    /// per RFC 9449. If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
+    /// server-provided nonces are stored for pre-emptive use on subsequent
+    /// requests per RFC 9449 §7.
     pub async fn request_credentials<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
         signer: &S,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<Vec<CredentialResponse>> {
         let resolved = resolve_credential_ids(token)?;
-        let token = &token.access_token;
         let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
         let mut results = Vec::with_capacity(total);
         let mut futures = FuturesUnordered::new();
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer));
+                futures.push(self.request_credential(context, token, id, config_id, signer, dpop));
             }
         }
 
@@ -584,11 +739,19 @@ impl Oid4vciClient {
     }
 
     /// Polls the deferred credential endpoint for a single transaction id.
+    ///
+    /// If `dpop` is provided and the access token was DPoP-bound
+    /// (`token_type=DPoP`), a fresh DPoP proof with `ath` (SHA-256 of
+    /// the access token) is attached per RFC 9449. If a `DpopNonceHandler`
+    /// is provided via `dpop.nonce_handler`, server-provided nonces are
+    /// stored for pre-emptive use on subsequent requests per RFC 9449 §7.
     pub async fn poll_deferred_credential(
         &self,
         context: &ResolvedOfferContext,
         access_token: &str,
+        token_type: &str,
         transaction_id: impl Into<String>,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<DeferredCredentialResult> {
         let endpoint = context
             .issuer_metadata
@@ -603,28 +766,100 @@ impl Oid4vciClient {
             credential_response_encryption: None,
         };
 
-        let response = self
+        let htu = htu_from_url(endpoint)?;
+        let ath = dpop.map(|_| compute_ath(access_token));
+        let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
+
+        let mut http_request = self
             .inner_client
             .http_client()
             .post(endpoint.as_str())
-            .bearer_auth(access_token)
-            .json(&request)
+            .header(
+                AUTHORIZATION_HEADER_NAME,
+                auth_header(token_type, access_token),
+            )
+            .json(&request);
+
+        if let Some(opts) = dpop {
+            let proof = build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), ath.as_deref())?;
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
+        }
+
+        let response = http_request
             .send()
             .await
             .map_err(|e| ClientError::http("Failed to poll deferred credential", e))?;
 
         if !response.status().is_success() {
-            // Try to parse as deferred credential error
-            let status = response.status();
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
             let body = response.text().await.unwrap_or_default();
 
-            // Check if it's a deferred credential error
+            if DpopNonceHandler::is_use_nonce_error(status, &body)
+                && let (Some(opts), Some(nonce_str)) = (
+                    dpop,
+                    DpopNonceHandler::extract_nonce_from_response(&headers),
+                )
+            {
+                if let Some(handler) = opts.nonce_handler {
+                    handler.store_nonce(&htu, &nonce_str);
+                }
+                let retry_proof =
+                    build_dpop_proof(opts.key, "POST", &htu, Some(&nonce_str), ath.as_deref())?;
+                let retry_response = self
+                    .inner_client
+                    .http_client()
+                    .post(endpoint.as_str())
+                    .header(
+                        AUTHORIZATION_HEADER_NAME,
+                        auth_header(token_type, access_token),
+                    )
+                    .json(&request)
+                    .header(DPOP_HEADER_NAME, retry_proof)
+                    .send()
+                    .await
+                    .map_err(|e| ClientError::http("Deferred credential DPoP retry failed", e))?;
+
+                if !retry_response.status().is_success() {
+                    let retry_status = retry_response.status();
+                    let retry_body = retry_response.text().await.unwrap_or_default();
+                    if let Ok(error) = serde_json::from_str::<
+                        Oid4vciError<DeferredCredentialErrorResponse>,
+                    >(&retry_body)
+                    {
+                        return Err(ClientError::DeferredCredential(error));
+                    }
+                    return Err(ClientError::http_response(
+                        retry_status.as_u16(),
+                        retry_body,
+                    ));
+                }
+
+                if let Some(handler) = opts.nonce_handler {
+                    handler.extract_and_store_nonce(&htu, retry_response.headers());
+                }
+
+                let result = retry_response
+                    .json::<DeferredCredentialResult>()
+                    .await
+                    .map_err(|e| ClientError::InvalidResponse {
+                        message: format!("Failed to parse deferred credential response: {e}")
+                            .into(),
+                    })?;
+                return Ok(result);
+            }
+
+            // Try to parse as deferred credential error
             if let Ok(error) =
                 serde_json::from_str::<Oid4vciError<DeferredCredentialErrorResponse>>(&body)
             {
                 return Err(ClientError::DeferredCredential(error));
             }
-            return Err(ClientError::http_response(status.as_u16(), body));
+            return Err(ClientError::http_response(status, body));
+        }
+
+        if let Some(handler) = dpop.and_then(|opts| opts.nonce_handler) {
+            handler.extract_and_store_nonce(&htu, response.headers());
         }
 
         let result = response
@@ -640,18 +875,38 @@ impl Oid4vciClient {
     ///
     /// Failures should not propagate, the notification endpoint
     /// is optional and its failure must not break the issuance flow.
+    ///
+    /// If `dpop` is provided and the access token was DPoP-bound
+    /// (`token_type=DPoP`), a fresh DPoP proof with `ath` is attached
+    /// per RFC 9449.
     pub async fn send_notification(
         &self,
         notification_endpoint: &Url,
         access_token: &str,
+        token_type: &str,
         req: &NotificationRequest,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<()> {
-        let response = self
+        let htu = htu_from_url(notification_endpoint)?;
+        let ath = dpop.map(|_| compute_ath(access_token));
+        let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
+
+        let mut http_request = self
             .inner_client
             .http_client()
             .post(notification_endpoint.as_str())
-            .bearer_auth(access_token)
-            .json(&req)
+            .header(
+                AUTHORIZATION_HEADER_NAME,
+                auth_header(token_type, access_token),
+            )
+            .json(&req);
+
+        if let Some(opts) = dpop {
+            let proof = build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), ath.as_deref())?;
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
+        }
+
+        let response = http_request
             .send()
             .await
             .map_err(|e| ClientError::http("Failed to send notification", e))?;
@@ -669,6 +924,11 @@ impl Oid4vciClient {
             }
             return Err(ClientError::http_response(status.as_u16(), body));
         }
+
+        if let Some(handler) = dpop.and_then(|opts| opts.nonce_handler) {
+            handler.extract_and_store_nonce(&htu, response.headers());
+        }
+
         Ok(())
     }
 
@@ -734,14 +994,24 @@ impl Oid4vciClient {
             .as_ref()
             .ok_or_else(|| ClientError::configuration("PAR endpoint not available"))?;
 
+        // Override client_id to attestation sub when wallet attestation is configured
+        let mut request = request.clone();
+        if let Some(ref signer) = self.wallet_attestation {
+            request.oauth.client_id = signer.client_id().to_owned();
+        }
+
         let body = serde_urlencoded::to_string(request)
             .map_err(|e| ClientError::internal(format!("Failed to serialize PAR request: {e}")))?;
 
-        let response = self
+        let req = self
             .inner_client
             .http_client()
             .post(par_endpoint.as_str())
-            .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
+            .header(CONTENT_TYPE, FORM_ENCODED_HEADER);
+
+        let req = self.apply_wallet_attestation(req, par_endpoint.as_str())?;
+
+        let response = req
             .body(body)
             .send()
             .await
@@ -772,39 +1042,100 @@ impl Oid4vciClient {
         &self,
         token_endpoint: &Url,
         request: &T,
+        dpop_proof: Option<&str>,
+        dpop: Option<&DpopOptions<'_>>,
+        htu: &str,
     ) -> Result<TokenResponse> {
+        let response = self
+            .send_token_request(token_endpoint, request, dpop_proof)
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
+            let body = response.text().await.unwrap_or_default();
+
+            if DpopNonceHandler::is_use_nonce_error(status, &body)
+                && let (Some(opts), Some(nonce_str)) = (
+                    dpop,
+                    DpopNonceHandler::extract_nonce_from_response(&headers),
+                )
+            {
+                if let Some(handler) = opts.nonce_handler {
+                    handler.store_nonce(htu, &nonce_str);
+                }
+                let retry_proof = build_dpop_proof(opts.key, "POST", htu, Some(&nonce_str), None)?;
+                let retry_response = self
+                    .send_token_request(token_endpoint, request, Some(&retry_proof))
+                    .await?;
+
+                if let Some(handler) = opts.nonce_handler {
+                    handler.extract_and_store_nonce(htu, retry_response.headers());
+                }
+
+                if !retry_response.status().is_success() {
+                    let retry_status = retry_response.status().as_u16();
+                    let retry_body = retry_response.text().await.unwrap_or_default();
+                    if let Ok(error) =
+                        serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&retry_body)
+                    {
+                        return Err(ClientError::Token(error));
+                    }
+                    return Err(ClientError::http_response(retry_status, retry_body));
+                }
+
+                return self.parse_token_response(retry_response).await;
+            }
+
+            if let Ok(error) = serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&body) {
+                return Err(ClientError::Token(error));
+            }
+            return Err(ClientError::http_response(status, body));
+        }
+
+        if let Some(handler) = dpop.and_then(|opts| opts.nonce_handler) {
+            handler.extract_and_store_nonce(htu, response.headers());
+        }
+
+        self.parse_token_response(response).await
+    }
+
+    async fn send_token_request<T: serde::Serialize>(
+        &self,
+        token_endpoint: &Url,
+        request: &T,
+        dpop_proof: Option<&str>,
+    ) -> Result<reqwest::Response> {
         let body = serde_urlencoded::to_string(request).map_err(|e| {
             ClientError::internal(format!("Failed to serialize token request: {e}"))
         })?;
 
-        let response = self
+        let mut http_request = self
             .inner_client
             .http_client()
             .post(token_endpoint.as_str())
             .header(CONTENT_TYPE, FORM_ENCODED_HEADER)
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| ClientError::http("token request failed", e))?;
+            .body(body);
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            // Try to parse as OAuth error response
-            if let Ok(error) = serde_json::from_str::<Oid4vciError<TokenErrorResponse>>(&body) {
-                return Err(ClientError::Token(error));
-            }
-            return Err(ClientError::http_response(status.as_u16(), body));
+        http_request = self.apply_wallet_attestation(http_request, token_endpoint.as_str())?;
+
+        if let Some(proof) = dpop_proof {
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
         }
 
-        // Parse successful response
-        let token_response = response
+        http_request
+            .send()
+            .await
+            .map_err(|e| ClientError::http("token request failed", e))
+    }
+
+    async fn parse_token_response(&self, response: reqwest::Response) -> Result<TokenResponse> {
+        response
             .json()
             .await
             .map_err(|e| ClientError::InvalidResponse {
                 message: format!("failed to parse token response: {e}").into(),
-            })?;
-        Ok(token_response)
+            })
     }
 
     async fn build_proofs<S: ProofSigner>(
@@ -822,7 +1153,7 @@ impl Oid4vciClient {
         let client_id = if is_anonymous {
             None
         } else {
-            Some(self.inner_client.config().client_id.to_owned())
+            Some(self.attestation_client_id().to_owned())
         };
 
         let claims = ProofClaims {
@@ -839,27 +1170,101 @@ impl Oid4vciClient {
     async fn post_credential_request(
         &self,
         context: &ResolvedOfferContext,
-        access_token: &str,
+        token: &TokenResponse,
         request: &CredentialRequest,
+        dpop: Option<&DpopOptions<'_>>,
     ) -> Result<CredentialResponse> {
-        let response = self
+        let access_token = &token.access_token;
+        let token_type = &token.token_type;
+        let credential_endpoint = &context.issuer_metadata.credential_endpoint;
+        let htu = htu_from_url(credential_endpoint)?;
+        let ath = dpop.map(|_| compute_ath(access_token));
+        let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
+
+        let mut http_request = self
             .inner_client
             .http_client()
-            .post(context.issuer_metadata.credential_endpoint.as_str())
-            .bearer_auth(access_token)
-            .json(request)
+            .post(credential_endpoint.as_str())
+            .header(
+                AUTHORIZATION_HEADER_NAME,
+                auth_header(token_type, access_token),
+            )
+            .json(request);
+
+        if let Some(opts) = dpop {
+            let proof = build_dpop_proof(opts.key, "POST", &htu, nonce.as_deref(), ath.as_deref())?;
+            http_request = http_request.header(DPOP_HEADER_NAME, proof);
+        }
+
+        let response = http_request
             .send()
             .await
             .map_err(|e| ClientError::http("credential request failed", e))?;
 
         if !response.status().is_success() {
-            let status = response.status();
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
             let body = response.text().await.unwrap_or_default();
+
+            if DpopNonceHandler::is_use_nonce_error(status, &body)
+                && let (Some(opts), Some(nonce_str)) = (
+                    dpop,
+                    DpopNonceHandler::extract_nonce_from_response(&headers),
+                )
+            {
+                if let Some(handler) = opts.nonce_handler {
+                    handler.store_nonce(&htu, &nonce_str);
+                }
+                let retry_proof =
+                    build_dpop_proof(opts.key, "POST", &htu, Some(&nonce_str), ath.as_deref())?;
+                let retry_response = self
+                    .inner_client
+                    .http_client()
+                    .post(credential_endpoint.as_str())
+                    .header(
+                        AUTHORIZATION_HEADER_NAME,
+                        auth_header(token_type, access_token),
+                    )
+                    .json(request)
+                    .header(DPOP_HEADER_NAME, retry_proof)
+                    .send()
+                    .await
+                    .map_err(|e| ClientError::http("credential request retry failed", e))?;
+                if !retry_response.status().is_success() {
+                    let retry_status = retry_response.status();
+                    let retry_body = retry_response.text().await.unwrap_or_default();
+                    if let Ok(error) =
+                        serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&retry_body)
+                    {
+                        return Err(ClientError::Credential(error));
+                    }
+                    return Err(ClientError::http_response(
+                        retry_status.as_u16(),
+                        retry_body,
+                    ));
+                }
+
+                if let Some(handler) = opts.nonce_handler {
+                    handler.extract_and_store_nonce(&htu, retry_response.headers());
+                }
+
+                return retry_response
+                    .json::<CredentialResponse>()
+                    .await
+                    .map_err(|e| ClientError::InvalidResponse {
+                        message: format!("failed to parse credential response: {e}").into(),
+                    });
+            }
+
             if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body)
             {
                 return Err(ClientError::Credential(error));
             }
-            return Err(ClientError::http_response(status.as_u16(), body));
+            return Err(ClientError::http_response(status, body));
+        }
+
+        if let Some(handler) = dpop.and_then(|opts| opts.nonce_handler) {
+            handler.extract_and_store_nonce(&htu, response.headers());
         }
 
         let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {
@@ -883,6 +1288,17 @@ impl Oid4vciClient {
             return Ok(Some(self.fetch_nonce(endpoint).await?));
         }
         Ok(None)
+    }
+}
+
+/// Build the Authorization header value based on the token type.
+///
+/// Per RFC 9449 §7.1, DPoP-bound tokens use the `DPoP` scheme instead of `Bearer`.
+fn auth_header(token_type: &str, access_token: &str) -> String {
+    if token_type.eq_ignore_ascii_case(AUTH_SCHEME_DPOP) {
+        format!("{AUTH_SCHEME_DPOP} {access_token}")
+    } else {
+        format!("{AUTH_SCHEME_BEARER} {access_token}")
     }
 }
 
