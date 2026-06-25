@@ -5,6 +5,10 @@
 //!   (RFC 5280, ISO 18013-5 §9.1.2).
 //! - Check that a Document Signer Certificate (DSC) carries the mandatory Extended Key
 //!   Usage OID `1.0.18013.5.1.2` (ISO 18013-5 §9.1.2).
+//! - Check that a DSC carries the mandatory `digitalSignature` Key Usage bit, marked
+//!   critical (ISO 18013-5 Annex B Table B.3).
+//! - Check that a DSC's EC public key uses a curve on the ISO 18013-5 Table 22
+//!   permitted list (NIST P-256, P-384, P-521).
 //! - Extract the raw SubjectPublicKeyInfo (SPKI) bytes from a parsed certificate
 //!   so they can be passed to `cloud_wallet_crypto` verifying-key constructors.
 //!
@@ -16,12 +20,23 @@
 //! ASN.1 parsing for every validation step.
 
 use time::OffsetDateTime;
+use x509_parser::der_parser::Oid;
 use x509_parser::prelude::{FromDer as _, ParsedExtension, X509Certificate};
 
 use super::error::{MdocError, Result};
 
 /// The OID required in the DSC Extended Key Usage extension (ISO 18013-5 §9.1.2).
 const DSC_EKU_OID: &str = "1.0.18013.5.1.2";
+
+/// Top-level SPKI algorithm OID for all EC public keys (`id-ecPublicKey`, RFC 5480).
+/// The specific curve is carried in the SPKI algorithm *parameters*, not here.
+const OID_EC_PUBLIC_KEY: &str = "1.2.840.10045.2.1";
+/// NIST P-256 (secp256r1) curve OID — ISO 18013-5 Table 22 permitted curve.
+const OID_CURVE_P256: &str = "1.2.840.10045.3.1.7";
+/// NIST P-384 (secp384r1) curve OID — ISO 18013-5 Table 22 permitted curve.
+const OID_CURVE_P384: &str = "1.3.132.0.34";
+/// NIST P-521 (secp521r1) curve OID — ISO 18013-5 Table 22 permitted curve.
+const OID_CURVE_P521: &str = "1.3.132.0.35";
 
 /// Validates that `chain[0]` (the Document Signer Certificate) chains up to at least
 /// one certificate in `trusted_roots` via standard X.509 path validation.
@@ -168,6 +183,59 @@ pub(super) fn check_dsc_key_usage(dsc: &X509Certificate<'_>) -> Result<()> {
         Some((true, false)) => Err(MdocError::NonCriticalKeyUsage),
         // Bit set and extension is critical — compliant.
         Some((true, true)) => Ok(()),
+    }
+}
+
+/// Rejects a Document Signer Certificate whose EC public key is not on an ISO 18013-5
+/// Table 22 permitted curve (NIST P-256, P-384, or P-521).
+///
+/// Only applies to EC keys (SPKI algorithm OID `id-ecPublicKey`); any other SPKI
+/// algorithm OID passes through unchecked, since "curve" only has meaning for EC keys.
+/// This notably includes Ed25519 and Ed448 — neither carries a `parameters` field to
+/// check here, and neither needs one: Ed25519 is itself a Table 22 permitted algorithm,
+/// and Ed448 rejection is handled separately by the OID guard in `verify_issuer_signature`.
+/// A non-EC, non-EdDSA SPKI (e.g. RSA) is left for `dispatch_verify` to reject when it
+/// fails to construct a verifying key from it.
+///
+/// Closes the gap where a non-permitted EC curve (e.g. secp256k1) that the underlying
+/// ECDSA verification table happens to define for an unrelated hash combination would
+/// otherwise verify successfully under an algorithm identifier that claims a different
+/// curve (e.g. ESP256/-9, which RFC 9864 defines as P-256-specifically). Rejecting the
+/// curve once here, at chain-validation time, closes it for every algorithm at once
+/// rather than requiring a per-algorithm curve check in `dispatch_verify`.
+///
+/// # Errors
+///
+/// - [`MdocError::UnsupportedDscCurve`] — the SPKI is an EC key whose curve is not
+///   P-256, P-384, or P-521, or the curve OID is missing/malformed.
+pub(super) fn check_dsc_curve(dsc: &X509Certificate<'_>) -> Result<()> {
+    let algorithm = &dsc.public_key().algorithm;
+
+    if algorithm.algorithm.to_id_string() != OID_EC_PUBLIC_KEY {
+        // Not an EC key (e.g. Ed25519/Ed448 OKP keys) — no curve to restrict here.
+        return Ok(());
+    }
+
+    let curve_oid = algorithm
+        .parameters
+        .as_ref()
+        .and_then(|params| Oid::try_from(params).ok());
+
+    match curve_oid {
+        Some(oid)
+            if matches!(
+                oid.to_id_string().as_str(),
+                OID_CURVE_P256 | OID_CURVE_P384 | OID_CURVE_P521
+            ) =>
+        {
+            Ok(())
+        }
+        Some(oid) => Err(MdocError::UnsupportedDscCurve {
+            curve: oid.to_id_string(),
+        }),
+        None => Err(MdocError::UnsupportedDscCurve {
+            curve: "missing or malformed EC curve parameters".to_owned(),
+        }),
     }
 }
 

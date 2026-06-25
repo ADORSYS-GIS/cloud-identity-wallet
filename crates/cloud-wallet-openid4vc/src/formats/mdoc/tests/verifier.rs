@@ -560,6 +560,82 @@ fn build_three_cert_chain() -> (
     (iaca_der, int_der, dsc_der, dsc_aws_key)
 }
 
+// ── Hand-rolled minimal DER/ASN.1 builders ──────────────────────────────────────
+//
+// Shared by `build_ed448_dsc_manual` and `build_secp256k1_dsc_manual`: both need to
+// hand-assemble an X.509 certificate carrying a key type that the project's certificate
+// generation library cannot produce (rcgen has no Ed448 or secp256k1 support), in order
+// to exercise rejection paths (Ed448 OID guard, non-Table-22 curve allow-list) that can
+// only be reached with a DSC carrying that exact key type.
+
+fn der_len_bytes(n: usize) -> Vec<u8> {
+    if n < 128 {
+        vec![n as u8]
+    } else if n < 256 {
+        vec![0x81, n as u8]
+    } else {
+        vec![0x82, (n >> 8) as u8, (n & 0xff) as u8]
+    }
+}
+fn der_tlv(tag: u8, body: Vec<u8>) -> Vec<u8> {
+    let mut v = vec![tag];
+    v.extend(der_len_bytes(body.len()));
+    v.extend(body);
+    v
+}
+fn der_seq(body: Vec<u8>) -> Vec<u8> {
+    der_tlv(0x30, body)
+}
+fn der_set(body: Vec<u8>) -> Vec<u8> {
+    der_tlv(0x31, body)
+}
+fn der_ctx_explicit(n: u8, body: Vec<u8>) -> Vec<u8> {
+    der_tlv(0xa0 | n, body)
+}
+fn der_oid(components: &[u64]) -> Vec<u8> {
+    fn base128(mut n: u64) -> Vec<u8> {
+        if n == 0 {
+            return vec![0];
+        }
+        let mut b = Vec::new();
+        while n > 0 {
+            b.push((n & 0x7f) as u8);
+            n >>= 7;
+        }
+        b.reverse();
+        for i in 0..b.len() - 1 {
+            b[i] |= 0x80;
+        }
+        b
+    }
+    let mut bytes = base128(components[0] * 40 + components[1]);
+    for &c in &components[2..] {
+        bytes.extend(base128(c));
+    }
+    der_tlv(0x06, bytes)
+}
+fn der_integer_pos(b: Vec<u8>) -> Vec<u8> {
+    let mut content = b;
+    if content.first().is_some_and(|&x| x & 0x80 != 0) {
+        content.insert(0, 0);
+    }
+    der_tlv(0x02, content)
+}
+fn der_bit_str(data: Vec<u8>) -> Vec<u8> {
+    let mut c = vec![0x00]; // 0 unused bits
+    c.extend(data);
+    der_tlv(0x03, c)
+}
+fn der_octet_str(b: Vec<u8>) -> Vec<u8> {
+    der_tlv(0x04, b)
+}
+fn der_bool_true() -> Vec<u8> {
+    vec![0x01, 0x01, 0xff]
+}
+fn der_utc_time(s: &'static str) -> Vec<u8> {
+    der_tlv(0x17, s.as_bytes().to_vec())
+}
+
 /// Constructs a minimal X.509 certificate with an Ed448 public key (OID `1.3.101.113`)
 /// in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
 ///
@@ -577,78 +653,16 @@ fn build_ed448_dsc_manual(
 ) -> Vec<u8> {
     use x509_parser::prelude::{FromDer as _, X509Certificate};
 
+    use self::{
+        der_bit_str as bit_str, der_bool_true as bool_true, der_ctx_explicit as ctx_explicit,
+        der_integer_pos as integer_pos, der_octet_str as octet_str, der_oid as oid, der_seq as seq,
+        der_set as set, der_tlv as tlv, der_utc_time as utc_time,
+    };
+
     // Extract the IACA subject DER bytes — these become the DSC issuer field.
     let (_, iaca_x509) =
         X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
     let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
-
-    fn len_bytes(n: usize) -> Vec<u8> {
-        if n < 128 {
-            vec![n as u8]
-        } else if n < 256 {
-            vec![0x81, n as u8]
-        } else {
-            vec![0x82, (n >> 8) as u8, (n & 0xff) as u8]
-        }
-    }
-    fn tlv(tag: u8, body: Vec<u8>) -> Vec<u8> {
-        let mut v = vec![tag];
-        v.extend(len_bytes(body.len()));
-        v.extend(body);
-        v
-    }
-    fn seq(body: Vec<u8>) -> Vec<u8> {
-        tlv(0x30, body)
-    }
-    fn set(body: Vec<u8>) -> Vec<u8> {
-        tlv(0x31, body)
-    }
-    fn ctx_explicit(n: u8, body: Vec<u8>) -> Vec<u8> {
-        tlv(0xa0 | n, body)
-    }
-    fn oid(components: &[u64]) -> Vec<u8> {
-        fn base128(mut n: u64) -> Vec<u8> {
-            if n == 0 {
-                return vec![0];
-            }
-            let mut b = Vec::new();
-            while n > 0 {
-                b.push((n & 0x7f) as u8);
-                n >>= 7;
-            }
-            b.reverse();
-            for i in 0..b.len() - 1 {
-                b[i] |= 0x80;
-            }
-            b
-        }
-        let mut bytes = base128(components[0] * 40 + components[1]);
-        for &c in &components[2..] {
-            bytes.extend(base128(c));
-        }
-        tlv(0x06, bytes)
-    }
-    fn integer_pos(b: Vec<u8>) -> Vec<u8> {
-        let mut content = b;
-        if content.first().is_some_and(|&x| x & 0x80 != 0) {
-            content.insert(0, 0);
-        }
-        tlv(0x02, content)
-    }
-    fn bit_str(data: Vec<u8>) -> Vec<u8> {
-        let mut c = vec![0x00]; // 0 unused bits
-        c.extend(data);
-        tlv(0x03, c)
-    }
-    fn octet_str(b: Vec<u8>) -> Vec<u8> {
-        tlv(0x04, b)
-    }
-    fn bool_true() -> Vec<u8> {
-        vec![0x01, 0x01, 0xff]
-    }
-    fn utc_time(s: &'static str) -> Vec<u8> {
-        tlv(0x17, s.as_bytes().to_vec())
-    }
 
     let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
     let serial = integer_pos(vec![0x01]); // serialNumber = 1
@@ -749,6 +763,272 @@ fn build_ed448_dsc_chain() -> (Vec<u8>, Vec<u8>) {
     let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
 
     let dsc_der = build_ed448_dsc_manual(&iaca_der, &iaca_aws_key);
+
+    (iaca_der, dsc_der)
+}
+
+/// Constructs a minimal X.509 certificate with a secp256k1 public key (OID
+/// `1.3.132.0.10`) in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
+///
+/// `rcgen 0.14` does not support secp256k1 key generation, so the certificate is built
+/// from raw DER, mirroring [`build_ed448_dsc_manual`]. Unlike the Ed448 fixture, the
+/// public key here is a real secp256k1 point (`cloud_wallet_crypto` does support
+/// secp256k1 for signing/verification elsewhere) — sufficient to exercise the
+/// `check_dsc_curve` allow-list, which fires on the SPKI curve OID before any
+/// signature is checked.
+fn build_secp256k1_dsc_manual(
+    iaca_cert_der: &[u8],
+    iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+    dsc_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> Vec<u8> {
+    use x509_parser::prelude::{FromDer as _, X509Certificate};
+
+    use self::{
+        der_bit_str as bit_str, der_bool_true as bool_true, der_ctx_explicit as ctx_explicit,
+        der_integer_pos as integer_pos, der_octet_str as octet_str, der_oid as oid, der_seq as seq,
+        der_set as set, der_tlv as tlv, der_utc_time as utc_time,
+    };
+
+    let (_, iaca_x509) =
+        X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
+    let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
+
+    let mut point_buf = [0u8; 65]; // secp256k1 uncompressed point: 0x04 || X(32) || Y(32)
+    let point = dsc_key
+        .public_key()
+        .to_sec1_uncompressed(&mut point_buf)
+        .expect("secp256k1 point encoding must succeed");
+
+    let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
+    let serial = integer_pos(vec![0x02]); // serialNumber = 2 (distinct from Ed448 fixture)
+    let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
+    let validity = seq({
+        let mut b = utc_time("231201000000Z");
+        b.extend(utc_time("241231235959Z"));
+        b
+    });
+    let subject = seq(set(seq({
+        let mut b = oid(&[2, 5, 4, 3]); // id-at-commonName
+        b.extend(tlv(0x0c, b"Secp256k1DSC".to_vec())); // UTF8String
+        b
+    })));
+    let spki = seq({
+        // id-ecPublicKey with secp256k1 named-curve parameters (RFC 5480 §2.1.1).
+        let mut b = seq({
+            let mut alg = oid(&[1, 2, 840, 10045, 2, 1]); // id-ecPublicKey
+            alg.extend(oid(&[1, 3, 132, 0, 10])); // secp256k1
+            alg
+        });
+        b.extend(bit_str(point.to_vec()));
+        b
+    });
+    // extendedKeyUsage (2.5.29.37), critical — ISO 18013-5 EKU
+    let eku_ext = seq({
+        let mut b = oid(&[2, 5, 29, 37]);
+        b.extend(bool_true());
+        b.extend(octet_str(seq(oid(&[1, 0, 18013, 5, 1, 2]))));
+        b
+    });
+    // keyUsage (2.5.29.15), critical, digitalSignature bit set
+    let ku_ext = seq({
+        let mut b = oid(&[2, 5, 29, 15]);
+        b.extend(bool_true());
+        b.extend(octet_str(tlv(0x03, vec![0x07, 0x80]))); // BIT STRING: 7 unused, bit 0
+        b
+    });
+    let extensions = ctx_explicit(
+        3,
+        seq({
+            let mut b = eku_ext;
+            b.extend(ku_ext);
+            b
+        }),
+    );
+    let tbs = seq({
+        let mut b = version;
+        b.extend(serial);
+        b.extend(sig_alg_id.clone());
+        b.extend(issuer_raw);
+        b.extend(validity);
+        b.extend(subject);
+        b.extend(spki);
+        b.extend(extensions);
+        b
+    });
+
+    let mut sig_buf = [0u8; 80];
+    let sig = iaca_key
+        .sign_sha256_asn1(&tbs, &mut sig_buf)
+        .expect("ECDSA-P256 signing of TBSCertificate must succeed");
+
+    seq({
+        let mut b = tbs;
+        b.extend(sig_alg_id);
+        b.extend(bit_str(sig.to_vec()));
+        b
+    })
+}
+
+/// Builds a P-256 IACA root and a minimal secp256k1 DSC signed by that root.
+///
+/// secp256k1 is not on the ISO 18013-5 Table 22 permitted-curve list; this fixture
+/// exercises `check_dsc_curve`'s rejection of it.
+fn build_secp256k1_dsc_chain() -> (Vec<u8>, Vec<u8>) {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa};
+
+    let iaca_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+            .expect("P-256 IACA key generation must succeed");
+
+    let iaca_pkcs8 = iaca_aws_key.to_pkcs8_der();
+    let iaca_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            iaca_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+    )
+    .expect("loading P-256 key into rcgen must succeed");
+
+    let mut iaca_params =
+        CertificateParams::new(vec!["Secp256k1 Test IACA".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_rcgen_key)
+        .expect("IACA self-sign must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+
+    let dsc_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256K1)
+            .expect("secp256k1 DSC key generation must succeed");
+    let dsc_der = build_secp256k1_dsc_manual(&iaca_der, &iaca_aws_key, &dsc_key);
+
+    (iaca_der, dsc_der)
+}
+
+/// Constructs a minimal X.509 certificate whose SPKI declares `id-ecPublicKey` but
+/// encodes the curve as an explicit `SEQUENCE` (PKIX `specifiedCurve` form, RFC 3279
+/// §2.3.5) instead of a named-curve OID, signed by the provided P-256 IACA key.
+///
+/// The `SEQUENCE` here is an empty placeholder, not a spec-compliant `ECParameters`
+/// structure — `check_dsc_curve` only needs to observe that `parameters` is present
+/// but is not an OID to reject it, so the placeholder's *content* is irrelevant to
+/// what this fixture proves. Real `specifiedCurve` SPKIs are vanishingly rare (PKIX
+/// strongly discourages them) but must still be rejected rather than silently
+/// mismatched against `check_dsc_curve`'s OID-only allow-list.
+fn build_explicit_curve_dsc_manual(
+    iaca_cert_der: &[u8],
+    iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> Vec<u8> {
+    use x509_parser::prelude::{FromDer as _, X509Certificate};
+
+    use self::{
+        der_bit_str as bit_str, der_bool_true as bool_true, der_ctx_explicit as ctx_explicit,
+        der_integer_pos as integer_pos, der_octet_str as octet_str, der_oid as oid, der_seq as seq,
+        der_set as set, der_tlv as tlv, der_utc_time as utc_time,
+    };
+
+    let (_, iaca_x509) =
+        X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
+    let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
+
+    let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
+    let serial = integer_pos(vec![0x03]); // serialNumber = 3 (distinct from other fixtures)
+    let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
+    let validity = seq({
+        let mut b = utc_time("231201000000Z");
+        b.extend(utc_time("241231235959Z"));
+        b
+    });
+    let subject = seq(set(seq({
+        let mut b = oid(&[2, 5, 4, 3]); // id-at-commonName
+        b.extend(tlv(0x0c, b"ExplicitCurveDSC".to_vec())); // UTF8String
+        b
+    })));
+    let spki = seq({
+        // id-ecPublicKey with a SEQUENCE (not OID) in place of the named-curve OID —
+        // the PKIX `specifiedCurve` form `check_dsc_curve` must reject as malformed.
+        let mut b = seq({
+            let mut alg = oid(&[1, 2, 840, 10045, 2, 1]); // id-ecPublicKey
+            alg.extend(seq(vec![])); // explicit ECParameters placeholder (non-OID)
+            alg
+        });
+        b.extend(bit_str(vec![0u8; 65])); // point bytes are irrelevant; never reached
+        b
+    });
+    // extendedKeyUsage (2.5.29.37), critical — ISO 18013-5 EKU
+    let eku_ext = seq({
+        let mut b = oid(&[2, 5, 29, 37]);
+        b.extend(bool_true());
+        b.extend(octet_str(seq(oid(&[1, 0, 18013, 5, 1, 2]))));
+        b
+    });
+    // keyUsage (2.5.29.15), critical, digitalSignature bit set
+    let ku_ext = seq({
+        let mut b = oid(&[2, 5, 29, 15]);
+        b.extend(bool_true());
+        b.extend(octet_str(tlv(0x03, vec![0x07, 0x80]))); // BIT STRING: 7 unused, bit 0
+        b
+    });
+    let extensions = ctx_explicit(
+        3,
+        seq({
+            let mut b = eku_ext;
+            b.extend(ku_ext);
+            b
+        }),
+    );
+    let tbs = seq({
+        let mut b = version;
+        b.extend(serial);
+        b.extend(sig_alg_id.clone());
+        b.extend(issuer_raw);
+        b.extend(validity);
+        b.extend(subject);
+        b.extend(spki);
+        b.extend(extensions);
+        b
+    });
+
+    let mut sig_buf = [0u8; 80];
+    let sig = iaca_key
+        .sign_sha256_asn1(&tbs, &mut sig_buf)
+        .expect("ECDSA-P256 signing of TBSCertificate must succeed");
+
+    seq({
+        let mut b = tbs;
+        b.extend(sig_alg_id);
+        b.extend(bit_str(sig.to_vec()));
+        b
+    })
+}
+
+/// Builds a P-256 IACA root and a minimal DSC with an explicit-curve-parameters SPKI
+/// signed by that root.
+fn build_explicit_curve_dsc_chain() -> (Vec<u8>, Vec<u8>) {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa};
+
+    let iaca_aws_key =
+        cloud_wallet_crypto::ecdsa::KeyPair::generate(cloud_wallet_crypto::ecdsa::Curve::P256)
+            .expect("P-256 IACA key generation must succeed");
+
+    let iaca_pkcs8 = iaca_aws_key.to_pkcs8_der();
+    let iaca_rcgen_key = rcgen::KeyPair::from_der_and_sign_algo(
+        &rustls_pki_types::PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(
+            iaca_pkcs8,
+        )),
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+    )
+    .expect("loading P-256 key into rcgen must succeed");
+
+    let mut iaca_params =
+        CertificateParams::new(vec!["Explicit Curve Test IACA".to_string()]).expect("iaca params");
+    iaca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let iaca_cert = iaca_params
+        .self_signed(&iaca_rcgen_key)
+        .expect("IACA self-sign must succeed");
+    let iaca_der: Vec<u8> = iaca_cert.der().to_vec();
+
+    let dsc_der = build_explicit_curve_dsc_manual(&iaca_der, &iaca_aws_key);
 
     (iaca_der, dsc_der)
 }
@@ -893,6 +1173,10 @@ fn parsed_with_device_key(cose_key: Value) -> ParsedMdoc {
 
 // ── Verifier tests ───────────────────────────────────────────────────────────
 
+/// Also the explicit proof that `check_dsc_curve` accepts a P-256 DSC — the ISO
+/// 18013-5 Table 22 curve every other passing test in this file already relies on
+/// implicitly. See `verify_issuer_signature_rejects_secp256k1_curve` for the
+/// corresponding rejection of a non-permitted curve.
 #[tokio::test]
 async fn verify_issuer_signature_accepts_valid_chain() {
     let (iaca_der, dsc_der, signing_key) = build_chain(true);
@@ -1597,6 +1881,68 @@ async fn verify_issuer_signature_rejects_ed448_algorithm_ed25519_identifier() {
     assert!(
         matches!(err, MdocError::UnsupportedAlgorithm { alg: -19 }),
         "expected UnsupportedAlgorithm {{ alg: -19 }}, got: {err:?}"
+    );
+}
+
+/// The fix this test pins: secp256k1 is not on the ISO 18013-5 Table 22 permitted-curve
+/// list (P-256/P-384/P-521), but `cloud_wallet_crypto::ecdsa::get_verification_algorithm`
+/// does define a `(P256K1, Sha256)` verification combination for unrelated reasons, and
+/// `cert_chain.rs` previously had no curve allow-list at all. Without `check_dsc_curve`,
+/// a DSC carrying a secp256k1 key signing under `alg: -7`/`-9` (which both claim P-256)
+/// would verify successfully. `check_dsc_curve` rejects it at chain-validation time,
+/// before signature dispatch is ever reached.
+#[tokio::test]
+async fn verify_issuer_signature_rejects_secp256k1_curve() {
+    let (iaca_der, dsc_der) = build_secp256k1_dsc_chain();
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -7} (ES256): a1 01 26 — alg is irrelevant here; check_dsc_curve fires
+    // before dispatch_verify regardless of which algorithm is declared.
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x26]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with secp256k1 DSC must still parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("secp256k1 DSC must be rejected as an unsupported curve");
+
+    assert!(
+        matches!(err, MdocError::UnsupportedDscCurve { .. }),
+        "expected UnsupportedDscCurve, got: {err:?}"
+    );
+}
+
+/// Proves the PKIX `specifiedCurve` rejection path in `check_dsc_curve` is real, not
+/// just reasoned about: an EC SPKI whose `parameters` field is a `SEQUENCE` rather than
+/// a named-curve OID must be rejected as malformed, not silently let through because
+/// `Oid::try_from` happened to succeed.
+#[tokio::test]
+async fn verify_issuer_signature_rejects_explicit_curve_parameters() {
+    let (iaca_der, dsc_der) = build_explicit_curve_dsc_chain();
+    let mso_bytes = minimal_mso_cbor();
+    // {1: -7} (ES256): a1 01 26 — alg is irrelevant; check_dsc_curve fires first.
+    let raw = build_issuer_signed_with_custom_alg(mso_bytes, dsc_der, vec![0xa1, 0x01, 0x26]);
+    let mdoc = ParsedMdoc::parse(&raw).expect("mdoc with explicit-curve DSC must still parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let err = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect_err("explicit-curve-parameters DSC must be rejected");
+
+    assert!(
+        matches!(err, MdocError::UnsupportedDscCurve { .. }),
+        "expected UnsupportedDscCurve, got: {err:?}"
     );
 }
 
