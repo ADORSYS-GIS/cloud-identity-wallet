@@ -580,6 +580,84 @@ async fn create_response_path_end_to_end() {
     );
 }
 
+#[tokio::test]
+async fn create_response_path_end_to_end_direct_post_jwt() {
+    use crate::oid4vp::presentation::SelectedCredential;
+    use cloud_wallet_crypto::jwk::{Algorithm as JwkAlgorithm, Jwk, KeyManagement};
+    use cloud_wallet_crypto::rsa::{KeyPair, RsaKeySize};
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    let mock_uri = format!("{}/response", mock_server.uri());
+
+    Mock::given(method("POST"))
+        .and(path("/response"))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .and(body_string_contains("response="))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"redirect_uri": "https://verifier.example.com/cb"}),
+            ),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let key_pair = KeyPair::generate(RsaKeySize::Rsa2048).unwrap();
+    let mut jwk = Jwk::try_from(&key_pair).unwrap();
+    jwk.prm.alg = Some(JwkAlgorithm::KeyManagement(KeyManagement::RsaOaep256));
+    jwk.prm.kid = Some("response-key-1".to_string());
+
+    let client_metadata = serde_json::json!({
+        "jwks": {
+            "keys": [serde_json::to_value(&jwk).unwrap()]
+        },
+        "vp_formats_supported": {
+            "dc+sd-jwt": {
+                "sd-jwt_alg_values": ["ES256"],
+                "kb-jwt_alg_values": ["ES256"]
+            }
+        }
+    });
+
+    let client_metadata: crate::oid4vp::metadata::verifier::VerifierMetadata =
+        serde_json::from_value(client_metadata).unwrap();
+
+    let mut request = test_authorization_request();
+    request.response_mode = ResponseMode::DirectPostJwt;
+    request.response_uri = Some(url::Url::parse(&mock_uri).unwrap());
+    request.client_metadata = Some(client_metadata);
+
+    let dcql_query = request.dcql_query.clone().unwrap();
+    let ctx = PresentationContext {
+        nonce: request.nonce.clone(),
+        state: request.oauth.state.clone(),
+        response_uri: request.response_uri.clone(),
+        response_mode: request.response_mode.clone(),
+        dcql_query,
+        transaction_data: vec![],
+        verifier_metadata: None,
+        client_id: ParsedClientId::parse(&request.oauth.client_id).unwrap(),
+        request,
+    };
+
+    let selected = vec![SelectedCredential::string(
+        "pid_request",
+        "eyJhbGciOiJFUzI1NiJ9.mock-vp-token",
+    )];
+
+    let client = Oid4vpClient::new(test_config());
+    let response = client
+        .create_response(&ctx, selected)
+        .await
+        .expect("direct_post.jwt should succeed");
+
+    assert_eq!(
+        response.redirect_uri,
+        Some(url::Url::parse("https://verifier.example.com/cb").unwrap())
+    );
+}
+
 #[test]
 fn parse_haip_vp_uri() {
     // Test haip-vp:// scheme (HAIP §5.1) - should be accepted

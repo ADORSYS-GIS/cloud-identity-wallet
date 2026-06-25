@@ -18,6 +18,9 @@ use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use cloud_wallet_crypto::jwe::ContentEncryptionAlgorithm;
+use cloud_wallet_crypto::jwk::{Algorithm as JwkAlgorithm, Jwk, JwkSet, KeyUse};
+
 use crate::oid4vp::authorization::request_uri::{RequestUriResult, resolve_request_uri};
 use crate::oid4vp::authorization::{
     AuthorizationRequest, AuthorizationResponse, DirectPostResponse, RequestUriMethod, ResponseMode,
@@ -30,7 +33,7 @@ use crate::oid4vp::metadata::verifier::VerifierMetadata;
 use crate::oid4vp::metadata::wallet::WalletPresentationMetadata;
 use crate::oid4vp::presentation::{PresentationBuilder, SelectedCredential};
 use crate::oid4vp::request_object::{DiscoveryMode, RequestObject, VerifierKeyResolver};
-use crate::oid4vp::response_mode::send_direct_post;
+use crate::oid4vp::response_mode::{send_direct_post, send_direct_post_jwt};
 use crate::oid4vp::selection::{CredentialView, SelectionResult, match_dcql_query};
 use crate::oid4vp::transaction_data::TransactionData;
 
@@ -143,9 +146,9 @@ impl AuthzResponseSender for DirectPostResponseSender {
                     .await
                     .map_err(Into::into)
             }
-            ResponseMode::DirectPostJwt => Err(Error::UnsupportedResponseMode(
-                "direct_post.jwt requires an encrypted response sender",
-            )),
+            ResponseMode::DirectPostJwt => {
+                send_direct_post_jwt_response(http_client, context, response).await
+            }
             ResponseMode::DcApi | ResponseMode::DcApiJwt => Err(Error::UnsupportedResponseMode(
                 "dc_api response modes are handled by the Digital Credentials API surface",
             )),
@@ -154,6 +157,216 @@ impl AuthzResponseSender for DirectPostResponseSender {
             }
         }
     }
+}
+
+async fn send_direct_post_jwt_response(
+    http_client: &ClientWithMiddleware,
+    context: &PresentationContext,
+    response: &AuthorizationResponse,
+) -> Result<DirectPostResponse, Error> {
+    tracing::info!("Authorization response: {:#?}", serde_json::to_string_pretty(response).unwrap());
+    let response_uri = context.require_response_uri()?;
+    let verifier_metadata = resolve_direct_post_jwt_metadata(http_client, context).await?;
+    let encryption_key = select_direct_post_jwt_key(http_client, &verifier_metadata).await?;
+    let enc = select_direct_post_jwt_enc(&verifier_metadata)?;
+
+    send_direct_post_jwt(
+        http_client,
+        response_uri,
+        response_uri,
+        response,
+        &encryption_key,
+        enc,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+async fn resolve_direct_post_jwt_metadata(
+    http_client: &ClientWithMiddleware,
+    context: &PresentationContext,
+) -> Result<VerifierMetadata, Error> {
+    if let Some(metadata) = context.verifier_metadata.clone() {
+        return Ok(metadata);
+    }
+
+    if let Some(metadata) = context.request.client_metadata.clone() {
+        return Ok(metadata);
+    }
+
+    if let Some(metadata_uri) = context.request.client_metadata_uri.as_ref() {
+        return fetch_verifier_metadata(http_client, metadata_uri).await;
+    }
+
+    Err(Error::UnsupportedResponseMode(
+        "direct_post.jwt requires verifier metadata with a JWKS",
+    ))
+}
+
+fn select_direct_post_jwt_enc(
+    metadata: &VerifierMetadata,
+) -> Result<ContentEncryptionAlgorithm, Error> {
+    match metadata
+        .encrypted_response_enc_values_supported
+        .as_deref()
+    {
+        None => Ok(ContentEncryptionAlgorithm::A128Gcm),
+        Some(values) => values
+            .iter()
+            .find_map(map_content_encryption_algorithm)
+            .ok_or(Error::UnsupportedResponseMode(
+                "direct_post.jwt requires A128GCM or A256GCM support",
+            )),
+    }
+}
+
+fn map_content_encryption_algorithm(
+    alg: &crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm,
+) -> Option<ContentEncryptionAlgorithm> {
+    match alg {
+        crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::A128Gcm => {
+            Some(ContentEncryptionAlgorithm::A128Gcm)
+        }
+        crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::A256Gcm => {
+            Some(ContentEncryptionAlgorithm::A256Gcm)
+        }
+        crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::A128CbcHs256
+        | crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::A192CbcHs384
+        | crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::A256CbcHs512
+        | crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::A192Gcm => None,
+        crate::oid4vp::metadata::verifier::JweContentEncryptionAlgorithm::Other(_) => None,
+    }
+}
+
+async fn select_direct_post_jwt_key(
+    http_client: &ClientWithMiddleware,
+    metadata: &VerifierMetadata,
+) -> Result<Jwk, Error> {
+    let jwks = resolve_direct_post_jwt_jwks(http_client, metadata).await?;
+
+    let supported_algorithms = metadata
+        .encrypted_response_alg_values_supported
+        .as_deref();
+
+    jwks.keys
+        .iter()
+        .find(|jwk| jwk_is_usable_for_direct_post_jwt(jwk, supported_algorithms))
+        .cloned()
+        .ok_or(Error::UnsupportedResponseMode(
+            "direct_post.jwt requires an encryption-capable verifier key",
+        ))
+}
+
+fn jwk_is_usable_for_direct_post_jwt(
+    jwk: &Jwk,
+    supported_algorithms: Option<&[crate::oid4vp::metadata::verifier::JweKeyManagementAlgorithm]>,
+) -> bool {
+    if matches!(jwk.prm.key_use, Some(KeyUse::Signing)) {
+        return false;
+    }
+
+    let key_alg = match jwk.prm.alg.as_ref() {
+        Some(JwkAlgorithm::KeyManagement(key_alg)) => key_alg,
+        _ => return false,
+    };
+
+    match supported_algorithms {
+        None => true,
+        Some(values) => values.iter().any(|supported| {
+            matches!(
+                supported,
+                crate::oid4vp::metadata::verifier::JweKeyManagementAlgorithm::Registered(
+                    registered
+                ) if registered == key_alg
+            )
+        }),
+    }
+}
+
+async fn resolve_direct_post_jwt_jwks(
+    http_client: &ClientWithMiddleware,
+    metadata: &VerifierMetadata,
+) -> Result<JwkSet, Error> {
+    match (
+        metadata.client_metadata.jwks.as_ref(),
+        metadata.client_metadata.jwks_uri.as_ref(),
+    ) {
+        (Some(jwks), None) => Ok(jwks.clone()),
+        (None, Some(jwks_uri)) => fetch_jwks(http_client, jwks_uri).await,
+        (Some(_), Some(_)) => Err(Error::VerifierResolutionFailed(
+            "verifier metadata must not include both jwks and jwks_uri".to_string(),
+        )),
+        (None, None) => Err(Error::UnsupportedResponseMode(
+            "direct_post.jwt requires verifier metadata with a JWKS",
+        )),
+    }
+}
+
+async fn fetch_jwks(http_client: &ClientWithMiddleware, jwks_uri: &Url) -> Result<JwkSet, Error> {
+    if jwks_uri.scheme() != "https"
+        && jwks_uri.host_str() != Some("127.0.0.1")
+        && jwks_uri.host_str() != Some("localhost")
+    {
+        return Err(Error::VerifierResolutionFailed(
+            "verifier JWKS URI must use HTTPS".to_string(),
+        ));
+    }
+
+    let response = http_client
+        .get(jwks_uri.as_str())
+        .send()
+        .await
+        .map_err(|err| {
+            Error::VerifierResolutionFailed(format!("failed to fetch verifier JWKS: {err}"))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(Error::VerifierResolutionFailed(format!(
+            "verifier JWKS endpoint returned HTTP {}",
+            response.status()
+        )));
+    }
+
+    response.json::<JwkSet>().await.map_err(|err| {
+        Error::VerifierResolutionFailed(format!("failed to parse verifier JWKS: {err}"))
+    })
+}
+
+async fn fetch_verifier_metadata(
+    http_client: &ClientWithMiddleware,
+    metadata_uri: &Url,
+) -> Result<VerifierMetadata, Error> {
+    if metadata_uri.scheme() != "https"
+        && metadata_uri.host_str() != Some("127.0.0.1")
+        && metadata_uri.host_str() != Some("localhost")
+    {
+        return Err(Error::VerifierResolutionFailed(
+            "verifier metadata URI must use HTTPS".to_string(),
+        ));
+    }
+
+    let response = http_client
+        .get(metadata_uri.as_str())
+        .send()
+        .await
+        .map_err(|err| {
+            Error::VerifierResolutionFailed(format!(
+                "failed to fetch verifier metadata: {err}"
+            ))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(Error::VerifierResolutionFailed(format!(
+            "verifier metadata endpoint returned HTTP {}",
+            response.status()
+        )));
+    }
+
+    response.json::<VerifierMetadata>().await.map_err(|err| {
+        Error::VerifierResolutionFailed(format!(
+            "failed to parse verifier metadata: {err}"
+        ))
+    })
 }
 
 /// Validated intermediate state produced by [`Oid4vpClient::process_authz_request`].
