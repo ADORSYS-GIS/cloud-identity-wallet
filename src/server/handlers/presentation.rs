@@ -55,7 +55,7 @@ pub async fn start_presentation<S: SessionStore + Clone>(
     }
 
     let session = PresentationSession::new(tenant_id, context, dcql_result);
-    let response = StartPresentationResponse::from_session(&session)?;
+    let response = StartPresentationResponse::from_session(&session, &credentials)?;
 
     state
         .service

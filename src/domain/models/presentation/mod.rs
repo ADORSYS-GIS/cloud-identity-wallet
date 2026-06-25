@@ -21,6 +21,7 @@ use rustls_pki_types::TrustAnchor;
 use tracing::{debug, info, instrument};
 
 use crate::domain::keys::tenant_crypto_signer;
+use crate::domain::models::credential::CredentialDisplayMetadata;
 use crate::domain::ports::{CredentialRepo, TenantRepo};
 
 type Result<T> = std::result::Result<T, PresentationError>;
@@ -73,6 +74,13 @@ pub struct PresentationEngine {
     pub credential_repo: Arc<dyn CredentialRepo>,
     pub tenant_repo: Arc<dyn TenantRepo>,
     key_resolver: Arc<dyn VerifierKeyResolver>,
+}
+
+/// Credential data prepared for OpenID4VP matching plus wallet display metadata.
+#[derive(Debug, Clone)]
+pub struct StoredCredentialView {
+    pub view: CredentialView,
+    pub display: CredentialDisplayMetadata,
 }
 
 impl Clone for PresentationEngine {
@@ -173,9 +181,13 @@ impl PresentationEngine {
     pub fn match_credentials(
         &self,
         ctx: &PresentationContext,
-        credentials: &[CredentialView],
+        credentials: &[StoredCredentialView],
     ) -> SelectionResult {
-        self.client.match_credentials(ctx, credentials)
+        let views = credentials
+            .iter()
+            .map(|credential| credential.view.clone())
+            .collect::<Vec<_>>();
+        self.client.match_credentials(ctx, &views)
     }
 
     /// Builds and sends a VP Token response to the verifier.
@@ -221,7 +233,7 @@ impl PresentationEngine {
     pub async fn load_credential_views(
         &self,
         tenant_id: uuid::Uuid,
-    ) -> Result<Vec<CredentialView>> {
+    ) -> Result<Vec<StoredCredentialView>> {
         use crate::domain::models::credential::CredentialFilter;
 
         let filter = CredentialFilter {
@@ -244,7 +256,10 @@ impl PresentationEngine {
         for summary in &summaries {
             match self.credential_repo.find_by_id(summary.id, tenant_id).await {
                 Ok(cred) => match credential_to_view(&cred) {
-                    Ok(view) => views.push(view),
+                    Ok(view) => views.push(StoredCredentialView {
+                        view,
+                        display: summary.display.clone(),
+                    }),
                     Err(err) => {
                         tracing::warn!(
                             credential_id = %cred.id,

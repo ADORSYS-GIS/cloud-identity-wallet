@@ -117,9 +117,13 @@ pub fn build_service<S: SessionStore + Clone>(
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
     let cred_repo = MemoryCredentialRepo::new();
-    let issuance_engine = build_issuance_engine(config, tenant_repo.clone(), &session_store, cred_repo.clone())?;
-    let presentation_engine =
-        build_presentation_engine(config, cred_repo, tenant_repo.clone())?;
+    let issuance_engine = build_issuance_engine(
+        config,
+        tenant_repo.clone(),
+        &session_store,
+        cred_repo.clone(),
+    )?;
+    let presentation_engine = build_presentation_engine(config, cred_repo, tenant_repo.clone())?;
     Ok(Service::new(
         session_store,
         tenant_repo,

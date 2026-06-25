@@ -146,8 +146,9 @@ async fn valid_request_with_matching_credentials_returns_201() {
     let tenant_id = Uuid::new_v4();
     let token = utils::create_test_bearer_token(tenant_id);
 
+    let credential_id = Uuid::new_v4();
     let credential = Credential {
-        id: Uuid::new_v4(),
+        id: credential_id,
         tenant_id,
         issuer: "https://issuer.example".to_string(),
         subject: Some("did:example:alice".to_string()),
@@ -177,7 +178,7 @@ async fn valid_request_with_matching_credentials_returns_201() {
 
     test_server
         .credential_repo
-        .upsert(credential, Some(display))
+        .upsert(credential, Some(display.clone()))
         .await
         .expect("Failed to insert credential");
 
@@ -215,19 +216,42 @@ async fn valid_request_with_matching_credentials_returns_201() {
 
     let verifier = body.get("verifier").unwrap();
     assert_eq!(
-        verifier.get("client_id").unwrap(),
+        verifier.get("name").unwrap(),
         "https://verifier.example.com"
     );
+    assert_eq!(verifier.get("verified").unwrap(), false);
+    assert_eq!(verifier.get("verification_method").unwrap(), "redirect_uri");
 
     let credential_matches = body.get("credential_matches").unwrap().as_array().unwrap();
     assert_eq!(credential_matches.len(), 1);
     let match_info = &credential_matches[0];
     assert_eq!(match_info.get("query_id").unwrap(), "pid");
-    assert_eq!(match_info.get("format").unwrap(), "jwt_vc_json");
-    assert_eq!(match_info.get("candidate_count").unwrap(), 1);
+    assert_eq!(match_info.get("required").unwrap(), true);
 
-    assert_eq!(body.get("has_transaction_data").unwrap(), false);
-    assert_eq!(body.get("satisfies_query").unwrap(), true);
+    let candidates = match_info.get("candidates").unwrap().as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].get("credential_id").unwrap(),
+        &credential_id.to_string()
+    );
+    assert_eq!(candidates[0]["display"]["name"], display.display.name);
+    assert_eq!(candidates[0]["display"]["issuer_name"], display.issuer_name);
+    assert_eq!(
+        candidates[0]["display"]["credential_type"],
+        display.credential_type
+    );
+    assert!(
+        candidates[0]["requested_claims"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    assert_eq!(
+        body.get("transaction_data").unwrap(),
+        &serde_json::Value::Null
+    );
+    assert_eq!(body.get("requires_consent").unwrap(), true);
 }
 
 #[tokio::test]
