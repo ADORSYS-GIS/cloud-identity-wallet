@@ -382,6 +382,8 @@ fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Resul
         ALG_BRAINPOOL_P256 | ALG_BRAINPOOL_P384 | ALG_BRAINPOOL_P512 => {
             Err(MdocError::UnsupportedAlgorithm { alg })
         }
+        // Defense-in-depth: read_cose_alg is the gatekeeper
+        // but this arm catches future additions that forget to update dispatch_verify
         _ => Err(MdocError::UnsupportedAlgorithm { alg }),
     }
 }
