@@ -857,6 +857,28 @@ fn build_issuer_signed_ed25519(
     issuer_signed_b64(default_name_spaces(), issuer_auth)
 }
 
+/// Like [`build_issuer_signed_ed25519`] but uses the RFC 9864 fully-specified Ed25519
+/// algorithm (-19) instead of the deprecated EdDSA (-8).
+///
+/// Ed25519 (-19) denotes the identical Ed25519 signing operation as EdDSA (-8)
+/// (RFC 9864 §5); only the protected-header alg label differs:
+/// `{1: -19}` (CBOR: `a1 01 32`).
+fn build_issuer_signed_with_issuer_auth_ed25519(
+    mso_bytes: Vec<u8>,
+    dsc_der: Vec<u8>,
+    signing_key: &cloud_wallet_crypto::ed25519::KeyPair,
+) -> String {
+    // {1: -19} (Ed25519): a1 01 32
+    let issuer_auth = signed_cose1(
+        mso_bytes,
+        vec![0xa1, 0x01, 0x32],
+        Value::Array(vec![Value::Bytes(dsc_der)]),
+        |tbs| signing_key.sign(tbs).to_vec(),
+        false,
+    );
+    issuer_signed_b64(default_name_spaces(), issuer_auth)
+}
+
 /// Builds a fresh `ParsedMdoc` and overwrites its `device_key` with `cose_key`,
 /// keeping the rest of the document valid and within its validity window.
 fn parsed_with_device_key(cose_key: Value) -> ParsedMdoc {
@@ -1657,6 +1679,40 @@ async fn verify_issuer_signature_accepts_valid_ed25519() {
     assert!(
         result.is_ok(),
         "valid EdDSA/Ed25519 COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+/// Executable proof (not inferred from reading the match arms) that Ed25519 (-19)
+/// routes through `dispatch_verify` to `Ed25519Key::verify`, same as the deprecated
+/// EdDSA (-8) tested above. The Ed448-rejection tests exercise the OID guard under
+/// `-19`, but neither proves the success path is reachable under that label — this
+/// does.
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_ed25519_fully_specified() {
+    let (iaca_der, dsc_der, signing_key) = build_chain_ed25519();
+    let mso_bytes = minimal_mso_cbor();
+    let raw =
+        build_issuer_signed_with_issuer_auth_ed25519(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid Ed25519 (-19) issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "valid Ed25519 (-19) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
     );
     let info = result.unwrap();
     assert_eq!(
