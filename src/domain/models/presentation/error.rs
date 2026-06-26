@@ -268,7 +268,8 @@ mod tests {
 
     #[test]
     fn parse_verifier_error_description_extracts_error_description_field() {
-        let body = r#"{"error":"invalid_request","error_description":"Missing required parameter"}"#;
+        let body =
+            r#"{"error":"invalid_request","error_description":"Missing required parameter"}"#;
         let result = parse_verifier_error_description(body);
         assert_eq!(result, Some("Missing required parameter".to_string()));
     }
@@ -316,7 +317,10 @@ mod tests {
             body: r#"{"error":"invalid_request","error_description":"bad param"}"#.to_string(),
         });
         let presentation_err: PresentationError = err.into();
-        assert_eq!(presentation_err.error, PresentationErrorCode::VerifierSubmissionFailed);
+        assert_eq!(
+            presentation_err.error,
+            PresentationErrorCode::VerifierSubmissionFailed
+        );
         assert_eq!(
             presentation_err.error_description.as_deref(),
             Some("bad param")

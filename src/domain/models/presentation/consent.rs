@@ -71,10 +71,7 @@ mod tests {
         .unwrap();
         assert!(req.accepted);
         assert_eq!(req.selected_credentials.as_ref().unwrap().len(), 1);
-        assert_eq!(
-            req.selected_credentials.as_ref().unwrap()[0].query_id,
-            "q1"
-        );
+        assert_eq!(req.selected_credentials.as_ref().unwrap()[0].query_id, "q1");
         assert_eq!(req.transaction_data_acknowledged, Some(true));
     }
 
@@ -116,9 +113,10 @@ mod tests {
     fn verifier_direct_post_response_flattens_additional_fields() {
         let resp = VerifierDirectPostResponse {
             redirect_uri: Some("https://example.com/cb".to_string()),
-            additional: serde_json::Map::from_iter([
-                ("error".to_string(), serde_json::Value::String("invalid_request".to_string())),
-            ]),
+            additional: serde_json::Map::from_iter([(
+                "error".to_string(),
+                serde_json::Value::String("invalid_request".to_string()),
+            )]),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["redirect_uri"], "https://example.com/cb");

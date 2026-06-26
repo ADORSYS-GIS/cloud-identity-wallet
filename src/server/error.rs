@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
 use axum::{
+    Json,
     extract::rejection::JsonRejection,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 
@@ -279,17 +279,15 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request(
-        req: axum::extract::Request,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        let Json(inner) = Json::<T>::from_request(req, state)
-            .await
-            .map_err(|rejection: JsonRejection| ApiError {
-                status: StatusCode::BAD_REQUEST,
-                error: Cow::Borrowed("invalid_request"),
-                error_description: Some(rejection.body_text()),
-            })?;
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(inner) =
+            Json::<T>::from_request(req, state)
+                .await
+                .map_err(|rejection: JsonRejection| ApiError {
+                    status: StatusCode::BAD_REQUEST,
+                    error: Cow::Borrowed("invalid_request"),
+                    error_description: Some(rejection.body_text()),
+                })?;
         Ok(Self(inner))
     }
 }
