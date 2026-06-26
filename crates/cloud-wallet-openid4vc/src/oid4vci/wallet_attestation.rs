@@ -189,7 +189,7 @@ impl WalletAttestationSigner {
             nonce: nonce.map(|s| s.to_string()),
         };
 
-        self.wallet_key.encode(&pop_header, &claims)
+        self.wallet_key.sign_jwt(&pop_header, &claims)
     }
 
     /// Validates the attestation JWT by verifying its signature against the wallet
@@ -253,7 +253,7 @@ pub(crate) fn create_test_attestation_jwt(
         kid: None,
         x5c: None,
     };
-    provider_key.encode(&header, claims).unwrap()
+    provider_key.sign_jwt(&header, claims).unwrap()
 }
 
 #[cfg(test)]
