@@ -1,6 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use cloud_wallet_openid4vc::formats::mdoc::RevocationPolicy;
+use cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode;
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
 use redis::{
     Client as RedisClient, RedisResult,
@@ -17,7 +18,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub redis: RedisConfig,
     pub database: DatabaseConfig,
-    pub oid4vci: Oid4vciConfig,
+    pub oid4vc: Oid4vcConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,35 +39,20 @@ pub struct DatabaseConfig {
 
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
-pub struct Oid4vciConfig {
+pub struct Oid4vcConfig {
     pub client_id: String,
     pub redirect_uri: Url,
     pub use_system_proxy: bool,
-    /// Locale prefixes tried in order when selecting a credential display entry.
-    /// Configurable via `APP_OID4VCI__PREFERRED_DISPLAY_LOCALES=en,fr,de`.
     #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
     pub preferred_display_locales: Vec<String>,
-    /// Paths to DER- or PEM-encoded IACA root certificate files loaded at startup.
-    #[serde_as(as = "PickFirst<(StringWithSeparator::<CommaSeparator, String>, Vec<_>)>")]
-    pub iaca_root_paths: Vec<String>,
-    /// DSC revocation checking policy for mdoc verification.
-    /// - `skip`: Bypass revocation checking entirely (offline/test mode)
-    /// - `soft_fail`: Reject revoked DSCs, tolerate CRL fetch failures (default)
-    /// - `hard_fail`: Reject revoked DSCs or on any CRL fetch/parse failure
-    /// Configurable via `APP_OID4VCI__REVOCATION_POLICY=soft_fail`.
     #[serde(default)]
     pub revocation_policy: RevocationPolicy,
+    #[serde(default)]
+    pub discovery_mode: DiscoveryMode,
+    pub root_truststore_dir: Option<PathBuf>,
 }
 
 impl RedisConfig {
-    /// Establishes a new Redis connection based on the provided URI.
-    ///
-    /// - To enable TLS, the URI must use the `rediss://` scheme.
-    /// - To enable insecure TLS, the URI must use the `rediss://` scheme and end with `/#insecure`.
-    /// - To enable RESP3 protocol, the URI must contains the `protocol=resp3` query parameter.
-    ///
-    /// # Errors
-    /// Returns an error if the connection cannot be established.
     pub async fn start(
         &self,
     ) -> RedisResult<(ConnectionManager, UnboundedReceiver<redis::PushInfo>)> {
@@ -92,15 +78,11 @@ impl Config {
 
     fn load_with_sources(env_vars: Option<HashMap<String, String>>) -> Result<Self, ConfigError> {
         let mut builder = Self::set_defaults()?;
-        // If env_vars is provided, we use it instead of system environment
-        // This is to avoid systems variables pollution across tests
         if let Some(vars) = env_vars {
             for (key, value) in vars {
                 builder = builder.set_override(&key, value)?;
             }
         } else {
-            // Use system environment variables
-            // Should be in the format APP_SERVER__HOST or APP_SERVER__PORT
             builder = builder.add_source(
                 Environment::with_prefix("APP")
                     .prefix_separator("_")
@@ -111,23 +93,21 @@ impl Config {
         builder.build()?.try_deserialize()
     }
 
-    /// Set default values for the configuration.
-    /// This is used when no environment variables or config file are provided
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
         ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 3000)?
             .set_default("redis.uri", "redis://127.0.0.1:6379?protocol=resp3")?
             .set_default("database.url", "sqlite::memory:")?
-            .set_default("oid4vci.client_id", "cloud-identity-wallet")?
+            .set_default("oid4vc.client_id", "cloud-identity-wallet")?
             .set_default(
-                "oid4vci.redirect_uri",
+                "oid4vc.redirect_uri",
                 "http://localhost:3000/api/v1/issuance/callback",
             )?
-            .set_default("oid4vci.use_system_proxy", true)?
-            .set_default("oid4vci.preferred_display_locales", vec!["en"])?
-            .set_default("oid4vci.iaca_root_paths", Vec::<String>::new())?
-            .set_default("oid4vci.revocation_policy", "soft_fail")
+            .set_default("oid4vc.use_system_proxy", true)?
+            .set_default("oid4vc.preferred_display_locales", vec!["en"])?
+            .set_default("oid4vc.revocation_policy", "soft_fail")?
+            .set_default("oid4vc.discovery_mode", "static")
     }
 }
 
@@ -146,21 +126,23 @@ mod tests {
             config.redis.uri.expose_secret(),
             "redis://127.0.0.1:6379?protocol=resp3"
         );
-        assert_eq!(config.oid4vci.preferred_display_locales, vec!["en"]);
+        assert_eq!(config.oid4vc.preferred_display_locales, vec!["en"]);
+        assert_eq!(config.oid4vc.discovery_mode, DiscoveryMode::Static);
+        assert!(config.oid4vc.root_truststore_dir.is_none());
     }
 
     #[test]
     fn test_preferred_display_locales_csv_string_override() {
         let mut env_vars = HashMap::new();
         env_vars.insert(
-            "oid4vci.preferred_display_locales".to_string(),
+            "oid4vc.preferred_display_locales".to_string(),
             "fr,de,en".to_string(),
         );
 
         let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
 
         assert_eq!(
-            config.oid4vci.preferred_display_locales,
+            config.oid4vc.preferred_display_locales,
             vec!["fr", "de", "en"]
         );
     }
@@ -182,37 +164,35 @@ mod tests {
     }
 
     #[test]
-    fn test_iaca_root_paths_defaults_to_empty() {
+    fn test_root_truststore_dir_defaults_to_none() {
         let config = Config::load().expect("Failed to load config");
-        assert!(config.oid4vci.iaca_root_paths.is_empty());
+        assert!(config.oid4vc.root_truststore_dir.is_none());
     }
 
     #[test]
-    fn test_iaca_root_paths_csv_string_override() {
+    fn test_discovery_mode_default_is_static() {
+        let config = Config::load().expect("Failed to load config");
+        assert_eq!(config.oid4vc.discovery_mode, DiscoveryMode::Static);
+    }
+
+    #[test]
+    fn test_discovery_mode_override() {
         let mut env_vars = HashMap::new();
-        env_vars.insert(
-            "oid4vci.iaca_root_paths".to_string(),
-            "/certs/root1.pem,/certs/root2.der".to_string(),
-        );
+        env_vars.insert("oid4vc.discovery_mode".to_string(), "dynamic".to_string());
 
         let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
 
-        assert_eq!(
-            config.oid4vci.iaca_root_paths,
-            vec!["/certs/root1.pem", "/certs/root2.der"]
-        );
+        assert_eq!(config.oid4vc.discovery_mode, DiscoveryMode::Dynamic);
     }
 
     #[test]
     fn test_partial_env_override() {
         let mut env_vars = HashMap::new();
-        // We just override the host
         env_vars.insert("server.host".to_string(), "192.168.1.1".to_string());
 
         let config = Config::load_with_sources(Some(env_vars)).expect("Failed to load config");
 
         assert_eq!(config.server.host, "192.168.1.1");
-        // The other values should use default
         assert_eq!(config.server.port, 3000);
         assert_eq!(
             config.redis.uri.expose_secret(),
