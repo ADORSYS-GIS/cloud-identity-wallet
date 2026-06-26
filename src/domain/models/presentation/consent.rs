@@ -45,7 +45,7 @@ impl From<cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse>
     fn from(resp: cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse) -> Self {
         Self {
             redirect_uri: resp.redirect_uri.map(|u| u.to_string()),
-            additional: serde_json::Map::new(),
+            additional: resp.additional,
         }
     }
 }

@@ -309,6 +309,14 @@ impl PresentationEngine {
                 .await
             }
             crate::domain::models::credential::CredentialFormat::Mdoc => {
+                if !transaction_data.is_empty() {
+                    tracing::warn!(
+                        query_id = query_id,
+                        count = transaction_data.len(),
+                        "transaction data is not yet supported for mdoc presentations; \
+                         hashes will not be bound to the device authentication"
+                    );
+                }
                 self.build_mdoc_presentation(ctx, query_id, tenant_id, credential)
                     .await
             }
@@ -348,29 +356,30 @@ impl PresentationEngine {
         )
         .requested_claims(matched_claim_paths);
 
-        let td_hashes: Vec<String> = transaction_data
+        let mut td_hashes: Vec<String> = Vec::new();
+        let mut td_algs: Vec<String> = Vec::new();
+        for td in transaction_data
             .iter()
             .filter(|td| td.applies_to_credential(query_id))
-            .map(|td| {
-                let alg = td
-                    .hash_algorithms()
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(|| "sha-256".to_string());
-                td.compute_hash(&alg).map_err(|e| {
+        {
+            for alg in td.hash_algorithms() {
+                let hash = td.compute_hash(&alg).map_err(|e| {
                     PresentationError::new(
                         PresentationErrorCode::PresentationBuildFailed,
                         format!("Failed to compute transaction data hash: {e}"),
                     )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+                })?;
+                td_hashes.push(hash);
+                if !td_algs.contains(&alg) {
+                    td_algs.push(alg);
+                }
+            }
+        }
 
         if !td_hashes.is_empty() {
-            let alg = transaction_data
-                .iter()
-                .filter(|td| td.applies_to_credential(query_id))
-                .find_map(|td| td.hash_algorithms().into_iter().next())
+            let alg = td_algs
+                .first()
+                .cloned()
                 .unwrap_or_else(|| "sha-256".to_string());
             builder = builder.transaction_data(td_hashes, Some(alg));
         }

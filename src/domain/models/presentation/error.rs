@@ -169,6 +169,8 @@ impl fmt::Display for PresentationError {
 
 impl From<Oid4vpClientError> for PresentationError {
     fn from(err: Oid4vpClientError) -> Self {
+        use cloud_wallet_openid4vc::oid4vp::response_mode::DirectPostError;
+
         let error = match &err {
             Oid4vpClientError::InvalidRequest(_) | Oid4vpClientError::NoDcqlQuery => {
                 PresentationErrorCode::InvalidRequest
@@ -189,12 +191,45 @@ impl From<Oid4vpClientError> for PresentationError {
             }
             _ => PresentationErrorCode::InternalError,
         };
+
+        let error_description = match &err {
+            Oid4vpClientError::ResponseDeliveryFailed(direct_post_err) => match direct_post_err {
+                DirectPostError::VerifierError { body, .. } => {
+                    parse_verifier_error_description(body)
+                }
+                DirectPostError::HttpServerError { body, .. } => {
+                    parse_verifier_error_description(body)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+
         Self {
             error,
-            error_description: None,
+            error_description,
             source: Some(Box::new(err)),
         }
     }
+}
+
+/// Attempts to extract an OAuth-style `error_description` from the verifier's
+/// error response body. If the body is valid JSON with an `error_description`
+/// field, returns its value. Otherwise returns the raw body truncated to 256 chars.
+fn parse_verifier_error_description(body: &str) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(body) {
+        if let Some(serde_json::Value::String(desc)) = map.get("error_description") {
+            return Some(desc.clone());
+        }
+        if let Some(serde_json::Value::String(error_code)) = map.get("error") {
+            return Some(error_code.clone());
+        }
+    }
+    let truncated = if body.len() > 256 { &body[..256] } else { body };
+    Some(truncated.to_string())
 }
 
 impl From<SessionError> for PresentationError {
