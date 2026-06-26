@@ -82,6 +82,28 @@ fn cbor_to_json_preserves_large_integer_as_number() {
 }
 
 #[test]
+fn cbor_to_json_negative_outside_i64_becomes_string() {
+    let below_i64_min: i128 = i64::MIN as i128 - 1;
+    let cbor_int = ciborium::value::Integer::try_from(below_i64_min).unwrap();
+    let result = cbor_to_json(&Value::Integer(cbor_int));
+    assert!(
+        result.is_string(),
+        "negative integer outside i64 range should become a string, got: {result:?}"
+    );
+    assert_eq!(result.as_str().unwrap(), &below_i64_min.to_string());
+}
+
+#[test]
+fn cbor_to_json_large_positive_outside_i64_stays_number() {
+    let above_i64_max: u64 = u64::MAX;
+    let result = cbor_to_json(&Value::Integer(above_i64_max.into()));
+    assert!(
+        result.is_number(),
+        "large positive integer representable as u64 should be a JSON number, got: {result:?}"
+    );
+}
+
+#[test]
 fn cbor_to_json_preserves_non_text_map_keys() {
     let map = Value::Map(vec![
         (Value::Text("key".into()), Value::Text("value".into())),
@@ -197,6 +219,19 @@ fn claim_view_from_tag_wrapped_item() {
 }
 
 #[test]
+fn claim_view_from_tag1004_full_date() {
+    let tagged = Value::Tag(1004, Box::new(Value::Text("1990-01-01".into())));
+    let item = build_item(0, vec![0u8; 16], "birth_date", tagged);
+    let mdoc = create_test_mdoc(vec![item]);
+    let views = mdoc.to_claim_views();
+    assert_eq!(views[0].claim_name, "birth_date");
+    assert_eq!(
+        views[0].value,
+        ClaimValueView::String("1990-01-01".to_owned())
+    );
+}
+
+#[test]
 fn classify_element_value_handles_bool_and_null() {
     let bool_val = cbor(&Value::Bool(true));
     assert_eq!(
@@ -293,4 +328,32 @@ fn display_metadata_translates_and_falls_back() {
     let no_desc =
         MdocClaimExtractor::new(&mdoc).to_namespaced_json_with_display(&[], &["en".to_string()]);
     assert_eq!(no_desc["org.iso.18013.5.1"]["family_name"], "Doe");
+}
+
+#[test]
+fn cbor_element_to_json_malformed_falls_back_to_base64url() {
+    use crate::formats::mdoc::claims::cbor_element_to_json;
+    let malformed = vec![0xFF, 0xFE, 0xFD];
+    let result = cbor_element_to_json(&malformed);
+    assert!(
+        result.is_string(),
+        "malformed CBOR should fall back to base64url string, got: {result:?}"
+    );
+    assert_eq!(
+        result.as_str().unwrap(),
+        Base64UrlUnpadded::encode_string(&malformed)
+    );
+}
+
+#[test]
+fn classify_element_value_malformed_falls_back_to_binary() {
+    let malformed = vec![0xFF, 0xFE, 0xFD];
+    let result = classify_element_value(&malformed);
+    assert_eq!(
+        result,
+        ClaimValueView::Binary {
+            media_type: None,
+            size: 3,
+        }
+    );
 }

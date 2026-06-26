@@ -150,7 +150,8 @@ pub(crate) fn claim_view_from_item(namespace: &str, item: &IssuerSignedItem) -> 
 pub(crate) fn classify_element_value(raw_cbor: &[u8]) -> ClaimValueView {
     let cbor_val = match ciborium::de::from_reader::<CborValue, _>(raw_cbor) {
         Ok(v) => v,
-        Err(_) => {
+        Err(e) => {
+            tracing::debug!(len = raw_cbor.len(), error = %e, "CBOR decode failed in classify_element_value; treating as opaque binary");
             return ClaimValueView::Binary {
                 media_type: None,
                 size: raw_cbor.len(),
@@ -203,7 +204,8 @@ fn cbor_value_to_claim_view(cbor_val: &CborValue, raw_bytes: &[u8]) -> ClaimValu
 pub(crate) fn cbor_element_to_json(raw_cbor: &[u8]) -> Value {
     let cbor_val = match ciborium::de::from_reader::<CborValue, _>(raw_cbor) {
         Ok(v) => v,
-        Err(_) => {
+        Err(e) => {
+            tracing::debug!(len = raw_cbor.len(), error = %e, "CBOR decode failed in cbor_element_to_json; falling back to base64url");
             return Value::String(Base64UrlUnpadded::encode_string(raw_cbor));
         }
     };
@@ -222,10 +224,10 @@ pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
             let n: i128 = (*i).into();
             match i64::try_from(n) {
                 Ok(v) => Value::Number(v.into()),
-                Err(_) => serde_json::Number::from_i128(n)
-                    .or_else(|| serde_json::Number::from_u128(n as u128))
-                    .map(Value::Number)
-                    .unwrap_or_else(|| Value::String(n.to_string())),
+                Err(_) => match u64::try_from(n) {
+                    Ok(v) => Value::Number(serde_json::Number::from(v)),
+                    Err(_) => Value::String(n.to_string()),
+                },
             }
         }
         CborValue::Float(f) => {
