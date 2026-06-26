@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::parser::{IssuerSignedItem, ParsedMdoc};
+use crate::oid4vci::metadata::{ClaimDescription, ClaimDisplay};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MdocClaimView {
@@ -34,9 +35,6 @@ pub enum ClaimValueView {
     Structured(serde_json::Value),
     #[serde(rename = "binary")]
     Binary {
-        /// MIME type of the binary data (e.g. `"image/jpeg"` for portrait).
-        /// Currently always `None`; derive from element identifiers or
-        /// issuer display metadata per OID4VCI §4.3.2 in a follow-up.
         media_type: Option<String>,
         size: usize,
     },
@@ -64,13 +62,6 @@ impl<'a> MdocClaimExtractor<'a> {
         views
     }
 
-    /// Produces namespaced JSON from mdoc claims (e.g.
-    /// `{"org.iso.18013.5.1": {"family_name": "Doe"}}`).
-    ///
-    /// This preserves the mdoc namespace structure. Callers that need a flat
-    /// shape (e.g. `{"org.iso.18013.5.1.family_name": "Doe"}`) should flatten
-    /// the result themselves. The namespaced shape is required for DCQL claim
-    /// path matching where the first element selects the namespace.
     pub fn to_namespaced_json(&self) -> Value {
         let mut root = serde_json::Map::new();
         for (namespace, items) in &self.mdoc.name_spaces {
@@ -86,11 +77,18 @@ impl<'a> MdocClaimExtractor<'a> {
         Value::Object(root)
     }
 
+    /// Produces namespaced JSON with claim display names resolved per
+    /// `preferred_locales`, falling back to element identifiers.
+    ///
+    /// `claim_descriptions` come from `credential_configurations_supported[].credential_metadata.claims`
+    /// per OID4VCI §4.3.2. For mdoc credentials, each `path` should be
+    /// `["namespace", "claim_name"]` (e.g. `["org.iso.18013.5.1", "family_name"]`).
     pub fn to_namespaced_json_with_display(
         &self,
-        claim_descriptions: &[ClaimDescriptionRef<'_>],
+        claim_descriptions: &[ClaimDescription],
         preferred_locales: &[String],
     ) -> Value {
+        use crate::core::claim_path_pointer::ClaimPathElement;
         let mut root = serde_json::Map::new();
         for (namespace, items) in &self.mdoc.name_spaces {
             let mut ns_map = serde_json::Map::new();
@@ -100,10 +98,14 @@ impl<'a> MdocClaimExtractor<'a> {
                     .find(|desc| {
                         let elements = desc.path.elements();
                         elements.len() == 2
-                            && matches!(&elements[0], ClaimPathElementRef::String(s) if s == namespace)
-                            && matches!(&elements[1], ClaimPathElementRef::String(s) if s == &item.element_identifier)
+                            && matches!(&elements[0], ClaimPathElement::String(s) if s == namespace)
+                            && matches!(&elements[1], ClaimPathElement::String(s) if s == &item.element_identifier)
                     })
-                    .and_then(|desc| select_preferred_display(&desc.display, preferred_locales))
+                    .and_then(|desc| {
+                        desc.display.as_deref().and_then(|displays| {
+                            select_preferred_display(displays, preferred_locales)
+                        })
+                    })
                     .unwrap_or(item.element_identifier.as_str());
 
                 ns_map.insert(
@@ -117,60 +119,22 @@ impl<'a> MdocClaimExtractor<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ClaimDescriptionRef<'a> {
-    pub path: ClaimPathRef<'a>,
-    pub mandatory: bool,
-    pub display: Vec<ClaimDisplayRef<'a>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ClaimPathElementRef<'a> {
-    String(&'a str),
-    Index(u64),
-}
-
-#[derive(Debug, Clone)]
-pub struct ClaimPathRef<'a> {
-    elements: Vec<ClaimPathElementRef<'a>>,
-}
-
-impl<'a> ClaimPathRef<'a> {
-    pub fn try_from_elements(elements: Vec<ClaimPathElementRef<'a>>) -> Option<Self> {
-        if elements.is_empty() {
-            return None;
-        }
-        Some(Self { elements })
-    }
-
-    pub fn elements(&self) -> &[ClaimPathElementRef<'a>] {
-        &self.elements
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ClaimDisplayRef<'a> {
-    pub name: Option<&'a str>,
-    pub locale: Option<&'a str>,
-}
-
+/// Selects the best matching display name from `displays` based on
+/// `preferred_locales`, iterating locales in priority order.
 fn select_preferred_display<'a>(
-    display: &'a [ClaimDisplayRef<'a>],
+    displays: &'a [ClaimDisplay],
     preferred_locales: &[String],
 ) -> Option<&'a str> {
-    if display.is_empty() {
-        return None;
-    }
     for prefix in preferred_locales {
-        for entry in display {
-            if let Some(locale) = entry.locale
+        for entry in displays {
+            if let Some(locale) = &entry.locale
                 && locale.starts_with(prefix.as_str())
             {
-                return entry.name;
+                return entry.name.as_deref();
             }
         }
     }
-    display.first().and_then(|e| e.name)
+    displays.first().and_then(|e| e.name.as_deref())
 }
 
 /// Builds an `MdocClaimView` from a single `IssuerSignedItem`.
@@ -196,6 +160,7 @@ pub(crate) fn classify_element_value(raw_cbor: &[u8]) -> ClaimValueView {
     cbor_value_to_claim_view(&cbor_val, raw_cbor)
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn cbor_value_to_claim_view(cbor_val: &CborValue, raw_bytes: &[u8]) -> ClaimValueView {
     match cbor_val {
         CborValue::Text(s) => ClaimValueView::String(s.clone()),
@@ -296,6 +261,17 @@ pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
 impl ParsedMdoc {
     pub fn to_rendered_claims(&self) -> Value {
         MdocClaimExtractor::new(self).to_namespaced_json()
+    }
+
+    /// Like [`to_rendered_claims`](Self::to_rendered_claims) but translates
+    /// claim names using display metadata and preferred locales.
+    pub fn to_rendered_claims_with_display(
+        &self,
+        claim_descriptions: &[ClaimDescription],
+        preferred_locales: &[String],
+    ) -> Value {
+        MdocClaimExtractor::new(self)
+            .to_namespaced_json_with_display(claim_descriptions, preferred_locales)
     }
 
     pub fn to_claim_views(&self) -> Vec<MdocClaimView> {

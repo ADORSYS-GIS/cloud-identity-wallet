@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::domain::service::Service;
 use crate::server::handlers::{
     authorization_callback, delete_credential, get_credential, get_session_events, health_check,
-    home, list_credentials, register_tenant, start_issuance, submit_consent,
+    home, list_credentials, register_tenant, start_issuance, start_presentation, submit_consent,
     submit_transaction_code,
 };
 use crate::session::SessionStore;
@@ -112,6 +112,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
         .route("/credentials", get(list_credentials))
         .route("/credentials/{id}", get(get_credential))
         .route("/credentials/{id}", delete(delete_credential))
+        .route("/presentation/start", post(start_presentation))
         .route_layer(middleware::from_fn(auth::auth));
 
     Router::new()

@@ -20,10 +20,7 @@ pub mod revocation;
 mod tests;
 pub mod verifier;
 
-pub use claims::{
-    ClaimDescriptionRef, ClaimDisplayRef, ClaimPathElementRef, ClaimPathRef, ClaimValueView,
-    MdocClaimExtractor, MdocClaimView,
-};
+pub use claims::{ClaimValueView, MdocClaimExtractor, MdocClaimView};
 pub use error::{MdocError, Result};
 pub use parser::{IssuerSignedItem, ParsedMdoc};
 pub use revocation::RevocationPolicy;

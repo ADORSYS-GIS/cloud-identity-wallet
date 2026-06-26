@@ -1,9 +1,10 @@
 use super::*;
+use crate::core::claim_path_pointer::ClaimPathPointer;
 use crate::formats::mdoc::claims::{
-    ClaimDescriptionRef, ClaimDisplayRef, ClaimPathElementRef, ClaimPathRef, ClaimValueView,
-    MdocClaimExtractor, cbor_to_json, classify_element_value,
+    ClaimValueView, MdocClaimExtractor, cbor_to_json, classify_element_value,
 };
 use crate::formats::mdoc::parser::IssuerSignedItem;
+use crate::oid4vci::metadata::{ClaimDescription, ClaimDisplay};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use std::collections::HashMap;
 
@@ -65,7 +66,10 @@ fn cbor_to_json_handles_core_types_and_bytes() {
     );
     assert_eq!(cbor_to_json(&Value::Null), serde_json::Value::Null);
     let b = cbor_to_json(&Value::Bytes(vec![0xDE, 0xAD]));
-    assert_eq!(b, serde_json::Value::String(Base64UrlUnpadded::encode_string(&[0xDE, 0xAD])));
+    assert_eq!(
+        b,
+        serde_json::Value::String(Base64UrlUnpadded::encode_string(&[0xDE, 0xAD]))
+    );
 }
 
 #[test]
@@ -85,7 +89,10 @@ fn cbor_to_json_preserves_non_text_map_keys() {
     ]);
     let json = cbor_to_json(&map);
     assert_eq!(json["key"], "value");
-    assert!(json.get("Bool(true)").is_some(), "boolean key should be preserved via Debug fallback");
+    assert!(
+        json.get("Bool(true)").is_some(),
+        "boolean key should be preserved via Debug fallback"
+    );
     assert_eq!(json["Bool(true)"], 1);
 }
 
@@ -108,69 +115,14 @@ fn rendered_claims_produces_namespaced_json() {
     let json = create_test_mdoc(items).to_rendered_claims();
     let ns = json.get("org.iso.18013.5.1").expect("namespace");
     assert_eq!(ns["family_name"], "Doe");
-    assert!(ns["portrait"].is_string(), "portrait should be a base64url string, got: {:?}", ns["portrait"]);
+    assert!(
+        ns["portrait"].is_string(),
+        "portrait should be a base64url string, got: {:?}",
+        ns["portrait"]
+    );
     let portrait_b64 = ns["portrait"].as_str().unwrap();
-    let expected = Base64UrlUnpadded::encode_string(&vec![0xAA; 64]);
+    let expected = Base64UrlUnpadded::encode_string(&[0xAAu8; 64]);
     assert_eq!(portrait_b64, expected);
-}
-
-#[test]
-fn display_metadata_translates_and_falls_back() {
-    let items = vec![
-        build_item(0, vec![0u8; 16], "family_name", Value::Text("Doe".into())),
-        build_item(1, vec![0u8; 16], "given_name", Value::Text("Jane".into())),
-    ];
-    let mdoc = create_test_mdoc(items);
-    let descs = vec![
-        ClaimDescriptionRef {
-            path: ClaimPathRef::try_from_elements(vec![
-                ClaimPathElementRef::String("org.iso.18013.5.1"),
-                ClaimPathElementRef::String("family_name"),
-            ])
-            .unwrap(),
-            mandatory: true,
-            display: vec![
-                ClaimDisplayRef {
-                    name: Some("Familienname"),
-                    locale: Some("de"),
-                },
-                ClaimDisplayRef {
-                    name: Some("Family Name"),
-                    locale: Some("en"),
-                },
-            ],
-        },
-        ClaimDescriptionRef {
-            path: ClaimPathRef::try_from_elements(vec![
-                ClaimPathElementRef::String("org.iso.18013.5.1"),
-                ClaimPathElementRef::String("given_name"),
-            ])
-            .unwrap(),
-            mandatory: true,
-            display: vec![
-                ClaimDisplayRef {
-                    name: Some("Vorname"),
-                    locale: Some("de"),
-                },
-                ClaimDisplayRef {
-                    name: Some("Given Name"),
-                    locale: Some("en"),
-                },
-            ],
-        },
-    ];
-    let ext = MdocClaimExtractor::new(&mdoc);
-
-    let en = ext.to_namespaced_json_with_display(&descs, &["en".into()]);
-    assert_eq!(en["org.iso.18013.5.1"]["Family Name"], "Doe");
-    assert_eq!(en["org.iso.18013.5.1"]["Given Name"], "Jane");
-
-    let de = ext.to_namespaced_json_with_display(&descs, &["de".into()]);
-    assert_eq!(de["org.iso.18013.5.1"]["Familienname"], "Doe");
-
-    let no_desc =
-        MdocClaimExtractor::new(&mdoc).to_namespaced_json_with_display(&[], &["en".into()]);
-    assert_eq!(no_desc["org.iso.18013.5.1"]["family_name"], "Doe");
 }
 
 #[test]
@@ -213,7 +165,10 @@ fn claim_view_from_bytes_item() {
 #[test]
 fn claim_view_from_nested_map_item() {
     let nested = Value::Map(vec![
-        (Value::Text("street".into()), Value::Text("123 Main St".into())),
+        (
+            Value::Text("street".into()),
+            Value::Text("123 Main St".into()),
+        ),
         (Value::Text("city".into()), Value::Text("Anytown".into())),
     ]);
     let item = build_item(0, vec![0u8; 16], "address", nested);
@@ -235,13 +190,19 @@ fn claim_view_from_tag_wrapped_item() {
     let mdoc = create_test_mdoc(vec![item]);
     let views = mdoc.to_claim_views();
     assert_eq!(views[0].claim_name, "date_of_birth");
-    assert_eq!(views[0].value, ClaimValueView::String("2023-01-01T00:00:00Z".to_owned()));
+    assert_eq!(
+        views[0].value,
+        ClaimValueView::String("2023-01-01T00:00:00Z".to_owned())
+    );
 }
 
 #[test]
 fn classify_element_value_handles_bool_and_null() {
     let bool_val = cbor(&Value::Bool(true));
-    assert_eq!(classify_element_value(&bool_val), ClaimValueView::Boolean(true));
+    assert_eq!(
+        classify_element_value(&bool_val),
+        ClaimValueView::Boolean(true)
+    );
 
     let null_val = cbor(&Value::Null);
     assert_eq!(classify_element_value(&null_val), ClaimValueView::Null);
@@ -249,9 +210,9 @@ fn classify_element_value_handles_bool_and_null() {
 
 #[test]
 fn classify_element_value_handles_float_with_nan_and_inf() {
-    let f = cbor(&Value::Float(3.14));
+    let f = cbor(&Value::Float(42.5));
     if let ClaimValueView::Float(v) = classify_element_value(&f) {
-        assert!((v - 3.14).abs() < f64::EPSILON);
+        assert!((v - 42.5).abs() < 1e-10);
     } else {
         panic!("expected Float, got {:?}", classify_element_value(&f));
     }
@@ -273,9 +234,63 @@ fn classify_element_value_preserves_non_text_map_keys() {
     let result = classify_element_value(&bytes);
     if let ClaimValueView::Structured(serde_json::Value::Object(obj)) = result {
         assert_eq!(obj["key"], "val");
-        assert!(obj.get("Bool(true)").is_some(), "boolean key preserved via Debug fallback");
+        assert!(
+            obj.get("Bool(true)").is_some(),
+            "boolean key preserved via Debug fallback"
+        );
         assert_eq!(obj["Bool(true)"], 1);
     } else {
         panic!("expected structured object, got {:?}", result);
     }
+}
+
+#[test]
+fn display_metadata_translates_and_falls_back() {
+    let items = vec![
+        build_item(0, vec![0u8; 16], "family_name", Value::Text("Doe".into())),
+        build_item(1, vec![0u8; 16], "given_name", Value::Text("Jane".into())),
+    ];
+    let mdoc = create_test_mdoc(items);
+    let descs = vec![
+        ClaimDescription {
+            path: ClaimPathPointer::from_strings(["org.iso.18013.5.1", "family_name"]),
+            mandatory: true,
+            display: Some(vec![
+                ClaimDisplay {
+                    name: Some("Familienname".into()),
+                    locale: Some("de".into()),
+                },
+                ClaimDisplay {
+                    name: Some("Family Name".into()),
+                    locale: Some("en".into()),
+                },
+            ]),
+        },
+        ClaimDescription {
+            path: ClaimPathPointer::from_strings(["org.iso.18013.5.1", "given_name"]),
+            mandatory: true,
+            display: Some(vec![
+                ClaimDisplay {
+                    name: Some("Vorname".into()),
+                    locale: Some("de".into()),
+                },
+                ClaimDisplay {
+                    name: Some("Given Name".into()),
+                    locale: Some("en".into()),
+                },
+            ]),
+        },
+    ];
+    let ext = MdocClaimExtractor::new(&mdoc);
+
+    let en = ext.to_namespaced_json_with_display(&descs, &["en".to_string()]);
+    assert_eq!(en["org.iso.18013.5.1"]["Family Name"], "Doe");
+    assert_eq!(en["org.iso.18013.5.1"]["Given Name"], "Jane");
+
+    let de = ext.to_namespaced_json_with_display(&descs, &["de".to_string()]);
+    assert_eq!(de["org.iso.18013.5.1"]["Familienname"], "Doe");
+
+    let no_desc =
+        MdocClaimExtractor::new(&mdoc).to_namespaced_json_with_display(&[], &["en".to_string()]);
+    assert_eq!(no_desc["org.iso.18013.5.1"]["family_name"], "Doe");
 }

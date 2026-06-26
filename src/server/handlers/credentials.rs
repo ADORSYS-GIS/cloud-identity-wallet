@@ -3,8 +3,9 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use cloud_wallet_openid4vc::formats::mdoc::ParsedMdoc;
+use cloud_wallet_openid4vc::formats::mdoc::{MdocClaimView, ParsedMdoc};
 use cloud_wallet_openid4vc::formats::sd_jwt::SdJwt;
+use serde::Serialize;
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
 use url::Url;
@@ -41,6 +42,9 @@ pub async fn list_credentials<S: SessionStore + Clone>(
 }
 
 /// `GET /api/v1/credentials/:id` — retrieve a single credential by wallet ID.
+///
+/// Returns rendered claims and, for mdoc credentials, a typed `claims_view`
+/// suitable for display rendering.
 pub async fn get_credential<S: SessionStore>(
     State(state): State<AppState<S>>,
     Extension(tenant_id): Extension<Uuid>,
@@ -54,7 +58,30 @@ pub async fn get_credential<S: SessionStore>(
         .await?;
 
     let claims = render_claims(&credential)?;
-    Ok(ResponseBody::new(StatusCode::OK, claims))
+    let claims_view = render_claims_view(&credential);
+    let response = CredentialDetailResponse {
+        claims,
+        claims_view,
+    };
+    Ok(ResponseBody::new(StatusCode::OK, response))
+}
+
+/// Response body for `GET /api/v1/credentials/:id`.
+#[derive(Debug, Serialize)]
+pub struct CredentialDetailResponse {
+    /// Namespaced claim values (flat JSON for SD-JWT, namespaced for mdoc).
+    pub claims: serde_json::Value,
+    /// Typed per-claim view for mdoc credentials, `null` for other formats.
+    pub claims_view: Option<Vec<MdocClaimView>>,
+}
+
+fn render_claims_view(c: &Credential) -> Option<Vec<MdocClaimView>> {
+    match c.format {
+        CredentialFormat::Mdoc => ParsedMdoc::parse(&c.raw_credential)
+            .ok()
+            .map(|mdoc| mdoc.to_claim_views()),
+        _ => None,
+    }
 }
 
 /// Deletes a credential owned by the authenticated tenant.
