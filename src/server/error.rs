@@ -290,10 +290,10 @@ where
     ) -> Result<Self, Self::Rejection> {
         let Json(inner) = Json::<T>::from_request(req, state)
             .await
-            .map_err(|rejection: JsonRejection| ApiError {
+            .map_err(|_: JsonRejection| ApiError {
                 status: StatusCode::BAD_REQUEST,
                 error: Cow::Borrowed("invalid_request"),
-                error_description: Some(rejection.body_text()),
+                error_description: Some("request body is missing or malformed JSON".into()),
             })?;
         Ok(Self(inner))
     }

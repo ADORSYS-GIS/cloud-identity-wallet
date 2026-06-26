@@ -32,26 +32,16 @@ pub async fn submit_presentation_consent<S: SessionStore + Clone>(
     let mut session: PresentationSession = state
         .service
         .session
-        .consume(session_id.as_str())
+        .get(session_id.as_str())
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| PresentationError::session_not_found(&session_id).into_api_error())?;
 
     if session.tenant_id != tenant_id {
-        let _ = state
-            .service
-            .session
-            .upsert(session_id.as_str(), &session)
-            .await;
         return Err(PresentationError::session_not_found(&session_id).into_api_error());
     }
 
     if session.state != PresentationState::AwaitingConsent {
-        let _ = state
-            .service
-            .session
-            .upsert(session_id.as_str(), &session)
-            .await;
         return Err(PresentationError::invalid_state(format!(
             "Session '{}' is not in awaiting_consent state (current: {:?})",
             session_id, session.state
@@ -63,52 +53,28 @@ pub async fn submit_presentation_consent<S: SessionStore + Clone>(
         return handle_rejection(&state, &session_id, &mut session).await;
     }
 
+    validate_selections(&session, &payload)?;
+
+    if session.context.has_transaction_data() && payload.transaction_data_acknowledged != Some(true)
+    {
+        return Err(PresentationError::transaction_data_not_acknowledged().into_api_error());
+    }
+
+    let mut session: PresentationSession = state
+        .service
+        .session
+        .consume(session_id.as_str())
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| PresentationError::session_not_found(&session_id).into_api_error())?;
+
     handle_acceptance(&state, &session_id, &mut session, &payload).await
 }
 
-async fn handle_rejection<S: SessionStore + Clone>(
-    state: &AppState<S>,
-    session_id: &str,
-    session: &mut PresentationSession,
-) -> Result<Response, ApiError> {
-    info!(session_id = %session_id, "presentation consent rejected");
-
-    match state
-        .service
-        .presentation_engine
-        .reject_presentation(&session.context, AuthorizationErrorCode::AccessDenied)
-        .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            warn!(error = %e, session_id = %session_id, "best-effort rejection to verifier failed");
-        }
-    }
-
-    transition_presentation_session(session, PresentationState::Completed)
-        .map_err(ApiError::from)?;
-
-    state
-        .service
-        .session
-        .upsert(session_id, session)
-        .await
-        .map_err(ApiError::internal)?;
-
-    let resp = PresentationConsentResponse {
-        status: ConsentStatus::Rejected,
-        redirect_uri: None,
-        verifier_response: None,
-    };
-    Ok(ResponseBody::new(StatusCode::OK, resp).into_response())
-}
-
-async fn handle_acceptance<S: SessionStore + Clone>(
-    state: &AppState<S>,
-    session_id: &str,
-    session: &mut PresentationSession,
+fn validate_selections(
+    session: &PresentationSession,
     payload: &PresentationConsentRequest,
-) -> Result<Response, ApiError> {
+) -> Result<(), ApiError> {
     let selections = payload.selected_credentials.as_ref().ok_or_else(|| {
         PresentationError::new(
             PresentationErrorCode::InvalidRequest,
@@ -166,10 +132,62 @@ async fn handle_acceptance<S: SessionStore + Clone>(
         }
     }
 
-    if session.context.has_transaction_data() && payload.transaction_data_acknowledged != Some(true)
+    Ok(())
+}
+
+async fn handle_rejection<S: SessionStore + Clone>(
+    state: &AppState<S>,
+    session_id: &str,
+    session: &mut PresentationSession,
+) -> Result<Response, ApiError> {
+    info!(session_id = %session_id, "presentation consent rejected");
+
+    let consumed: PresentationSession = state
+        .service
+        .session
+        .consume(session_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| PresentationError::session_not_found(session_id).into_api_error())?;
+    *session = consumed;
+
+    match state
+        .service
+        .presentation_engine
+        .reject_presentation(&session.context, AuthorizationErrorCode::AccessDenied)
+        .await
     {
-        return Err(PresentationError::transaction_data_not_acknowledged().into_api_error());
+        Ok(_) => {}
+        Err(e) => {
+            warn!(error = %e, session_id = %session_id, "best-effort rejection to verifier failed");
+        }
     }
+
+    transition_presentation_session(session, PresentationState::Completed)
+        .map_err(ApiError::from)?;
+
+    state
+        .service
+        .session
+        .upsert(session_id, session)
+        .await
+        .map_err(ApiError::internal)?;
+
+    let resp = PresentationConsentResponse {
+        status: ConsentStatus::Rejected,
+        redirect_uri: None,
+        verifier_response: None,
+    };
+    Ok(ResponseBody::new(StatusCode::OK, resp).into_response())
+}
+
+async fn handle_acceptance<S: SessionStore + Clone>(
+    state: &AppState<S>,
+    session_id: &str,
+    session: &mut PresentationSession,
+    payload: &PresentationConsentRequest,
+) -> Result<Response, ApiError> {
+    let selections = payload.selected_credentials.as_ref().unwrap();
 
     let selected_credentials = build_selected_credentials(
         &state.service.presentation_engine,

@@ -400,9 +400,18 @@ impl PresentationEngine {
         let mut td_hashes: Vec<String> = Vec::new();
         let mut td_alg: Option<String> = None;
         if !applicable_td.is_empty() {
-            let alg = applicable_td
+            let all_algs: Vec<Vec<String>> =
+                applicable_td.iter().map(|td| td.hash_algorithms()).collect();
+            let alg_set: Vec<String> = all_algs
                 .first()
-                .and_then(|td| td.hash_algorithms().into_iter().next())
+                .map(|first| first.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|alg| all_algs.iter().all(|algs| algs.contains(alg)))
+                .collect();
+            let alg = alg_set
+                .first()
+                .cloned()
                 .unwrap_or_else(|| "sha-256".to_string());
             td_alg = Some(alg.clone());
             for td in &applicable_td {
