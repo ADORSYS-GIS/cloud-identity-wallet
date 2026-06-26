@@ -18,7 +18,7 @@ use rustls_pki_types::TrustAnchor;
 /// - Basic-constraints CA = true
 ///
 /// The same underlying certificate bytes feed both:
-/// - **IACA roots** — raw DER bytes for [`StaticTrustStore`] (mdoc issuerAuth verification)
+/// - **IACA roots** — raw DER bytes for [`cloud_wallet_openid4vc::formats::mdoc::StaticTrustStore`] (mdoc issuerAuth verification)
 /// - **X5C trust anchors** — parsed [`TrustAnchor`] values for SD-JWT VC x5c chain verification
 #[derive(Debug)]
 pub struct RootTrustStore {
