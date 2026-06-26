@@ -22,10 +22,13 @@ use cloud_identity_wallet::{
     },
     server::Server,
     session::MemorySession,
+    setup,
+    utils::load_root_truststore,
 };
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 use sqlx::{AnyPool, ConnectOptions};
+use std::sync::Arc;
 use time::UtcDateTime;
 use url::Url;
 
@@ -44,23 +47,24 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
         config.server.port = 0;
-        config.oid4vci.use_system_proxy = false;
+        config.oid4vc.use_system_proxy = false;
         config
     };
+    let trust_store = load_root_truststore(config.oid4vc.root_truststore_dir.as_deref()).unwrap();
     let session_store = MemorySession::default();
     let tenant_repo = MemoryTenantRepo::new();
     let credential_repo = MemoryCredentialRepo::new();
     let client_config = Oid4vciClientConfig::new(
-        config.oid4vci.client_id.clone(),
-        config.oid4vci.redirect_uri.clone(),
+        config.oid4vc.client_id.clone(),
+        config.oid4vc.redirect_uri.clone(),
     )
-    .use_system_proxy(config.oid4vci.use_system_proxy)
+    .use_system_proxy(config.oid4vc.use_system_proxy)
     .accept_untrusted_hosts(true);
     let client = Oid4vciClient::new(OidClient::new(client_config).unwrap());
     let task_queue = MemoryTaskQueue::new();
     let publisher = MemoryEventPublisher::new(128);
     let subscriber = MemoryEventSubscriber::new(&publisher);
-    let engine = IssuanceEngine::new(
+    let issuance_engine = IssuanceEngine::new(
         client,
         task_queue,
         publisher,
@@ -68,9 +72,22 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
         credential_repo.clone(),
         tenant_repo.clone(),
         &session_store,
-        config.oid4vci.preferred_display_locales.clone(),
+        config.oid4vc.preferred_display_locales.clone(),
     );
-    let service = Service::new(session_store, tenant_repo, engine);
+    let x5c_trust_anchors = Arc::new(trust_store.x5c_trust_anchors);
+    let presentation_engine = setup::build_presentation_engine(
+        &config,
+        credential_repo.clone(),
+        tenant_repo.clone(),
+        x5c_trust_anchors,
+    )
+    .expect("failed to build presentation engine");
+    let service = Service::new(
+        session_store,
+        tenant_repo,
+        issuance_engine,
+        presentation_engine,
+    );
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
     tokio::spawn(server.run());
@@ -89,7 +106,7 @@ pub fn make_config() -> Config {
     let mut config = Config::load().unwrap();
     config.server.host = "localhost".to_string();
     config.server.port = 0;
-    config.oid4vci.use_system_proxy = false;
+    config.oid4vc.use_system_proxy = false;
     config
 }
 
