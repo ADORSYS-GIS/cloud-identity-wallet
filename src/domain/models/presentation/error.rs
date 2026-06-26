@@ -228,8 +228,8 @@ fn parse_verifier_error_description(body: &str) -> Option<String> {
             return Some(error_code.clone());
         }
     }
-    let truncated = if body.len() > 256 { &body[..256] } else { body };
-    Some(truncated.to_string())
+    let truncated: String = body.chars().take(256).collect();
+    Some(truncated)
 }
 
 impl From<SessionError> for PresentationError {
@@ -264,5 +264,62 @@ mod tests {
         assert_eq!(err.error(), "internal_error");
         assert!(err.error_description().is_none());
         assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn parse_verifier_error_description_extracts_error_description_field() {
+        let body = r#"{"error":"invalid_request","error_description":"Missing required parameter"}"#;
+        let result = parse_verifier_error_description(body);
+        assert_eq!(result, Some("Missing required parameter".to_string()));
+    }
+
+    #[test]
+    fn parse_verifier_error_description_falls_back_to_error_code() {
+        let body = r#"{"error":"invalid_client"}"#;
+        let result = parse_verifier_error_description(body);
+        assert_eq!(result, Some("invalid_client".to_string()));
+    }
+
+    #[test]
+    fn parse_verifier_error_description_truncates_non_json_body() {
+        let body = "a".repeat(300);
+        let result = parse_verifier_error_description(&body);
+        assert_eq!(result.as_deref().unwrap().chars().count(), 256);
+    }
+
+    #[test]
+    fn parse_verifier_error_description_handles_multibyte_utf8() {
+        let body: String = "é".repeat(300);
+        let result = parse_verifier_error_description(&body);
+        let truncated = result.unwrap();
+        assert!(truncated.chars().count() <= 256);
+    }
+
+    #[test]
+    fn parse_verifier_error_description_returns_none_for_empty_body() {
+        assert_eq!(parse_verifier_error_description(""), None);
+    }
+
+    #[test]
+    fn parse_verifier_error_description_short_non_json_body_returned_as_is() {
+        let body = "plain text error";
+        let result = parse_verifier_error_description(body);
+        assert_eq!(result, Some("plain text error".to_string()));
+    }
+
+    #[test]
+    fn from_oid4vp_client_error_surfaces_verifier_error_description() {
+        use cloud_wallet_openid4vc::oid4vp::response_mode::DirectPostError;
+
+        let err = Oid4vpClientError::ResponseDeliveryFailed(DirectPostError::VerifierError {
+            status: 400,
+            body: r#"{"error":"invalid_request","error_description":"bad param"}"#.to_string(),
+        });
+        let presentation_err: PresentationError = err.into();
+        assert_eq!(presentation_err.error, PresentationErrorCode::VerifierSubmissionFailed);
+        assert_eq!(
+            presentation_err.error_description.as_deref(),
+            Some("bad param")
+        );
     }
 }

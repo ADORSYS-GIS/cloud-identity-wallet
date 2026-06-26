@@ -356,13 +356,20 @@ impl PresentationEngine {
         )
         .requested_claims(matched_claim_paths);
 
-        let mut td_hashes: Vec<String> = Vec::new();
-        let mut td_algs: Vec<String> = Vec::new();
-        for td in transaction_data
+        let applicable_td: Vec<&TransactionData<'_>> = transaction_data
             .iter()
             .filter(|td| td.applies_to_credential(query_id))
-        {
-            for alg in td.hash_algorithms() {
+            .collect();
+
+        let mut td_hashes: Vec<String> = Vec::new();
+        let mut td_alg: Option<String> = None;
+        if !applicable_td.is_empty() {
+            let alg = applicable_td
+                .first()
+                .and_then(|td| td.hash_algorithms().into_iter().next())
+                .unwrap_or_else(|| "sha-256".to_string());
+            td_alg = Some(alg.clone());
+            for td in &applicable_td {
                 let hash = td.compute_hash(&alg).map_err(|e| {
                     PresentationError::new(
                         PresentationErrorCode::PresentationBuildFailed,
@@ -370,18 +377,11 @@ impl PresentationEngine {
                     )
                 })?;
                 td_hashes.push(hash);
-                if !td_algs.contains(&alg) {
-                    td_algs.push(alg);
-                }
             }
         }
 
         if !td_hashes.is_empty() {
-            let alg = td_algs
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "sha-256".to_string());
-            builder = builder.transaction_data(td_hashes, Some(alg));
+            builder = builder.transaction_data(td_hashes, td_alg);
         }
 
         if requires_holder_binding(ctx, query_id)? {

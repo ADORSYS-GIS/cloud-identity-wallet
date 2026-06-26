@@ -1,5 +1,4 @@
 use axum::{
-    Json,
     extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -12,7 +11,7 @@ use crate::domain::models::presentation::{
     PresentationEngine, PresentationError, PresentationErrorCode, VerifierDirectPostResponse,
 };
 use crate::server::AppState;
-use crate::server::error::{ApiError, IntoApiError};
+use crate::server::error::{ApiError, ApiJson, IntoApiError};
 use crate::server::responses::ResponseBody;
 use crate::session::{
     PresentationFlow, PresentationSession, PresentationState, SessionStore,
@@ -26,19 +25,33 @@ pub async fn submit_presentation_consent<S: SessionStore + Clone>(
     State(state): State<AppState<S>>,
     Extension(tenant_id): Extension<uuid::Uuid>,
     Path(session_id): Path<String>,
-    Json(payload): Json<PresentationConsentRequest>,
+    ApiJson(payload): ApiJson<PresentationConsentRequest>,
 ) -> Result<Response, ApiError> {
     info!(session_id = %session_id, accepted = payload.accepted, "received presentation consent request");
 
     let mut session: PresentationSession = state
         .service
         .session
-        .get(session_id.as_str())
+        .consume(session_id.as_str())
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| PresentationError::session_not_found(&session_id).into_api_error())?;
 
+    if session.tenant_id != tenant_id {
+        let _ = state
+            .service
+            .session
+            .upsert(session_id.as_str(), &session)
+            .await;
+        return Err(PresentationError::session_not_found(&session_id).into_api_error());
+    }
+
     if session.state != PresentationState::AwaitingConsent {
+        let _ = state
+            .service
+            .session
+            .upsert(session_id.as_str(), &session)
+            .await;
         return Err(PresentationError::invalid_state(format!(
             "Session '{}' is not in awaiting_consent state (current: {:?})",
             session_id, session.state
@@ -46,20 +59,16 @@ pub async fn submit_presentation_consent<S: SessionStore + Clone>(
         .into_api_error());
     }
 
-    if session.tenant_id != tenant_id {
-        return Err(PresentationError::session_not_found(&session_id).into_api_error());
-    }
-
     if !payload.accepted {
-        return handle_rejection(&state, session_id, &mut session).await;
+        return handle_rejection(&state, &session_id, &mut session).await;
     }
 
-    handle_acceptance(&state, session_id, &mut session, &payload).await
+    handle_acceptance(&state, &session_id, &mut session, &payload).await
 }
 
 async fn handle_rejection<S: SessionStore + Clone>(
     state: &AppState<S>,
-    session_id: String,
+    session_id: &str,
     session: &mut PresentationSession,
 ) -> Result<Response, ApiError> {
     info!(session_id = %session_id, "presentation consent rejected");
@@ -82,7 +91,7 @@ async fn handle_rejection<S: SessionStore + Clone>(
     state
         .service
         .session
-        .upsert(session_id.as_str(), session)
+        .upsert(session_id, session)
         .await
         .map_err(ApiError::internal)?;
 
@@ -96,7 +105,7 @@ async fn handle_rejection<S: SessionStore + Clone>(
 
 async fn handle_acceptance<S: SessionStore + Clone>(
     state: &AppState<S>,
-    session_id: String,
+    session_id: &str,
     session: &mut PresentationSession,
     payload: &PresentationConsentRequest,
 ) -> Result<Response, ApiError> {
@@ -180,7 +189,7 @@ async fn handle_acceptance<S: SessionStore + Clone>(
     {
         Ok(resp) => resp,
         Err(e) => {
-            transition_to_failed(state, &session_id, session).await;
+            transition_to_failed(state, session_id, session).await;
             return Err(e.into_api_error());
         }
     };
@@ -191,7 +200,7 @@ async fn handle_acceptance<S: SessionStore + Clone>(
     state
         .service
         .session
-        .upsert(session_id.as_str(), session)
+        .upsert(session_id, session)
         .await
         .map_err(ApiError::internal)?;
 
