@@ -221,15 +221,21 @@ impl IntoApiError for PresentationError {
     fn into_api_error(self) -> ApiError {
         let status = match &self.error {
             PresentationErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::InvalidDcqlQuery => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InvalidCredentialSelection => StatusCode::BAD_REQUEST,
             PresentationErrorCode::TransactionDataNotAcknowledged => StatusCode::BAD_REQUEST,
             PresentationErrorCode::NoMatchingCredentials => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::VpFormatsNotSupported => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::InvalidClient => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::RequestUriFetchFailed => StatusCode::BAD_GATEWAY,
+            PresentationErrorCode::RequestObjectInvalid => StatusCode::BAD_GATEWAY,
             PresentationErrorCode::KeyResolutionFailed => StatusCode::BAD_REQUEST,
             PresentationErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
             PresentationErrorCode::InvalidSessionState => StatusCode::CONFLICT,
             PresentationErrorCode::PresentationBuildFailed => StatusCode::INTERNAL_SERVER_ERROR,
             PresentationErrorCode::VerifierSubmissionFailed => StatusCode::BAD_GATEWAY,
             PresentationErrorCode::ResponseDeliveryFailed => StatusCode::BAD_GATEWAY,
+            PresentationErrorCode::InvalidTransactionData => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -244,16 +250,15 @@ impl IntoApiError for PresentationError {
             tracing::warn!(
                 error = %self,
                 error.source = ?self.source,
-                "verifier submission failed"
+                "external system error during presentation"
             );
         }
 
-        let error_description = match &self.error {
-            PresentationErrorCode::PresentationBuildFailed => {
-                Some("VP Token construction failed".into())
-            }
-            PresentationErrorCode::InternalError => Some("An unexpected error occurred.".into()),
-            _ => self.error_description,
+        // Do not leak internal error details to the client.
+        let error_description = if self.error == PresentationErrorCode::InternalError {
+            None
+        } else {
+            self.error_description
         };
 
         ApiError {
@@ -279,15 +284,17 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(inner) =
-            Json::<T>::from_request(req, state)
-                .await
-                .map_err(|rejection: JsonRejection| ApiError {
-                    status: StatusCode::BAD_REQUEST,
-                    error: Cow::Borrowed("invalid_request"),
-                    error_description: Some(rejection.body_text()),
-                })?;
+    async fn from_request(
+        req: axum::extract::Request,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let Json(inner) = Json::<T>::from_request(req, state)
+            .await
+            .map_err(|rejection: JsonRejection| ApiError {
+                status: StatusCode::BAD_REQUEST,
+                error: Cow::Borrowed("invalid_request"),
+                error_description: Some(rejection.body_text()),
+            })?;
         Ok(Self(inner))
     }
 }
