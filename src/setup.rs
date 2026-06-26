@@ -114,6 +114,7 @@ pub fn build_service<S: SessionStore + Clone>(
     config: &Config,
 ) -> color_eyre::Result<Service<S>> {
     let trust_store = load_root_truststore(config.oid4vc.root_truststore_dir.as_deref())?;
+    let trust_store = Arc::new(trust_store);
 
     let credential_repo = MemoryCredentialRepo::new();
     let issuance_engine = build_issuance_engine(
@@ -123,7 +124,7 @@ pub fn build_service<S: SessionStore + Clone>(
         &session_store,
         &trust_store,
     )?;
-    let x5c_trust_anchors = Arc::new(trust_store.x5c_trust_anchors);
+    let x5c_trust_anchors = Arc::new(trust_store.x5c_trust_anchors.clone());
     let presentation_engine = build_presentation_engine(
         config,
         credential_repo,

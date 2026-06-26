@@ -94,7 +94,7 @@ impl Config {
     }
 
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
-        ConfigLib::builder()
+        Ok(ConfigLib::builder()
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 3000)?
             .set_default("redis.uri", "redis://127.0.0.1:6379?protocol=resp3")?
@@ -107,7 +107,7 @@ impl Config {
             .set_default("oid4vc.use_system_proxy", true)?
             .set_default("oid4vc.preferred_display_locales", vec!["en"])?
             .set_default("oid4vc.revocation_policy", "soft_fail")?
-            .set_default("oid4vc.discovery_mode", "static")
+            .set_default("oid4vc.discovery_mode", "static")?)
     }
 }
 

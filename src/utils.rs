@@ -20,7 +20,7 @@ use rustls_pki_types::TrustAnchor;
 /// The same underlying certificate bytes feed both:
 /// - **IACA roots** — raw DER bytes for [`cloud_wallet_openid4vc::formats::mdoc::StaticTrustStore`] (mdoc issuerAuth verification)
 /// - **X5C trust anchors** — parsed [`TrustAnchor`] values for SD-JWT VC x5c chain verification
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RootTrustStore {
     pub iaca_roots: Vec<Vec<u8>>,
     pub x5c_trust_anchors: Vec<TrustAnchor<'static>>,
@@ -41,7 +41,7 @@ impl Driver {
         let url = url.as_str();
         if url.starts_with("postgres://") || url.starts_with("postgresql://") {
             Self::Postgres
-        } else if url.starts_with("mysql://") || url.starts_with("mysql://") {
+        } else if url.starts_with("mysql://") || url.starts_with("mariadb://") {
             Self::MySql
         } else {
             Self::Sqlite
@@ -135,7 +135,8 @@ fn rewrite_to_positional(sql: &str) -> Cow<'_, str> {
 ///
 /// If `dir` is `None`, logs a `WARN` and returns an empty store (all mdoc/x5c
 /// verifications will fail closed). If `dir` is `Some(path)` but the directory
-/// is empty, also logs a `WARN`.
+/// does not exist, returns a hard error (misconfigured path). If `dir` is
+/// `Some(path)` and the directory exists but is empty, logs a `WARN`.
 pub fn load_root_truststore(dir: Option<&Path>) -> color_eyre::Result<RootTrustStore> {
     let Some(dir) = dir.filter(|d| !d.as_os_str().is_empty()) else {
         tracing::warn!(
@@ -153,15 +154,11 @@ pub fn load_root_truststore(dir: Option<&Path>) -> color_eyre::Result<RootTrustS
 
 fn load_root_truststore_from_dir(dir: &Path) -> color_eyre::Result<RootTrustStore> {
     if !dir.exists() {
-        tracing::warn!(
-            path = %dir.display(),
-            "root truststore directory does not exist; \
-             all mdoc/x5c verifications will fail closed"
-        );
-        return Ok(RootTrustStore {
-            iaca_roots: Vec::new(),
-            x5c_trust_anchors: Vec::new(),
-        });
+        return Err(eyre!(
+            "root truststore directory '{}' does not exist; \
+             verify APP_OID4VC__ROOT_TRUSTSTORE_DIR is correct",
+            dir.display()
+        ));
     }
 
     let entries = std::fs::read_dir(dir)
@@ -370,11 +367,13 @@ mod tests {
     }
 
     #[test]
-    fn returns_empty_on_nonexistent_dir() {
+    fn errors_on_nonexistent_dir() {
         let dir = PathBuf::from("/nonexistent/truststore/path");
-        let store = load_root_truststore(Some(dir.as_path())).unwrap();
-        assert!(store.iaca_roots.is_empty());
-        assert!(store.x5c_trust_anchors.is_empty());
+        let result = load_root_truststore(Some(dir.as_path()));
+        assert!(
+            result.is_err(),
+            "nonexistent configured truststore dir should be a hard error"
+        );
     }
 
     #[test]
