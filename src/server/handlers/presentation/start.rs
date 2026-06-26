@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -32,6 +33,11 @@ pub async fn start_presentation<S: SessionStore + Clone>(
         .presentation_engine
         .process_request(&payload.request)
         .await?;
+    validate_origin(payload.origin.as_deref(), &context.request.expected_origins)?;
+    state
+        .service
+        .presentation_engine
+        .ensure_supported_vp_formats(&context)?;
 
     let (credentials, credential_displays) = state
         .service
@@ -53,7 +59,13 @@ pub async fn start_presentation<S: SessionStore + Clone>(
     }
 
     let session = PresentationSession::new(tenant_id, context, dcql_result);
-    let response = StartPresentationResponse::from_session(&session, &credential_displays)?;
+    let expires_at = (OffsetDateTime::now_utc() + state.service.session.ttl())
+        .format(&Rfc3339)
+        .map_err(|e| {
+            PresentationError::internal_message(format!(
+                "failed to format expiration timestamp: {e}"
+            ))
+        })?;
 
     state
         .service
@@ -61,5 +73,33 @@ pub async fn start_presentation<S: SessionStore + Clone>(
         .upsert(session.id.clone(), &session)
         .await?;
 
+    let response =
+        StartPresentationResponse::from_session(&session, &credential_displays, expires_at)?;
+
     Ok(ResponseBody::new(StatusCode::CREATED, response))
+}
+
+fn validate_origin(
+    origin: Option<&str>,
+    expected_origins: &Option<Vec<String>>,
+) -> Result<(), PresentationError> {
+    let Some(expected_origins) = expected_origins else {
+        return Ok(());
+    };
+
+    let Some(origin) = origin else {
+        return Err(PresentationError::new(
+            PresentationErrorCode::InvalidRequest,
+            "origin is required when expected_origins is present",
+        ));
+    };
+
+    if expected_origins.iter().any(|expected| expected == origin) {
+        return Ok(());
+    }
+
+    Err(PresentationError::new(
+        PresentationErrorCode::InvalidRequest,
+        "origin does not match expected_origins",
+    ))
 }

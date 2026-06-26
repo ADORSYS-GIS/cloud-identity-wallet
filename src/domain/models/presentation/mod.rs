@@ -8,6 +8,7 @@ pub use start::{StartPresentationRequest, StartPresentationResponse};
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use base64ct::Encoding as _;
 use cloud_wallet_openid4vc::errors::{Error as Oid4vcError, ErrorKind};
 use cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse;
@@ -169,6 +170,48 @@ impl PresentationEngine {
             "authorization request validated"
         );
         Ok(context)
+    }
+
+    /// Ensures the requested DCQL credential formats intersect with this
+    /// wallet's advertised VP format capabilities.
+    pub fn ensure_supported_vp_formats(&self, ctx: &PresentationContext) -> Result<()> {
+        let supported_formats = self
+            .client
+            .config()
+            .wallet_metadata
+            .as_ref()
+            .map(|metadata| &metadata.vp_formats_supported);
+
+        let supports_format = |format: &cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat| {
+            supported_formats
+                .map(|formats| {
+                    formats
+                        .keys()
+                        .any(|supported_format| supported_format.to_string() == format.to_string())
+                })
+                .unwrap_or_else(|| {
+                    matches!(
+                        format,
+                        cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat::DcSdJwt
+                            | cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat::MsoMdoc
+                            | cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat::JwtVcJson
+                    )
+                })
+        };
+
+        if ctx
+            .dcql_query
+            .credentials
+            .iter()
+            .any(|query| supports_format(&query.format))
+        {
+            return Ok(());
+        }
+
+        Err(PresentationError::new(
+            PresentationErrorCode::VpFormatsNotSupported,
+            "None of the requested VP formats are supported by this wallet",
+        ))
     }
 
     /// Matches the wallet's credentials against the DCQL query in the context.
@@ -539,10 +582,33 @@ fn decode_credential_for_matching(credential: &Credential) -> Result<DecodedCred
                 holder_binding_supported: true,
             })
         }
+        CredentialFormat::JwtVcJson | CredentialFormat::JwtVcJsonLd => {
+            let claims = decode_jwt_claims(&credential.raw_credential)?;
+            Ok(DecodedCredential {
+                claims,
+                trusted_authorities: vec![],
+                holder_binding_supported: true,
+            })
+        }
         other => Err(PresentationError::internal_message(format!(
             "unsupported credential format: {other}"
         ))),
     }
+}
+
+fn decode_jwt_claims(raw_credential: &str) -> Result<serde_json::Value> {
+    let payload = raw_credential.split('.').nth(1).ok_or_else(|| {
+        PresentationError::internal_message("JWT credential is missing a payload segment")
+    })?;
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|err| {
+            PresentationError::internal_message(format!(
+                "failed to decode JWT credential payload: {err}"
+            ))
+        })?;
+
+    serde_json::from_slice(&payload).map_err(PresentationError::internal)
 }
 
 /// Extracts claims from an mdoc IssuerSigned CBOR value as a JSON object.

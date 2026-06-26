@@ -1,18 +1,16 @@
 use std::collections::HashMap;
 
 use cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathElement;
-use cloud_wallet_openid4vc::oid4vp::dcql::{CredentialQuery, CredentialSet};
+use cloud_wallet_openid4vc::oid4vp::client_id::ClientIdPrefix;
+use cloud_wallet_openid4vc::oid4vp::dcql::{ClaimsQuery, CredentialQuery, CredentialSet};
 use cloud_wallet_openid4vc::oid4vp::selection::{CredentialCandidate, SelectionResult};
 use cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::PresentationError;
 use crate::domain::models::credential::CredentialDisplayMetadata;
 use crate::session::{PresentationFlow, PresentationSession};
-
-const SESSION_TTL: Duration = Duration::minutes(15);
 
 /// Request body for `POST /presentation/start`.
 #[derive(Debug, serde::Deserialize)]
@@ -91,6 +89,7 @@ impl StartPresentationResponse {
     pub fn from_session(
         session: &PresentationSession,
         display_map: &HashMap<String, CredentialDisplayMetadata>,
+        expires_at: String,
     ) -> Result<Self, PresentationError> {
         let ctx = &session.context;
         let verifier = build_verifier_display(ctx);
@@ -106,20 +105,12 @@ impl StartPresentationResponse {
             &display_by_id,
         )?;
 
-        let expires_at = (OffsetDateTime::now_utc() + SESSION_TTL)
-            .format(&Rfc3339)
-            .map_err(|e| {
-                PresentationError::internal_message(format!(
-                    "failed to format expiration timestamp: {e}"
-                ))
-            })?;
-
         Ok(Self {
             session_id: session.id.clone(),
             expires_at,
             flow: session.flow,
             verifier,
-            purpose: None,
+            purpose: presentation_purpose(ctx),
             credential_matches,
             credential_set_options: credential_set_options(
                 ctx.dcql_query.credential_sets.as_deref(),
@@ -139,6 +130,10 @@ fn build_verifier_display(
         .or(ctx.request.client_metadata.as_ref())
         .map(|metadata| &metadata.client_metadata);
 
+    let verified = ctx.verifier_metadata.is_some()
+        || ctx.client_id.is_x509_hash()
+        || ctx.client_id.is_x509_san_dns();
+
     VerifierDisplay {
         name: client_metadata
             .and_then(|metadata| metadata.client_name.clone())
@@ -147,14 +142,8 @@ fn build_verifier_display(
             .and_then(|metadata| metadata.logo_uri.as_ref().map(|uri| uri.to_string())),
         policy_uri: client_metadata
             .and_then(|metadata| metadata.policy_uri.as_ref().map(|uri| uri.to_string())),
-        verified: ctx.verifier_metadata.is_some()
-            || ctx.client_id.is_x509_hash()
-            || ctx.client_id.is_x509_san_dns(),
-        verification_method: ctx
-            .client_id
-            .prefix()
-            .map(|prefix| prefix.as_str().to_string())
-            .or_else(|| Some("pre-registered".to_string())),
+        verified,
+        verification_method: verified.then(|| verification_method(ctx)).flatten(),
     }
 }
 
@@ -179,6 +168,33 @@ fn verifier_fallback_name(
     ctx.client_id.value().to_string()
 }
 
+fn verification_method(
+    ctx: &cloud_wallet_openid4vc::oid4vp::client::PresentationContext,
+) -> Option<String> {
+    match ctx.client_id.prefix() {
+        Some(ClientIdPrefix::Origin) => None,
+        Some(prefix) => Some(prefix.as_str().to_string()),
+        None if ctx.verifier_metadata.is_some() => Some("pre-registered".to_string()),
+        None => None,
+    }
+}
+
+fn presentation_purpose(
+    ctx: &cloud_wallet_openid4vc::oid4vp::client::PresentationContext,
+) -> Option<String> {
+    let metadata = ctx
+        .verifier_metadata
+        .as_ref()
+        .or(ctx.request.client_metadata.as_ref())
+        .map(|metadata| &metadata.client_metadata);
+
+    metadata
+        .and_then(|metadata| metadata.additional.get("purpose"))
+        .and_then(Value::as_str)
+        .filter(|purpose| !purpose.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn build_credential_matches(
     queries: &[CredentialQuery],
     credential_sets: Option<&[CredentialSet]>,
@@ -191,7 +207,7 @@ fn build_credential_matches(
             let candidates = result
                 .candidates
                 .get(&query.id)
-                .map(|candidates| build_candidate_info(candidates, display_by_id))
+                .map(|candidates| build_candidate_info(query, candidates, display_by_id))
                 .transpose()?
                 .unwrap_or_default();
 
@@ -205,6 +221,7 @@ fn build_credential_matches(
 }
 
 fn build_candidate_info(
+    query: &CredentialQuery,
     candidates: &[CredentialCandidate],
     display_by_id: &HashMap<&str, &CredentialDisplayMetadata>,
 ) -> Result<Vec<CandidateInfo>, PresentationError> {
@@ -229,7 +246,11 @@ fn build_candidate_info(
                     .map(|claim| RequestedClaimInfo {
                         path: claim.path.elements().to_vec(),
                         display_name: claim_display_name(claim.path.elements()),
-                        value_required: claim.selected_values.iter().any(|value| !value.is_null()),
+                        value_required: claims_query_for_match(query, claim)
+                            .map(|claims_query| claims_query.values.is_some())
+                            .unwrap_or_else(|| {
+                                claim.selected_values.iter().any(|value| !value.is_null())
+                            }),
                     })
                     .collect(),
             })
@@ -237,27 +258,57 @@ fn build_candidate_info(
         .collect()
 }
 
+fn claims_query_for_match<'a>(
+    query: &'a CredentialQuery,
+    claim: &cloud_wallet_openid4vc::oid4vp::selection::MatchedClaim,
+) -> Option<&'a ClaimsQuery> {
+    let claims = query.claims.as_deref()?;
+
+    claim
+        .claim_query_id
+        .as_deref()
+        .and_then(|id| {
+            claims
+                .iter()
+                .find(|claims_query| claims_query.id.as_deref() == Some(id))
+        })
+        .or_else(|| {
+            claims
+                .iter()
+                .find(|claims_query| claims_query.path == claim.path)
+        })
+}
+
 fn claim_display_name(path: &[ClaimPathElement]) -> Option<String> {
+    path.iter()
+        .rev()
+        .find_map(|element| match element {
+            ClaimPathElement::String(segment) => Some(humanize_claim_segment(segment)),
+            ClaimPathElement::Index(_) | ClaimPathElement::Null => None,
+        })
+        .filter(|label| !label.is_empty())
+}
+
+fn humanize_claim_segment(segment: &str) -> String {
     let mut label = String::new();
 
-    for element in path {
-        match element {
-            ClaimPathElement::String(segment) => {
-                if !label.is_empty() {
-                    label.push('.');
-                }
-                label.push_str(segment);
-            }
-            ClaimPathElement::Index(index) => {
-                label.push('[');
-                label.push_str(&index.to_string());
-                label.push(']');
-            }
-            ClaimPathElement::Null => label.push_str("[*]"),
+    for (index, word) in segment
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .enumerate()
+    {
+        if index > 0 {
+            label.push(' ');
+        }
+
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            label.push(first.to_ascii_uppercase());
+            label.extend(chars);
         }
     }
 
-    (!label.is_empty()).then_some(label)
+    label
 }
 
 fn query_required(query_id: &str, credential_sets: Option<&[CredentialSet]>) -> bool {
@@ -292,31 +343,52 @@ fn transaction_data_display(
     Some(
         transaction_data
             .iter()
-            .map(|entry| {
-                let mut display_data = Map::new();
-                display_data.insert(
-                    "hash_algorithms".to_string(),
-                    Value::Array(
-                        entry
-                            .hash_algorithms()
-                            .into_iter()
-                            .map(Value::String)
-                            .collect(),
-                    ),
-                );
-
-                TransactionDataDisplay {
-                    data_type: entry.transaction_type().to_string(),
-                    credential_ids: entry.credential_ids().to_vec(),
-                    display_data: Value::Object(display_data),
-                }
+            .map(|entry| TransactionDataDisplay {
+                data_type: entry.transaction_type().to_string(),
+                credential_ids: entry.credential_ids().to_vec(),
+                display_data: transaction_display_data(entry),
             })
             .collect(),
     )
 }
 
+fn transaction_display_data(entry: &TransactionData<'static>) -> Value {
+    let mut display_data = Map::new();
+
+    match entry {
+        TransactionData::Openid4vp { data, .. } => {
+            if let Some(algorithms) = &data.transaction_data_hashes_alg {
+                display_data.insert(
+                    "transaction_data_hashes_alg".to_string(),
+                    Value::Array(algorithms.iter().cloned().map(Value::String).collect()),
+                );
+            }
+        }
+        TransactionData::Other {
+            transaction_data_hashes_alg,
+            additional_params,
+            ..
+        } => {
+            if let Value::Object(params) = additional_params {
+                display_data.extend(params.clone());
+            }
+            if let Some(algorithms) = transaction_data_hashes_alg {
+                display_data.insert(
+                    "transaction_data_hashes_alg".to_string(),
+                    Value::Array(algorithms.iter().cloned().map(Value::String).collect()),
+                );
+            }
+        }
+    }
+
+    Value::Object(display_data)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
+    use cloud_wallet_openid4vc::core::claim_path_pointer::ClaimValue;
     use cloud_wallet_openid4vc::oauth::authorization::OAuthAuthorizationRequest;
     use cloud_wallet_openid4vc::oid4vp::authorization::{
         AuthorizationRequest, ResponseMode, ResponseType,
@@ -324,9 +396,11 @@ mod tests {
     use cloud_wallet_openid4vc::oid4vp::client::PresentationContext;
     use cloud_wallet_openid4vc::oid4vp::client_id::ParsedClientId;
     use cloud_wallet_openid4vc::oid4vp::dcql::{
-        CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
+        ClaimsQuery, CredentialFormat, CredentialMeta, CredentialQuery, DcqlQuery,
     };
     use cloud_wallet_openid4vc::oid4vp::metadata::verifier::VerifierMetadata;
+    use cloud_wallet_openid4vc::oid4vp::selection::MatchedClaim;
+    use cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData;
     use serde_json::json;
 
     use super::*;
@@ -422,20 +496,17 @@ mod tests {
     }
 
     #[test]
-    fn claim_display_name_uses_path_segments_instead_of_claim_query_id() {
+    fn claim_display_name_humanizes_last_string_path_segment() {
         let path = vec![
             ClaimPathElement::from("credentialSubject"),
             "username".into(),
         ];
 
-        assert_eq!(
-            claim_display_name(&path).as_deref(),
-            Some("credentialSubject.username")
-        );
+        assert_eq!(claim_display_name(&path).as_deref(), Some("Username"));
     }
 
     #[test]
-    fn claim_display_name_formats_array_selectors() {
+    fn claim_display_name_ignores_array_selectors_for_label_fallback() {
         let path = vec![
             ClaimPathElement::from("addresses"),
             ClaimPathElement::Index(0),
@@ -443,9 +514,71 @@ mod tests {
             ClaimPathElement::Null,
         ];
 
-        assert_eq!(
-            claim_display_name(&path).as_deref(),
-            Some("addresses[0].street[*]")
+        assert_eq!(claim_display_name(&path).as_deref(), Some("Street"));
+    }
+
+    #[test]
+    fn claims_query_for_match_resolves_value_constraints_by_claim_query_id() {
+        let path = cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathPointer::new(vec![
+            ClaimPathElement::from("age_over_18"),
+        ]);
+        let query = CredentialQuery {
+            id: "pid".to_string(),
+            format: CredentialFormat::DcSdJwt,
+            multiple: None,
+            meta: CredentialMeta::SdJwt {
+                vct_values: vec!["https://example.com/vct".to_string()],
+            },
+            claims: Some(vec![ClaimsQuery {
+                path: path.clone(),
+                id: Some("age".to_string()),
+                values: Some(vec![ClaimValue::Boolean(true)]),
+            }]),
+            claim_sets: None,
+            trusted_authorities: None,
+            require_cryptographic_holder_binding: None,
+        };
+        let matched = MatchedClaim {
+            claim_query_id: Some("age".to_string()),
+            path,
+            selected_values: vec![serde_json::Value::Bool(true)],
+        };
+
+        assert!(
+            claims_query_for_match(&query, &matched)
+                .and_then(|claims_query| claims_query.values.as_ref())
+                .is_some()
         );
+    }
+
+    #[test]
+    fn transaction_display_data_preserves_type_specific_payload() {
+        let entry = TransactionData::Other {
+            transaction_type: "payment_authorization".to_string(),
+            credential_ids: vec!["pid".to_string()],
+            transaction_data_hashes_alg: Some(vec!["sha-256".to_string()]),
+            additional_params: json!({
+                "amount": "250.00",
+                "currency": "EUR",
+                "payee": "ACME Corp"
+            }),
+            original_encoded: Cow::Borrowed("encoded"),
+        };
+
+        let display = transaction_display_data(&entry);
+
+        assert_eq!(
+            display.get("amount").and_then(Value::as_str),
+            Some("250.00")
+        );
+        assert_eq!(
+            display
+                .get("transaction_data_hashes_alg")
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(Value::as_str),
+            Some("sha-256")
+        );
+        assert!(display.get("hash_algorithms").is_none());
     }
 }

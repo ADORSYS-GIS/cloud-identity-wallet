@@ -204,9 +204,9 @@ async fn valid_request_with_matching_credentials_returns_201() {
         .await
         .expect("Failed to send request");
 
-    assert_eq!(response.status(), StatusCode::CREATED);
-
+    let status = response.status();
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(status, StatusCode::CREATED, "response body: {body}");
     let session_id = body.get("session_id").unwrap().as_str().unwrap();
     assert!(session_id.starts_with("prs_"));
 
@@ -219,7 +219,7 @@ async fn valid_request_with_matching_credentials_returns_201() {
         "https://verifier.example.com"
     );
     assert_eq!(verifier.get("verified").unwrap(), false);
-    assert_eq!(verifier.get("verification_method").unwrap(), "redirect_uri");
+    assert!(verifier.get("verification_method").unwrap().is_null());
 
     let credential_matches = body.get("credential_matches").unwrap().as_array().unwrap();
     assert_eq!(credential_matches.len(), 1);
@@ -306,9 +306,9 @@ async fn fragment_response_mode_returns_same_device_flow() {
         .await
         .expect("Failed to send request");
 
-    assert_eq!(response.status(), StatusCode::CREATED);
-
+    let status = response.status();
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
+    assert_eq!(status, StatusCode::CREATED, "response body: {body}");
     let flow = body.get("flow").unwrap().as_str().unwrap();
     assert_eq!(flow, "same_device");
 }

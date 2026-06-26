@@ -158,9 +158,7 @@ impl From<Oid4vpClientError> for PresentationError {
             Oid4vpClientError::InvalidClientId(_) => PresentationErrorCode::InvalidClient,
             Oid4vpClientError::VerifierResolutionFailed(_) => PresentationErrorCode::InvalidClient,
             Oid4vpClientError::ValidationFailed(_) => PresentationErrorCode::InvalidRequest,
-            Oid4vpClientError::UnsupportedResponseMode(_) => {
-                PresentationErrorCode::ResponseDeliveryFailed
-            }
+            Oid4vpClientError::UnsupportedResponseMode(_) => PresentationErrorCode::InvalidRequest,
             Oid4vpClientError::ResponseDeliveryFailed(_) | Oid4vpClientError::NoResponseUri => {
                 PresentationErrorCode::ResponseDeliveryFailed
             }
