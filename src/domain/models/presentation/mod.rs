@@ -76,6 +76,7 @@ pub struct PresentationEngine {
     pub credential_repo: Arc<dyn CredentialRepo>,
     pub tenant_repo: Arc<dyn TenantRepo>,
     key_resolver: Arc<dyn VerifierKeyResolver>,
+    preferred_display_locales: Arc<Vec<String>>,
 }
 
 impl Clone for PresentationEngine {
@@ -85,6 +86,7 @@ impl Clone for PresentationEngine {
             credential_repo: Arc::clone(&self.credential_repo),
             tenant_repo: Arc::clone(&self.tenant_repo),
             key_resolver: Arc::clone(&self.key_resolver),
+            preferred_display_locales: Arc::clone(&self.preferred_display_locales),
         }
     }
 }
@@ -112,6 +114,7 @@ impl PresentationEngine {
         credential_repo: C,
         tenant_repo: T,
         x509_trust_anchor_der: I,
+        preferred_display_locales: Vec<String>,
     ) -> Self
     where
         C: CredentialRepo,
@@ -149,6 +152,7 @@ impl PresentationEngine {
             credential_repo: Arc::new(credential_repo),
             tenant_repo: Arc::new(tenant_repo),
             key_resolver,
+            preferred_display_locales: Arc::new(preferred_display_locales),
         }
     }
 
@@ -176,6 +180,11 @@ impl PresentationEngine {
         credentials: &[CredentialView],
     ) -> SelectionResult {
         self.client.match_credentials(ctx, credentials)
+    }
+
+    /// Returns the preferred display locales configured for this engine.
+    pub fn preferred_display_locales(&self) -> &[String] {
+        &self.preferred_display_locales
     }
 
     /// Builds and sends a VP Token response to the verifier.

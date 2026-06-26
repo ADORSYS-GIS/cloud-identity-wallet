@@ -77,6 +77,24 @@ impl<'a> MdocClaimExtractor<'a> {
         Value::Object(root)
     }
 
+    /// Like [`to_namespaced_json`](Self::to_namespaced_json) but redacts binary
+    /// CBOR values to `null`. Use this for API responses where binary claim
+    /// payloads (e.g. portrait images) must not leak as base64 strings.
+    pub fn to_safe_namespaced_json(&self) -> Value {
+        let mut root = serde_json::Map::new();
+        for (namespace, items) in &self.mdoc.name_spaces {
+            let mut ns_map = serde_json::Map::new();
+            for item in items {
+                ns_map.insert(
+                    item.element_identifier.clone(),
+                    cbor_element_to_safe_json(&item.element_value),
+                );
+            }
+            root.insert(namespace.clone(), Value::Object(ns_map));
+        }
+        Value::Object(root)
+    }
+
     /// Produces namespaced JSON with claim display names resolved per
     /// `preferred_locales`, falling back to element identifiers.
     ///
@@ -212,6 +230,66 @@ pub(crate) fn cbor_element_to_json(raw_cbor: &[u8]) -> Value {
     cbor_to_json(&cbor_val)
 }
 
+/// Decodes raw CBOR element bytes and converts to JSON, redacting binary
+/// values to `null`. Use for API response rendering where binary payloads
+/// (e.g. portrait images) must not be exposed as base64 strings.
+pub(crate) fn cbor_element_to_safe_json(raw_cbor: &[u8]) -> Value {
+    let cbor_val = match ciborium::de::from_reader::<CborValue, _>(raw_cbor) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(len = raw_cbor.len(), error = %e, "CBOR decode failed in cbor_element_to_safe_json; treating as null");
+            return Value::Null;
+        }
+    };
+    cbor_to_safe_json(&cbor_val)
+}
+
+/// Converts a `ciborium::Value` tree into a `serde_json::Value`, redacting
+/// binary values to `null`. Use for API response rendering where binary
+/// payloads must not be exposed.
+pub(crate) fn cbor_to_safe_json(cbor_val: &CborValue) -> Value {
+    match cbor_val {
+        CborValue::Text(s) => Value::String(s.clone()),
+        CborValue::Integer(i) => {
+            let n: i128 = (*i).into();
+            match i64::try_from(n) {
+                Ok(v) => Value::Number(v.into()),
+                Err(_) => match u64::try_from(n) {
+                    Ok(v) => Value::Number(serde_json::Number::from(v)),
+                    Err(_) => Value::String(n.to_string()),
+                },
+            }
+        }
+        CborValue::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                Value::Null
+            } else {
+                serde_json::Number::from_f64(*f)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }
+        }
+        CborValue::Bool(b) => Value::Bool(*b),
+        CborValue::Null => Value::Null,
+        CborValue::Tag(_, inner) => cbor_to_safe_json(inner),
+        CborValue::Array(items) => Value::Array(items.iter().map(cbor_to_safe_json).collect()),
+        CborValue::Map(entries) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in entries {
+                let key = match k {
+                    CborValue::Text(s) => s.clone(),
+                    CborValue::Integer(i) => i128::from(*i).to_string(),
+                    other => format!("{other:?}"),
+                };
+                map.insert(key, cbor_to_safe_json(v));
+            }
+            Value::Object(map)
+        }
+        CborValue::Bytes(_) => Value::Null,
+        _ => Value::Null,
+    }
+}
+
 /// Converts a `ciborium::Value` tree into a `serde_json::Value`.
 ///
 /// Used by the DCQL matching path (`to_rendered_claims`). Binary CBOR
@@ -263,6 +341,15 @@ pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
 impl ParsedMdoc {
     pub fn to_rendered_claims(&self) -> Value {
         MdocClaimExtractor::new(self).to_namespaced_json()
+    }
+
+    /// Like [`to_rendered_claims`](Self::to_rendered_claims) but redacts binary
+    /// CBOR values to `null`. Intended for API responses where binary payloads
+    /// (e.g. portrait) must not be exposed as base64 strings; use
+    /// [`to_claim_views`](Self::to_claim_views) for a typed view that includes
+    /// `Binary { size, media_type }` metadata without the raw data.
+    pub fn to_safe_claims(&self) -> Value {
+        MdocClaimExtractor::new(self).to_safe_namespaced_json()
     }
 
     /// Like [`to_rendered_claims`](Self::to_rendered_claims) but translates

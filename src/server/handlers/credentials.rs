@@ -69,7 +69,9 @@ pub async fn get_credential<S: SessionStore>(
 /// Response body for `GET /api/v1/credentials/:id`.
 #[derive(Debug, Serialize)]
 pub struct CredentialDetailResponse {
-    /// Namespaced claim values (flat JSON for SD-JWT, namespaced for mdoc).
+    /// Namespaced claim values. For mdoc credentials, binary payloads (e.g.
+    /// portrait) are redacted to `null`; use `claims_view` for typed binary
+    /// metadata including size.
     pub claims: serde_json::Value,
     /// Typed per-claim view for mdoc credentials, `null` for other formats.
     pub claims_view: Option<Vec<MdocClaimView>>,
@@ -160,7 +162,7 @@ fn render_claims(c: &Credential) -> Result<serde_json::Value, ApiError> {
                 ApiError::internal(format!("failed to parse stored SD-JWT VC claims: {error}"))
             }),
         CredentialFormat::Mdoc => ParsedMdoc::parse(&c.raw_credential)
-            .map(|mdoc| mdoc.to_rendered_claims())
+            .map(|mdoc| mdoc.to_safe_claims())
             .map_err(|error| {
                 ApiError::internal(format!("failed to parse stored mdoc claims: {error}"))
             }),
@@ -509,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_mdoc_claims_without_raw_portrait_bytes() {
+    fn mdoc_claims_redacts_portrait_bytes_to_null() {
         let mdoc_credential = build_mdoc_credential();
         let claims = render_claims(&mdoc_credential).expect("mdoc claims should render");
 
@@ -518,22 +520,8 @@ mod tests {
 
         let portrait = ns.get("portrait").expect("portrait claim present");
         assert!(
-            portrait.is_string(),
-            "portrait should be a string, got: {portrait:?}"
-        );
-
-        let portrait_str = portrait.as_str().unwrap();
-        let portrait_bytes = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert!(
-            !portrait_str.contains(&format!("{:?}", portrait_bytes)),
-            "portrait must not contain raw image bytes"
-        );
-
-        let decoded = Base64UrlUnpadded::decode_vec(portrait_str)
-            .expect("portrait should be valid base64url");
-        assert_eq!(
-            decoded, portrait_bytes,
-            "portrait should be base64url-encoded image bytes"
+            portrait.is_null(),
+            "portrait should be redacted to null, got: {portrait:?}"
         );
     }
 

@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::claim_path_pointer::ClaimPathPointer;
 use crate::formats::mdoc::claims::{
-    ClaimValueView, MdocClaimExtractor, cbor_to_json, classify_element_value,
+    ClaimValueView, MdocClaimExtractor, cbor_to_json, cbor_to_safe_json, classify_element_value,
 };
 use crate::formats::mdoc::parser::IssuerSignedItem;
 use crate::oid4vci::metadata::{ClaimDescription, ClaimDisplay};
@@ -125,6 +125,41 @@ fn cbor_to_json_encodes_bytes_as_base64url() {
     assert_eq!(
         json,
         serde_json::Value::String(Base64UrlUnpadded::encode_string(&bytes))
+    );
+}
+
+#[test]
+fn cbor_to_safe_json_redacts_bytes_to_null() {
+    let bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    let json = cbor_to_safe_json(&Value::Bytes(bytes));
+    assert_eq!(json, serde_json::Value::Null);
+}
+
+#[test]
+fn cbor_to_safe_json_preserves_text_and_numbers() {
+    assert_eq!(
+        cbor_to_safe_json(&Value::Text("hello".into())),
+        serde_json::Value::String("hello".into())
+    );
+    assert_eq!(
+        cbor_to_safe_json(&Value::Integer(42.into())),
+        serde_json::Value::Number(42.into())
+    );
+}
+
+#[test]
+fn safe_claims_redacts_binary_to_null() {
+    let items = vec![
+        build_item(0, vec![0u8; 16], "family_name", Value::Text("Doe".into())),
+        build_item(1, vec![0u8; 16], "portrait", Value::Bytes(vec![0xAA; 64])),
+    ];
+    let json = create_test_mdoc(items).to_safe_claims();
+    let ns = json.get("org.iso.18013.5.1").expect("namespace");
+    assert_eq!(ns["family_name"], "Doe");
+    assert!(
+        ns["portrait"].is_null(),
+        "portrait should be redacted to null in safe claims, got: {:?}",
+        ns["portrait"]
     );
 }
 

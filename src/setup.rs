@@ -112,6 +112,7 @@ pub fn build_presentation_engine(
         credential_repo,
         tenant_repo,
         x509_trust_anchor_der,
+        config.oid4vci.preferred_display_locales.clone(),
     );
     Ok(engine)
 }
