@@ -108,6 +108,7 @@ fn api_routes<S: SessionStore + Clone>() -> Router<AppState<S>> {
             post(submit_transaction_code),
         )
         .route("/issuance/start", post(start_issuance))
+        .route("/presentation/start", post(start_presentation))
         .route("/issuance/{session_id}/consent", post(submit_consent))
         .route("/credentials", get(list_credentials))
         .route("/credentials/{id}", get(get_credential))
