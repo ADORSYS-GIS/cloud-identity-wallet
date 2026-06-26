@@ -400,8 +400,10 @@ impl PresentationEngine {
         let mut td_hashes: Vec<String> = Vec::new();
         let mut td_alg: Option<String> = None;
         if !applicable_td.is_empty() {
-            let all_algs: Vec<Vec<String>> =
-                applicable_td.iter().map(|td| td.hash_algorithms()).collect();
+            let all_algs: Vec<Vec<String>> = applicable_td
+                .iter()
+                .map(|td| td.hash_algorithms())
+                .collect();
             let alg_set: Vec<String> = all_algs
                 .first()
                 .map(|first| first.clone())

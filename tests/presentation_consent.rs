@@ -35,10 +35,7 @@ async fn consent_without_auth_returns_401() {
     let client = Client::new();
 
     let response = client
-        .post(format!(
-            "{}/api/v1/presentation/prs_test/consent",
-            base_url
-        ))
+        .post(format!("{}/api/v1/presentation/prs_test/consent", base_url))
         .json(&json!({ "accepted": false }))
         .send()
         .await
@@ -55,10 +52,7 @@ async fn consent_malformed_json_returns_400() {
     let token = utils::create_test_bearer_token(tenant_id);
 
     let response = client
-        .post(format!(
-            "{}/api/v1/presentation/prs_test/consent",
-            base_url
-        ))
+        .post(format!("{}/api/v1/presentation/prs_test/consent", base_url))
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .body("{invalid json")
