@@ -505,6 +505,7 @@ fn minimal_as_metadata(par_url: &str) -> AuthorizationServerMetadata {
         pushed_authorization_request_endpoint: Some(Url::parse(par_url).unwrap()),
         require_pushed_authorization_requests: None,
         pre_authorized_grant_anonymous_access_supported: None,
+        authorization_details_types_supported: None,
         extra_fields: HashMap::new(),
     }
 }
@@ -604,7 +605,10 @@ fn minimal_context(
     }
 }
 
-fn token_response(scope: Option<&str>, authorization_details: Option<Vec<AuthorizationDetails>>) -> TokenResponse {
+fn token_response(
+    scope: Option<&str>,
+    authorization_details: Option<Vec<AuthorizationDetails>>,
+) -> TokenResponse {
     TokenResponse {
         access_token: "test_access_token".to_string(),
         token_type: "Bearer".to_string(),
@@ -647,7 +651,10 @@ fn resolve_via_scope_returns_none_when_no_scope() {
     let issuer_url = "https://issuer.example.com";
     let context = minimal_context(
         issuer_url,
-        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", Some("university_degree"))]),
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("UniversityDegreeCredential", Some("university_degree"))],
+        ),
         vec!["UniversityDegreeCredential".to_string()],
     );
     let token = token_response(None, None);
@@ -660,7 +667,10 @@ fn resolve_via_scope_returns_none_when_no_configuration_matches() {
     let issuer_url = "https://issuer.example.com";
     let context = minimal_context(
         issuer_url,
-        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", Some("university_degree"))]),
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("UniversityDegreeCredential", Some("university_degree"))],
+        ),
         vec!["UniversityDegreeCredential".to_string()],
     );
     let token = token_response(Some("unrelated_scope"), None);
@@ -723,7 +733,10 @@ fn resolve_credential_targets_falls_back_to_scope_when_no_authorization_details(
     let issuer_url = "https://issuer.example.com";
     let context = minimal_context(
         issuer_url,
-        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", Some("university_degree"))]),
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("UniversityDegreeCredential", Some("university_degree"))],
+        ),
         vec!["UniversityDegreeCredential".to_string()],
     );
     let token = token_response(Some("university_degree"), None);
@@ -769,6 +782,191 @@ fn resolve_credential_targets_errors_when_nothing_resolvable() {
     assert!(result.is_err());
 }
 
+//  build_scope
+
+#[test]
+fn build_scope_joins_scopes_of_selected_configurations() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[
+                ("UniversityDegreeCredential", Some("university_degree")),
+                ("DriversLicenseCredential", Some("drivers_license")),
+            ],
+        ),
+        vec![
+            "UniversityDegreeCredential".to_string(),
+            "DriversLicenseCredential".to_string(),
+        ],
+    );
+
+    let scope = build_scope(
+        &context,
+        &[
+            "UniversityDegreeCredential".to_string(),
+            "DriversLicenseCredential".to_string(),
+        ],
+    )
+    .expect("scope should build when every selected config has a scope");
+
+    assert_eq!(scope, "university_degree drivers_license");
+}
+
+#[test]
+fn build_scope_errors_when_a_selected_configuration_has_no_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[
+                ("UniversityDegreeCredential", Some("university_degree")),
+                ("DriversLicenseCredential", None),
+            ],
+        ),
+        vec![
+            "UniversityDegreeCredential".to_string(),
+            "DriversLicenseCredential".to_string(),
+        ],
+    );
+
+    // Must fail loud rather than silently building a scope string that omits
+    // DriversLicenseCredential - a partial scope grant would silently drop a
+    // credential the user selected.
+    let result = build_scope(
+        &context,
+        &[
+            "UniversityDegreeCredential".to_string(),
+            "DriversLicenseCredential".to_string(),
+        ],
+    );
+    assert!(result.is_err());
+}
+
+//  build_authorization_url: RAR vs scope preference
+
+/// Builds a [`ResolvedOfferContext`] for the authorization code flow, with no
+/// `pushed_authorization_request_endpoint` so `build_authorization_url` takes
+/// the plain (non-PAR) path and can be exercised without a mock server.
+fn authz_code_context(
+    issuer_url: &str,
+    issuer_metadata: CredentialIssuerMetadata,
+    offer_config_ids: Vec<String>,
+    authorization_details_types_supported: Option<Vec<String>>,
+) -> ResolvedOfferContext {
+    let mut as_metadata = minimal_as_metadata(&format!("{issuer_url}/par"));
+    as_metadata.authorization_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/authorize")).unwrap());
+    as_metadata.pushed_authorization_request_endpoint = None;
+    as_metadata.authorization_details_types_supported = authorization_details_types_supported;
+
+    ResolvedOfferContext {
+        offer: minimal_offer(issuer_url, offer_config_ids),
+        issuer_metadata,
+        as_metadata,
+        flow: IssuanceFlow::AuthorizationCode { issuer_state: None },
+    }
+}
+
+fn query_pairs(url: &Url) -> HashMap<String, String> {
+    url.query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
+}
+
+#[tokio::test]
+async fn build_authorization_url_prefers_authorization_details_when_as_supports_it() {
+    let issuer_url = "https://issuer.example.com";
+    let context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("UniversityDegreeCredential", Some("university_degree"))],
+        ),
+        vec!["UniversityDegreeCredential".to_string()],
+        Some(vec!["openid_credential".to_string()]),
+    );
+    let client = create_client();
+
+    let result = client
+        .build_authorization_url(
+            &context,
+            "state123",
+            &["UniversityDegreeCredential".to_string()],
+        )
+        .await
+        .expect("should build authorization url");
+
+    let params = query_pairs(&result.authz_url);
+    assert!(
+        params.contains_key("authorization_details"),
+        "expected authorization_details param, got: {params:?}"
+    );
+    assert!(
+        !params.contains_key("scope"),
+        "RAR path must not also send scope, got: {params:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_authorization_url_falls_back_to_scope_when_as_does_not_support_rar() {
+    let issuer_url = "https://issuer.example.com";
+    let context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("UniversityDegreeCredential", Some("university_degree"))],
+        ),
+        vec!["UniversityDegreeCredential".to_string()],
+        // AS explicitly advertises RAR support for a different type only.
+        Some(vec!["some_other_type".to_string()]),
+    );
+    let client = create_client();
+
+    let result = client
+        .build_authorization_url(
+            &context,
+            "state123",
+            &["UniversityDegreeCredential".to_string()],
+        )
+        .await
+        .expect("should build authorization url");
+
+    let params = query_pairs(&result.authz_url);
+    assert_eq!(
+        params.get("scope").map(String::as_str),
+        Some("university_degree")
+    );
+    assert!(
+        !params.contains_key("authorization_details"),
+        "scope path must not also send authorization_details, got: {params:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_authorization_url_errors_when_neither_rar_nor_scope_available() {
+    let issuer_url = "https://issuer.example.com";
+    let context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("UniversityDegreeCredential", None)]),
+        vec!["UniversityDegreeCredential".to_string()],
+        Some(vec!["some_other_type".to_string()]),
+    );
+    let client = create_client();
+
+    let result = client
+        .build_authorization_url(
+            &context,
+            "state123",
+            &["UniversityDegreeCredential".to_string()],
+        )
+        .await;
+
+    assert!(result.is_err());
+}
+
 #[test]
 fn resolve_credential_configuration_id_prefers_config_based_selector() {
     let selector = CredIdOrCredConfigId::credential_configuration_id("FromSelector");
@@ -799,7 +997,8 @@ async fn credential_response_parse_failure_includes_raw_body() {
         .await;
 
     let client = create_client();
-    let mut issuer_metadata = issuer_metadata_with_configs(&issuer_url, &[("TestCredential", None)]);
+    let mut issuer_metadata =
+        issuer_metadata_with_configs(&issuer_url, &[("TestCredential", None)]);
     issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
     let context = minimal_context(
         &issuer_url,

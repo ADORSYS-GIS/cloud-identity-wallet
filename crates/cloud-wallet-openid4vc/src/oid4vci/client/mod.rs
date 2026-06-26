@@ -399,9 +399,26 @@ impl Oid4vciClient {
                 message: "authorization server does not have an authorization endpoint".into(),
             })?;
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
-        let authz_details = build_authorization_details(context, credential_config_ids)?;
+        // Resolve which credential-selection mechanism to use, per OID4VCI §5.1.
+        // RAR is preferred when the AS can be relied on to accept it, because it
+        // additionally lets the AS return per-credential `credential_identifiers`
+        // in the token response (§6.2), which is what `resolve_credential_targets`
+        // checks first. This preference is grounded in the base OID4VCI spec only;
+        // it does not claim HAIP conformance for the authorization path (HAIP §4.2
+        // mandates scope, and §4.3 mandates PAR, neither of which this decision
+        // is based on).
+        let (authz_details, scope) = if context
+            .as_metadata
+            .supports_openid_credential_authorization_details()
+        {
+            // Include authorization_details so the AS can return credential_identifiers
+            // in the token response per §6.2
+            let details = build_authorization_details(context, credential_config_ids)?;
+            (Some(details), None)
+        } else {
+            let scope = build_scope(context, credential_config_ids)?;
+            (None, Some(scope))
+        };
 
         // Generate PKCE parameters
         let pkce_verifier = generate_pkce_verifier();
@@ -416,14 +433,14 @@ impl Oid4vciClient {
                 client_id: self.base_client_id().to_owned(),
                 redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
                 state: Some(state.into()),
-                scope: None,
+                scope,
                 nonce: None,
                 code_challenge: Some(code_challenge),
                 code_challenge_method: Some(CodeChallengeMethod::S256),
             },
             resource: None,
             issuer_state,
-            authorization_details: Some(authz_details),
+            authorization_details: authz_details,
         };
 
         let authz_url = if context
@@ -560,16 +577,28 @@ impl Oid4vciClient {
             ClientError::configuration("authorization server does not have a token endpoint")
         })?;
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
-        let authz_details = build_authorization_details(context, credential_config_ids)?;
+        // Mirror the credential-selection mechanism used at the authorization
+        // endpoint (see `build_authorization_url`). On the scope path, the
+        // grant was already bound to the requested credential type when the
+        // user authorized; the token request is a bare code exchange and
+        // carries neither `scope` nor `authorization_details`.
+        let authz_details = if context
+            .as_metadata
+            .supports_openid_credential_authorization_details()
+        {
+            // Include authorization_details so the AS can return credential_identifiers
+            // in the token response per §6.2
+            Some(build_authorization_details(context, credential_config_ids)?)
+        } else {
+            None
+        };
 
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
             code: code.into(),
             redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
             client_id: self.attestation_client_id().to_owned(),
             code_verifier: Some(pkce_verifier.into()),
-            authorization_details: Some(authz_details),
+            authorization_details: authz_details,
         });
         let htu = htu_from_url(token_endpoint)?;
         let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
@@ -727,7 +756,14 @@ impl Oid4vciClient {
         let mut futures = FuturesUnordered::new();
 
         for (selector, config_id) in &targets {
-            futures.push(self.request_credential(context, token, selector.clone(), config_id, signer, dpop));
+            futures.push(self.request_credential(
+                context,
+                token,
+                selector.clone(),
+                config_id,
+                signer,
+                dpop,
+            ));
         }
 
         while let Some(res) = futures.next().await {
@@ -1403,6 +1439,39 @@ fn build_authorization_details(
             Ok(detail)
         })
         .collect()
+}
+
+/// Build the `scope` authorization parameter for credential selection,
+/// per OID4VCI §5.1.2, for use when the AS cannot be relied on to accept
+/// `authorization_details` (see `build_authorization_url`).
+///
+/// Every selected credential configuration must advertise a `scope` value
+/// in `credential_configurations_supported`; if any does not, scope-based
+/// selection cannot represent the full selection, so this fails rather than
+/// silently omitting that credential from the request.
+fn build_scope(context: &ResolvedOfferContext, selected_config_ids: &[String]) -> Result<String> {
+    let selected_ids = selected_credential_config_ids(context, selected_config_ids)?;
+
+    let scopes: Vec<&str> = selected_ids
+        .iter()
+        .map(|id| {
+            context
+                .issuer_metadata
+                .credential_configurations_supported
+                .get(id)
+                .and_then(|config| config.scope.as_deref())
+                .ok_or_else(|| ClientError::Configuration {
+                    message: format!(
+                        "credential configuration '{id}' has no scope and the authorization \
+                         server does not support authorization_details: \
+                         unable to request this credential"
+                    )
+                    .into(),
+                })
+        })
+        .collect::<Result<_>>()?;
+
+    Ok(scopes.join(" "))
 }
 
 /// Negotiate the proof algorithm for a credential request.
