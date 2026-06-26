@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use axum::{
     Json,
+    extract::rejection::JsonRejection,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -221,6 +222,8 @@ impl IntoApiError for PresentationError {
         let status = match &self.error {
             PresentationErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InvalidDcqlQuery => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::InvalidCredentialSelection => StatusCode::BAD_REQUEST,
+            PresentationErrorCode::TransactionDataNotAcknowledged => StatusCode::BAD_REQUEST,
             PresentationErrorCode::NoMatchingCredentials => StatusCode::BAD_REQUEST,
             PresentationErrorCode::VpFormatsNotSupported => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InvalidClient => StatusCode::BAD_REQUEST,
@@ -229,7 +232,10 @@ impl IntoApiError for PresentationError {
             PresentationErrorCode::KeyResolutionFailed => StatusCode::BAD_REQUEST,
             PresentationErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
             PresentationErrorCode::InvalidSessionState => StatusCode::CONFLICT,
+            PresentationErrorCode::PresentationBuildFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            PresentationErrorCode::VerifierSubmissionFailed => StatusCode::BAD_GATEWAY,
             PresentationErrorCode::ResponseDeliveryFailed => StatusCode::BAD_GATEWAY,
+            PresentationErrorCode::InvalidTransactionData => StatusCode::BAD_REQUEST,
             PresentationErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -260,5 +266,33 @@ impl IntoApiError for PresentationError {
             error: self.error.to_string().into(),
             error_description,
         }
+    }
+}
+
+/// A custom JSON extractor that converts [`JsonRejection`] into [`ApiError`]
+/// with the `invalid_request` error code, matching the documented API contract.
+///
+/// Use this in handler signatures instead of `axum::Json<T>` when the
+/// endpoint must return the standard `{"error": "invalid_request", ...}`
+/// shape on malformed or missing request bodies.
+pub struct ApiJson<T>(pub T);
+
+impl<S, T> axum::extract::FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: serde::de::DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(inner) =
+            Json::<T>::from_request(req, state)
+                .await
+                .map_err(|_: JsonRejection| ApiError {
+                    status: StatusCode::BAD_REQUEST,
+                    error: Cow::Borrowed("invalid_request"),
+                    error_description: Some("request body is missing or malformed JSON".into()),
+                })?;
+        Ok(Self(inner))
     }
 }

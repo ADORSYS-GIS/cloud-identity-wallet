@@ -26,6 +26,14 @@ pub enum PresentationErrorCode {
     SessionNotFound,
     /// The session is not in the expected state.
     InvalidSessionState,
+    /// Wrong credential_id or missing query_id in selection.
+    InvalidCredentialSelection,
+    /// Transaction data requires explicit user acknowledgment.
+    TransactionDataNotAcknowledged,
+    /// VP Token construction failed.
+    PresentationBuildFailed,
+    /// Verifier returned a non-2xx response or network error.
+    VerifierSubmissionFailed,
     /// The VP token could not be built or sent.
     ResponseDeliveryFailed,
     /// The client identifier is invalid or unauthorized.
@@ -34,6 +42,8 @@ pub enum PresentationErrorCode {
     RequestUriFetchFailed,
     /// The request object JWT is invalid or malformed.
     RequestObjectInvalid,
+    /// Transaction data is invalid or malformed.
+    InvalidTransactionData,
     /// An internal server error occurred.
     InternalError,
 }
@@ -48,10 +58,15 @@ impl PresentationErrorCode {
             Self::VpFormatsNotSupported => "vp_formats_not_supported",
             Self::SessionNotFound => "session_not_found",
             Self::InvalidSessionState => "invalid_session_state",
+            Self::InvalidCredentialSelection => "invalid_credential_selection",
+            Self::TransactionDataNotAcknowledged => "transaction_data_not_acknowledged",
+            Self::PresentationBuildFailed => "presentation_build_failed",
+            Self::VerifierSubmissionFailed => "verifier_submission_failed",
             Self::ResponseDeliveryFailed => "response_delivery_failed",
             Self::InvalidClient => "invalid_client",
             Self::RequestUriFetchFailed => "request_uri_fetch_failed",
             Self::RequestObjectInvalid => "request_object_invalid",
+            Self::InvalidTransactionData => "invalid_transaction_data",
             Self::InternalError => "internal_error",
         }
     }
@@ -117,6 +132,36 @@ impl PresentationError {
         Self::new(PresentationErrorCode::InvalidSessionState, msg.into())
     }
 
+    /// Create an invalid credential selection error.
+    pub fn invalid_credential_selection(msg: impl Into<String>) -> Self {
+        Self::new(
+            PresentationErrorCode::InvalidCredentialSelection,
+            msg.into(),
+        )
+    }
+
+    /// Create a transaction-data-not-acknowledged error.
+    pub fn transaction_data_not_acknowledged() -> Self {
+        Self::new(
+            PresentationErrorCode::TransactionDataNotAcknowledged,
+            "Transaction data must be acknowledged",
+        )
+    }
+
+    /// Create a verifier-submission-failed error.
+    pub fn verifier_submission_failed(msg: impl Into<String>) -> Self {
+        Self::new(PresentationErrorCode::VerifierSubmissionFailed, msg.into())
+    }
+
+    /// Create a presentation-build-failed error with a source.
+    pub fn presentation_build_failed(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self {
+            error: PresentationErrorCode::PresentationBuildFailed,
+            error_description: Some("VP Token construction failed".into()),
+            source: Some(Box::new(source)),
+        }
+    }
+
     /// Returns the machine-readable presentation error code.
     pub fn error(&self) -> &str {
         self.error.as_str()
@@ -143,6 +188,8 @@ impl fmt::Display for PresentationError {
 
 impl From<Oid4vpClientError> for PresentationError {
     fn from(err: Oid4vpClientError) -> Self {
+        use cloud_wallet_openid4vc::oid4vp::response_mode::DirectPostError;
+
         let error = match &err {
             Oid4vpClientError::InvalidRequest(_) => PresentationErrorCode::InvalidRequest,
             Oid4vpClientError::NoDcqlQuery => PresentationErrorCode::InvalidDcqlQuery,
@@ -158,19 +205,58 @@ impl From<Oid4vpClientError> for PresentationError {
             Oid4vpClientError::InvalidClientId(_) => PresentationErrorCode::InvalidClient,
             Oid4vpClientError::VerifierResolutionFailed(_) => PresentationErrorCode::InvalidClient,
             Oid4vpClientError::ValidationFailed(_) => PresentationErrorCode::InvalidRequest,
-            Oid4vpClientError::UnsupportedResponseMode(_) => PresentationErrorCode::InvalidRequest,
-            Oid4vpClientError::ResponseDeliveryFailed(_) | Oid4vpClientError::NoResponseUri => {
+            Oid4vpClientError::PresentationBuildFailed(_) => {
+                PresentationErrorCode::PresentationBuildFailed
+            }
+            Oid4vpClientError::ResponseDeliveryFailed(_) => {
+                PresentationErrorCode::VerifierSubmissionFailed
+            }
+            Oid4vpClientError::NoResponseUri | Oid4vpClientError::UnsupportedResponseMode(_) => {
                 PresentationErrorCode::ResponseDeliveryFailed
             }
-            Oid4vpClientError::InvalidTransactionData(_) => PresentationErrorCode::InvalidRequest,
-            Oid4vpClientError::PresentationBuildFailed(_) => PresentationErrorCode::InternalError,
+            Oid4vpClientError::InvalidTransactionData(_) => {
+                PresentationErrorCode::InvalidTransactionData
+            }
         };
+
+        let error_description = match &err {
+            Oid4vpClientError::ResponseDeliveryFailed(direct_post_err) => match direct_post_err {
+                DirectPostError::VerifierError { body, .. } => {
+                    parse_verifier_error_description(body)
+                }
+                DirectPostError::HttpServerError { body, .. } => {
+                    parse_verifier_error_description(body)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+
         Self {
             error,
-            error_description: None,
+            error_description,
             source: Some(Box::new(err)),
         }
     }
+}
+
+/// Attempts to extract an OAuth-style `error_description` from the verifier's
+/// error response body. If the body is valid JSON with an `error_description`
+/// field, returns its value. Otherwise returns the raw body truncated to 256 chars.
+fn parse_verifier_error_description(body: &str) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(body) {
+        if let Some(serde_json::Value::String(desc)) = map.get("error_description") {
+            return Some(desc.clone());
+        }
+        if let Some(serde_json::Value::String(error_code)) = map.get("error") {
+            return Some(error_code.clone());
+        }
+    }
+    let truncated: String = body.chars().take(256).collect();
+    Some(truncated)
 }
 
 impl From<SessionError> for PresentationError {
@@ -205,5 +291,66 @@ mod tests {
         assert_eq!(err.error(), "internal_error");
         assert!(err.error_description().is_none());
         assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn parse_verifier_error_description_extracts_error_description_field() {
+        let body =
+            r#"{"error":"invalid_request","error_description":"Missing required parameter"}"#;
+        let result = parse_verifier_error_description(body);
+        assert_eq!(result, Some("Missing required parameter".to_string()));
+    }
+
+    #[test]
+    fn parse_verifier_error_description_falls_back_to_error_code() {
+        let body = r#"{"error":"invalid_client"}"#;
+        let result = parse_verifier_error_description(body);
+        assert_eq!(result, Some("invalid_client".to_string()));
+    }
+
+    #[test]
+    fn parse_verifier_error_description_truncates_non_json_body() {
+        let body = "a".repeat(300);
+        let result = parse_verifier_error_description(&body);
+        assert_eq!(result.as_deref().unwrap().chars().count(), 256);
+    }
+
+    #[test]
+    fn parse_verifier_error_description_handles_multibyte_utf8() {
+        let body: String = "é".repeat(300);
+        let result = parse_verifier_error_description(&body);
+        let truncated = result.unwrap();
+        assert!(truncated.chars().count() <= 256);
+    }
+
+    #[test]
+    fn parse_verifier_error_description_returns_none_for_empty_body() {
+        assert_eq!(parse_verifier_error_description(""), None);
+    }
+
+    #[test]
+    fn parse_verifier_error_description_short_non_json_body_returned_as_is() {
+        let body = "plain text error";
+        let result = parse_verifier_error_description(body);
+        assert_eq!(result, Some("plain text error".to_string()));
+    }
+
+    #[test]
+    fn from_oid4vp_client_error_surfaces_verifier_error_description() {
+        use cloud_wallet_openid4vc::oid4vp::response_mode::DirectPostError;
+
+        let err = Oid4vpClientError::ResponseDeliveryFailed(DirectPostError::VerifierError {
+            status: 400,
+            body: r#"{"error":"invalid_request","error_description":"bad param"}"#.to_string(),
+        });
+        let presentation_err: PresentationError = err.into();
+        assert_eq!(
+            presentation_err.error,
+            PresentationErrorCode::VerifierSubmissionFailed
+        );
+        assert_eq!(
+            presentation_err.error_description.as_deref(),
+            Some("bad param")
+        );
     }
 }
