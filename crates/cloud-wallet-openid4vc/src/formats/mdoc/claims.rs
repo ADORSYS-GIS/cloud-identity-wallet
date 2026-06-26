@@ -4,6 +4,7 @@
 //! matching and human-readable rendering. See ISO 18013-5 §8.3.2,
 //! OID4VCI §4.3.2, HAIP §6.2.
 
+use base64ct::{Base64UrlUnpadded, Encoding};
 use ciborium::Value as CborValue;
 use serde::Serialize;
 use serde_json::Value;
@@ -33,6 +34,9 @@ pub enum ClaimValueView {
     Structured(serde_json::Value),
     #[serde(rename = "binary")]
     Binary {
+        /// MIME type of the binary data (e.g. `"image/jpeg"` for portrait).
+        /// Currently always `None`; derive from element identifiers or
+        /// issuer display metadata per OID4VCI §4.3.2 in a follow-up.
         media_type: Option<String>,
         size: usize,
     },
@@ -60,6 +64,13 @@ impl<'a> MdocClaimExtractor<'a> {
         views
     }
 
+    /// Produces namespaced JSON from mdoc claims (e.g.
+    /// `{"org.iso.18013.5.1": {"family_name": "Doe"}}`).
+    ///
+    /// This preserves the mdoc namespace structure. Callers that need a flat
+    /// shape (e.g. `{"org.iso.18013.5.1.family_name": "Doe"}`) should flatten
+    /// the result themselves. The namespaced shape is required for DCQL claim
+    /// path matching where the first element selects the namespace.
     pub fn to_namespaced_json(&self) -> Value {
         let mut root = serde_json::Map::new();
         for (namespace, items) in &self.mdoc.name_spaces {
@@ -209,15 +220,15 @@ fn cbor_value_to_claim_view(cbor_val: &CborValue, raw_bytes: &[u8]) -> ClaimValu
                 let key = match k {
                     CborValue::Text(s) => s.clone(),
                     CborValue::Integer(i) => i128::from(*i).to_string(),
-                    _ => continue,
+                    other => format!("{other:?}"),
                 };
                 map.insert(key, cbor_to_json(v));
             }
             ClaimValueView::Structured(Value::Object(map))
         }
-        CborValue::Bytes(_) => ClaimValueView::Binary {
+        CborValue::Bytes(bytes) => ClaimValueView::Binary {
             media_type: None,
-            size: raw_bytes.len(),
+            size: bytes.len(),
         },
         _ => ClaimValueView::Null,
     }
@@ -228,16 +239,17 @@ pub(crate) fn cbor_element_to_json(raw_cbor: &[u8]) -> Value {
     let cbor_val = match ciborium::de::from_reader::<CborValue, _>(raw_cbor) {
         Ok(v) => v,
         Err(_) => {
-            return Value::Object(serde_json::Map::from_iter([
-                ("type".to_owned(), Value::String("binary".to_owned())),
-                ("size".to_owned(), Value::Number(raw_cbor.len().into())),
-            ]));
+            return Value::String(Base64UrlUnpadded::encode_string(raw_cbor));
         }
     };
     cbor_to_json(&cbor_val)
 }
 
 /// Converts a `ciborium::Value` tree into a `serde_json::Value`.
+///
+/// Used by the DCQL matching path (`to_rendered_claims`). Binary CBOR
+/// values are encoded as base64url strings so that DCQL value constraints
+/// (which use string equality) can match binary claims such as portrait.
 pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
     match cbor_val {
         CborValue::Text(s) => Value::String(s.clone()),
@@ -245,7 +257,10 @@ pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
             let n: i128 = (*i).into();
             match i64::try_from(n) {
                 Ok(v) => Value::Number(v.into()),
-                Err(_) => Value::String(n.to_string()),
+                Err(_) => serde_json::Number::from_i128(n)
+                    .or_else(|| serde_json::Number::from_u128(n as u128))
+                    .map(Value::Number)
+                    .unwrap_or_else(|| Value::String(n.to_string())),
             }
         }
         CborValue::Float(f) => {
@@ -267,16 +282,13 @@ pub(crate) fn cbor_to_json(cbor_val: &CborValue) -> Value {
                 let key = match k {
                     CborValue::Text(s) => s.clone(),
                     CborValue::Integer(i) => i128::from(*i).to_string(),
-                    _ => continue,
+                    other => format!("{other:?}"),
                 };
                 map.insert(key, cbor_to_json(v));
             }
             Value::Object(map)
         }
-        CborValue::Bytes(bytes) => Value::Object(serde_json::Map::from_iter([
-            ("type".to_owned(), Value::String("binary".to_owned())),
-            ("size".to_owned(), Value::Number(bytes.len().into())),
-        ])),
+        CborValue::Bytes(bytes) => Value::String(Base64UrlUnpadded::encode_string(bytes)),
         _ => Value::Null,
     }
 }
