@@ -42,8 +42,9 @@ impl std::fmt::Debug for JweDecryptKey<'_> {
 /// Decrypt a compact JWE token and return the plaintext.
 ///
 /// The strict validation gate (parse → deserialize → validate → alg/key check →
-/// ECDH curve check → crypto) means no cryptographic work occurs until all
-/// attacker-controlled fields have been validated.
+/// IV/tag length check → key recovery → crypto) means no expensive
+/// cryptographic work (RSA-OAEP decrypt, ECDH agreement, AES-KW unwrap) runs
+/// until the cheap, header-derivable checks have all passed.
 ///
 /// The raw ASCII bytes of the first compact segment are used as AAD for
 /// AES-GCM, exactly as produced by [`fn@crate::jwe::encrypt`].
@@ -76,6 +77,32 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
 
     validate_key_alg(&header.alg, &key)?;
 
+    // IV/tag length are derivable from `header.enc` alone, before any key
+    // recovery (RSA-OAEP decrypt, ECDH agreement, AES-KW unwrap) happens —
+    // checking them here, not after `recover_cek()`, means a malformed token
+    // fails on a cheap length comparison instead of burning asymmetric crypto
+    // work first.
+    if iv_bytes.len() != header.enc.iv_len() {
+        return Err(error_msg(
+            ErrorKind::WrongLength,
+            format!(
+                "JWE IV must be {} bytes, got {}",
+                header.enc.iv_len(),
+                iv_bytes.len()
+            ),
+        ));
+    }
+    if tag_bytes.len() != header.enc.tag_len() {
+        return Err(error_msg(
+            ErrorKind::WrongLength,
+            format!(
+                "JWE authentication tag must be {} bytes, got {}",
+                header.enc.tag_len(),
+                tag_bytes.len()
+            ),
+        ));
+    }
+
     let cek_key = recover_cek(&header, &key, &enc_key_bytes)?;
 
     // AAD = the raw base64url bytes of the first compact segment, exactly as
@@ -86,26 +113,6 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
 
     let plaintext = match cek_key {
         ContentEncKey::Aead(k) => {
-            if iv_bytes.len() != aead::NONCE_LENGTH {
-                return Err(error_msg(
-                    ErrorKind::WrongLength,
-                    format!(
-                        "JWE IV must be {} bytes, got {}",
-                        aead::NONCE_LENGTH,
-                        iv_bytes.len()
-                    ),
-                ));
-            }
-            if tag_bytes.len() != aead::TAG_LENGTH {
-                return Err(error_msg(
-                    ErrorKind::WrongLength,
-                    format!(
-                        "JWE authentication tag must be {} bytes, got {}",
-                        aead::TAG_LENGTH,
-                        tag_bytes.len()
-                    ),
-                ));
-            }
             let nonce: [u8; aead::NONCE_LENGTH] = iv_bytes
                 .try_into()
                 .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;
@@ -121,26 +128,6 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
             plaintext
         }
         ContentEncKey::CbcHmac(k) => {
-            if iv_bytes.len() != cbc_hmac::IV_LENGTH {
-                return Err(error_msg(
-                    ErrorKind::WrongLength,
-                    format!(
-                        "JWE IV must be {} bytes, got {}",
-                        cbc_hmac::IV_LENGTH,
-                        iv_bytes.len()
-                    ),
-                ));
-            }
-            if tag_bytes.len() != k.tag_len() {
-                return Err(error_msg(
-                    ErrorKind::WrongLength,
-                    format!(
-                        "JWE authentication tag must be {} bytes, got {}",
-                        k.tag_len(),
-                        tag_bytes.len()
-                    ),
-                ));
-            }
             let iv: [u8; cbc_hmac::IV_LENGTH] = iv_bytes
                 .try_into()
                 .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;

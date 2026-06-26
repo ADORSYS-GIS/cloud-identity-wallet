@@ -249,6 +249,31 @@ impl ContentEncryptionAlgorithm {
         }
     }
 
+    /// Expected IV length in bytes for this algorithm.
+    ///
+    /// Derived from `key_kind()` alone — no CEK/key material is needed, so
+    /// callers can validate an incoming token's IV length before doing any
+    /// key-recovery work (RSA-OAEP decrypt, ECDH agreement, AES-KW unwrap).
+    #[must_use]
+    pub(crate) fn iv_len(self) -> usize {
+        match self.key_kind() {
+            ContentEncKeyKind::Aead(_) => aead::NONCE_LENGTH,
+            ContentEncKeyKind::CbcHmac(_) => cbc_hmac::IV_LENGTH,
+        }
+    }
+
+    /// Expected authentication tag length in bytes for this algorithm.
+    ///
+    /// Derived from `key_kind()` alone, for the same fast-fail reason as
+    /// [`Self::iv_len`].
+    #[must_use]
+    pub(crate) fn tag_len(self) -> usize {
+        match self.key_kind() {
+            ContentEncKeyKind::Aead(_) => aead::TAG_LENGTH,
+            ContentEncKeyKind::CbcHmac(alg) => alg.tag_len(),
+        }
+    }
+
     /// ASCII algorithm identifier used as `algorithmID` in ConcatKDF (RFC 7518 §4.6.2).
     ///
     /// For ECDH-ES direct mode the `enc` value is used; for +KW modes the
