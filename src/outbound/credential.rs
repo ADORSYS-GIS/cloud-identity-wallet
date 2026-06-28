@@ -921,8 +921,12 @@ impl From<cloud_wallet_kms::Error> for CredentialError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::models::credential::{CredentialFormat, CredentialStatus};
     use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
+    use time::UtcDateTime;
+    use url::Url;
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_no_filters_produces_valid_sql() {
         let driver = Driver::Postgres;
@@ -934,6 +938,7 @@ mod tests {
         assert!(exclude_expired_ts.is_none());
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_postgres_uses_dollar_placeholders() {
         let driver = Driver::Postgres;
@@ -949,6 +954,7 @@ mod tests {
         assert!(exclude_expired_ts.is_some());
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_mysql_uses_question_marks() {
         let driver = Driver::MySql;
@@ -964,6 +970,7 @@ mod tests {
         assert!(exclude_expired_ts.is_some());
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_postgres_types_contain_uses_jsonb_operator() {
         let driver = Driver::Postgres;
@@ -991,6 +998,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_mysql_types_contain_uses_json_contains() {
         let driver = Driver::MySql;
@@ -1016,6 +1024,7 @@ mod tests {
         assert_eq!(values[1], "\"UniversityDegree\"");
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_sqlite_types_contain_uses_json_each() {
         let driver = Driver::Sqlite;
@@ -1037,6 +1046,7 @@ mod tests {
         assert_eq!(values[1], "UniversityDegree");
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_types_contain_empty_slice_adds_no_clause() {
         let driver = Driver::Postgres;

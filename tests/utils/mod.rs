@@ -17,9 +17,11 @@ use cloud_identity_wallet::{
     session::MemorySession,
     setup,
 };
-use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
+
+#[cfg(feature = "sqlx")]
+use sqlx::{AnyPool, ConnectOptions};
 
 /// Test server which holds the base URL and other necessary components for testing
 pub struct TestServer {
@@ -101,6 +103,8 @@ pub fn sample_credential(tenant_id: Uuid) -> Credential {
     }
 }
 
+/// Inserts a tenant row into the given SQL pool for test setup.
+#[cfg(feature = "sqlx")]
 #[allow(dead_code)]
 pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
     let url = pool.connect_options().to_url_lossy();

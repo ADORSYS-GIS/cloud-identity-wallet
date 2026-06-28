@@ -19,7 +19,6 @@ pub enum Driver {
     MySql,
     Sqlite,
 }
-
 #[cfg(feature = "sqlx")]
 impl Driver {
     /// Create a new driver from a pool.
@@ -162,6 +161,7 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn rewrites_postgres_bindings_to_question_marks() {
         let sql = "SELECT * FROM credentials WHERE id = $1 AND tenant_id = $2";
