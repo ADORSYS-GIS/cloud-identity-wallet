@@ -1,20 +1,28 @@
+#[cfg(feature = "redis")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "redis")]
 use dashmap::DashMap;
+#[cfg(feature = "redis")]
 use redis::{AsyncCommands, PushKind, aio::ConnectionManager};
-use tokio::sync::{broadcast, mpsc::UnboundedReceiver};
+use tokio::sync::broadcast;
+#[cfg(feature = "redis")]
+use tokio::sync::mpsc::UnboundedReceiver;
+#[cfg(feature = "redis")]
 use tracing::warn;
 
 use crate::domain::models::issuance::{IssuanceError, IssuanceEvent};
 use crate::domain::ports::{IssuanceEventPublisher, IssuanceEventStream, IssuanceEventSubscriber};
 
 /// Redis-backed event publisher.
+#[cfg(feature = "redis")]
 #[derive(Debug, Clone)]
 pub struct RedisEventPublisher {
     conn: ConnectionManager,
 }
 
+#[cfg(feature = "redis")]
 impl RedisEventPublisher {
     /// Create a new publisher backed by the given Redis connection.
     pub fn new(conn: ConnectionManager) -> Self {
@@ -23,6 +31,7 @@ impl RedisEventPublisher {
 }
 
 #[async_trait]
+#[cfg(feature = "redis")]
 impl IssuanceEventPublisher for RedisEventPublisher {
     async fn publish(&self, event: &IssuanceEvent) -> Result<(), IssuanceError> {
         let channel = format!("issuance:events:{}", event.session_id());
@@ -33,17 +42,20 @@ impl IssuanceEventPublisher for RedisEventPublisher {
     }
 }
 
+#[cfg(feature = "redis")]
 type Dispatcher = DashMap<String, broadcast::Sender<IssuanceEvent>>;
 
 /// Redis-backed event subscriber.
 ///
 /// The returned stream after subscription auto-terminates on `completed` or `failed` events.
+#[cfg(feature = "redis")]
 #[derive(Debug, Clone)]
 pub struct RedisEventSubscriber {
     conn: ConnectionManager,
     dispatcher: Arc<Dispatcher>,
 }
 
+#[cfg(feature = "redis")]
 impl RedisEventSubscriber {
     /// Build with an already-configured [RESP3] `ConnectionManager`.
     ///
@@ -163,6 +175,7 @@ impl RedisEventSubscriber {
 }
 
 #[async_trait]
+#[cfg(feature = "redis")]
 impl IssuanceEventSubscriber for RedisEventSubscriber {
     async fn subscribe(&self, session_id: &str) -> Result<IssuanceEventStream, IssuanceError> {
         self.subscribe(session_id).await
@@ -170,6 +183,7 @@ impl IssuanceEventSubscriber for RedisEventSubscriber {
 }
 
 /// Maps a `redis::RedisError` into an `IssuanceError`.
+#[cfg(feature = "redis")]
 fn map_redis_err(err: redis::RedisError) -> IssuanceError {
     IssuanceError::internal(err)
 }

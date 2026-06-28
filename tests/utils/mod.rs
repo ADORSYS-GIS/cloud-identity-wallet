@@ -3,44 +3,32 @@
 use cloud_wallet_crypto::ecdsa::{Curve, KeyPair};
 use cloud_wallet_crypto::jwk::Jwk;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use cloud_identity_wallet::{
     config::Config,
     domain::{
-        models::{
-            credential::{Credential, CredentialFormat, CredentialStatus},
-            issuance::IssuanceEngine,
-        },
+        models::credential::{Credential, CredentialFormat, CredentialStatus},
         ports::CredentialRepo,
-        service::Service,
-    },
-    outbound::{
-        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
-        MemoryTenantRepo,
     },
     server::Server,
     session::MemorySession,
     setup,
 };
-use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
-use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 use sqlx::{AnyPool, ConnectOptions};
 use time::UtcDateTime;
 use url::Url;
 
 /// Test server which holds the base URL and other necessary components for testing
-pub struct TestServer<R>
-where
-    R: CredentialRepo,
-{
+pub struct TestServer {
     pub base_url: String,
-    pub credential_repo: R,
+    pub credential_repo: Arc<dyn CredentialRepo>,
 }
 
 /// Spawn a server and return the base URL and other necessary components
-pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
+pub async fn spawn_server() -> TestServer {
     let config = {
         let mut config = Config::load().unwrap();
         config.server.host = "localhost".to_string();
@@ -49,37 +37,10 @@ pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
         config
     };
     let session_store = MemorySession::default();
-    let tenant_repo = MemoryTenantRepo::new();
-    let credential_repo = MemoryCredentialRepo::new();
-    let client_config = Oid4vciClientConfig::new(
-        config.oid4vci.client_id.clone(),
-        config.oid4vci.redirect_uri.clone(),
-    )
-    .use_system_proxy(config.oid4vci.use_system_proxy)
-    .accept_untrusted_hosts(true);
-    let client = Oid4vciClient::new(OidClient::new(client_config).unwrap());
-    let task_queue = MemoryTaskQueue::new();
-    let publisher = MemoryEventPublisher::new(128);
-    let subscriber = MemoryEventSubscriber::new(&publisher);
-    let issuance_engine = IssuanceEngine::new(
-        client,
-        task_queue,
-        publisher,
-        subscriber,
-        credential_repo.clone(),
-        tenant_repo.clone(),
-        &session_store,
-        config.oid4vci.preferred_display_locales.clone(),
-    );
-    let presentation_engine =
-        setup::build_presentation_engine(&config, credential_repo.clone(), tenant_repo.clone())
-            .expect("failed to build presentation engine");
-    let service = Service::new(
-        session_store,
-        tenant_repo,
-        issuance_engine,
-        presentation_engine,
-    );
+    let service = setup::build_service(session_store, &config)
+        .await
+        .expect("failed to build service");
+    let credential_repo = service.issuance_engine.credential_repo.clone();
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
     tokio::spawn(server.run());

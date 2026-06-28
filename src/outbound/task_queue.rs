@@ -1,26 +1,37 @@
 use std::collections::VecDeque;
+#[cfg(feature = "redis")]
+use std::sync::Arc;
+use std::sync::Mutex;
+#[cfg(feature = "redis")]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+#[cfg(feature = "redis")]
 use std::time::Duration;
 
 use async_trait::async_trait;
+#[cfg(feature = "redis")]
 use redis::streams::{
     StreamAddOptions, StreamAutoClaimOptions, StreamId, StreamReadOptions, StreamReadReply,
     StreamTrimStrategy, StreamTrimmingMode,
 };
+#[cfg(feature = "redis")]
 use redis::{AsyncCommands, Value, aio::ConnectionManager};
 
 use crate::domain::models::issuance::{IssuanceError, IssuanceTask};
 use crate::domain::ports::IssuanceTaskQueue;
 
-/// Key for the issuance task queue stream in Redis.
+#[cfg(feature = "redis")]
 const TASK_STREAM_KEY: &str = "issuance:task_stream";
+#[cfg(feature = "redis")]
 const TASK_STREAM_GROUP: &str = "issuance-workers";
+#[cfg(feature = "redis")]
 const TASK_STREAM_PAYLOAD_FIELD: &str = "payload";
+#[cfg(feature = "redis")]
 const DEFAULT_STREAM_MAX_LEN: usize = 10_000;
+#[cfg(feature = "redis")]
 const DEFAULT_CLAIM_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Redis-backed distributed task queue.
+#[cfg(feature = "redis")]
 #[derive(Debug, Clone)]
 pub struct RedisTaskQueue {
     conn: ConnectionManager,
@@ -31,6 +42,7 @@ pub struct RedisTaskQueue {
     group_ready: Arc<AtomicBool>,
 }
 
+#[cfg(feature = "redis")]
 impl RedisTaskQueue {
     /// Create a new task queue with a Redis connection manager.
     pub fn new(conn: ConnectionManager) -> Self {
@@ -126,6 +138,7 @@ impl RedisTaskQueue {
 }
 
 #[async_trait]
+#[cfg(feature = "redis")]
 impl IssuanceTaskQueue for RedisTaskQueue {
     async fn push(&self, task: &IssuanceTask) -> Result<(), IssuanceError> {
         let json = task.to_json()?;
@@ -196,10 +209,12 @@ impl IssuanceTaskQueue for RedisTaskQueue {
     }
 }
 
+#[cfg(feature = "redis")]
 fn default_consumer_name() -> String {
     format!("worker-{}-{}", std::process::id(), uuid::Uuid::new_v4())
 }
 
+#[cfg(feature = "redis")]
 fn task_from_stream_entry(entry: &StreamId) -> Result<IssuanceTask, IssuanceError> {
     let Some(payload) = entry.map.get(TASK_STREAM_PAYLOAD_FIELD) else {
         return Err(IssuanceError::internal_message(
@@ -213,6 +228,7 @@ fn task_from_stream_entry(entry: &StreamId) -> Result<IssuanceTask, IssuanceErro
     Ok(task)
 }
 
+#[cfg(feature = "redis")]
 fn payload_bytes(value: &Value) -> Result<&[u8], IssuanceError> {
     match value {
         Value::BulkString(bytes) => Ok(bytes),
@@ -224,6 +240,7 @@ fn payload_bytes(value: &Value) -> Result<&[u8], IssuanceError> {
 }
 
 /// Maps a `redis::RedisError` into an `IssuanceError`.
+#[cfg(feature = "redis")]
 fn map_redis_err(err: redis::RedisError) -> IssuanceError {
     IssuanceError::internal(err)
 }

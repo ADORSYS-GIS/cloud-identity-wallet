@@ -1,20 +1,26 @@
 use color_eyre::eyre::{WrapErr as _, eyre};
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject as _;
+#[cfg(feature = "sqlx")]
 use std::borrow::Cow;
+#[cfg(feature = "sqlx")]
 use std::fmt::Write;
+#[cfg(feature = "sqlx")]
 use std::sync::OnceLock;
 
+#[cfg(feature = "sqlx")]
 use sqlx::{AnyPool, ConnectOptions};
 
 /// An SQL database driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "sqlx")]
 pub enum Driver {
     Postgres,
     MySql,
     Sqlite,
 }
 
+#[cfg(feature = "sqlx")]
 impl Driver {
     /// Create a new driver from a pool.
     pub fn from_pool(pool: &AnyPool) -> Self {
@@ -51,11 +57,13 @@ impl Driver {
 ///
 /// Postgres uses `$N` placeholders; MySQL and SQLite use `?`.
 /// This wrapper automatically rewrites queries to the target driver's format.
+#[cfg(feature = "sqlx")]
 pub struct Query {
     raw: &'static str,
     rewritten: OnceLock<String>,
 }
 
+#[cfg(feature = "sqlx")]
 impl Query {
     /// Create a new query wrapper from a raw SQL string.
     pub const fn new(raw: &'static str) -> Self {
@@ -79,6 +87,7 @@ impl Query {
 }
 
 /// Rewrite a query from `$N` placeholders to `?` placeholders.
+#[cfg(feature = "sqlx")]
 fn rewrite_to_positional(sql: &str) -> Cow<'_, str> {
     let bytes = sql.as_bytes();
     let mut result = String::with_capacity(sql.len());
