@@ -100,6 +100,7 @@ pub fn build_presentation_engine(
         credential_repo,
         tenant_repo,
         x5c_trust_anchors,
+        config.oid4vc.preferred_display_locales.clone(),
     );
     Ok(engine)
 }

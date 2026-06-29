@@ -82,6 +82,7 @@ pub struct PresentationEngine {
     pub credential_repo: Arc<dyn CredentialRepo>,
     pub tenant_repo: Arc<dyn TenantRepo>,
     key_resolver: Arc<dyn VerifierKeyResolver>,
+    preferred_display_locales: Arc<Vec<String>>,
 }
 
 impl Clone for PresentationEngine {
@@ -91,6 +92,7 @@ impl Clone for PresentationEngine {
             credential_repo: Arc::clone(&self.credential_repo),
             tenant_repo: Arc::clone(&self.tenant_repo),
             key_resolver: Arc::clone(&self.key_resolver),
+            preferred_display_locales: Arc::clone(&self.preferred_display_locales),
         }
     }
 }
@@ -120,6 +122,7 @@ impl PresentationEngine {
         credential_repo: C,
         tenant_repo: T,
         x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
+        preferred_display_locales: Vec<String>,
     ) -> Self
     where
         C: CredentialRepo,
@@ -135,6 +138,7 @@ impl PresentationEngine {
             credential_repo: Arc::new(credential_repo),
             tenant_repo: Arc::new(tenant_repo),
             key_resolver,
+            preferred_display_locales: Arc::new(preferred_display_locales),
         }
     }
 
@@ -204,6 +208,11 @@ impl PresentationEngine {
         credentials: &[CredentialView],
     ) -> SelectionResult {
         self.client.match_credentials(ctx, credentials)
+    }
+
+    /// Returns the preferred display locales configured for this engine.
+    pub fn preferred_display_locales(&self) -> &[String] {
+        &self.preferred_display_locales
     }
 
     /// Builds and sends a VP Token response to the verifier.
@@ -611,7 +620,7 @@ fn decode_credential_for_matching(credential: &Credential) -> Result<DecodedCred
         CredentialFormat::Mdoc => {
             let parsed = ParsedMdoc::parse(&credential.raw_credential)?;
             let trusted_authorities = trusted_authorities_from_mdoc(&parsed);
-            let claims = extract_mdoc_claims(&parsed)?;
+            let claims = parsed.to_rendered_claims();
             Ok(DecodedCredential {
                 claims,
                 trusted_authorities,
@@ -646,25 +655,6 @@ fn decode_jwt_claims(raw_credential: &str) -> Result<serde_json::Value> {
 
     serde_json::from_slice(&payload).map_err(PresentationError::internal)
 }
-
-/// Extracts claims from an mdoc IssuerSigned CBOR value as a JSON object.
-///
-/// The result is keyed by namespace, each containing an object of
-/// `elementIdentifier -> elementValue` pairs.
-fn extract_mdoc_claims(parsed: &ParsedMdoc) -> Result<serde_json::Value> {
-    let mut result = serde_json::Map::new();
-    for (namespace, items) in &parsed.name_spaces {
-        let mut ns_claims = serde_json::Map::with_capacity(items.len());
-        for item in items {
-            let value: ciborium::value::Value =
-                ciborium::de::from_reader(item.element_value.as_slice())?;
-            ns_claims.insert(item.element_identifier.clone(), cbor_to_json(&value)?);
-        }
-        result.insert(namespace.clone(), serde_json::Value::Object(ns_claims));
-    }
-    Ok(serde_json::Value::Object(result))
-}
-
 fn trusted_authorities_from_sd_jwt(
     sd_jwt: &cloud_wallet_openid4vc::formats::sd_jwt::SdJwt<'_>,
 ) -> Vec<CredentialAuthority> {
@@ -747,46 +737,6 @@ fn push_aki_authority_from_der(authorities: &mut Vec<CredentialAuthority>, der: 
                 value,
             });
         }
-    }
-}
-
-/// Best-effort conversion from CBOR to JSON for mdoc element values.
-fn cbor_to_json(value: &ciborium::value::Value) -> Result<serde_json::Value> {
-    use ciborium::value::Value as CborValue;
-
-    match value {
-        CborValue::Text(s) => Ok(serde_json::Value::String(s.clone())),
-        CborValue::Integer(i) => {
-            let n: i128 = (*i).into();
-            Ok(serde_json::json!(n))
-        }
-        CborValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
-        CborValue::Null => Ok(serde_json::Value::Null),
-        CborValue::Float(f) => Ok(serde_json::json!(*f)),
-        CborValue::Bytes(b) => {
-            use base64ct::Encoding as _;
-            Ok(serde_json::Value::String(
-                base64ct::Base64UrlUnpadded::encode_string(b),
-            ))
-        }
-        CborValue::Array(arr) => {
-            let items: std::result::Result<Vec<_>, _> = arr.iter().map(cbor_to_json).collect();
-            Ok(serde_json::Value::Array(items?))
-        }
-        CborValue::Map(map) => {
-            let mut obj = serde_json::Map::new();
-            for (k, v) in map {
-                let key = match k {
-                    CborValue::Text(s) => s.clone(),
-                    _ => format!("{k:?}"),
-                };
-                obj.insert(key, cbor_to_json(v)?);
-            }
-            Ok(serde_json::Value::Object(obj))
-        }
-        // Tag values: unwrap the inner value
-        CborValue::Tag(_, inner) => cbor_to_json(inner),
-        _ => Ok(serde_json::Value::Null),
     }
 }
 
