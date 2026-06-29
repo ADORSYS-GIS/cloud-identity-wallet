@@ -1216,37 +1216,6 @@ async fn verify_issuer_signature_rejects_dsc_validity_too_long() {
     );
 }
 
-/// Executable proof (not inferred from reading the match arms) that ESP512 (-52)
-/// routes through `dispatch_verify` to `verify_sha512`, same as the deprecated
-/// ES512 (-36) tested below.
-#[tokio::test]
-async fn verify_issuer_signature_accepts_valid_esp512() {
-    let (iaca_der, dsc_der, signing_key) = build_chain_p521();
-    let mso_bytes = minimal_mso_cbor();
-    let raw = build_issuer_signed_with_issuer_auth_esp512(mso_bytes, dsc_der.clone(), &signing_key);
-    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP512 issuer-signed mdoc must parse");
-    let trust_store = StaticTrustStore::new(vec![iaca_der]);
-
-    let result = verify_issuer_signature(
-        &mdoc,
-        "org.iso.18013.5.1.mDL",
-        &trust_store,
-        RevocationPolicy::Skip,
-        OffsetDateTime::now_utc(),
-    )
-    .await;
-
-    assert!(
-        result.is_ok(),
-        "valid ESP512 (-52) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
-    );
-    let info = result.unwrap();
-    assert_eq!(
-        info.cert_chain[0], dsc_der,
-        "cert_chain[0] must be the DSC leaf certificate"
-    );
-}
-
 #[tokio::test]
 async fn verify_issuer_signature_accepts_valid_es512() {
     let (iaca_der, dsc_der, signing_key) = build_chain_p521();
@@ -1267,6 +1236,37 @@ async fn verify_issuer_signature_accepts_valid_es512() {
     assert!(
         result.is_ok(),
         "valid ES512 COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+/// Executable proof (not inferred from reading the match arms) that ESP512 (-52)
+/// routes through `dispatch_verify` to `verify_sha512`, same as the deprecated
+/// ES512 (-36) tested above.
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_esp512() {
+    let (iaca_der, dsc_der, signing_key) = build_chain_p521();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth_esp512(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP512 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "valid ESP512 (-52) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
     );
     let info = result.unwrap();
     assert_eq!(
@@ -1600,37 +1600,6 @@ async fn verify_issuer_signature_rejects_ed448_algorithm_ed25519_identifier() {
     );
 }
 
-/// Executable proof (not inferred from reading the match arms) that ESP384 (-51)
-/// routes through `dispatch_verify` to `verify_sha384`, same as the deprecated
-/// ES384 (-35) tested below.
-#[tokio::test]
-async fn verify_issuer_signature_accepts_valid_esp384() {
-    let (iaca_der, dsc_der, signing_key) = build_chain_p384();
-    let mso_bytes = minimal_mso_cbor();
-    let raw = build_issuer_signed_with_issuer_auth_esp384(mso_bytes, dsc_der.clone(), &signing_key);
-    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP384 issuer-signed mdoc must parse");
-    let trust_store = StaticTrustStore::new(vec![iaca_der]);
-
-    let result = verify_issuer_signature(
-        &mdoc,
-        "org.iso.18013.5.1.mDL",
-        &trust_store,
-        RevocationPolicy::Skip,
-        OffsetDateTime::now_utc(),
-    )
-    .await;
-
-    assert!(
-        result.is_ok(),
-        "valid ESP384 (-51) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
-    );
-    let info = result.unwrap();
-    assert_eq!(
-        info.cert_chain[0], dsc_der,
-        "cert_chain[0] must be the DSC leaf certificate"
-    );
-}
-
 #[tokio::test]
 async fn verify_issuer_signature_accepts_valid_es384() {
     let (iaca_der, dsc_der, signing_key) = build_chain_p384();
@@ -1651,6 +1620,37 @@ async fn verify_issuer_signature_accepts_valid_es384() {
     assert!(
         result.is_ok(),
         "valid ES384 COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
+    );
+    let info = result.unwrap();
+    assert_eq!(
+        info.cert_chain[0], dsc_der,
+        "cert_chain[0] must be the DSC leaf certificate"
+    );
+}
+
+/// Executable proof (not inferred from reading the match arms) that ESP384 (-51)
+/// routes through `dispatch_verify` to `verify_sha384`, same as the deprecated
+/// ES384 (-35) tested above.
+#[tokio::test]
+async fn verify_issuer_signature_accepts_valid_esp384() {
+    let (iaca_der, dsc_der, signing_key) = build_chain_p384();
+    let mso_bytes = minimal_mso_cbor();
+    let raw = build_issuer_signed_with_issuer_auth_esp384(mso_bytes, dsc_der.clone(), &signing_key);
+    let mdoc = ParsedMdoc::parse(&raw).expect("valid ESP384 issuer-signed mdoc must parse");
+    let trust_store = StaticTrustStore::new(vec![iaca_der]);
+
+    let result = verify_issuer_signature(
+        &mdoc,
+        "org.iso.18013.5.1.mDL",
+        &trust_store,
+        RevocationPolicy::Skip,
+        OffsetDateTime::now_utc(),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "valid ESP384 (-51) COSE_Sign1 with trusted chain must be accepted, got: {result:?}"
     );
     let info = result.unwrap();
     assert_eq!(

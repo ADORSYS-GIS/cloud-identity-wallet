@@ -347,29 +347,32 @@ fn extract_x5chain(parsed: &ParsedMdoc) -> Result<Vec<Vec<u8>>> {
 /// Dispatches the COSE signature verification to the correct crypto backend.
 fn dispatch_verify(alg: i64, spki: &[u8], tbs: &[u8], signature: &[u8]) -> Result<()> {
     match alg {
-        // ESP256 (-9, RFC 9864) is deprecated-equivalent to ES256 (-7): identical
-        // crypto operation, just a fully-specified (curve-pinned) identifier.
+        // ESP256 (-9): RFC 9864 fully-specified replacement for deprecated ES256 (-7);
+        // same crypto operation (ECDSA P-256 + SHA-256), just a curve-pinned identifier.
         ALG_ES256 | ALG_ESP256 => {
             let key =
                 EcdsaKey::from_spki_der(spki).map_err(|_| MdocError::InvalidIssuerSignature)?;
             key.verify_sha256(tbs, signature)
                 .map_err(|_| MdocError::InvalidIssuerSignature)
         }
-        // ESP384 (-51, RFC 9864) is deprecated-equivalent to ES384 (-35).
+        // ESP384 (-51): RFC 9864 fully-specified replacement for deprecated ES384 (-35);
+        // same crypto operation (ECDSA P-384 + SHA-384), just a curve-pinned identifier.
         ALG_ES384 | ALG_ESP384 => {
             let key =
                 EcdsaKey::from_spki_der(spki).map_err(|_| MdocError::InvalidIssuerSignature)?;
             key.verify_sha384(tbs, signature)
                 .map_err(|_| MdocError::InvalidIssuerSignature)
         }
-        // ESP512 (-52, RFC 9864) is deprecated-equivalent to ES512 (-36).
+        // ESP512 (-52): RFC 9864 fully-specified replacement for deprecated ES512 (-36);
+        // same crypto operation (ECDSA P-521 + SHA-512), just a curve-pinned identifier.
         ALG_ES512 | ALG_ESP512 => {
             let key =
                 EcdsaKey::from_spki_der(spki).map_err(|_| MdocError::InvalidIssuerSignature)?;
             key.verify_sha512(tbs, signature)
                 .map_err(|_| MdocError::InvalidIssuerSignature)
         }
-        // Ed25519 (-19, RFC 9864) is deprecated-equivalent to EdDSA (-8).
+        // Ed25519 (-19): RFC 9864 fully-specified replacement for deprecated EdDSA (-8);
+        // same crypto operation (Ed25519 signing), just a curve-pinned identifier.
         ALG_EDDSA | ALG_ED25519 => {
             // Ed448 is rejected earlier in `verify_issuer_signature` via the parsed OID.
             // By the time we reach here the key is guaranteed to be Ed25519.
