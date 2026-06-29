@@ -2,6 +2,7 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use cloud_wallet_openid4vc::oid4vp::client::Error as Oid4vpClientError;
+use cloud_wallet_openid4vc::oid4vp::error::RequestUriError;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::models::credential::CredentialError;
@@ -13,16 +14,26 @@ use crate::session::SessionError;
 pub enum PresentationErrorCode {
     /// The raw authorization request could not be parsed or validated.
     InvalidRequest,
+    /// The DCQL query in the request is invalid or malformed.
+    InvalidDcqlQuery,
     /// The verifier's key could not be resolved or verified.
     KeyResolutionFailed,
     /// No matching credentials found for the DCQL query.
     NoMatchingCredentials,
+    /// The wallet does not support any of the requested VP formats.
+    VpFormatsNotSupported,
     /// The session was not found or has expired.
     SessionNotFound,
     /// The session is not in the expected state.
     InvalidSessionState,
     /// The VP token could not be built or sent.
     ResponseDeliveryFailed,
+    /// The client identifier is invalid or unauthorized.
+    InvalidClient,
+    /// Fetching the request object from request_uri failed.
+    RequestUriFetchFailed,
+    /// The request object JWT is invalid or malformed.
+    RequestObjectInvalid,
     /// An internal server error occurred.
     InternalError,
 }
@@ -31,11 +42,16 @@ impl PresentationErrorCode {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
+            Self::InvalidDcqlQuery => "invalid_dcql_query",
             Self::KeyResolutionFailed => "key_resolution_failed",
             Self::NoMatchingCredentials => "no_matching_credentials",
+            Self::VpFormatsNotSupported => "vp_formats_not_supported",
             Self::SessionNotFound => "session_not_found",
             Self::InvalidSessionState => "invalid_session_state",
             Self::ResponseDeliveryFailed => "response_delivery_failed",
+            Self::InvalidClient => "invalid_client",
+            Self::RequestUriFetchFailed => "request_uri_fetch_failed",
+            Self::RequestObjectInvalid => "request_object_invalid",
             Self::InternalError => "internal_error",
         }
     }
@@ -128,20 +144,26 @@ impl fmt::Display for PresentationError {
 impl From<Oid4vpClientError> for PresentationError {
     fn from(err: Oid4vpClientError) -> Self {
         let error = match &err {
-            Oid4vpClientError::InvalidRequest(_) | Oid4vpClientError::NoDcqlQuery => {
-                PresentationErrorCode::InvalidRequest
+            Oid4vpClientError::InvalidRequest(_) => PresentationErrorCode::InvalidRequest,
+            Oid4vpClientError::NoDcqlQuery => PresentationErrorCode::InvalidDcqlQuery,
+            Oid4vpClientError::RequestUriFailed(req_uri_err) => match req_uri_err {
+                RequestUriError::HttpError { .. } | RequestUriError::Transport(_) => {
+                    PresentationErrorCode::RequestUriFetchFailed
+                }
+                _ => PresentationErrorCode::InvalidRequest,
+            },
+            Oid4vpClientError::InvalidRequestObject(_) => {
+                PresentationErrorCode::RequestObjectInvalid
             }
-            Oid4vpClientError::InvalidRequestObject(_)
-            | Oid4vpClientError::InvalidClientId(_)
-            | Oid4vpClientError::VerifierResolutionFailed(_) => {
-                PresentationErrorCode::KeyResolutionFailed
-            }
-            Oid4vpClientError::ResponseDeliveryFailed(_)
-            | Oid4vpClientError::NoResponseUri
-            | Oid4vpClientError::UnsupportedResponseMode(_) => {
+            Oid4vpClientError::InvalidClientId(_) => PresentationErrorCode::InvalidClient,
+            Oid4vpClientError::VerifierResolutionFailed(_) => PresentationErrorCode::InvalidClient,
+            Oid4vpClientError::ValidationFailed(_) => PresentationErrorCode::InvalidRequest,
+            Oid4vpClientError::UnsupportedResponseMode(_) => PresentationErrorCode::InvalidRequest,
+            Oid4vpClientError::ResponseDeliveryFailed(_) | Oid4vpClientError::NoResponseUri => {
                 PresentationErrorCode::ResponseDeliveryFailed
             }
-            _ => PresentationErrorCode::InternalError,
+            Oid4vpClientError::InvalidTransactionData(_) => PresentationErrorCode::InvalidRequest,
+            Oid4vpClientError::PresentationBuildFailed(_) => PresentationErrorCode::InternalError,
         };
         Self {
             error,
