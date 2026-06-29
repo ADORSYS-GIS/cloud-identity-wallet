@@ -254,8 +254,11 @@ impl IntoApiError for PresentationError {
             );
         }
 
-        // Do not leak internal error details to the client.
-        let error_description = if self.error == PresentationErrorCode::InternalError {
+        // Do not leak internal/build error details to the client.
+        let error_description = if matches!(
+            self.error,
+            PresentationErrorCode::InternalError | PresentationErrorCode::PresentationBuildFailed
+        ) {
             None
         } else {
             self.error_description

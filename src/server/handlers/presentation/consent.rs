@@ -50,6 +50,14 @@ pub async fn submit_presentation_consent<S: SessionStore + Clone>(
     }
 
     if !payload.accepted {
+        if payload.selected_credentials.is_some() || payload.transaction_data_acknowledged.is_some()
+        {
+            return Err(PresentationError::new(
+                PresentationErrorCode::InvalidRequest,
+                "selected_credentials and transaction_data_acknowledged must not be present when accepted is false",
+            )
+            .into_api_error());
+        }
         return handle_rejection(&state, &session_id, &mut session).await;
     }
 
@@ -90,21 +98,112 @@ fn validate_selections(
         .into_api_error());
     }
 
-    let required_query_ids: std::collections::HashSet<String> = session
-        .dcql_result
-        .selected_credential_query_ids
-        .iter()
-        .cloned()
-        .collect();
     let provided_query_ids: std::collections::HashSet<String> =
         selections.iter().map(|s| s.query_id.clone()).collect();
 
-    if provided_query_ids != required_query_ids {
+    // Validate every provided query_id exists in the DCQL queries.
+    let all_query_ids: std::collections::HashSet<String> = session
+        .context
+        .dcql_query
+        .credentials
+        .iter()
+        .map(|q| q.id.clone())
+        .collect();
+
+    let unknown: Vec<&String> = provided_query_ids
+        .iter()
+        .filter(|id| !all_query_ids.contains(*id))
+        .collect();
+    if !unknown.is_empty() {
         return Err(PresentationError::invalid_credential_selection(format!(
-            "selected credentials must cover exactly the query IDs {:?}, got {:?}",
-            required_query_ids, provided_query_ids
+            "provided query IDs {:?} are not part of the DCQL query",
+            unknown
         ))
         .into_api_error());
+    }
+
+    // If credential_sets are present, validate against the set logic.
+    // Every required set must have at least one satisfiable option covered;
+    // optional sets may be skipped entirely.
+    if let Some(credential_sets) = &session.context.dcql_query.credential_sets {
+        let mut all_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for set in credential_sets {
+            let is_required = set.required.unwrap_or(true);
+            let satisfied_option = set.options.iter().find(|option| {
+                option
+                    .iter()
+                    .all(|cq_id| provided_query_ids.contains(cq_id))
+            });
+
+            if !is_required {
+                continue;
+            }
+
+            match satisfied_option {
+                Some(option) => {
+                    for id in option {
+                        all_ids.insert(id.clone());
+                    }
+                }
+                None => {
+                    return Err(PresentationError::invalid_credential_selection(format!(
+                        "required credential set is not satisfied; provided: {:?}, required: {:?}",
+                    provided_query_ids, set.options
+                ))
+                .into_api_error());
+                }
+            }
+        }
+
+        // Also ensure that non-required (optional) sets that are satisfied
+        // don't have extraneous query IDs that don't belong to any set option.
+        let valid_ids: std::collections::HashSet<String> = all_ids;
+        let mut extra_ids: Vec<&String> = Vec::new();
+
+        for id in &provided_query_ids {
+            if !valid_ids.contains(id) {
+                extra_ids.push(id);
+            }
+        }
+
+        // If we have extra IDs that don't belong to any required set option,
+        // check if they belong to optional sets.
+        if !extra_ids.is_empty() {
+            let all_valid_ids: std::collections::HashSet<String> = credential_sets
+                .iter()
+                .flat_map(|s| &s.options)
+                .flat_map(|o| o.iter().cloned())
+                .collect();
+
+            let truly_extra: Vec<&String> = extra_ids
+                .into_iter()
+                .filter(|id| !all_valid_ids.contains(*id))
+                .collect();
+
+            if !truly_extra.is_empty() {
+                return Err(PresentationError::invalid_credential_selection(format!(
+                    "extra query IDs {:?} not covered by any credential set option",
+                    truly_extra
+                ))
+                .into_api_error());
+            }
+        }
+    } else {
+        // No credential_sets: every credential query must be covered.
+        let required_query_ids: std::collections::HashSet<String> = session
+            .dcql_result
+            .selected_credential_query_ids
+            .iter()
+            .cloned()
+            .collect();
+
+        if provided_query_ids != required_query_ids {
+            return Err(PresentationError::invalid_credential_selection(format!(
+                "selected credentials must cover exactly the query IDs {:?}, got {:?}",
+                required_query_ids, provided_query_ids
+            ))
+            .into_api_error());
+        }
     }
 
     for selection in selections {
@@ -257,7 +356,7 @@ async fn build_selected_credentials(
                     ))
                     .into_api_error()
                 }
-                other => ApiError::internal(other),
+                other => PresentationError::presentation_build_failed(other).into_api_error(),
             })?;
 
         let sc = engine
