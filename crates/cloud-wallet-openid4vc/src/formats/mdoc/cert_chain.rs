@@ -31,12 +31,6 @@ const DSC_EKU_OID: &str = "1.0.18013.5.1.2";
 /// Top-level SPKI algorithm OID for all EC public keys (`id-ecPublicKey`, RFC 5480).
 /// The specific curve is carried in the SPKI algorithm *parameters*, not here.
 const OID_EC_PUBLIC_KEY: &str = "1.2.840.10045.2.1";
-/// NIST P-256 (secp256r1) curve OID — ISO 18013-5 Table 22 permitted curve.
-const OID_CURVE_P256: &str = "1.2.840.10045.3.1.7";
-/// NIST P-384 (secp384r1) curve OID — ISO 18013-5 Table 22 permitted curve.
-const OID_CURVE_P384: &str = "1.3.132.0.34";
-/// NIST P-521 (secp521r1) curve OID — ISO 18013-5 Table 22 permitted curve.
-const OID_CURVE_P521: &str = "1.3.132.0.35";
 
 /// Validates that `chain[0]` (the Document Signer Certificate) chains up to at least
 /// one certificate in `trusted_roots` via standard X.509 path validation.
@@ -204,11 +198,21 @@ pub(super) fn check_dsc_key_usage(dsc: &X509Certificate<'_>) -> Result<()> {
 /// curve once here, at chain-validation time, closes it for every algorithm at once
 /// rather than requiring a per-algorithm curve check in `dispatch_verify`.
 ///
+/// Curve OIDs are resolved via [`cloud_wallet_crypto::ecdsa::Curve::from_oid`] rather
+/// than a locally-hardcoded OID list, so this check and the crypto layer's notion of
+/// "which curve does this OID mean" can never silently diverge. secp256k1
+/// (`Curve::P256K1`) is recognized by that lookup — it's a curve the crypto crate
+/// supports for other purposes — but is deliberately excluded from the permitted set
+/// here, since the ISO 18013-5 policy decision ("which curves may a DSC use") belongs
+/// to this module, not to the crypto crate.
+///
 /// # Errors
 ///
 /// - [`MdocError::UnsupportedDscCurve`] — the SPKI is an EC key whose curve is not
 ///   P-256, P-384, or P-521, or the curve OID is missing/malformed.
 pub(super) fn check_dsc_curve(dsc: &X509Certificate<'_>) -> Result<()> {
+    use cloud_wallet_crypto::ecdsa::Curve;
+
     let algorithm = &dsc.public_key().algorithm;
 
     if algorithm.algorithm.to_id_string() != OID_EC_PUBLIC_KEY {
@@ -224,8 +228,8 @@ pub(super) fn check_dsc_curve(dsc: &X509Certificate<'_>) -> Result<()> {
     match curve_oid {
         Some(oid)
             if matches!(
-                oid.to_id_string().as_str(),
-                OID_CURVE_P256 | OID_CURVE_P384 | OID_CURVE_P521
+                Curve::from_oid(&oid.to_id_string()),
+                Some(Curve::P256 | Curve::P384 | Curve::P521)
             ) =>
         {
             Ok(())
