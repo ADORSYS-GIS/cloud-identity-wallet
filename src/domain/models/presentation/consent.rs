@@ -25,9 +25,7 @@ pub enum ConsentStatus {
 #[derive(Debug, Serialize)]
 pub struct PresentationConsentResponse {
     pub status: ConsentStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub redirect_uri: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub verifier_response: Option<VerifierDirectPostResponse>,
 }
 
@@ -94,19 +92,20 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["status"], "completed");
         assert_eq!(json["redirect_uri"], "https://example.com/cb");
-        assert!(!json.as_object().unwrap().contains_key("verifier_response"));
+        assert!(json["verifier_response"].is_null());
     }
 
     #[test]
-    fn consent_response_omits_optional_fields() {
+    fn consent_response_serializes_null_optional_fields() {
         let resp = PresentationConsentResponse {
             status: ConsentStatus::Rejected,
             redirect_uri: None,
             verifier_response: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
-        assert!(!json.as_object().unwrap().contains_key("redirect_uri"));
-        assert!(!json.as_object().unwrap().contains_key("verifier_response"));
+        assert_eq!(json["status"], "rejected");
+        assert!(json["redirect_uri"].is_null());
+        assert!(json["verifier_response"].is_null());
     }
 
     #[test]
