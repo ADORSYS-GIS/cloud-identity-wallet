@@ -148,9 +148,9 @@ fn validate_selections(
                 None => {
                     return Err(PresentationError::invalid_credential_selection(format!(
                         "required credential set is not satisfied; provided: {:?}, required: {:?}",
-                    provided_query_ids, set.options
-                ))
-                .into_api_error());
+                        provided_query_ids, set.options
+                    ))
+                    .into_api_error());
                 }
             }
         }
