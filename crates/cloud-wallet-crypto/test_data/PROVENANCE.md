@@ -24,6 +24,17 @@ NOT by this crate's own `encrypt()` function.
 
 ---
 
+## ECDH-ES / AES_CBC_HMAC_SHA2 tokens
+
+- Recipient private key: `p256_recipient.pkcs8.der` (same key as the GCM token above)
+- Plaintext: `"ecdh cbc-hs256 interop"` / `"ecdh cbc-hs384 interop"` / `"ecdh cbc-hs512 interop"`
+  (one distinct plaintext per file, named after its `enc` value)
+- Files: `interop_ecdh_es_a128cbc_hs256.jwe`, `interop_ecdh_es_a192cbc_hs384.jwe`,
+  `interop_ecdh_es_a256cbc_hs512.jwe`
+- `enc` values: `A128CBC-HS256`, `A192CBC-HS384`, `A256CBC-HS512` (RFC 7518 §5.2)
+
+---
+
 ## Token generation code
 
 ```python
@@ -64,3 +75,17 @@ token_rsa = encrypt_token(
 )
 
 print("token_rsa:", token_rsa)
+
+
+for enc, suffix in [
+    ("A128CBC-HS256", "cbc-hs256"),
+    ("A192CBC-HS384", "cbc-hs384"),
+    ("A256CBC-HS512", "cbc-hs512"),
+]:
+    token = encrypt_token(
+        {"alg": "ECDH-ES", "enc": enc},
+        f"ecdh {suffix} interop".encode(),
+        ecdh_public_key,
+        ["ECDH-ES", enc],
+    )
+    print(f"token_{enc}:", token)
