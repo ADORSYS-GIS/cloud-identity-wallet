@@ -11,14 +11,8 @@ const OPENID4VCI_PROOF_JWT_TYP: &str = "openid4vci-proof+jwt";
 
 /// Builds a holder-binding proof JWT for a credential request.
 pub trait ProofSigner: Send + Sync + 'static {
-    /// Sign `claims` with the provided header and return the compact JWT string.
+    /// Sign `claims` with the standard proof header and return the compact JWT string.
     fn sign(&self, claims: &Claims) -> Result<String>;
-
-    /// Sign claims with a key attestation embedded in the JWT header.
-    ///
-    /// The attestation JWT is included in the `attestation` header field
-    /// per OID4VCI Appendix D and HAIP §4.5.1.
-    fn sign_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String>;
 
     /// Returns the algorithm used by this signer.
     fn algorithm(&self) -> Algorithm;
@@ -26,7 +20,12 @@ pub trait ProofSigner: Send + Sync + 'static {
     /// Returns the holder's public JWK embedded in the proof JWT header.
     ///
     /// Use this to obtain the holder binding key for attestation key matching.
-    fn holder_binding_public_jwk(&self) -> Jwk;
+    fn public_jwk(&self) -> &Jwk;
+
+    /// Sign claims with a custom header.
+    ///
+    /// This allows embedding additional header fields like `attestation` per OID4VCI Appendix D.
+    fn sign_with_header(&self, header: &Header, claims: &Claims) -> Result<String>;
 }
 
 /// JOSE header for OpenID4VCI proof JWTs as defined in [OID4VCI Appendix F]
@@ -382,41 +381,6 @@ impl CryptoSigner {
         jwt.push_str(&sig_b64);
         Ok(jwt)
     }
-
-    /// Encode to a JWT with a key attestation embedded in the header.
-    ///
-    /// The attestation JWT is included in the `attestation` header field
-    /// per OID4VCI Appendix D and HAIP §4.5.1.
-    fn encode_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String> {
-        let header = Header {
-            alg: self.signer.algorithm(),
-            typ: OPENID4VCI_PROOF_JWT_TYP,
-            kid: None,
-            jwk: Some(self.holder_binding_public_jwk.clone()),
-            x5c: None,
-            attestation: Some(attestation_jwt.to_string()),
-            trust_chain: None,
-        };
-        let header_b64 = base64_encode_type(&header)?;
-        let payload_b64 = base64_encode_type(claims)?;
-
-        let mut signing_input = Vec::with_capacity(header_b64.len() + 1 + payload_b64.len());
-        signing_input.extend_from_slice(header_b64.as_bytes());
-        signing_input.push(b'.');
-        signing_input.extend_from_slice(payload_b64.as_bytes());
-
-        let signature = self.signer.sign_bytes(&signing_input)?;
-        let sig_b64 = b64_encode(signature);
-
-        let mut jwt =
-            String::with_capacity(header_b64.len() + 1 + payload_b64.len() + 1 + sig_b64.len());
-        jwt.push_str(&header_b64);
-        jwt.push('.');
-        jwt.push_str(&payload_b64);
-        jwt.push('.');
-        jwt.push_str(&sig_b64);
-        Ok(jwt)
-    }
 }
 
 impl ProofSigner for CryptoSigner {
@@ -424,16 +388,16 @@ impl ProofSigner for CryptoSigner {
         self.encode(claims)
     }
 
-    fn sign_with_attestation(&self, claims: &Claims, attestation_jwt: &str) -> Result<String> {
-        self.encode_with_attestation(claims, attestation_jwt)
-    }
-
     fn algorithm(&self) -> Algorithm {
         self.signer.algorithm()
     }
 
-    fn holder_binding_public_jwk(&self) -> Jwk {
-        self.holder_binding_public_jwk.clone()
+    fn public_jwk(&self) -> &Jwk {
+        &self.holder_binding_public_jwk
+    }
+
+    fn sign_with_header(&self, header: &Header, claims: &Claims) -> Result<String> {
+        self.signer.sign_jwt(header, claims)
     }
 }
 

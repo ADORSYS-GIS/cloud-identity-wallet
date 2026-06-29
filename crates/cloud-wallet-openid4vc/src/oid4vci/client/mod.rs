@@ -672,43 +672,24 @@ impl Oid4vciClient {
     /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
     /// server-provided nonces are stored for pre-emptive use on subsequent
     /// requests per RFC 9449 §7.
-    pub async fn request_credential<S: ProofSigner>(
-        &self,
-        context: &ResolvedOfferContext,
-        token: &TokenResponse,
-        credential_identifier: impl Into<String>,
-        credential_config_id: &str,
-        signer: &S,
-        dpop: Option<&DpopOptions<'_>>,
-    ) -> Result<CredentialResponse> {
-        self.request_credential_with_attestation(
-            context,
-            token,
-            credential_identifier,
-            credential_config_id,
-            signer,
-            dpop,
-            None,
-        )
-        .await
-    }
-
-    /// Request a credential from the issuer's credential endpoint with optional key attestation.
+    /// Request a credential from the issuer's credential endpoint.
     ///
-    /// Per OID4VCI Appendix D and HAIP §4.5.1, when the credential configuration indicates
-    /// `key_attestations_required`, the proof JWT header must include a key attestation in
-    /// the `attestation` field.
+    /// If `dpop` is provided and the access token was DPoP-bound
+    /// (`token_type=DPoP`), a fresh DPoP proof with `ath` (SHA-256 of
+    /// the access token) is attached to the credential request per RFC 9449.
+    /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
+    /// server-provided nonces are stored for pre-emptive use on subsequent
+    /// requests per RFC 9449 §7.
     ///
-    /// # Arguments
-    /// * `dpop` - Optional DPoP options for DPoP-bound access tokens.
-    /// * `key_attestation_jwt` - Optional key attestation JWT to embed in the proof header.
-    ///   If `None` and attestation is required by issuer metadata, an error is returned.
+    /// Per OID4VCI Appendix D and HAIP §4.5.1, when the credential configuration
+    /// indicates `key_attestations_required` and `key_attestation_jwt` is provided,
+    /// the proof JWT header will include a key attestation in the `attestation` field.
     ///
     /// # Errors
     /// * `ClientError::MissingKeyAttestation` - If attestation is required but not provided.
     /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation.
     #[allow(clippy::too_many_arguments)]
-    pub async fn request_credential_with_attestation<S: ProofSigner>(
+    pub async fn request_credential<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
@@ -723,7 +704,7 @@ impl Oid4vciClient {
 
         let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
         let proofs = self
-            .build_proofs_with_attestation(
+            .build_proofs(
                 context,
                 c_nonce.as_deref(),
                 is_anonymous,
@@ -752,33 +733,15 @@ impl Oid4vciClient {
     /// per RFC 9449. If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
     /// server-provided nonces are stored for pre-emptive use on subsequent
     /// requests per RFC 9449 §7.
-    pub async fn request_credentials<S: ProofSigner>(
-        &self,
-        context: &ResolvedOfferContext,
-        token: &TokenResponse,
-        signer: &S,
-        dpop: Option<&DpopOptions<'_>>,
-    ) -> Result<Vec<CredentialResponse>> {
-        self.request_credentials_with_attestation(context, token, signer, dpop, None)
-            .await
-    }
-
-    /// Request all credentials authorized by the token response with optional key attestation.
     ///
     /// Per OID4VCI Appendix D, for batch issuance, all public keys can be attested
     /// within a single key attestation when multiple credentials are requested.
     ///
-    /// # Arguments
-    /// * `dpop` - Optional DPoP options for DPoP-bound access tokens.
-    /// * `key_attestation_jwt` - Optional key attestation JWT to embed in the proof header.
-    ///   The attestation must contain all signer public keys in its `attested_keys` array.
-    ///
     /// # Errors
     /// * `ClientError::MissingKeyAttestation` - If attestation is required but not provided.
-    /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation or
-    ///   doesn't contain all required signer keys in `attested_keys`.
+    /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation.
     #[allow(clippy::too_many_arguments)]
-    pub async fn request_credentials_with_attestation<S: ProofSigner>(
+    pub async fn request_credentials<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
@@ -793,7 +756,7 @@ impl Oid4vciClient {
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential_with_attestation(
+                futures.push(self.request_credential(
                     context,
                     token,
                     id,
@@ -1213,34 +1176,10 @@ impl Oid4vciClient {
 
     /// Builds proof JWTs without key attestation.
     ///
-    /// This is kept for backwards compatibility and internal use.
-    /// For key attestation support, use `build_proofs_with_attestation`.
-    #[allow(dead_code)]
-    async fn build_proofs<S: ProofSigner>(
-        &self,
-        context: &ResolvedOfferContext,
-        c_nonce: Option<&str>,
-        is_anonymous: bool,
-        credential_config_id: &str,
-        signer: &S,
-    ) -> Result<Option<Proofs>> {
-        self.build_proofs_with_attestation(
-            context,
-            c_nonce,
-            is_anonymous,
-            credential_config_id,
-            signer,
-            None,
-        )
-        .await
-    }
-
-    /// Build proof JWTs with optional key attestation support.
-    ///
     /// When `key_attestation_jwt` is provided, it will be embedded in the proof JWT header
     /// per OID4VCI Appendix D. When key attestations are required by issuer metadata and
     /// no attestation is provided, an error is returned.
-    async fn build_proofs_with_attestation<S: ProofSigner>(
+    async fn build_proofs<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
         c_nonce: Option<&str>,
@@ -1271,11 +1210,11 @@ impl Oid4vciClient {
                     })?;
 
                 // Verify the signer's key is in attested_keys
-                let signer_jwk = signer.holder_binding_public_jwk();
+                let signer_jwk = signer.public_jwk();
                 let key_in_attestation = attestation
                     .attested_keys()
                     .iter()
-                    .any(|k| keys_match(k, &signer_jwk));
+                    .any(|k| crate::oid4vci::key_attestation::keys_match(k, signer_jwk));
                 if !key_in_attestation {
                     return Err(ClientError::key_attestation_validation(
                         "signer key not found in attested_keys",
@@ -1305,7 +1244,18 @@ impl Oid4vciClient {
         };
 
         let jwt = match key_attestation_jwt {
-            Some(attestation) => signer.sign_with_attestation(&claims, attestation)?,
+            Some(attestation) => {
+                let header = ProofHeader {
+                    alg: signer.algorithm(),
+                    typ: "openid4vci-proof+jwt",
+                    kid: None,
+                    jwk: Some(signer.public_jwk().clone()),
+                    x5c: None,
+                    attestation: Some(attestation.to_string()),
+                    trust_chain: None,
+                };
+                signer.sign_with_header(&header, &claims)?
+            }
             None => signer.sign(&claims)?,
         };
         Ok(Some(Proofs::jwt([jwt])))
@@ -1629,20 +1579,6 @@ fn key_attestation_requirements(
         });
 
     Ok(requirements)
-}
-
-/// Check if two JWKs represent the same key (by public key material).
-fn keys_match(a: &cloud_wallet_crypto::jwk::Jwk, b: &cloud_wallet_crypto::jwk::Jwk) -> bool {
-    use cloud_wallet_crypto::jwk::Key;
-    match (&a.key, &b.key) {
-        (Key::Ec(ec_a), Key::Ec(ec_b)) => {
-            ec_a.crv == ec_b.crv && ec_a.x == ec_b.x && ec_a.y == ec_b.y
-        }
-        (Key::Rsa(rsa_a), Key::Rsa(rsa_b)) => rsa_a.n == rsa_b.n && rsa_a.e == rsa_b.e,
-        (Key::Okp(okp_a), Key::Okp(okp_b)) => okp_a.crv == okp_b.crv && okp_a.x == okp_b.x,
-        (Key::Oct(oct_a), Key::Oct(oct_b)) => oct_a.k.expose() == oct_b.k.expose(),
-        _ => false,
-    }
 }
 
 pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[String])>> {

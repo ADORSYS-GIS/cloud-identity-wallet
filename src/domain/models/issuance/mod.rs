@@ -492,7 +492,7 @@ impl IssuanceEngine {
 
         let responses = self
             .client
-            .request_credentials(context, token, &signer, dpop)
+            .request_credentials(context, token, &signer, dpop, None)
             .await?;
 
         debug!(

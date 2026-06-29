@@ -43,6 +43,7 @@ impl AttackPotential {
 /// Claims in a Key Attestation JWT per OID4VCI Appendix D.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct KeyAttestationClaims {
     /// Issuer of the key attestation (the secure key management backend).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,12 +81,16 @@ pub struct KeyAttestationClaims {
 }
 
 impl KeyAttestationClaims {
-    /// Creates a new KeyAttestationClaims with the minimal required fields.
-    pub fn new(attested_keys: Vec<Jwk>) -> Self {
+    /// Creates a new KeyAttestationClaims with the required fields.
+    ///
+    /// # Panics
+    /// Panics if `attested_keys` is empty.
+    pub fn new(attested_keys: Vec<Jwk>, exp: i64) -> Self {
+        assert!(!attested_keys.is_empty(), "attested_keys must not be empty");
         Self {
             iss: None,
             iat: OffsetDateTime::now_utc().unix_timestamp(),
-            exp: None,
+            exp: Some(exp),
             attested_keys,
             key_storage: None,
             user_authentication: None,
@@ -98,12 +103,6 @@ impl KeyAttestationClaims {
     /// Sets the issuer of the key attestation.
     pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
         self.iss = Some(issuer.into());
-        self
-    }
-
-    /// Sets the expiration time.
-    pub fn with_expiration(mut self, exp: i64) -> Self {
-        self.exp = Some(exp);
         self
     }
 
@@ -172,6 +171,7 @@ impl KeyAttestationClaims {
 /// JOSE Header for Key Attestation JWTs.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct KeyAttestationHeader {
     /// Digital signature algorithm (REQUIRED, MUST NOT be `none` or symmetric).
     pub alg: String,
@@ -388,9 +388,9 @@ pub struct KeyAttestationBuilder {
 
 impl KeyAttestationBuilder {
     /// Creates a new builder with the minimum required claims.
-    pub fn new(attested_keys: Vec<Jwk>, algorithm: impl Into<String>) -> Self {
+    pub fn new(attested_keys: Vec<Jwk>, algorithm: impl Into<String>, exp: i64) -> Self {
         Self {
-            claims: KeyAttestationClaims::new(attested_keys),
+            claims: KeyAttestationClaims::new(attested_keys, exp),
             header: KeyAttestationHeader::new(algorithm),
         }
     }
@@ -507,7 +507,10 @@ pub fn validate_batch_attestation(
 }
 
 /// Checks if two JWKs represent the same key (by public key material).
-fn keys_match(a: &Jwk, b: &Jwk) -> bool {
+///
+/// Note: Oct (symmetric) keys always return false as they are not valid
+/// holder-binding keys per OID4VCI/HAI].
+pub(crate) fn keys_match(a: &Jwk, b: &Jwk) -> bool {
     use cloud_wallet_crypto::jwk::Key;
     match (&a.key, &b.key) {
         (Key::Ec(ec_a), Key::Ec(ec_b)) => {
@@ -515,7 +518,8 @@ fn keys_match(a: &Jwk, b: &Jwk) -> bool {
         }
         (Key::Rsa(rsa_a), Key::Rsa(rsa_b)) => rsa_a.n == rsa_b.n && rsa_a.e == rsa_b.e,
         (Key::Okp(okp_a), Key::Okp(okp_b)) => okp_a.crv == okp_b.crv && okp_a.x == okp_b.x,
-        (Key::Oct(oct_a), Key::Oct(oct_b)) => oct_a.k.expose() == oct_b.k.expose(),
+        // Oct (symmetric) keys are not valid holder-binding keys per OID4VCI
+        (Key::Oct(_), _) | (_, Key::Oct(_)) => false,
         _ => false,
     }
 }
@@ -599,10 +603,11 @@ mod tests {
     #[test]
     fn test_key_attestation_claims_new() {
         let jwk = sample_ec_jwk();
-        let claims = KeyAttestationClaims::new(vec![jwk.clone()]);
+        let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
+        let claims = KeyAttestationClaims::new(vec![jwk.clone()], exp);
 
         assert!(claims.iss.is_none());
-        assert!(claims.exp.is_none());
+        assert_eq!(claims.exp, Some(exp));
         assert!(claims.key_storage.is_none());
         assert!(claims.user_authentication.is_none());
         assert_eq!(claims.attested_keys.len(), 1);
@@ -611,9 +616,9 @@ mod tests {
     #[test]
     fn test_key_attestation_claims_builder() {
         let jwk = sample_ec_jwk();
-        let claims = KeyAttestationClaims::new(vec![jwk])
+        let exp = 1234567890i64;
+        let claims = KeyAttestationClaims::new(vec![jwk], exp + 3600)
             .with_issuer("https://attestation.example.com")
-            .with_expiration(1234567890)
             .with_key_storage(vec!["iso_18045_moderate".to_string()])
             .with_user_authentication(vec!["iso_18045_moderate".to_string()])
             .with_nonce("test-nonce".to_string());
@@ -622,21 +627,17 @@ mod tests {
             claims.iss,
             Some("https://attestation.example.com".to_string())
         );
-        assert_eq!(claims.exp, Some(1234567890));
+        assert_eq!(claims.exp, Some(exp + 3600));
         assert!(claims.key_storage.is_some());
         assert!(claims.user_authentication.is_some());
         assert_eq!(claims.nonce, Some("test-nonce".to_string()));
     }
 
     #[test]
+    #[should_panic(expected = "attested_keys must not be empty")]
     fn test_key_attestation_claims_validate_empty_keys() {
-        let claims = KeyAttestationClaims::new(vec![]);
-        let result = claims.validate();
-        assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(KeyAttestationError::MissingAttestedKeys)
-        ));
+        let _ =
+            KeyAttestationClaims::new(vec![], OffsetDateTime::now_utc().unix_timestamp() + 3600);
     }
 
     #[test]
@@ -673,12 +674,10 @@ mod tests {
     #[test]
     fn test_attestation_meets_requirements() {
         let jwk = sample_ec_jwk();
-        let claims = KeyAttestationClaims::new(vec![jwk])
+        let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
+        let claims = KeyAttestationClaims::new(vec![jwk], exp)
             .with_key_storage(vec!["iso_18045_moderate".to_string()])
             .with_user_authentication(vec!["iso_18045_moderate".to_string()]);
-
-        let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
-        let claims = claims.with_expiration(exp);
 
         let attestation_jwt =
             KeyAttestationJwt::decode_unverified(&create_test_jwt(&claims)).unwrap();
@@ -697,9 +696,9 @@ mod tests {
     fn test_validate_batch_attestation() {
         let key1 = sample_ec_jwk();
         let key2 = sample_ec_jwk();
+        let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
 
-        let claims = KeyAttestationClaims::new(vec![key1.clone(), key2.clone()])
-            .with_expiration(OffsetDateTime::now_utc().unix_timestamp() + 3600);
+        let claims = KeyAttestationClaims::new(vec![key1.clone(), key2.clone()], exp);
         let jwt = create_test_jwt(&claims);
 
         let result = validate_batch_attestation(&jwt, &[key1.clone(), key2]);
@@ -723,9 +722,9 @@ mod tests {
 
         assert!(requirements.is_required());
 
+        let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
         let attestation = KeyAttestationJwt::decode_unverified(&create_test_jwt(
-            &KeyAttestationClaims::new(vec![sample_ec_jwk()])
-                .with_expiration(OffsetDateTime::now_utc().unix_timestamp() + 3600),
+            &KeyAttestationClaims::new(vec![sample_ec_jwk()], exp),
         ))
         .unwrap();
 
@@ -747,9 +746,9 @@ mod tests {
         let requirements = KeyAttestationRequirements::default();
         assert!(!requirements.is_required());
 
+        let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
         let attestation = KeyAttestationJwt::decode_unverified(&create_test_jwt(
-            &KeyAttestationClaims::new(vec![sample_ec_jwk()])
-                .with_expiration(OffsetDateTime::now_utc().unix_timestamp() + 3600),
+            &KeyAttestationClaims::new(vec![sample_ec_jwk()], exp),
         ))
         .unwrap();
 
