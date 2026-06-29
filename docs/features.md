@@ -1,37 +1,36 @@
 # Cargo Feature Matrix
 
-Cloud Identity Wallet selects infrastructure backends with Cargo features and validates the matching runtime configuration at startup.
+The server selects infrastructure backends with Cargo features and validates the matching runtime configuration at startup.
 
 ## Feature Flags
 
-| Feature | Default | Enables |
-| --- | --- | --- |
-| `memory` | yes | In-memory credential, tenant, task queue, event bus, session-friendly local development, and `cloud-wallet-kms/memory-backend`. |
-| `redis` | no | Redis-backed issuance task queue and event publisher/subscriber. Requires Redis 7+ and RESP3 for event subscriptions. |
-| `sqlx` | no | Shared SQL support. This is enabled by `mysql`, `postgres`, or `sqlite`; do not enable it alone. |
-| `mysql` | no | MySQL credential/tenant repositories, `sqlx/mysql`, and `cloud-wallet-kms/mysql`. |
-| `postgres` | no | PostgreSQL credential/tenant repositories, `sqlx/postgres`, and `cloud-wallet-kms/postgres`. |
-| `sqlite` | no | SQLite credential/tenant repositories, `sqlx/sqlite`, and `cloud-wallet-kms/sqlite`. |
-| `local-kms` | yes | Local KMS provider for development and tests via `cloud-wallet-kms/local-kms`. |
-| `aws-kms` | no | AWS KMS provider via `cloud-wallet-kms/aws-kms` and AWS SDK configuration loading. |
+| Feature     | Default | Enables                                                                                                                         |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `memory`    | yes     | In-memory credential, tenant, task queue, event bus, session-friendly local development, and `cloud-wallet-kms/memory-backend`. |
+| `redis`     | no      | Redis-backed issuance task queue and event publisher/subscriber. Requires Redis 7+ and RESP3 for event subscriptions.           |
+| `mysql`     | no      | MySQL credential/tenant repositories, `sqlx/mysql`, and `cloud-wallet-kms/mysql`.                                               |
+| `postgres`  | no      | PostgreSQL credential/tenant repositories, `sqlx/postgres`, and `cloud-wallet-kms/postgres`.                                    |
+| `sqlite`    | no      | SQLite credential/tenant repositories, `sqlx/sqlite`, and `cloud-wallet-kms/sqlite`.                                            |
+| `local-kms` | yes     | Local KMS provider for development and tests via `cloud-wallet-kms/local-kms`.                                                  |
+| `aws-kms`   | no      | AWS KMS provider via `cloud-wallet-kms/aws-kms` and AWS SDK configuration loading.                                              |
 
 ## Runtime Configuration
 
 `APP_BACKEND` selects the repository backend:
 
-| `APP_BACKEND` | Required features | External services |
-| --- | --- | --- |
-| `memory` | `memory` plus `local-kms` or `aws-kms` | None for `local-kms`; AWS credentials for `aws-kms`. |
-| `mysql` | `mysql`; usually `redis`; plus `local-kms` or `aws-kms` | MySQL database. Redis is recommended for distributed issuance workers. |
-| `postgres` | `postgres`; usually `redis`; plus `local-kms` or `aws-kms` | PostgreSQL database. Redis is recommended for distributed issuance workers. |
-| `sqlite` | `sqlite`; plus `local-kms` or `aws-kms` | SQLite file path. Redis is optional and usually unnecessary for local single-node use. |
+| `APP_BACKEND` | Required features                                          | External services                                                                      |
+| ------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `memory`      | `memory` plus `local-kms` or `aws-kms`                     | None for `local-kms`; AWS credentials for `aws-kms`.                                   |
+| `mysql`       | `mysql`; usually `redis`; plus `local-kms` or `aws-kms`    | MySQL database. Redis is recommended for distributed issuance workers.                 |
+| `postgres`    | `postgres`; usually `redis`; plus `local-kms` or `aws-kms` | PostgreSQL database. Redis is recommended for distributed issuance workers.            |
+| `sqlite`      | `sqlite`; plus `local-kms` or `aws-kms`                    | SQLite file path. Redis is optional and usually unnecessary for local single-node use. |
 
 `APP_KMS__PROVIDER` selects key management:
 
-| `APP_KMS__PROVIDER` | Required features | Requirements |
-| --- | --- | --- |
-| `local` | `local-kms` | Development/test only. With SQL backends, DEKs are persisted through the selected SQL KMS storage backend. |
-| `aws` | `aws-kms` | AWS credentials and region. `APP_KMS__AWS_REGION` can override region loading. |
+| `APP_KMS__PROVIDER` | Required features | Requirements                                                                                               |
+| ------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `local`             | `local-kms`       | Development/test only. With SQL backends, DEKs are persisted through the selected SQL KMS storage backend. |
+| `aws`               | `aws-kms`         | AWS credentials and region. `APP_KMS__AWS_REGION` can override region loading.                             |
 
 If runtime configuration names a backend whose feature was not compiled, startup fails with a clear error.
 
@@ -83,11 +82,11 @@ APP_KMS__AWS_REGION=us-east-1
 
 The `xtask` workspace member provides profile-based commands that automatically configure the correct Cargo features for each deployment environment:
 
-| Profile | Features | Use case |
-| --- | --- | --- |
-| `development` | `memory`, `local-kms` | Local development, no external services needed |
-| `staging` | `postgres`, `redis`, `local-kms` | Pre-production testing with real databases |
-| `production` | `mysql`, `redis`, `aws-kms` | Production deployment with AWS KMS |
+| Profile       | Features                         | Use case                                       |
+| ------------- | -------------------------------- | ---------------------------------------------- |
+| `development` | `memory`, `local-kms`            | Local development, no external services needed |
+| `staging`     | `postgres`, `redis`, `local-kms` | Pre-production testing with real databases     |
+| `production`  | `postgres`, `redis`, `aws-kms`   | Production deployment with AWS KMS             |
 
 ```bash
 # List available profiles
