@@ -16,12 +16,14 @@ use cloud_identity_wallet::{
     server::Server,
     session::MemorySession,
     setup,
+    utils::load_root_truststore,
 };
-use time::UtcDateTime;
-use url::Url;
 
 #[cfg(feature = "sqlx")]
 use sqlx::{AnyPool, ConnectOptions};
+
+use time::UtcDateTime;
+use url::Url;
 
 /// Test server which holds the base URL and other necessary components for testing
 pub struct TestServer {
@@ -31,13 +33,8 @@ pub struct TestServer {
 
 /// Spawn a server and return the base URL and other necessary components
 pub async fn spawn_server() -> TestServer {
-    let config = {
-        let mut config = Config::load().unwrap();
-        config.server.host = "localhost".to_string();
-        config.server.port = 0;
-        config.oid4vci.use_system_proxy = false;
-        config
-    };
+    let config = make_config();
+    let _trust_store = load_root_truststore(config.oid4vc.root_truststore_dir.as_deref()).unwrap();
     let session_store = MemorySession::default();
     let service = setup::build_service(session_store, &config)
         .await
@@ -61,7 +58,7 @@ pub fn make_config() -> Config {
     let mut config = Config::load().unwrap();
     config.server.host = "localhost".to_string();
     config.server.port = 0;
-    config.oid4vci.use_system_proxy = false;
+    config.oid4vc.use_system_proxy = false;
     config
 }
 

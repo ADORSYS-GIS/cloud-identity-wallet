@@ -8,6 +8,7 @@
 //!
 //! Content encryption (`enc`):
 //! - `A128GCM`, `A256GCM` (RFC 7518 §5.3)
+//! - `A128CBC-HS256`, `A192CBC-HS384`, `A256CBC-HS512` (RFC 7518 §5.2)
 //!
 //! # FIPS Compatibility
 //!

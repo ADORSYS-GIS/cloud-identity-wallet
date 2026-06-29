@@ -61,6 +61,10 @@ impl RedisSession {
 
 #[async_trait::async_trait]
 impl SessionStore for RedisSession {
+    fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
     async fn upsert<K, V>(&self, key: K, value: &V) -> Result<()>
     where
         K: Into<Id> + Send + Sync,

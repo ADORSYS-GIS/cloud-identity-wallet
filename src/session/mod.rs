@@ -3,6 +3,8 @@ mod error;
 mod store;
 mod utils;
 
+use std::time::Duration;
+
 pub use data::*;
 pub use error::Error as SessionError;
 pub use store::MemorySession;
@@ -15,6 +17,9 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 /// A session store interface used to manage the lifecycle of sessions.
 #[async_trait::async_trait]
 pub trait SessionStore: Send + Sync + 'static {
+    /// Returns the configured TTL used for newly inserted sessions.
+    fn ttl(&self) -> Duration;
+
     /// Inserts or updates a session in the store.
     ///
     /// The update operation doesn't reset the expiration time.

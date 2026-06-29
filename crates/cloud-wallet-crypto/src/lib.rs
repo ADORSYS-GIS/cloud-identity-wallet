@@ -11,6 +11,7 @@
 
 pub mod aead;
 pub mod aes_kek;
+pub mod cbc_hmac;
 pub mod digest;
 pub mod ecdh;
 pub mod ecdsa;

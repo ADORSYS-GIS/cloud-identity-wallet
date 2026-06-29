@@ -1,11 +1,14 @@
 mod error;
+mod start;
 
 use cloud_wallet_openid4vc::formats::mdoc::ParsedMdoc;
 use cloud_wallet_openid4vc::oid4vci::client::ProofSigner;
 pub use error::{PresentationError, PresentationErrorCode};
+pub use start::{StartPresentationRequest, StartPresentationResponse};
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use base64ct::Encoding as _;
 use cloud_wallet_openid4vc::errors::{Error as Oid4vcError, ErrorKind};
 use cloud_wallet_openid4vc::oid4vp::authorization::DirectPostResponse;
@@ -76,6 +79,7 @@ pub struct PresentationEngine {
     pub credential_repo: Arc<dyn CredentialRepo>,
     pub tenant_repo: Arc<dyn TenantRepo>,
     key_resolver: Arc<dyn VerifierKeyResolver>,
+    preferred_display_locales: Arc<Vec<String>>,
 }
 
 impl Clone for PresentationEngine {
@@ -85,6 +89,7 @@ impl Clone for PresentationEngine {
             credential_repo: Arc::clone(&self.credential_repo),
             tenant_repo: Arc::clone(&self.tenant_repo),
             key_resolver: Arc::clone(&self.key_resolver),
+            preferred_display_locales: Arc::clone(&self.preferred_display_locales),
         }
     }
 }
@@ -105,41 +110,22 @@ impl std::fmt::Debug for PresentationEngine {
 impl PresentationEngine {
     /// Creates a new presentation engine with all required dependencies.
     ///
-    /// `x509_trust_anchor_der` are raw DER-encoded X.509 root certificates
-    /// used for `x509_san_dns` / `x509_hash` verifier key resolution.
-    pub fn new<C, T, I, V>(
+    /// `x5c_trust_anchors` are pre-validated X.509 root trust anchors used for
+    /// `x509_san_dns` / `x509_hash` verifier key resolution. They should be
+    /// loaded once at startup via [`crate::utils::load_root_truststore`] and
+    /// shared across engines.
+    pub fn new<C, T>(
         client: Oid4vpClient,
         credential_repo: C,
         tenant_repo: T,
-        x509_trust_anchor_der: I,
+        x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>>,
+        preferred_display_locales: Vec<String>,
     ) -> Self
     where
         C: CredentialRepo,
         T: TenantRepo,
-        I: IntoIterator<Item = V>,
-        V: AsRef<[u8]>,
     {
-        let trust_anchors: Vec<TrustAnchor<'static>> = x509_trust_anchor_der
-            .into_iter()
-            .filter_map(|der: V| {
-                let cert = rustls_pki_types::CertificateDer::from(der.as_ref());
-                match webpki::anchor_from_trusted_cert(&cert) {
-                    Ok(anchor) => {
-                        let anchor: TrustAnchor<'static> = anchor.to_owned();
-                        Some(anchor)
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            error = %err,
-                            "skipping malformed X.509 trust anchor"
-                        );
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        let x509_verifier = X509Verifier::new(Arc::new(trust_anchors));
+        let x509_verifier = X509Verifier::new(x5c_trust_anchors);
         let key_resolver = Arc::new(CompositeKeyResolver {
             x509: x509_verifier,
         });
@@ -149,6 +135,7 @@ impl PresentationEngine {
             credential_repo: Arc::new(credential_repo),
             tenant_repo: Arc::new(tenant_repo),
             key_resolver,
+            preferred_display_locales: Arc::new(preferred_display_locales),
         }
     }
 
@@ -169,6 +156,48 @@ impl PresentationEngine {
         Ok(context)
     }
 
+    /// Ensures the requested DCQL credential formats intersect with this
+    /// wallet's advertised VP format capabilities.
+    pub fn ensure_supported_vp_formats(&self, ctx: &PresentationContext) -> Result<()> {
+        let supported_formats = self
+            .client
+            .config()
+            .wallet_metadata
+            .as_ref()
+            .map(|metadata| &metadata.vp_formats_supported);
+
+        let supports_format = |format: &cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat| {
+            supported_formats
+                .map(|formats| {
+                    formats
+                        .keys()
+                        .any(|supported_format| supported_format.to_string() == format.to_string())
+                })
+                .unwrap_or_else(|| {
+                    matches!(
+                        format,
+                        cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat::DcSdJwt
+                            | cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat::MsoMdoc
+                            | cloud_wallet_openid4vc::oid4vp::dcql::CredentialFormat::JwtVcJson
+                    )
+                })
+        };
+
+        if ctx
+            .dcql_query
+            .credentials
+            .iter()
+            .any(|query| supports_format(&query.format))
+        {
+            return Ok(());
+        }
+
+        Err(PresentationError::new(
+            PresentationErrorCode::VpFormatsNotSupported,
+            "None of the requested VP formats are supported by this wallet",
+        ))
+    }
+
     /// Matches the wallet's credentials against the DCQL query in the context.
     pub fn match_credentials(
         &self,
@@ -176,6 +205,11 @@ impl PresentationEngine {
         credentials: &[CredentialView],
     ) -> SelectionResult {
         self.client.match_credentials(ctx, credentials)
+    }
+
+    /// Returns the preferred display locales configured for this engine.
+    pub fn preferred_display_locales(&self) -> &[String] {
+        &self.preferred_display_locales
     }
 
     /// Builds and sends a VP Token response to the verifier.
@@ -211,14 +245,21 @@ impl PresentationEngine {
     }
 
     /// Loads the tenant's credentials and converts them to [`CredentialView`]
-    /// for DCQL matching.
+    /// for DCQL matching, together with a map of display metadata keyed by
+    /// credential id.
     ///
     /// Credentials that fail format-specific decoding (e.g., malformed SD-JWT)
     /// are logged and skipped rather than failing the entire operation.
     pub async fn load_credential_views(
         &self,
         tenant_id: uuid::Uuid,
-    ) -> Result<Vec<CredentialView>> {
+    ) -> Result<(
+        Vec<CredentialView>,
+        std::collections::HashMap<
+            String,
+            crate::domain::models::credential::CredentialDisplayMetadata,
+        >,
+    )> {
         use crate::domain::models::credential::CredentialFilter;
 
         let filter = CredentialFilter {
@@ -233,10 +274,14 @@ impl PresentationEngine {
         let summaries = self.credential_repo.list(filter).await?;
 
         let mut views = Vec::with_capacity(summaries.len());
+        let mut display_map = std::collections::HashMap::with_capacity(summaries.len());
         for summary in &summaries {
             match self.credential_repo.find_by_id(summary.id, tenant_id).await {
                 Ok(cred) => match credential_to_view(&cred) {
-                    Ok(view) => views.push(view),
+                    Ok(view) => {
+                        display_map.insert(view.id.clone(), summary.display.clone());
+                        views.push(view);
+                    }
                     Err(err) => {
                         tracing::warn!(
                             credential_id = %cred.id,
@@ -249,7 +294,7 @@ impl PresentationEngine {
             }
         }
         debug!(count = views.len(), "loaded credential views for matching");
-        Ok(views)
+        Ok((views, display_map))
     }
 
     /// Builds a [`SelectedCredential`] from a raw credential payload and its
@@ -519,10 +564,18 @@ fn decode_credential_for_matching(credential: &Credential) -> Result<DecodedCred
         CredentialFormat::Mdoc => {
             let parsed = ParsedMdoc::parse(&credential.raw_credential)?;
             let trusted_authorities = trusted_authorities_from_mdoc(&parsed);
-            let claims = extract_mdoc_claims(&parsed)?;
+            let claims = parsed.to_rendered_claims();
             Ok(DecodedCredential {
                 claims,
                 trusted_authorities,
+                holder_binding_supported: true,
+            })
+        }
+        CredentialFormat::JwtVcJson | CredentialFormat::JwtVcJsonLd => {
+            let claims = decode_jwt_claims(&credential.raw_credential)?;
+            Ok(DecodedCredential {
+                claims,
+                trusted_authorities: vec![],
                 holder_binding_supported: true,
             })
         }
@@ -532,24 +585,20 @@ fn decode_credential_for_matching(credential: &Credential) -> Result<DecodedCred
     }
 }
 
-/// Extracts claims from an mdoc IssuerSigned CBOR value as a JSON object.
-///
-/// The result is keyed by namespace, each containing an object of
-/// `elementIdentifier -> elementValue` pairs.
-fn extract_mdoc_claims(parsed: &ParsedMdoc) -> Result<serde_json::Value> {
-    let mut result = serde_json::Map::new();
-    for (namespace, items) in &parsed.name_spaces {
-        let mut ns_claims = serde_json::Map::with_capacity(items.len());
-        for item in items {
-            let value: ciborium::value::Value =
-                ciborium::de::from_reader(item.element_value.as_slice())?;
-            ns_claims.insert(item.element_identifier.clone(), cbor_to_json(&value)?);
-        }
-        result.insert(namespace.clone(), serde_json::Value::Object(ns_claims));
-    }
-    Ok(serde_json::Value::Object(result))
-}
+fn decode_jwt_claims(raw_credential: &str) -> Result<serde_json::Value> {
+    let payload = raw_credential.split('.').nth(1).ok_or_else(|| {
+        PresentationError::internal_message("JWT credential is missing a payload segment")
+    })?;
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|err| {
+            PresentationError::internal_message(format!(
+                "failed to decode JWT credential payload: {err}"
+            ))
+        })?;
 
+    serde_json::from_slice(&payload).map_err(PresentationError::internal)
+}
 fn trusted_authorities_from_sd_jwt(
     sd_jwt: &cloud_wallet_openid4vc::formats::sd_jwt::SdJwt<'_>,
 ) -> Vec<CredentialAuthority> {
@@ -632,46 +681,6 @@ fn push_aki_authority_from_der(authorities: &mut Vec<CredentialAuthority>, der: 
                 value,
             });
         }
-    }
-}
-
-/// Best-effort conversion from CBOR to JSON for mdoc element values.
-fn cbor_to_json(value: &ciborium::value::Value) -> Result<serde_json::Value> {
-    use ciborium::value::Value as CborValue;
-
-    match value {
-        CborValue::Text(s) => Ok(serde_json::Value::String(s.clone())),
-        CborValue::Integer(i) => {
-            let n: i128 = (*i).into();
-            Ok(serde_json::json!(n))
-        }
-        CborValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
-        CborValue::Null => Ok(serde_json::Value::Null),
-        CborValue::Float(f) => Ok(serde_json::json!(*f)),
-        CborValue::Bytes(b) => {
-            use base64ct::Encoding as _;
-            Ok(serde_json::Value::String(
-                base64ct::Base64UrlUnpadded::encode_string(b),
-            ))
-        }
-        CborValue::Array(arr) => {
-            let items: std::result::Result<Vec<_>, _> = arr.iter().map(cbor_to_json).collect();
-            Ok(serde_json::Value::Array(items?))
-        }
-        CborValue::Map(map) => {
-            let mut obj = serde_json::Map::new();
-            for (k, v) in map {
-                let key = match k {
-                    CborValue::Text(s) => s.clone(),
-                    _ => format!("{k:?}"),
-                };
-                obj.insert(key, cbor_to_json(v)?);
-            }
-            Ok(serde_json::Value::Object(obj))
-        }
-        // Tag values: unwrap the inner value
-        CborValue::Tag(_, inner) => cbor_to_json(inner),
-        _ => Ok(serde_json::Value::Null),
     }
 }
 
