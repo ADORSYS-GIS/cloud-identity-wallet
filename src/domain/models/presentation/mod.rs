@@ -404,7 +404,10 @@ impl PresentationEngine {
                 .iter()
                 .map(|td| td.hash_algorithms())
                 .collect();
-            let alg_set: Vec<String> = all_algs.first().cloned().unwrap_or_default()
+            let alg_set: Vec<String> = all_algs
+                .first()
+                .cloned()
+                .unwrap_or_default()
                 .into_iter()
                 .filter(|alg| all_algs.iter().all(|algs| algs.contains(alg)))
                 .collect();
