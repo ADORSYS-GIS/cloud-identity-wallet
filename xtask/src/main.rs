@@ -20,6 +20,8 @@
 //!   cargo xtask list               # List available profiles
 //!   cargo xtask dev                # Alias for `run development`
 
+#![allow(rustdoc::invalid_html_tags)]
+
 use clap::{Parser, Subcommand};
 use std::process::Command;
 
@@ -40,7 +42,7 @@ impl Profile {
         match self {
             Self::Development => &["memory", "local-kms"],
             Self::Staging => &["postgres", "redis", "local-kms"],
-            Self::Production => &["mysql", "redis", "aws-kms"],
+            Self::Production => &["postgres", "redis", "aws-kms"],
         }
     }
 }
