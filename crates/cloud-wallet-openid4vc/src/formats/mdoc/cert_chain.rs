@@ -185,11 +185,16 @@ pub(super) fn check_dsc_key_usage(dsc: &X509Certificate<'_>) -> Result<()> {
 ///
 /// Only applies to EC keys (SPKI algorithm OID `id-ecPublicKey`); any other SPKI
 /// algorithm OID passes through unchecked, since "curve" only has meaning for EC keys.
-/// This notably includes Ed25519 and Ed448 — neither carries a `parameters` field to
-/// check here, and neither needs one: Ed25519 is itself a Table 22 permitted algorithm,
-/// and Ed448 rejection is handled separately by the OID guard in `verify_issuer_signature`.
-/// A non-EC, non-EdDSA SPKI (e.g. RSA) is left for `dispatch_verify` to reject when it
-/// fails to construct a verifying key from it.
+/// ISO 18013-5 Table 22 itself only enumerates permitted *curves* (the NIST triad here,
+/// plus Brainpool — see note below), not algorithms in general, so there is nothing in
+/// Table 22 for a non-EC key to be checked against in the first place.
+///
+/// This notably includes Ed25519 and Ed448, both OKP keys: their SPKI algorithm OID is
+/// never `id-ecPublicKey`, so neither carries a `parameters` field to check here, and
+/// the curve restriction simply does not apply to them. Ed25519 is supported by this
+/// implementation; Ed448 rejection is handled separately by the OID guard in
+/// `verify_issuer_signature`. A non-EC, non-OKP SPKI (e.g. RSA) is left for
+/// `dispatch_verify` to reject when it fails to construct a verifying key from it.
 ///
 /// Closes the gap where a non-permitted EC curve (e.g. secp256k1) that the underlying
 /// ECDSA verification table happens to define for an unrelated hash combination would
@@ -206,10 +211,23 @@ pub(super) fn check_dsc_key_usage(dsc: &X509Certificate<'_>) -> Result<()> {
 /// here, since the ISO 18013-5 policy decision ("which curves may a DSC use") belongs
 /// to this module, not to the crypto crate.
 ///
+/// **Note on Brainpool:** `Curve::from_oid` does not recognize Brainpool curve OIDs
+/// (the crypto crate has no `Curve` variant for them yet), so a DSC carrying a
+/// Brainpool key is rejected *here*, with [`MdocError::UnsupportedDscCurve`] — not
+/// later in `dispatch_verify`, which would otherwise reject it with
+/// `MdocError::UnsupportedAlgorithm` once it inspected the alg header. This is a
+/// behavioral side effect of this function's existence: Brainpool rejection now
+/// happens earlier and under a different error variant than before, regardless of
+/// what algorithm the credential's protected header claims. Any caller matching on
+/// `UnsupportedAlgorithm` specifically for Brainpool DSCs needs to also handle
+/// `UnsupportedDscCurve`. Add a `Curve` variant (and update this allow-list) once
+/// Brainpool *verification* lands in `dispatch_verify` — see that function's TODO.
+///
 /// # Errors
 ///
 /// - [`MdocError::UnsupportedDscCurve`] — the SPKI is an EC key whose curve is not
-///   P-256, P-384, or P-521, or the curve OID is missing/malformed.
+///   P-256, P-384, or P-521, or the curve OID is missing/malformed. This includes
+///   Brainpool-keyed DSCs (see note above).
 pub(super) fn check_dsc_curve(dsc: &X509Certificate<'_>) -> Result<()> {
     use cloud_wallet_crypto::ecdsa::Curve;
 

@@ -636,20 +636,24 @@ fn der_utc_time(s: &'static str) -> Vec<u8> {
     der_tlv(0x17, s.as_bytes().to_vec())
 }
 
-/// Constructs a minimal X.509 certificate with an Ed448 public key (OID `1.3.101.113`)
-/// in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
+/// Assembles a minimal, hand-rolled X.509 `Certificate` DER for a DSC carrying the
+/// given pre-built `spki` bytes (the full SPKI `SEQUENCE`, including its
+/// `AlgorithmIdentifier` and `BIT STRING` payload), signed by `iaca_key`.
 ///
-/// `rcgen 0.13` does not support Ed448 key generation, so the certificate is built from
-/// raw DER.  The public key payload is all-zeros (57 bytes) — sufficient for the Ed448
-/// OID check in `verify_issuer_signature`, which fires before any key-payload check.
+/// Shared by [`build_ed448_dsc_manual`], [`build_secp256k1_dsc_manual`], and
+/// [`build_explicit_curve_dsc_manual`] — those three differ only in *what SPKI bytes*
+/// they pass in (the part each fixture exists to vary); the surrounding
+/// `TBSCertificate` shape (version, validity, subject, EKU/KU extensions) and the
+/// signing step are identical across all three, so they live here once.
 ///
-/// Hand-assembled DER because rcgen 0.13 cannot generate Ed448 keys, and Ed448 is a
-/// Table 22 curve we must recognize-and-reject. This is the only way to produce an
-/// Ed448 DSC to exercise the OID-rejection path. Do not "simplify" with rcgen — it
-/// cannot do this.
-fn build_ed448_dsc_manual(
+/// `serial` and `common_name` only need to be distinct per caller so the resulting
+/// certs aren't byte-identical; their values carry no semantic weight.
+fn build_manual_dsc(
     iaca_cert_der: &[u8],
     iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+    serial: u8,
+    common_name: &str,
+    spki: Vec<u8>,
 ) -> Vec<u8> {
     use x509_parser::prelude::{FromDer as _, X509Certificate};
 
@@ -665,7 +669,7 @@ fn build_ed448_dsc_manual(
     let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
 
     let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
-    let serial = integer_pos(vec![0x01]); // serialNumber = 1
+    let serial = integer_pos(vec![serial]);
     let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
     let validity = seq({
         let mut b = utc_time("231201000000Z");
@@ -674,14 +678,9 @@ fn build_ed448_dsc_manual(
     });
     let subject = seq(set(seq({
         let mut b = oid(&[2, 5, 4, 3]); // id-at-commonName
-        b.extend(tlv(0x0c, b"Ed448DSC".to_vec())); // UTF8String
+        b.extend(tlv(0x0c, common_name.as_bytes().to_vec())); // UTF8String
         b
     })));
-    let spki = seq({
-        let mut b = seq(oid(&[1, 3, 101, 113])); // id-Ed448, no params
-        b.extend(bit_str(vec![0u8; 57])); // fake 57-byte public key
-        b
-    });
     // extendedKeyUsage (2.5.29.37), critical — ISO 18013-5 EKU
     let eku_ext = seq({
         let mut b = oid(&[2, 5, 29, 37]);
@@ -732,6 +731,33 @@ fn build_ed448_dsc_manual(
     })
 }
 
+/// Constructs a minimal X.509 certificate with an Ed448 public key (OID `1.3.101.113`)
+/// in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
+///
+/// `rcgen 0.13` does not support Ed448 key generation, so the certificate is built from
+/// raw DER via [`build_manual_dsc`].  The public key payload is all-zeros (57 bytes) —
+/// sufficient for the Ed448 OID check in `verify_issuer_signature`, which fires before
+/// any key-payload check.
+///
+/// Hand-assembled DER because rcgen 0.13 cannot generate Ed448 keys, and Ed448 is a
+/// Table 22 curve we must recognize-and-reject. This is the only way to produce an
+/// Ed448 DSC to exercise the OID-rejection path. Do not "simplify" with rcgen — it
+/// cannot do this.
+fn build_ed448_dsc_manual(
+    iaca_cert_der: &[u8],
+    iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
+) -> Vec<u8> {
+    use self::{der_bit_str as bit_str, der_oid as oid, der_seq as seq};
+
+    let spki = seq({
+        let mut b = seq(oid(&[1, 3, 101, 113])); // id-Ed448, no params
+        b.extend(bit_str(vec![0u8; 57])); // fake 57-byte public key
+        b
+    });
+
+    build_manual_dsc(iaca_cert_der, iaca_key, 0x01, "Ed448DSC", spki)
+}
+
 /// Builds a P-256 IACA root and a minimal Ed448 DSC signed by that root.
 ///
 /// `rcgen 0.13` does not support Ed448 key generation; the DSC is assembled from raw
@@ -771,27 +797,16 @@ fn build_ed448_dsc_chain() -> (Vec<u8>, Vec<u8>) {
 /// `1.3.132.0.10`) in the SubjectPublicKeyInfo, signed by the provided P-256 IACA key.
 ///
 /// `rcgen 0.14` does not support secp256k1 key generation, so the certificate is built
-/// from raw DER, mirroring [`build_ed448_dsc_manual`]. Unlike the Ed448 fixture, the
-/// public key here is a real secp256k1 point (`cloud_wallet_crypto` does support
-/// secp256k1 for signing/verification elsewhere) — sufficient to exercise the
-/// `check_dsc_curve` allow-list, which fires on the SPKI curve OID before any
-/// signature is checked.
+/// from raw DER via [`build_manual_dsc`]. Unlike the Ed448 fixture, the public key here
+/// is a real secp256k1 point (`cloud_wallet_crypto` does support secp256k1 for
+/// signing/verification elsewhere) — sufficient to exercise the `check_dsc_curve`
+/// allow-list, which fires on the SPKI curve OID before any signature is checked.
 fn build_secp256k1_dsc_manual(
     iaca_cert_der: &[u8],
     iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
     dsc_key: &cloud_wallet_crypto::ecdsa::KeyPair,
 ) -> Vec<u8> {
-    use x509_parser::prelude::{FromDer as _, X509Certificate};
-
-    use self::{
-        der_bit_str as bit_str, der_bool_true as bool_true, der_ctx_explicit as ctx_explicit,
-        der_integer_pos as integer_pos, der_octet_str as octet_str, der_oid as oid, der_seq as seq,
-        der_set as set, der_tlv as tlv, der_utc_time as utc_time,
-    };
-
-    let (_, iaca_x509) =
-        X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
-    let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
+    use self::{der_bit_str as bit_str, der_oid as oid, der_seq as seq};
 
     let mut point_buf = [0u8; 65]; // secp256k1 uncompressed point: 0x04 || X(32) || Y(32)
     let point = dsc_key
@@ -799,19 +814,6 @@ fn build_secp256k1_dsc_manual(
         .to_sec1_uncompressed(&mut point_buf)
         .expect("secp256k1 point encoding must succeed");
 
-    let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
-    let serial = integer_pos(vec![0x02]); // serialNumber = 2 (distinct from Ed448 fixture)
-    let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
-    let validity = seq({
-        let mut b = utc_time("231201000000Z");
-        b.extend(utc_time("241231235959Z"));
-        b
-    });
-    let subject = seq(set(seq({
-        let mut b = oid(&[2, 5, 4, 3]); // id-at-commonName
-        b.extend(tlv(0x0c, b"Secp256k1DSC".to_vec())); // UTF8String
-        b
-    })));
     let spki = seq({
         // id-ecPublicKey with secp256k1 named-curve parameters (RFC 5480 §2.1.1).
         let mut b = seq({
@@ -822,51 +824,8 @@ fn build_secp256k1_dsc_manual(
         b.extend(bit_str(point.to_vec()));
         b
     });
-    // extendedKeyUsage (2.5.29.37), critical — ISO 18013-5 EKU
-    let eku_ext = seq({
-        let mut b = oid(&[2, 5, 29, 37]);
-        b.extend(bool_true());
-        b.extend(octet_str(seq(oid(&[1, 0, 18013, 5, 1, 2]))));
-        b
-    });
-    // keyUsage (2.5.29.15), critical, digitalSignature bit set
-    let ku_ext = seq({
-        let mut b = oid(&[2, 5, 29, 15]);
-        b.extend(bool_true());
-        b.extend(octet_str(tlv(0x03, vec![0x07, 0x80]))); // BIT STRING: 7 unused, bit 0
-        b
-    });
-    let extensions = ctx_explicit(
-        3,
-        seq({
-            let mut b = eku_ext;
-            b.extend(ku_ext);
-            b
-        }),
-    );
-    let tbs = seq({
-        let mut b = version;
-        b.extend(serial);
-        b.extend(sig_alg_id.clone());
-        b.extend(issuer_raw);
-        b.extend(validity);
-        b.extend(subject);
-        b.extend(spki);
-        b.extend(extensions);
-        b
-    });
 
-    let mut sig_buf = [0u8; 80];
-    let sig = iaca_key
-        .sign_sha256_asn1(&tbs, &mut sig_buf)
-        .expect("ECDSA-P256 signing of TBSCertificate must succeed");
-
-    seq({
-        let mut b = tbs;
-        b.extend(sig_alg_id);
-        b.extend(bit_str(sig.to_vec()));
-        b
-    })
+    build_manual_dsc(iaca_cert_der, iaca_key, 0x02, "Secp256k1DSC", spki)
 }
 
 /// Builds a P-256 IACA root and a minimal secp256k1 DSC signed by that root.
@@ -919,31 +878,8 @@ fn build_explicit_curve_dsc_manual(
     iaca_cert_der: &[u8],
     iaca_key: &cloud_wallet_crypto::ecdsa::KeyPair,
 ) -> Vec<u8> {
-    use x509_parser::prelude::{FromDer as _, X509Certificate};
+    use self::{der_bit_str as bit_str, der_oid as oid, der_seq as seq};
 
-    use self::{
-        der_bit_str as bit_str, der_bool_true as bool_true, der_ctx_explicit as ctx_explicit,
-        der_integer_pos as integer_pos, der_octet_str as octet_str, der_oid as oid, der_seq as seq,
-        der_set as set, der_tlv as tlv, der_utc_time as utc_time,
-    };
-
-    let (_, iaca_x509) =
-        X509Certificate::from_der(iaca_cert_der).expect("IACA cert must be parseable");
-    let issuer_raw = iaca_x509.tbs_certificate.subject.as_raw().to_vec();
-
-    let version = ctx_explicit(0, integer_pos(vec![0x02])); // [0] INTEGER 2 → v3
-    let serial = integer_pos(vec![0x03]); // serialNumber = 3 (distinct from other fixtures)
-    let sig_alg_id = seq(oid(&[1, 2, 840, 10045, 4, 3, 2])); // ecdsa-with-SHA256
-    let validity = seq({
-        let mut b = utc_time("231201000000Z");
-        b.extend(utc_time("241231235959Z"));
-        b
-    });
-    let subject = seq(set(seq({
-        let mut b = oid(&[2, 5, 4, 3]); // id-at-commonName
-        b.extend(tlv(0x0c, b"ExplicitCurveDSC".to_vec())); // UTF8String
-        b
-    })));
     let spki = seq({
         // id-ecPublicKey with a SEQUENCE (not OID) in place of the named-curve OID —
         // the PKIX `specifiedCurve` form `check_dsc_curve` must reject as malformed.
@@ -955,51 +891,8 @@ fn build_explicit_curve_dsc_manual(
         b.extend(bit_str(vec![0u8; 65])); // point bytes are irrelevant; never reached
         b
     });
-    // extendedKeyUsage (2.5.29.37), critical — ISO 18013-5 EKU
-    let eku_ext = seq({
-        let mut b = oid(&[2, 5, 29, 37]);
-        b.extend(bool_true());
-        b.extend(octet_str(seq(oid(&[1, 0, 18013, 5, 1, 2]))));
-        b
-    });
-    // keyUsage (2.5.29.15), critical, digitalSignature bit set
-    let ku_ext = seq({
-        let mut b = oid(&[2, 5, 29, 15]);
-        b.extend(bool_true());
-        b.extend(octet_str(tlv(0x03, vec![0x07, 0x80]))); // BIT STRING: 7 unused, bit 0
-        b
-    });
-    let extensions = ctx_explicit(
-        3,
-        seq({
-            let mut b = eku_ext;
-            b.extend(ku_ext);
-            b
-        }),
-    );
-    let tbs = seq({
-        let mut b = version;
-        b.extend(serial);
-        b.extend(sig_alg_id.clone());
-        b.extend(issuer_raw);
-        b.extend(validity);
-        b.extend(subject);
-        b.extend(spki);
-        b.extend(extensions);
-        b
-    });
 
-    let mut sig_buf = [0u8; 80];
-    let sig = iaca_key
-        .sign_sha256_asn1(&tbs, &mut sig_buf)
-        .expect("ECDSA-P256 signing of TBSCertificate must succeed");
-
-    seq({
-        let mut b = tbs;
-        b.extend(sig_alg_id);
-        b.extend(bit_str(sig.to_vec()));
-        b
-    })
+    build_manual_dsc(iaca_cert_der, iaca_key, 0x03, "ExplicitCurveDSC", spki)
 }
 
 /// Builds a P-256 IACA root and a minimal DSC with an explicit-curve-parameters SPKI
