@@ -20,17 +20,23 @@
 //! ASN.1 parsing for every validation step.
 
 use time::OffsetDateTime;
-use x509_parser::der_parser::Oid;
+use x509_parser::der_parser::{Oid, oid};
 use x509_parser::prelude::{FromDer as _, ParsedExtension, X509Certificate};
 
 use super::error::{MdocError, Result};
 
 /// The OID required in the DSC Extended Key Usage extension (ISO 18013-5 §9.1.2).
-const DSC_EKU_OID: &str = "1.0.18013.5.1.2";
+///
+/// Compile-time `Oid` (not a `&str`) so the EKU check compares OIDs directly rather
+/// than allocating a `String` per extension entry via `to_id_string()`.
+const DSC_EKU_OID: Oid<'static> = oid!(1.0.18013.5.1.2);
 
 /// Top-level SPKI algorithm OID for all EC public keys (`id-ecPublicKey`, RFC 5480).
 /// The specific curve is carried in the SPKI algorithm *parameters*, not here.
-const OID_EC_PUBLIC_KEY: &str = "1.2.840.10045.2.1";
+///
+/// Compile-time `Oid` so this is comparable directly against a parsed certificate's
+/// algorithm OID without allocating a `String` via `to_id_string()`.
+const OID_EC_PUBLIC_KEY: Oid<'static> = oid!(1.2.840.10045.2.1);
 
 /// Validates that `chain[0]` (the Document Signer Certificate) chains up to at least
 /// one certificate in `trusted_roots` via standard X.509 path validation.
@@ -137,11 +143,7 @@ pub(super) fn check_dsc_eku(dsc: &X509Certificate<'_>) -> Result<()> {
                 None
             }
         })
-        .any(|eku| {
-            eku.other
-                .iter()
-                .any(|oid| oid.to_id_string() == DSC_EKU_OID)
-        });
+        .any(|eku| eku.other.iter().any(|oid| oid == &DSC_EKU_OID));
 
     if !has_required_eku {
         return Err(MdocError::MissingDocSignerEku);
@@ -233,7 +235,7 @@ pub(super) fn check_dsc_curve(dsc: &X509Certificate<'_>) -> Result<()> {
 
     let algorithm = &dsc.public_key().algorithm;
 
-    if algorithm.algorithm.to_id_string() != OID_EC_PUBLIC_KEY {
+    if algorithm.algorithm != OID_EC_PUBLIC_KEY {
         // Not an EC key (e.g. Ed25519/Ed448 OKP keys) — no curve to restrict here.
         return Ok(());
     }
