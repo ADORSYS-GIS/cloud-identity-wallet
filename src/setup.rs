@@ -229,8 +229,7 @@ async fn build_sql_repositories(config: &Config) -> color_eyre::Result<Repositor
         .idle_timeout(Duration::from_mins(5))
         .max_lifetime(Duration::from_mins(30))
         .acquire_timeout(Duration::from_secs(5))
-        .connect_lazy(config.database.url.expose_secret())
-        .await?;
+        .connect_lazy(config.database.url.expose_secret())?;
 
     match config.kms.provider {
         KmsProviderKind::Local => build_sql_repositories_with_local_kms(pool).await,
@@ -293,8 +292,7 @@ async fn build_sql_repositories_with_aws_kms(
     use cloud_wallet_kms::storage::SqlxBackend;
 
     let aws_config = load_aws_config(config).await;
-    let hostname = kms_hostname(config);
-
+    let hostname = config.server.host.clone();
     let credential_kms_storage = SqlxBackend::new(pool.clone());
     credential_kms_storage.init_schema().await?;
     let credential_repo = SqlCredentialRepo::with_cipher(
