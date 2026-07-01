@@ -406,6 +406,14 @@ impl DirectPostJwtResponse {
 pub struct DirectPostResponse {
     /// Optional redirect URI provided by the Verifier.
     pub redirect_uri: Option<Url>,
+
+    /// Additional fields from the verifier response beyond `redirect_uri`.
+    ///
+    /// OpenID4VP allows the verifier to return arbitrary key-value pairs
+    /// (e.g. `error`, `error_description`, or custom extensions).
+    /// This map captures them so they can be forwarded to the caller.
+    #[serde(flatten)]
+    pub additional: serde_json::Map<String, serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -664,6 +672,7 @@ mod tests {
             redirect_uri: Some(
                 Url::parse("https://client.example.org/cb#response_code=abc").unwrap(),
             ),
+            additional: serde_json::Map::new(),
         };
 
         let json = serde_json::to_value(&response).expect("serialize");
