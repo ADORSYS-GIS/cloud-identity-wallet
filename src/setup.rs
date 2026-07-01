@@ -194,7 +194,7 @@ async fn build_memory_repositories_with_aws_kms(
     use cloud_wallet_kms::storage::InMemoryBackend;
 
     let aws_config = load_aws_config(config).await;
-    let hostname = kms_hostname(config);
+    let hostname = config.server.host.clone();
     Ok(Repositories {
         credential_repo: Arc::new(MemoryCredentialRepo::with_cipher(AwsProvider::new(
             &aws_config,
@@ -404,13 +404,4 @@ async fn load_aws_config(config: &Config) -> aws_config::SdkConfig {
         loader = loader.region(aws_config::Region::new(region.clone()));
     }
     loader.load().await
-}
-
-#[cfg(feature = "aws-kms")]
-fn kms_hostname(config: &Config) -> String {
-    config
-        .kms
-        .aws_kms_key_id
-        .clone()
-        .unwrap_or_else(|| config.server.host.clone())
 }

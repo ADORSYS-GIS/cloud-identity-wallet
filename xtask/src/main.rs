@@ -7,7 +7,7 @@
 //!
 //! - `development`: Memory backends + local KMS (no external services needed)
 //! - `staging`: PostgreSQL + Redis + local KMS (for pre-production testing)
-//! - `production`: MySQL + Redis + AWS KMS (for production deployment)
+//! - `production`: PostgreSQL + Redis + AWS KMS (for production deployment)
 //!
 //! Usage:
 //!   cargo xtask run development    # Build and run with development profile

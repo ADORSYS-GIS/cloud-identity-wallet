@@ -46,6 +46,8 @@ cargo check --no-default-features --features sqlite,local-kms
 cargo test --workspace --all-targets --all-features
 ```
 
+**Note**: Some integration tests use Testcontainers and require a working Docker daemon.
+
 Valid production examples include `aws-kms + mysql + redis`, `aws-kms + postgres + redis`, and `aws-kms + sqlite` for small single-node deployments. `local-kms` is intentionally suitable for development and CI only.
 
 When both `local-kms` and `aws-kms` are compiled, `APP_KMS__PROVIDER` decides which provider is used at runtime. This keeps `--all-features` useful for CI while avoiding ambiguous startup behavior.

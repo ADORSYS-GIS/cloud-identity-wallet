@@ -30,7 +30,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum Backend {
     Memory,
     MySql,
@@ -143,7 +143,7 @@ impl Config {
             .set_default("kms.provider", "local")?
             .set_default("kms.aws_region", Option::<String>::None)?
             .set_default("kms.aws_kms_key_id", Option::<String>::None)?
-            .set_default("oid4vci.client_id", "cloud-identity-wallet")?
+            .set_default("oid4vc.client_id", "cloud-identity-wallet")?
             .set_default("oid4vc.client_id", "cloud-identity-wallet")?
             .set_default(
                 "oid4vc.redirect_uri",
