@@ -11,11 +11,21 @@ const OPENID4VCI_PROOF_JWT_TYP: &str = "openid4vci-proof+jwt";
 
 /// Builds a holder-binding proof JWT for a credential request.
 pub trait ProofSigner: Send + Sync + 'static {
-    /// Sign `claims` with the provided header and return the compact JWT string.
+    /// Sign `claims` with the standard proof header and return the compact JWT string.
     fn sign(&self, claims: &Claims) -> Result<String>;
 
     /// Returns the algorithm used by this signer.
     fn algorithm(&self) -> Algorithm;
+
+    /// Returns the holder's public JWK embedded in the proof JWT header.
+    ///
+    /// Use this to obtain the holder binding key for attestation key matching.
+    fn public_jwk(&self) -> &Jwk;
+
+    /// Sign claims with a custom header.
+    ///
+    /// This allows embedding additional header fields like `attestation` per OID4VCI Appendix D.
+    fn sign_with_header(&self, header: &Header, claims: &Claims) -> Result<String>;
 }
 
 /// JOSE header for OpenID4VCI proof JWTs as defined in [OID4VCI Appendix F]
@@ -36,6 +46,7 @@ pub struct Header {
     /// contains the key that the Credential is to be bound to
     pub x5c: Option<Vec<String>>,
     /// Contains a key attestation as described in `OID4VCI Appendix D`
+    #[serde(rename = "key_attestation")]
     pub attestation: Option<String>,
     /// Contains an OpenID Federation Trust Chain
     pub trust_chain: Option<Vec<String>>,
@@ -380,6 +391,14 @@ impl ProofSigner for CryptoSigner {
 
     fn algorithm(&self) -> Algorithm {
         self.signer.algorithm()
+    }
+
+    fn public_jwk(&self) -> &Jwk {
+        &self.holder_binding_public_jwk
+    }
+
+    fn sign_with_header(&self, header: &Header, claims: &Claims) -> Result<String> {
+        self.signer.sign_jwt(header, claims)
     }
 }
 

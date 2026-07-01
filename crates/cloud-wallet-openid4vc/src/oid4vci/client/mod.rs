@@ -672,6 +672,15 @@ impl Oid4vciClient {
     /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
     /// server-provided nonces are stored for pre-emptive use on subsequent
     /// requests per RFC 9449 §7.
+    ///
+    /// Per OID4VCI Appendix D and HAIP §4.5.1, when the credential configuration
+    /// indicates `key_attestations_required` and `key_attestation_jwt` is provided,
+    /// the proof JWT header will include a key attestation in the `attestation` field.
+    ///
+    /// # Errors
+    /// * `ClientError::MissingKeyAttestation` - If attestation is required but not provided.
+    /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_credential<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
@@ -680,6 +689,7 @@ impl Oid4vciClient {
         credential_config_id: &str,
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
+        key_attestation_jwt: Option<&str>,
     ) -> Result<CredentialResponse> {
         let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
@@ -692,6 +702,7 @@ impl Oid4vciClient {
                 is_anonymous,
                 credential_config_id,
                 signer,
+                key_attestation_jwt,
             )
             .await?;
 
@@ -714,12 +725,21 @@ impl Oid4vciClient {
     /// per RFC 9449. If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
     /// server-provided nonces are stored for pre-emptive use on subsequent
     /// requests per RFC 9449 §7.
+    ///
+    /// Per OID4VCI Appendix D, for batch issuance, all public keys can be attested
+    /// within a single key attestation when multiple credentials are requested.
+    ///
+    /// # Errors
+    /// * `ClientError::MissingKeyAttestation` - If attestation is required but not provided.
+    /// * `ClientError::KeyAttestationValidation` - If the attestation fails validation.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_credentials<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
+        key_attestation_jwt: Option<&str>,
     ) -> Result<Vec<CredentialResponse>> {
         let resolved = resolve_credential_ids(token)?;
         let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
@@ -728,7 +748,15 @@ impl Oid4vciClient {
 
         for (config_id, identifiers) in resolved {
             for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer, dpop));
+                futures.push(self.request_credential(
+                    context,
+                    token,
+                    id,
+                    config_id,
+                    signer,
+                    dpop,
+                    key_attestation_jwt,
+                ));
             }
         }
 
@@ -1138,6 +1166,11 @@ impl Oid4vciClient {
             })
     }
 
+    /// Builds proof JWTs for the credential request.
+    ///
+    /// When `key_attestation_jwt` is provided, it is embedded in the proof JWT header
+    /// per OID4VCI Appendix D. When key attestations are required by issuer metadata and
+    /// no attestation is provided, an error is returned.
     async fn build_proofs<S: ProofSigner>(
         &self,
         context: &ResolvedOfferContext,
@@ -1145,9 +1178,47 @@ impl Oid4vciClient {
         is_anonymous: bool,
         credential_config_id: &str,
         signer: &S,
+        key_attestation_jwt: Option<&str>,
     ) -> Result<Option<Proofs>> {
         if !should_sign_proof(context, credential_config_id, signer)? {
             return Ok(None);
+        }
+
+        // Check key attestation requirements
+        let requirements = key_attestation_requirements(context, credential_config_id)?;
+
+        if let Some(attestation_jwt) = key_attestation_jwt {
+            use crate::oid4vci::key_attestation::KeyAttestationJwt;
+            let attestation =
+                KeyAttestationJwt::decode_without_signature_verification(attestation_jwt, c_nonce)
+                    .map_err(|e| {
+                        ClientError::key_attestation_validation(format!(
+                            "failed to decode key attestation: {e}"
+                        ))
+                    })?;
+
+            // Verify the signer's key is in attested_keys
+            let signer_jwk = signer.public_jwk();
+            let key_in_attestation = attestation
+                .attested_keys()
+                .iter()
+                .any(|k| crate::oid4vci::key_attestation::keys_match(k, signer_jwk));
+            if !key_in_attestation {
+                return Err(ClientError::key_attestation_validation(
+                    "signer key not found in attested_keys",
+                ));
+            }
+
+            // Only enforce requirement-level validation when required
+            if let Some(reqs) = requirements.filter(|r| r.is_required()) {
+                reqs.validate(&attestation).map_err(|e| {
+                    ClientError::key_attestation_validation(format!(
+                        "key attestation validation failed: {e}"
+                    ))
+                })?;
+            }
+        } else if requirements.as_ref().is_some_and(|r| r.is_required()) {
+            return Err(ClientError::missing_key_attestation());
         }
 
         let client_id = if is_anonymous {
@@ -1163,7 +1234,21 @@ impl Oid4vciClient {
             nonce: c_nonce.map(|n| n.to_owned()),
         };
 
-        let jwt = signer.sign(&claims)?;
+        let jwt = match key_attestation_jwt {
+            Some(attestation) => {
+                let header = ProofHeader {
+                    alg: signer.algorithm(),
+                    typ: "openid4vci-proof+jwt",
+                    kid: None,
+                    jwk: Some(signer.public_jwk().clone()),
+                    x5c: None,
+                    attestation: Some(attestation.to_owned()),
+                    trust_chain: None,
+                };
+                signer.sign_with_header(&header, &claims)?
+            }
+            None => signer.sign(&claims)?,
+        };
         Ok(Some(Proofs::jwt([jwt])))
     }
 
@@ -1454,6 +1539,37 @@ fn should_sign_proof<S: ProofSigner>(
     Err(ClientError::configuration(format!(
         "no compatible jwt proof signing algorithm for configuration '{credential_config_id}'"
     )))
+}
+
+/// Extract key attestation requirements from issuer metadata.
+///
+/// Returns the required key storage and user authentication security levels
+/// if the credential configuration requires key attestations.
+fn key_attestation_requirements(
+    context: &ResolvedOfferContext,
+    credential_config_id: &str,
+) -> Result<Option<crate::oid4vci::key_attestation::KeyAttestationRequirements>> {
+    let config = context
+        .issuer_metadata
+        .credential_configurations_supported
+        .get(credential_config_id)
+        .ok_or_else(|| ClientError::UnknownCredentialConfiguration {
+            id: credential_config_id.into(),
+        })?;
+
+    let Some(proof_types) = config.proof_types_supported.as_ref() else {
+        return Ok(None);
+    };
+
+    let proof_type = proof_types.get(&ProofType::Jwt);
+
+    let requirements = proof_type
+        .and_then(|pt| pt.key_attestations_required.as_ref())
+        .map(|ka| {
+            crate::oid4vci::key_attestation::KeyAttestationRequirements::from_metadata(Some(ka))
+        });
+
+    Ok(requirements)
 }
 
 pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[String])>> {
