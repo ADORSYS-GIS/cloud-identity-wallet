@@ -672,14 +672,6 @@ impl Oid4vciClient {
     /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
     /// server-provided nonces are stored for pre-emptive use on subsequent
     /// requests per RFC 9449 §7.
-    /// Request a credential from the issuer's credential endpoint.
-    ///
-    /// If `dpop` is provided and the access token was DPoP-bound
-    /// (`token_type=DPoP`), a fresh DPoP proof with `ath` (SHA-256 of
-    /// the access token) is attached to the credential request per RFC 9449.
-    /// If a `DpopNonceHandler` is provided via `dpop.nonce_handler`,
-    /// server-provided nonces are stored for pre-emptive use on subsequent
-    /// requests per RFC 9449 §7.
     ///
     /// Per OID4VCI Appendix D and HAIP §4.5.1, when the credential configuration
     /// indicates `key_attestations_required` and `key_attestation_jwt` is provided,
@@ -1174,9 +1166,9 @@ impl Oid4vciClient {
             })
     }
 
-    /// Builds proof JWTs without key attestation.
+    /// Builds proof JWTs for the credential request.
     ///
-    /// When `key_attestation_jwt` is provided, it will be embedded in the proof JWT header
+    /// When `key_attestation_jwt` is provided, it is embedded in the proof JWT header
     /// per OID4VCI Appendix D. When key attestations are required by issuer metadata and
     /// no attestation is provided, an error is returned.
     async fn build_proofs<S: ProofSigner>(
@@ -1195,39 +1187,39 @@ impl Oid4vciClient {
         // Check key attestation requirements
         let requirements = key_attestation_requirements(context, credential_config_id)?;
 
-        match (&requirements, key_attestation_jwt) {
-            (Some(reqs), None) if reqs.is_required() => {
-                return Err(ClientError::missing_key_attestation());
+        if let Some(attestation_jwt) = key_attestation_jwt {
+            use crate::oid4vci::key_attestation::KeyAttestationJwt;
+            let attestation = KeyAttestationJwt::decode_without_signature_verification(
+                attestation_jwt,
+            )
+            .map_err(|e| {
+                ClientError::key_attestation_validation(format!(
+                    "failed to decode key attestation: {e}"
+                ))
+            })?;
+
+            // Verify the signer's key is in attested_keys
+            let signer_jwk = signer.public_jwk();
+            let key_in_attestation = attestation
+                .attested_keys()
+                .iter()
+                .any(|k| crate::oid4vci::key_attestation::keys_match(k, signer_jwk));
+            if !key_in_attestation {
+                return Err(ClientError::key_attestation_validation(
+                    "signer key not found in attested_keys",
+                ));
             }
-            (Some(reqs), Some(attestation_jwt)) if reqs.is_required() => {
-                // Validate the attestation against requirements
-                use crate::oid4vci::key_attestation::KeyAttestationJwt;
-                let attestation =
-                    KeyAttestationJwt::decode_unverified(attestation_jwt).map_err(|e| {
-                        ClientError::key_attestation_validation(format!(
-                            "failed to decode key attestation: {e}"
-                        ))
-                    })?;
 
-                // Verify the signer's key is in attested_keys
-                let signer_jwk = signer.public_jwk();
-                let key_in_attestation = attestation
-                    .attested_keys()
-                    .iter()
-                    .any(|k| crate::oid4vci::key_attestation::keys_match(k, signer_jwk));
-                if !key_in_attestation {
-                    return Err(ClientError::key_attestation_validation(
-                        "signer key not found in attested_keys",
-                    ));
-                }
-
+            // Only enforce requirement-level validation when required
+            if let Some(reqs) = requirements.filter(|r| r.is_required()) {
                 reqs.validate(&attestation).map_err(|e| {
                     ClientError::key_attestation_validation(format!(
                         "key attestation validation failed: {e}"
                     ))
                 })?;
             }
-            _ => {}
+        } else if requirements.as_ref().is_some_and(|r| r.is_required()) {
+            return Err(ClientError::missing_key_attestation());
         }
 
         let client_id = if is_anonymous {

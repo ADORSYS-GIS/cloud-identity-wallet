@@ -279,9 +279,9 @@ impl From<ClientError> for IssuanceError {
             ClientError::Configuration { message } => Self::internal_message(message),
             ClientError::Internal { message } => Self::internal_message(message),
             ClientError::MissingKeyAttestation => {
-                Self::offer_resolution("key attestation required but not provided")
+                Self::credential_request("key attestation required but not provided")
             }
-            ClientError::KeyAttestationValidation { message } => Self::offer_resolution(message),
+            ClientError::KeyAttestationValidation { message } => Self::credential_request(message),
             ClientError::Dpop { message } => Self::internal_message(message),
         }
     }

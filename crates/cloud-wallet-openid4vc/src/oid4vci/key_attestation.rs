@@ -137,8 +137,9 @@ impl KeyAttestationClaims {
         }
 
         let now = OffsetDateTime::now_utc().unix_timestamp();
+        const CLOCK_SKEW_TOLERANCE_SECS: i64 = 60;
 
-        if self.iat > now {
+        if self.iat > now + CLOCK_SKEW_TOLERANCE_SECS {
             return Err(KeyAttestationError::IssuedInFuture);
         }
 
@@ -235,12 +236,17 @@ impl KeyAttestationJwt {
     /// The expected `typ` header value for Key Attestation JWTs.
     pub const EXPECTED_TYP: &'static str = KEY_ATTESTATION_JWT_TYP;
 
-    /// Decodes a Key Attestation JWT without signature verification.
+    /// Decodes a Key Attestation JWT **without signature verification**.
     ///
-    /// This performs structural and temporal validation but does NOT verify
-    /// the signature. The caller is responsible for verifying the signature
-    /// against a trusted attestation issuer's key.
-    pub fn decode_unverified(jwt: &str) -> Result<Self, KeyAttestationError> {
+    /// # Security Warning
+    ///
+    /// This method does **not** verify the JWT signature. Any party can forge
+    /// an attestation with a fake signature. The caller **MUST** verify the
+    /// signature against the attestation issuer's trusted key before trusting
+    /// any claims. Use [`Self::decode_without_signature_verification`] only when
+    /// you have verified or will verify the signature through an external mechanism.
+    #[must_use = "the decoded attestation must be signature-verified before use"]
+    pub fn decode_without_signature_verification(jwt: &str) -> Result<Self, KeyAttestationError> {
         let parts: Vec<&str> = jwt.split('.').collect();
         if parts.len() != 3 {
             return Err(KeyAttestationError::InvalidFormat(
@@ -475,14 +481,6 @@ impl KeyAttestationBuilder {
     }
 }
 
-/// Encodes a key attestation for embedding in a proof JWT header.
-///
-/// The attestation is included as the `attestation` field in the proof JWT header
-/// per OID4VCI Appendix D.
-pub fn encode_attestation_for_proof_header(attestation_jwt: &str) -> String {
-    attestation_jwt.to_string()
-}
-
 /// Decodes and validates multiple attestations batched together.
 ///
 /// For batch issuance, multiple keys can be attested in a single attestation.
@@ -491,7 +489,7 @@ pub fn validate_batch_attestation(
     attestation_jwt: &str,
     required_keys: &[Jwk],
 ) -> Result<KeyAttestationJwt, KeyAttestationError> {
-    let attestation = KeyAttestationJwt::decode_unverified(attestation_jwt)?;
+    let attestation = KeyAttestationJwt::decode_without_signature_verification(attestation_jwt)?;
 
     for required_key in required_keys {
         let found = attestation
@@ -680,7 +678,8 @@ mod tests {
             .with_user_authentication(vec!["iso_18045_moderate".to_string()]);
 
         let attestation_jwt =
-            KeyAttestationJwt::decode_unverified(&create_test_jwt(&claims)).unwrap();
+            KeyAttestationJwt::decode_without_signature_verification(&create_test_jwt(&claims))
+                .unwrap();
 
         assert!(
             attestation_jwt.meets_key_storage_requirements(&["iso_18045_moderate".to_string()])
@@ -723,9 +722,9 @@ mod tests {
         assert!(requirements.is_required());
 
         let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
-        let attestation = KeyAttestationJwt::decode_unverified(&create_test_jwt(
-            &KeyAttestationClaims::new(vec![sample_ec_jwk()], exp),
-        ))
+        let attestation = KeyAttestationJwt::decode_without_signature_verification(
+            &create_test_jwt(&KeyAttestationClaims::new(vec![sample_ec_jwk()], exp)),
+        )
         .unwrap();
 
         // Attestation meets requirements but missing key_storage level
@@ -747,9 +746,9 @@ mod tests {
         assert!(!requirements.is_required());
 
         let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
-        let attestation = KeyAttestationJwt::decode_unverified(&create_test_jwt(
-            &KeyAttestationClaims::new(vec![sample_ec_jwk()], exp),
-        ))
+        let attestation = KeyAttestationJwt::decode_without_signature_verification(
+            &create_test_jwt(&KeyAttestationClaims::new(vec![sample_ec_jwk()], exp)),
+        )
         .unwrap();
 
         // No requirements, any attestation should pass
