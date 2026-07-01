@@ -7,7 +7,9 @@ use std::time::Duration;
 
 pub use data::*;
 pub use error::Error as SessionError;
-pub use store::{MemorySession, RedisSession};
+pub use store::MemorySession;
+#[cfg(feature = "redis")]
+pub use store::RedisSession;
 pub use utils::{generate_presentation_session_id, generate_session_id};
 
 pub type Result<T> = std::result::Result<T, SessionError>;

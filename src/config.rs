@@ -1,24 +1,41 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+#[cfg(feature = "redis")]
+use std::time::Duration;
+use std::{collections::HashMap, path::PathBuf};
 
 use cloud_wallet_openid4vc::formats::mdoc::RevocationPolicy;
 use cloud_wallet_openid4vc::oid4vp::request_object::DiscoveryMode;
 use config::{Config as ConfigLib, ConfigBuilder, ConfigError, Environment, builder::DefaultState};
+#[cfg(feature = "redis")]
 use redis::{
     Client as RedisClient, RedisResult,
     aio::{ConnectionManager, ConnectionManagerConfig},
 };
-use secrecy::{ExposeSecret, SecretString};
+#[cfg(any(feature = "redis", test))]
+use secrecy::ExposeSecret;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_with::{PickFirst, StringWithSeparator, formats::CommaSeparator, serde_as};
+#[cfg(feature = "redis")]
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    pub backend: Backend,
     pub server: ServerConfig,
     pub redis: RedisConfig,
     pub database: DatabaseConfig,
+    pub kms: KmsConfig,
     pub oid4vc: Oid4vcConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    Memory,
+    MySql,
+    Postgres,
+    Sqlite,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +54,20 @@ pub struct DatabaseConfig {
     pub url: SecretString,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct KmsConfig {
+    pub provider: KmsProviderKind,
+    pub aws_region: Option<String>,
+    pub aws_kms_key_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KmsProviderKind {
+    Local,
+    Aws,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Oid4vcConfig {
@@ -53,6 +84,15 @@ pub struct Oid4vcConfig {
 }
 
 impl RedisConfig {
+    /// Establishes a new Redis connection based on the provided URI.
+    ///
+    /// - To enable TLS, the URI must use the `rediss://` scheme.
+    /// - To enable insecure TLS, the URI must use the `rediss://` scheme and end with `/#insecure`.
+    /// - To enable RESP3 protocol, the URI must contains the `protocol=resp3` query parameter.
+    ///
+    /// # Errors
+    /// Returns an error if the connection cannot be established.
+    #[cfg(feature = "redis")]
     pub async fn start(
         &self,
     ) -> RedisResult<(ConnectionManager, UnboundedReceiver<redis::PushInfo>)> {
@@ -95,10 +135,14 @@ impl Config {
 
     fn set_defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
         ConfigLib::builder()
+            .set_default("backend", "memory")?
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 3000)?
             .set_default("redis.uri", "redis://127.0.0.1:6379?protocol=resp3")?
             .set_default("database.url", "sqlite::memory:")?
+            .set_default("kms.provider", "local")?
+            .set_default("kms.aws_region", Option::<String>::None)?
+            .set_default("kms.aws_kms_key_id", Option::<String>::None)?
             .set_default("oid4vc.client_id", "cloud-identity-wallet")?
             .set_default(
                 "oid4vc.redirect_uri",

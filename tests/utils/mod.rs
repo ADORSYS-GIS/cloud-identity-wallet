@@ -3,91 +3,43 @@
 use cloud_wallet_crypto::ecdsa::{Curve, KeyPair};
 use cloud_wallet_crypto::jwk::Jwk;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use cloud_identity_wallet::{
     config::Config,
     domain::{
-        models::{
-            credential::{Credential, CredentialFormat, CredentialStatus},
-            issuance::IssuanceEngine,
-        },
+        models::credential::{Credential, CredentialFormat, CredentialStatus},
         ports::CredentialRepo,
-        service::Service,
-    },
-    outbound::{
-        MemoryCredentialRepo, MemoryEventPublisher, MemoryEventSubscriber, MemoryTaskQueue,
-        MemoryTenantRepo,
     },
     server::Server,
     session::MemorySession,
     setup,
     utils::load_root_truststore,
 };
-use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
-use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
+
+#[cfg(feature = "sqlx")]
 use sqlx::{AnyPool, ConnectOptions};
-use std::sync::Arc;
+
 use time::UtcDateTime;
 use url::Url;
 
 /// Test server which holds the base URL and other necessary components for testing
-pub struct TestServer<R>
-where
-    R: CredentialRepo,
-{
+pub struct TestServer {
     pub base_url: String,
-    pub credential_repo: R,
+    pub credential_repo: Arc<dyn CredentialRepo>,
 }
 
 /// Spawn a server and return the base URL and other necessary components
-pub async fn spawn_server() -> TestServer<MemoryCredentialRepo> {
-    let config = {
-        let mut config = Config::load().unwrap();
-        config.server.host = "localhost".to_string();
-        config.server.port = 0;
-        config.oid4vc.use_system_proxy = false;
-        config
-    };
-    let trust_store = load_root_truststore(config.oid4vc.root_truststore_dir.as_deref()).unwrap();
+pub async fn spawn_server() -> TestServer {
+    let config = make_config();
+    let _trust_store = load_root_truststore(config.oid4vc.root_truststore_dir.as_deref()).unwrap();
     let session_store = MemorySession::default();
-    let tenant_repo = MemoryTenantRepo::new();
-    let credential_repo = MemoryCredentialRepo::new();
-    let client_config = Oid4vciClientConfig::new(
-        config.oid4vc.client_id.clone(),
-        config.oid4vc.redirect_uri.clone(),
-    )
-    .use_system_proxy(config.oid4vc.use_system_proxy)
-    .accept_untrusted_hosts(true);
-    let client = Oid4vciClient::new(OidClient::new(client_config).unwrap());
-    let task_queue = MemoryTaskQueue::new();
-    let publisher = MemoryEventPublisher::new(128);
-    let subscriber = MemoryEventSubscriber::new(&publisher);
-    let issuance_engine = IssuanceEngine::new(
-        client,
-        task_queue,
-        publisher,
-        subscriber,
-        credential_repo.clone(),
-        tenant_repo.clone(),
-        &session_store,
-        config.oid4vc.preferred_display_locales.clone(),
-    );
-    let x5c_trust_anchors = Arc::new(trust_store.x5c_trust_anchors);
-    let presentation_engine = setup::build_presentation_engine(
-        &config,
-        credential_repo.clone(),
-        tenant_repo.clone(),
-        x5c_trust_anchors,
-    )
-    .expect("failed to build presentation engine");
-    let service = Service::new(
-        session_store,
-        tenant_repo,
-        issuance_engine,
-        presentation_engine,
-    );
+    let service = setup::build_service(session_store, &config)
+        .await
+        .expect("failed to build service");
+    let credential_repo = service.issuance_engine.credential_repo.clone();
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
     tokio::spawn(server.run());
@@ -148,6 +100,8 @@ pub fn sample_credential(tenant_id: Uuid) -> Credential {
     }
 }
 
+/// Inserts a tenant row into the given SQL pool for test setup.
+#[cfg(feature = "sqlx")]
 #[allow(dead_code)]
 pub async fn insert_tenant(pool: &AnyPool, id: Uuid, name: &str) {
     let url = pool.connect_options().to_url_lossy();

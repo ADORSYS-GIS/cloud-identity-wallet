@@ -2,6 +2,7 @@
    This module specifies the API by which external modules interact with the wallet domain.
 */
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -23,6 +24,17 @@ pub trait TenantRepo: Send + Sync + 'static {
 
     /// Retrieves a tenant key material by its ID.
     async fn find_key(&self, id: Uuid) -> Result<TenantKey, TenantError>;
+}
+
+#[async_trait]
+impl TenantRepo for Arc<dyn TenantRepo> {
+    async fn create(&self, request: RegisterTenantRequest) -> Result<TenantResponse, TenantError> {
+        self.as_ref().create(request).await
+    }
+
+    async fn find_key(&self, id: Uuid) -> Result<TenantKey, TenantError> {
+        self.as_ref().find_key(id).await
+    }
 }
 
 /// Common interface for Credential persistence.
@@ -59,6 +71,32 @@ pub trait CredentialRepo: Send + Sync + 'static {
     async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<(), CredentialError>;
 }
 
+#[async_trait]
+impl CredentialRepo for Arc<dyn CredentialRepo> {
+    async fn upsert(
+        &self,
+        credential: Credential,
+        display: Option<CredentialDisplayMetadata>,
+    ) -> Result<uuid::Uuid, CredentialError> {
+        self.as_ref().upsert(credential, display).await
+    }
+
+    async fn find_by_id(&self, id: Uuid, tenant_id: Uuid) -> Result<Credential, CredentialError> {
+        self.as_ref().find_by_id(id, tenant_id).await
+    }
+
+    async fn list(
+        &self,
+        filter: CredentialFilter,
+    ) -> Result<Vec<CredentialSummary>, CredentialError> {
+        self.as_ref().list(filter).await
+    }
+
+    async fn delete(&self, id: Uuid, tenant_id: Uuid) -> Result<(), CredentialError> {
+        self.as_ref().delete(id, tenant_id).await
+    }
+}
+
 /// A pinned async stream of [`IssuanceEvent`] items.
 pub type IssuanceEventStream = Pin<Box<dyn Stream<Item = IssuanceEvent> + Send>>;
 
@@ -86,11 +124,33 @@ pub trait IssuanceTaskQueue: Send + Sync + 'static {
     async fn ack(&self, task: &IssuanceTask) -> Result<(), IssuanceError>;
 }
 
+#[async_trait]
+impl IssuanceTaskQueue for Arc<dyn IssuanceTaskQueue> {
+    async fn push(&self, task: &IssuanceTask) -> Result<(), IssuanceError> {
+        self.as_ref().push(task).await
+    }
+
+    async fn pop(&self) -> Result<Option<IssuanceTask>, IssuanceError> {
+        self.as_ref().pop().await
+    }
+
+    async fn ack(&self, task: &IssuanceTask) -> Result<(), IssuanceError> {
+        self.as_ref().ack(task).await
+    }
+}
+
 /// An event publisher for issuance events.
 #[async_trait]
 pub trait IssuanceEventPublisher: Send + Sync + 'static {
     /// Publish an issuance event for a session.
     async fn publish(&self, event: &IssuanceEvent) -> Result<(), IssuanceError>;
+}
+
+#[async_trait]
+impl IssuanceEventPublisher for Arc<dyn IssuanceEventPublisher> {
+    async fn publish(&self, event: &IssuanceEvent) -> Result<(), IssuanceError> {
+        self.as_ref().publish(event).await
+    }
 }
 
 /// A subscriber for issuance events.
@@ -101,4 +161,11 @@ pub trait IssuanceEventSubscriber: Send + Sync + 'static {
     /// Returns a stream that yields events as they are published.
     /// The stream should auto-terminate after a terminal event.
     async fn subscribe(&self, session_id: &str) -> Result<IssuanceEventStream, IssuanceError>;
+}
+
+#[async_trait]
+impl IssuanceEventSubscriber for Arc<dyn IssuanceEventSubscriber> {
+    async fn subscribe(&self, session_id: &str) -> Result<IssuanceEventStream, IssuanceError> {
+        self.as_ref().subscribe(session_id).await
+    }
 }

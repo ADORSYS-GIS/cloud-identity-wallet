@@ -1,38 +1,49 @@
+#[cfg(feature = "sqlx")]
 use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_wallet_kms::provider::Provider as KmsProvider;
 use dashmap::DashMap;
+#[cfg(feature = "sqlx")]
 use sqlx::{AnyPool, FromRow, Transaction};
+#[cfg(feature = "sqlx")]
 use time::UtcDateTime;
+#[cfg(feature = "sqlx")]
 use url::Url;
 use uuid::Uuid;
 
 use crate::domain::models::credential::{
-    Credential, CredentialDisplayMetadata, CredentialError, CredentialFilter, CredentialFormat,
-    CredentialStatus, CredentialSummary,
+    Credential, CredentialDisplayMetadata, CredentialError, CredentialFilter, CredentialSummary,
 };
+#[cfg(feature = "sqlx")]
+use crate::domain::models::credential::{CredentialFormat, CredentialStatus};
 use crate::domain::ports::CredentialRepo;
 use crate::outbound::cipher::{self, Cipher};
+#[cfg(feature = "sqlx")]
 use crate::utils::{Driver, Query};
 
 type Result<T> = std::result::Result<T, CredentialError>;
 
+#[cfg(feature = "sqlx")]
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+#[cfg(feature = "sqlx")]
 static MYSQL_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql");
+#[cfg(feature = "sqlx")]
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// Persistent relational database backend for credentials.
 ///
 /// Supports PostgreSQL, MySQL, and SQLite databases.
 #[derive(Clone)]
+#[cfg(feature = "sqlx")]
 pub struct SqlCredentialRepo {
     pool: AnyPool,
     driver: Driver,
     cipher: Option<Arc<dyn Cipher>>,
 }
 
+#[cfg(feature = "sqlx")]
 impl std::fmt::Debug for SqlCredentialRepo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqlRepository")
@@ -42,6 +53,7 @@ impl std::fmt::Debug for SqlCredentialRepo {
     }
 }
 
+#[cfg(feature = "sqlx")]
 impl SqlCredentialRepo {
     /// Creates a new SQL repository using the provided connection pool.
     ///
@@ -169,6 +181,7 @@ impl SqlCredentialRepo {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[cfg(feature = "sqlx")]
 struct CredentialRecord {
     pub id: String,
     pub tenant_id: String,
@@ -192,6 +205,7 @@ struct CredentialRecord {
     pub payload_encrypted: i64,
 }
 
+#[cfg(feature = "sqlx")]
 impl CredentialRecord {
     fn from_credential(
         credential: Credential,
@@ -258,6 +272,7 @@ impl CredentialRecord {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "sqlx")]
 impl CredentialRepo for SqlCredentialRepo {
     async fn upsert(
         &self,
@@ -355,6 +370,7 @@ impl CredentialRepo for SqlCredentialRepo {
     }
 }
 
+#[cfg(feature = "sqlx")]
 struct FilterBuilder<'d> {
     driver: &'d Driver,
     sql: String,
@@ -365,6 +381,7 @@ struct FilterBuilder<'d> {
     order_by: &'static str,
 }
 
+#[cfg(feature = "sqlx")]
 impl<'d> FilterBuilder<'d> {
     fn for_summaries(driver: &'d Driver) -> Self {
         let sql = String::from(
@@ -469,6 +486,7 @@ impl<'d> FilterBuilder<'d> {
     }
 }
 
+#[cfg(feature = "sqlx")]
 async fn insert_credential(
     driver: &Driver,
     tx: &mut Transaction<'_, sqlx::Any>,
@@ -495,6 +513,7 @@ async fn insert_credential(
     Ok(())
 }
 
+#[cfg(feature = "sqlx")]
 async fn update_credential(
     driver: &Driver,
     tx: &mut Transaction<'_, sqlx::Any>,
@@ -522,6 +541,7 @@ async fn update_credential(
     Ok(result.rows_affected())
 }
 
+#[cfg(feature = "sqlx")]
 async fn upsert_display_metadata(
     driver: &Driver,
     tx: &mut Transaction<'_, sqlx::Any>,
@@ -541,6 +561,7 @@ async fn upsert_display_metadata(
     Ok(())
 }
 
+#[cfg(feature = "sqlx")]
 fn upsert_display_metadata_sql(driver: &Driver) -> &'static str {
     match driver {
         Driver::MySql => UPSERT_DISPLAY_METADATA_MYSQL.for_driver(driver),
@@ -548,6 +569,7 @@ fn upsert_display_metadata_sql(driver: &Driver) -> &'static str {
     }
 }
 
+#[cfg(feature = "sqlx")]
 static FIND_CREDENTIAL: Query = Query::new(
     "SELECT id, tenant_id, issuer, subject, credential_types, format, external_id, status, \
      issued_at, valid_until, is_revoked, status_location, status_index, raw_credential, \
@@ -555,6 +577,7 @@ static FIND_CREDENTIAL: Query = Query::new(
      FROM credentials WHERE id = $1 AND tenant_id = $2",
 );
 
+#[cfg(feature = "sqlx")]
 static INSERT_CREDENTIAL: Query = Query::new(
     "INSERT INTO credentials \
      (id, tenant_id, issuer, subject, credential_types, format, external_id, status, \
@@ -563,6 +586,7 @@ static INSERT_CREDENTIAL: Query = Query::new(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
 );
 
+#[cfg(feature = "sqlx")]
 static UPDATE_CREDENTIAL: Query = Query::new(
     "UPDATE credentials SET \
      issuer = $1, subject = $2, credential_types = $3, format = $4, external_id = $5, \
@@ -571,12 +595,14 @@ static UPDATE_CREDENTIAL: Query = Query::new(
      WHERE id = $14 AND tenant_id = $15",
 );
 
+#[cfg(feature = "sqlx")]
 static DELETE_CREDENTIAL: Query =
     Query::new("DELETE FROM credentials WHERE id = $1 AND tenant_id = $2");
 
 // Display metadata is one-to-one with credentials. `tenant_id` is stored for
 // tenant-scoped joins/cascade behavior, while uniqueness follows the globally
 // unique `credentials.id`, so the conflict target is `credential_id`.
+#[cfg(feature = "sqlx")]
 static UPSERT_DISPLAY_METADATA_ON_CONFLICT: Query = Query::new(
     "INSERT INTO credential_display_metadata \
      (credential_id, tenant_id, display, issuer_name, credential_type) \
@@ -586,6 +612,7 @@ static UPSERT_DISPLAY_METADATA_ON_CONFLICT: Query = Query::new(
      issuer_name = EXCLUDED.issuer_name, credential_type = EXCLUDED.credential_type",
 );
 
+#[cfg(feature = "sqlx")]
 static UPSERT_DISPLAY_METADATA_MYSQL: Query = Query::new(
     "INSERT INTO credential_display_metadata \
      (credential_id, tenant_id, display, issuer_name, credential_type) \
@@ -604,6 +631,7 @@ static UPSERT_DISPLAY_METADATA_MYSQL: Query = Query::new(
 /// Credential IDs are globally unique in `credentials`, so `tenant_id` is
 /// retained for tenant-scoped joins and cascade behavior.
 #[derive(FromRow)]
+#[cfg(feature = "sqlx")]
 struct DisplayMetadataRecord {
     credential_id: String,
     issued_at: i64,
@@ -613,6 +641,7 @@ struct DisplayMetadataRecord {
     credential_type: String,
 }
 
+#[cfg(feature = "sqlx")]
 impl TryFrom<DisplayMetadataRecord> for CredentialSummary {
     type Error = CredentialError;
 
@@ -833,12 +862,14 @@ impl CredentialRepo for MemoryCredentialRepo {
     }
 }
 
+#[cfg(feature = "sqlx")]
 impl From<sqlx::Error> for CredentialError {
     fn from(error: sqlx::Error) -> Self {
         Self::Backend(error.into())
     }
 }
 
+#[cfg(feature = "sqlx")]
 impl From<sqlx::migrate::MigrateError> for CredentialError {
     fn from(error: sqlx::migrate::MigrateError) -> Self {
         Self::Backend(error.into())
@@ -890,8 +921,12 @@ impl From<cloud_wallet_kms::Error> for CredentialError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::models::credential::{CredentialFormat, CredentialStatus};
     use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
+    use time::UtcDateTime;
+    use url::Url;
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_no_filters_produces_valid_sql() {
         let driver = Driver::Postgres;
@@ -903,6 +938,7 @@ mod tests {
         assert!(exclude_expired_ts.is_none());
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_postgres_uses_dollar_placeholders() {
         let driver = Driver::Postgres;
@@ -918,6 +954,7 @@ mod tests {
         assert!(exclude_expired_ts.is_some());
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_mysql_uses_question_marks() {
         let driver = Driver::MySql;
@@ -933,6 +970,7 @@ mod tests {
         assert!(exclude_expired_ts.is_some());
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_postgres_types_contain_uses_jsonb_operator() {
         let driver = Driver::Postgres;
@@ -960,6 +998,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_mysql_types_contain_uses_json_contains() {
         let driver = Driver::MySql;
@@ -985,6 +1024,7 @@ mod tests {
         assert_eq!(values[1], "\"UniversityDegree\"");
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_sqlite_types_contain_uses_json_each() {
         let driver = Driver::Sqlite;
@@ -1006,6 +1046,7 @@ mod tests {
         assert_eq!(values[1], "UniversityDegree");
     }
 
+    #[cfg(feature = "sqlx")]
     #[test]
     fn filter_builder_types_contain_empty_slice_adds_no_clause() {
         let driver = Driver::Postgres;
