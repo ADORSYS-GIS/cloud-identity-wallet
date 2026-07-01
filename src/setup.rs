@@ -196,9 +196,8 @@ async fn build_memory_repositories_with_aws_kms(
     use cloud_wallet_kms::storage::InMemoryBackend;
 
     let aws_config = load_aws_config(config).await;
-    // The hostname is used for deterministic key ID generation in the KMS provider, 
-    //  It serves as a namespace to ensure unique key
-    // identifiers per deployment instance.
+    // The hostname is used for deterministic key ID generation in the KMS provider,
+    // It serves as a namespace to ensure unique key identifiers per deployment instance.
     let hostname = config.server.host.clone();
     Ok(Repositories {
         credential_repo: Arc::new(MemoryCredentialRepo::with_cipher(AwsProvider::new(
