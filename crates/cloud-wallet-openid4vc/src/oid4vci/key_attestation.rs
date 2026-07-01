@@ -15,31 +15,6 @@ use crate::errors::{Error, ErrorKind};
 
 pub const KEY_ATTESTATION_JWT_TYP: &str = "key-attestation+jwt";
 
-/// Attack potential resistance values per ISO 18045 (Appendix D.2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AttackPotential {
-    #[serde(rename = "iso_18045_high")]
-    High,
-    #[serde(rename = "iso_18045_moderate")]
-    Moderate,
-    #[serde(rename = "iso_18045_enhanced-basic")]
-    EnhancedBasic,
-    #[serde(rename = "iso_18045_basic")]
-    Basic,
-}
-
-impl AttackPotential {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::High => "iso_18045_high",
-            Self::Moderate => "iso_18045_moderate",
-            Self::EnhancedBasic => "iso_18045_enhanced-basic",
-            Self::Basic => "iso_18045_basic",
-        }
-    }
-}
-
 /// Claims in a Key Attestation JWT per OID4VCI Appendix D.
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +106,10 @@ impl KeyAttestationClaims {
     }
 
     /// Validates that all required fields are present and valid.
-    pub fn validate(&self) -> Result<(), KeyAttestationError> {
+    ///
+    /// If `expected_nonce` is provided, the attestation's nonce claim must match it
+    /// per OID4VCI Appendix D to prevent replay attacks.
+    pub fn validate(&self, expected_nonce: Option<&str>) -> Result<(), KeyAttestationError> {
         if self.attested_keys.is_empty() {
             return Err(KeyAttestationError::MissingAttestedKeys);
         }
@@ -148,7 +126,7 @@ impl KeyAttestationClaims {
         }
 
         if let Some(exp) = self.exp
-            && exp < now
+            && exp < now - CLOCK_SKEW_TOLERANCE_SECS
         {
             return Err(KeyAttestationError::Expired);
         }
@@ -163,6 +141,21 @@ impl KeyAttestationClaims {
             && auth.is_empty()
         {
             return Err(KeyAttestationError::EmptyUserAuthentication);
+        }
+
+        if let Some(expected) = expected_nonce {
+            match &self.nonce {
+                Some(nonce) if nonce == expected => {}
+                Some(nonce) => {
+                    return Err(KeyAttestationError::NonceMismatch {
+                        expected: expected.to_string(),
+                        actual: nonce.clone(),
+                    });
+                }
+                None => {
+                    return Err(KeyAttestationError::MissingNonce);
+                }
+            }
         }
 
         Ok(())
@@ -245,8 +238,14 @@ impl KeyAttestationJwt {
     /// signature against the attestation issuer's trusted key before trusting
     /// any claims. Use [`Self::decode_without_signature_verification`] only when
     /// you have verified or will verify the signature through an external mechanism.
+    ///
+    /// If `expected_nonce` is provided, the attestation's `nonce` claim must match it
+    /// per OID4VCI Appendix D to bind the attestation to the server's `c_nonce`.
     #[must_use = "the decoded attestation must be signature-verified before use"]
-    pub fn decode_without_signature_verification(jwt: &str) -> Result<Self, KeyAttestationError> {
+    pub fn decode_without_signature_verification(
+        jwt: &str,
+        expected_nonce: Option<&str>,
+    ) -> Result<Self, KeyAttestationError> {
         let parts: Vec<&str> = jwt.split('.').collect();
         if parts.len() != 3 {
             return Err(KeyAttestationError::InvalidFormat(
@@ -265,11 +264,19 @@ impl KeyAttestationJwt {
             });
         }
 
+        const NONE_ALG: &str = "none";
+        if header.alg.eq_ignore_ascii_case(NONE_ALG) {
+            return Err(KeyAttestationError::InvalidAlgorithm {
+                algorithm: header.alg.clone(),
+                reason: "key attestation MUST NOT use 'none' algorithm".to_string(),
+            });
+        }
+
         let claims: KeyAttestationClaims = base64_decode_json(parts[1]).map_err(|e| {
             KeyAttestationError::InvalidFormat(format!("failed to decode claims: {e}"))
         })?;
 
-        claims.validate()?;
+        claims.validate(expected_nonce)?;
 
         Ok(Self {
             header,
@@ -461,7 +468,7 @@ impl KeyAttestationBuilder {
     /// This method is provided for testing and for integrations where the
     /// signing is performed externally.
     pub fn encode_un_signed(&self) -> Result<String, KeyAttestationError> {
-        self.claims.validate()?;
+        self.claims.validate(None)?;
 
         let header_b64 = base64_encode_json(&self.header)?;
         let claims_b64 = base64_encode_json(&self.claims)?;
@@ -489,7 +496,8 @@ pub fn validate_batch_attestation(
     attestation_jwt: &str,
     required_keys: &[Jwk],
 ) -> Result<KeyAttestationJwt, KeyAttestationError> {
-    let attestation = KeyAttestationJwt::decode_without_signature_verification(attestation_jwt)?;
+    let attestation =
+        KeyAttestationJwt::decode_without_signature_verification(attestation_jwt, None)?;
 
     for required_key in required_keys {
         let found = attestation
@@ -544,6 +552,9 @@ pub enum KeyAttestationError {
     #[error("invalid typ header: expected {expected}, got {actual}")]
     InvalidTyp { expected: String, actual: String },
 
+    #[error("invalid algorithm: {algorithm} — {reason}")]
+    InvalidAlgorithm { algorithm: String, reason: String },
+
     #[error("missing attested_keys")]
     MissingAttestedKeys,
 
@@ -564,6 +575,12 @@ pub enum KeyAttestationError {
 
     #[error("user_authentication array is empty (must be non-empty when present)")]
     EmptyUserAuthentication,
+
+    #[error("nonce mismatch: expected {expected}, got {actual}")]
+    NonceMismatch { expected: String, actual: String },
+
+    #[error("missing nonce (expected nonce binding to server c_nonce)")]
+    MissingNonce,
 
     #[error("insufficient key storage: required {required:?}, provided {provided:?}")]
     InsufficientKeyStorage {
@@ -639,15 +656,6 @@ mod tests {
     }
 
     #[test]
-    fn test_attack_potential_serialization() {
-        let high = AttackPotential::High;
-        assert_eq!(high.as_str(), "iso_18045_high");
-
-        let moderate = AttackPotential::Moderate;
-        assert_eq!(moderate.as_str(), "iso_18045_moderate");
-    }
-
-    #[test]
     fn test_key_attestation_header() {
         let header = KeyAttestationHeader::new("ES256");
         assert_eq!(header.typ, "key-attestation+jwt");
@@ -677,9 +685,11 @@ mod tests {
             .with_key_storage(vec!["iso_18045_moderate".to_string()])
             .with_user_authentication(vec!["iso_18045_moderate".to_string()]);
 
-        let attestation_jwt =
-            KeyAttestationJwt::decode_without_signature_verification(&create_test_jwt(&claims))
-                .unwrap();
+        let attestation_jwt = KeyAttestationJwt::decode_without_signature_verification(
+            &create_test_jwt(&claims),
+            None,
+        )
+        .unwrap();
 
         assert!(
             attestation_jwt.meets_key_storage_requirements(&["iso_18045_moderate".to_string()])
@@ -724,6 +734,7 @@ mod tests {
         let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
         let attestation = KeyAttestationJwt::decode_without_signature_verification(
             &create_test_jwt(&KeyAttestationClaims::new(vec![sample_ec_jwk()], exp)),
+            None,
         )
         .unwrap();
 
@@ -748,6 +759,7 @@ mod tests {
         let exp = OffsetDateTime::now_utc().unix_timestamp() + 3600;
         let attestation = KeyAttestationJwt::decode_without_signature_verification(
             &create_test_jwt(&KeyAttestationClaims::new(vec![sample_ec_jwk()], exp)),
+            None,
         )
         .unwrap();
 

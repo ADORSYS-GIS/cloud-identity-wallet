@@ -46,6 +46,7 @@ pub struct Header {
     /// contains the key that the Credential is to be bound to
     pub x5c: Option<Vec<String>>,
     /// Contains a key attestation as described in `OID4VCI Appendix D`
+    #[serde(rename = "key_attestation")]
     pub attestation: Option<String>,
     /// Contains an OpenID Federation Trust Chain
     pub trust_chain: Option<Vec<String>>,

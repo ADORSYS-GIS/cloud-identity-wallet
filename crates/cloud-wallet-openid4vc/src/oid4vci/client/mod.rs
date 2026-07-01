@@ -1189,14 +1189,13 @@ impl Oid4vciClient {
 
         if let Some(attestation_jwt) = key_attestation_jwt {
             use crate::oid4vci::key_attestation::KeyAttestationJwt;
-            let attestation = KeyAttestationJwt::decode_without_signature_verification(
-                attestation_jwt,
-            )
-            .map_err(|e| {
-                ClientError::key_attestation_validation(format!(
-                    "failed to decode key attestation: {e}"
-                ))
-            })?;
+            let attestation =
+                KeyAttestationJwt::decode_without_signature_verification(attestation_jwt, c_nonce)
+                    .map_err(|e| {
+                        ClientError::key_attestation_validation(format!(
+                            "failed to decode key attestation: {e}"
+                        ))
+                    })?;
 
             // Verify the signer's key is in attested_keys
             let signer_jwk = signer.public_jwk();
@@ -1243,7 +1242,7 @@ impl Oid4vciClient {
                     kid: None,
                     jwk: Some(signer.public_jwk().clone()),
                     x5c: None,
-                    attestation: Some(attestation.to_string()),
+                    attestation: Some(attestation.to_owned()),
                     trust_chain: None,
                 };
                 signer.sign_with_header(&header, &claims)?
