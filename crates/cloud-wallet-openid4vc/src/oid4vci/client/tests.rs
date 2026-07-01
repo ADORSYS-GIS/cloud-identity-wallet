@@ -424,6 +424,422 @@ async fn test_issuance_flow() {
     }
 }
 
+/// Integration test: end-to-end scope-based issuance with a mock AS that
+/// explicitly does not support `authorization_details` for OID4VCI credentials.
+///
+/// Covers the acceptance criterion: "Integration test: end-to-end flow with a
+/// mock AS that only supports scope-based auth."
+///
+/// The test verifies:
+/// 1. The AS metadata declares `authorization_details_types_supported` without
+///    `"openid_credential"`, so the scope path is chosen.
+/// 2. The token response carries `scope` (no `authorization_details`).
+/// 3. `resolve_credential_targets` falls through to tier 2 (scope) and
+///    addresses the credential endpoint with `credential_configuration_id`.
+/// 4. `request_credentials` successfully parses and returns the credential.
+#[tokio::test]
+async fn test_scope_based_issuance_flow() {
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    // Mock Issuer Metadata — credential config advertises a scope value.
+    let metadata_json = serde_json::json!({
+        "credential_issuer": issuer_url,
+        "credential_endpoint": format!("{issuer_url}/credential"),
+        "nonce_endpoint": format!("{issuer_url}/nonce"),
+        "authorization_servers": [issuer_url],
+        "credential_configurations_supported": {
+            "UniversityDegreeCredential": {
+                "format": "jwt_vc_json",
+                "scope": "university_degree",
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": {
+                        "proof_signing_alg_values_supported": ["ES256"]
+                    }
+                }
+            }
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-credential-issuer"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    // Mock AS Metadata — AS explicitly does NOT support openid_credential RAR.
+    // This forces the scope-based path in build_authorization_url /
+    // exchange_authorization_code.
+    let as_metadata_json = serde_json::json!({
+        "issuer": issuer_url.replace("http://", "https://"),
+        "authorization_endpoint": format!("{issuer_url}/authorize").replace("http://", "https://"),
+        "token_endpoint": format!("{issuer_url}/token").replace("http://", "https://"),
+        "pushed_authorization_request_endpoint": format!("{issuer_url}/par").replace("http://", "https://"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "urn:ietf:params:oauth:grant-type:pre-authorized_code"],
+        "code_challenge_methods_supported": ["S256"],
+        // Present but does NOT include "openid_credential" → wallet must use scope.
+        "authorization_details_types_supported": ["some_other_rar_type"]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(as_metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    // Mock Token Response — AS returns granted `scope`, no `authorization_details`.
+    // This is the shape a scope-only AS produces (OID4VCI §6.2 tier 2).
+    let token_response_json = serde_json::json!({
+        "access_token": "scope_access_token_xyz",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": "university_degree"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(token_response_json))
+        .mount(&mock_server)
+        .await;
+
+    // Mock Nonce Response.
+    Mock::given(method("POST"))
+        .and(path("/nonce"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"c_nonce": "scope-test-nonce"})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    // Mock Credential Endpoint — expects a request with credential_configuration_id
+    // (scope/offer tier uses config id, not credential identifier).
+    let credential_response_json = serde_json::json!({
+        "credentials": [{"credential": "scope_issued_credential_jwt"}]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/credential"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(credential_response_json))
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+
+    // Build context the same way test_issuance_flow does (fetch real metadata,
+    // then patch endpoints back to HTTP for reqwest to reach the mock server).
+    let offer = CredentialOffer {
+        credential_issuer: Url::parse(&issuer_url).unwrap(),
+        credential_configuration_ids: vec!["UniversityDegreeCredential".to_string()],
+        grants: Some(Grants {
+            authorization_code: None,
+            pre_authorized_code: Some(PreAuthorizedCodeGrant {
+                pre_authorized_code: "scope_pre_auth_code".to_string(),
+                tx_code: None,
+                authorization_server: None,
+            }),
+        }),
+    };
+
+    let issuer_metadata = client
+        .fetch_issuer_metadata(&Url::parse(&issuer_url).unwrap())
+        .await
+        .unwrap();
+
+    let mut as_metadata = client
+        .fetch_as_metadata(&Url::parse(&issuer_url).unwrap(), &issuer_metadata, &offer)
+        .await
+        .unwrap();
+
+    as_metadata.token_endpoint = Some(Url::parse(&format!("{issuer_url}/token")).unwrap());
+    as_metadata.pushed_authorization_request_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/par")).unwrap());
+
+    let mut issuer_metadata = issuer_metadata;
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    issuer_metadata.nonce_endpoint = Some(Url::parse(&format!("{issuer_url}/nonce")).unwrap());
+
+    let context = ResolvedOfferContext {
+        offer,
+        issuer_metadata,
+        as_metadata,
+        flow: IssuanceFlow::PreAuthorizedCode {
+            pre_authorized_code: "scope_pre_auth_code".to_string(),
+            tx_code: None,
+        },
+    };
+
+    // Exchange token — scope-based issuers don't need authorization_details in
+    // the token request; any AS-side RAR rejection would surface here.
+    let token = client
+        .exchange_pre_authorized_code(
+            &context,
+            "scope_pre_auth_code",
+            None::<String>,
+            &["UniversityDegreeCredential".to_string()],
+            None,
+        )
+        .await
+        .expect("token exchange should succeed");
+
+    assert_eq!(token.access_token, "scope_access_token_xyz");
+    assert_eq!(token.scope.as_deref(), Some("university_degree"));
+    assert!(
+        token.authorization_details.is_none(),
+        "scope-only AS must not return authorization_details"
+    );
+
+    // Verify the token REQUEST sent to /token did not contain authorization_details.
+    // This is the machine-checkable proof that exchange_pre_authorized_code respects
+    // the scope path and does not pollute scope-only ASes with unsupported RAR params.
+    let token_requests: Vec<_> = mock_server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/token")
+        .collect();
+    assert_eq!(
+        token_requests.len(),
+        1,
+        "expected exactly one /token request"
+    );
+    let token_body = std::str::from_utf8(&token_requests[0].body).unwrap();
+    assert!(
+        !token_body.contains("authorization_details"),
+        "scope-path token request must not include authorization_details; body: {token_body}"
+    );
+
+    let signer = get_ecdsa_signer();
+
+    // request_credentials must fall through to tier 2 (scope), match
+    // "university_degree" → "UniversityDegreeCredential", and issue a
+    // credential_configuration_id-addressed credential request.
+    let credentials = client
+        .request_credentials(&context, &token, &signer, None)
+        .await
+        .expect("credential request should succeed via scope tier");
+
+    assert_eq!(credentials.len(), 1);
+    match &credentials[0] {
+        CredentialResponse::Immediate(cred) => {
+            assert_eq!(
+                cred.credentials[0].credential.as_str().unwrap(),
+                "scope_issued_credential_jwt"
+            );
+        }
+        _ => panic!("expected immediate credential response"),
+    }
+}
+
+/// Integration test: scope-based issuance when AS omits
+/// `authorization_details_types_supported` entirely but all credential
+/// configurations advertise a `scope` value.
+///
+/// Verifies the new `prefer_authorization_details` heuristic (Fix 2): absent
+/// field + all configs have scope → use scope path rather than defaulting to RAR.
+#[tokio::test]
+async fn test_scope_based_issuance_flow_absent_rar_metadata() {
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    // Issuer metadata: credential config has a scope value.
+    let metadata_json = serde_json::json!({
+        "credential_issuer": issuer_url,
+        "credential_endpoint": format!("{issuer_url}/credential"),
+        "nonce_endpoint": format!("{issuer_url}/nonce"),
+        "authorization_servers": [issuer_url],
+        "credential_configurations_supported": {
+            "DriverLicenseCredential": {
+                "format": "jwt_vc_json",
+                "scope": "drivers_license",
+                "cryptographic_binding_methods_supported": ["jwk"],
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_types_supported": {
+                    "jwt": { "proof_signing_alg_values_supported": ["ES256"] }
+                }
+            }
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-credential-issuer"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    // AS metadata: authorization_details_types_supported is absent entirely.
+    // Legacy issuers (and national-eID scope-only issuers) typically omit it.
+    let as_metadata_json = serde_json::json!({
+        "issuer": issuer_url.replace("http://", "https://"),
+        "authorization_endpoint": format!("{issuer_url}/authorize").replace("http://", "https://"),
+        "token_endpoint": format!("{issuer_url}/token").replace("http://", "https://"),
+        "pushed_authorization_request_endpoint": format!("{issuer_url}/par").replace("http://", "https://"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["urn:ietf:params:oauth:grant-type:pre-authorized_code"],
+        "code_challenge_methods_supported": ["S256"]
+        // authorization_details_types_supported intentionally absent
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(as_metadata_json))
+        .mount(&mock_server)
+        .await;
+
+    // Token response: scope echoed back, no authorization_details.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "legacy_scope_token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "drivers_license"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/nonce"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "c_nonce": "legacy-nonce"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/credential"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "credentials": [{"credential": "legacy_scope_credential_jwt"}]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+
+    let offer = CredentialOffer {
+        credential_issuer: Url::parse(&issuer_url).unwrap(),
+        credential_configuration_ids: vec!["DriverLicenseCredential".to_string()],
+        grants: Some(Grants {
+            authorization_code: None,
+            pre_authorized_code: Some(PreAuthorizedCodeGrant {
+                pre_authorized_code: "legacy_pre_auth_code".to_string(),
+                tx_code: None,
+                authorization_server: None,
+            }),
+        }),
+    };
+
+    let issuer_metadata = client
+        .fetch_issuer_metadata(&Url::parse(&issuer_url).unwrap())
+        .await
+        .unwrap();
+
+    let mut as_metadata = client
+        .fetch_as_metadata(&Url::parse(&issuer_url).unwrap(), &issuer_metadata, &offer)
+        .await
+        .unwrap();
+
+    as_metadata.token_endpoint = Some(Url::parse(&format!("{issuer_url}/token")).unwrap());
+    as_metadata.pushed_authorization_request_endpoint =
+        Some(Url::parse(&format!("{issuer_url}/par")).unwrap());
+
+    // Verify the heuristic: absent field + all configs have scope → scope path.
+    assert!(
+        as_metadata.authorization_details_types_supported.is_none(),
+        "test requires AS metadata without authorization_details_types_supported"
+    );
+    assert!(
+        !prefer_authorization_details(
+            &ResolvedOfferContext {
+                offer: CredentialOffer {
+                    credential_issuer: Url::parse(&issuer_url).unwrap(),
+                    credential_configuration_ids: vec!["DriverLicenseCredential".to_string()],
+                    grants: None,
+                },
+                issuer_metadata: issuer_metadata.clone(),
+                as_metadata: as_metadata.clone(),
+                flow: IssuanceFlow::PreAuthorizedCode {
+                    pre_authorized_code: "x".to_string(),
+                    tx_code: None,
+                },
+            },
+            &["DriverLicenseCredential".to_string()]
+        ),
+        "absent field + config has scope → prefer_authorization_details must return false (use scope)"
+    );
+
+    let mut issuer_metadata = issuer_metadata;
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    issuer_metadata.nonce_endpoint = Some(Url::parse(&format!("{issuer_url}/nonce")).unwrap());
+
+    let context = ResolvedOfferContext {
+        offer,
+        issuer_metadata,
+        as_metadata,
+        flow: IssuanceFlow::PreAuthorizedCode {
+            pre_authorized_code: "legacy_pre_auth_code".to_string(),
+            tx_code: None,
+        },
+    };
+
+    let token = client
+        .exchange_pre_authorized_code(
+            &context,
+            "legacy_pre_auth_code",
+            None::<String>,
+            &["DriverLicenseCredential".to_string()],
+            None,
+        )
+        .await
+        .expect("token exchange should succeed for legacy scope-only issuer");
+
+    assert_eq!(token.scope.as_deref(), Some("drivers_license"));
+
+    // Verify the token REQUEST body does not carry authorization_details.
+    // This is the B1 regression test: the pre-authorized code token exchange
+    // must respect the scope path even when authorization_details_types_supported
+    // is absent (legacy issuers that only support scope).
+    let token_requests: Vec<_> = mock_server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/token")
+        .collect();
+    assert_eq!(
+        token_requests.len(),
+        1,
+        "expected exactly one /token request"
+    );
+    let token_body = std::str::from_utf8(&token_requests[0].body).unwrap();
+    assert!(
+        !token_body.contains("authorization_details"),
+        "scope-path token request must not include authorization_details; body: {token_body}"
+    );
+
+    let signer = get_ecdsa_signer();
+
+    let credentials = client
+        .request_credentials(&context, &token, &signer, None)
+        .await
+        .expect("credential request should succeed via scope tier for legacy issuer");
+
+    assert_eq!(credentials.len(), 1);
+    match &credentials[0] {
+        CredentialResponse::Immediate(cred) => {
+            assert_eq!(
+                cred.credentials[0].credential.as_str().unwrap(),
+                "legacy_scope_credential_jwt"
+            );
+        }
+        _ => panic!("expected immediate credential response"),
+    }
+}
+
 fn create_wallet_attestation_signer() -> WalletAttestationSigner {
     let provider_keypair = EcdsaKeyPair::generate(Curve::P256).unwrap();
     let provider_der = provider_keypair.to_pkcs8_der().to_vec();
@@ -627,10 +1043,31 @@ fn resolve_via_authorization_details_returns_none_when_absent() {
 
 #[test]
 fn resolve_via_authorization_details_skips_entries_without_identifiers() {
+    // authorization_details present but no credential_identifiers on any entry.
+    // Must return None so the caller falls back to scope/offer tier, and must
+    // not panic.  The warn! log is the operator-facing signal (not testable
+    // here without a tracing subscriber, but covered by the function contract).
     let details = AuthorizationDetails::for_configuration("NoIds");
     let token = token_response(None, Some(vec![details]));
 
     assert!(resolve_via_authorization_details(&token).is_none());
+}
+
+#[test]
+fn resolve_via_authorization_details_returns_none_and_falls_back_when_all_identifiers_empty() {
+    // Some ASes emit authorization_details with credential_identifiers: []
+    // (explicitly empty rather than absent).  The wallet must treat this the
+    // same as missing identifiers — fall back — not treat it as "zero credentials."
+    let mut detail_a = AuthorizationDetails::for_configuration("CredA");
+    detail_a.credential_identifiers = Some(vec![]); // explicitly empty
+    let mut detail_b = AuthorizationDetails::for_configuration("CredB");
+    detail_b.credential_identifiers = Some(vec![]); // explicitly empty
+    let token = token_response(None, Some(vec![detail_a, detail_b]));
+
+    assert!(
+        resolve_via_authorization_details(&token).is_none(),
+        "explicitly empty credential_identifiers arrays must also trigger fallback"
+    );
 }
 
 #[test]
@@ -780,6 +1217,53 @@ fn resolve_credential_targets_errors_when_nothing_resolvable() {
 
     let result = resolve_credential_targets(&context, &token);
     assert!(result.is_err());
+}
+
+// build_scope_to_config_id_map
+
+#[test]
+fn scope_map_contains_offered_configs_with_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let issuer_metadata = issuer_metadata_with_configs(
+        issuer_url,
+        &[
+            ("CredA", Some("scope_a")),
+            ("CredB", Some("scope_b")),
+            ("CredNoScope", None),
+            ("CredNotOffered", Some("scope_not_offered")),
+        ],
+    );
+    let offer_ids = vec![
+        "CredA".to_string(),
+        "CredB".to_string(),
+        "CredNoScope".to_string(),
+    ];
+
+    let map = build_scope_to_config_id_map(&issuer_metadata, &offer_ids);
+
+    assert_eq!(map.get("scope_a").map(String::as_str), Some("CredA"));
+    assert_eq!(map.get("scope_b").map(String::as_str), Some("CredB"));
+    assert!(
+        !map.contains_key("scope_not_offered"),
+        "CredNotOffered is not in the offer and must not appear in the map"
+    );
+    assert_eq!(
+        map.len(),
+        2,
+        "CredNoScope has no scope value and must be excluded"
+    );
+}
+
+#[test]
+fn scope_map_is_empty_when_no_offered_config_has_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let issuer_metadata =
+        issuer_metadata_with_configs(issuer_url, &[("CredA", None), ("CredB", None)]);
+    let offer_ids = vec!["CredA".to_string(), "CredB".to_string()];
+
+    let map = build_scope_to_config_id_map(&issuer_metadata, &offer_ids);
+
+    assert!(map.is_empty());
 }
 
 //  build_scope
@@ -967,24 +1451,6 @@ async fn build_authorization_url_errors_when_neither_rar_nor_scope_available() {
     assert!(result.is_err());
 }
 
-#[test]
-fn resolve_credential_configuration_id_prefers_config_based_selector() {
-    let selector = CredIdOrCredConfigId::credential_configuration_id("FromSelector");
-    assert_eq!(
-        resolve_credential_configuration_id(&selector, "FromFallback"),
-        "FromSelector"
-    );
-}
-
-#[test]
-fn resolve_credential_configuration_id_falls_back_for_identifier_selector() {
-    let selector = CredIdOrCredConfigId::credential_identifier("cred-1");
-    assert_eq!(
-        resolve_credential_configuration_id(&selector, "FromFallback"),
-        "FromFallback"
-    );
-}
-
 #[tokio::test]
 async fn credential_response_parse_failure_includes_raw_body() {
     let mock_server = setup_mock_server().await;
@@ -1018,6 +1484,107 @@ async fn credential_response_parse_failure_includes_raw_body() {
     assert!(
         message.contains("not valid json"),
         "error should include the raw response body, got: {message}"
+    );
+}
+
+// prefer_authorization_details
+
+#[test]
+fn prefer_rar_when_openid_credential_explicitly_listed() {
+    let issuer_url = "https://issuer.example.com";
+    let mut context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("CredA", Some("scope_a"))]),
+        vec!["CredA".to_string()],
+        Some(vec!["openid_credential".to_string()]),
+    );
+    context.as_metadata.authorization_details_types_supported =
+        Some(vec!["openid_credential".to_string()]);
+    assert!(
+        prefer_authorization_details(&context, &["CredA".to_string()]),
+        "explicit openid_credential support must use RAR"
+    );
+}
+
+#[test]
+fn prefer_scope_when_openid_credential_explicitly_absent() {
+    let issuer_url = "https://issuer.example.com";
+    let mut context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("CredA", Some("scope_a"))]),
+        vec!["CredA".to_string()],
+        Some(vec!["other_type".to_string()]),
+    );
+    context.as_metadata.authorization_details_types_supported =
+        Some(vec!["other_type".to_string()]);
+    assert!(
+        !prefer_authorization_details(&context, &["CredA".to_string()]),
+        "explicit exclusion of openid_credential must use scope"
+    );
+}
+
+#[test]
+fn prefer_scope_when_field_absent_and_all_configs_have_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let mut context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("CredA", Some("scope_a")), ("CredB", Some("scope_b"))],
+        ),
+        vec!["CredA".to_string(), "CredB".to_string()],
+        None,
+    );
+    context.as_metadata.authorization_details_types_supported = None;
+    assert!(
+        !prefer_authorization_details(&context, &["CredA".to_string(), "CredB".to_string()]),
+        "absent field + all configs have scope → must prefer scope (legacy issuer heuristic)"
+    );
+}
+
+#[test]
+fn prefer_rar_when_field_absent_and_a_config_has_no_scope() {
+    let issuer_url = "https://issuer.example.com";
+    let mut context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(issuer_url, &[("CredA", Some("scope_a")), ("CredB", None)]),
+        vec!["CredA".to_string(), "CredB".to_string()],
+        None,
+    );
+    context.as_metadata.authorization_details_types_supported = None;
+    assert!(
+        prefer_authorization_details(&context, &["CredA".to_string(), "CredB".to_string()]),
+        "absent field + any config without scope → must fall back to RAR"
+    );
+}
+
+// resolve_via_scope offer-boundary enforcement (Fix 1)
+
+#[test]
+fn resolve_via_scope_does_not_match_configs_outside_the_offer() {
+    let issuer_url = "https://issuer.example.com";
+    // Issuer publishes two configs: only OfferedCred is in the offer.
+    // UnofferedCred is present in the catalog but was never offered/selected.
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[
+                ("OfferedCred", Some("offered_scope")),
+                ("UnofferedCred", Some("unoffered_scope")),
+            ],
+        ),
+        vec!["OfferedCred".to_string()], // offer only contains OfferedCred
+    );
+    // Token response grants both scopes (e.g. AS echoes default scopes).
+    let token = token_response(Some("offered_scope unoffered_scope"), None);
+
+    let matched = resolve_via_scope(&context, &token).expect("should resolve OfferedCred");
+
+    assert_eq!(
+        matched,
+        vec!["OfferedCred".to_string()],
+        "UnofferedCred must not be included even though its scope matches the granted scope"
     );
 }
 

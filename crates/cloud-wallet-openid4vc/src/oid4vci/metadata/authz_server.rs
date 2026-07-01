@@ -239,6 +239,18 @@ impl AuthorizationServerMetadata {
     /// When `authorization_details_types_supported` is absent, support is
     /// assumed (many issuers implement RAR without publishing this RFC 9396
     /// metadata field). When present, `"openid_credential"` must be listed.
+    ///
+    /// # HAIP profile note
+    ///
+    /// HAIP §4.2 mandates `scope`-based credential selection and does **not**
+    /// require `authorization_details` support.  HAIP-profile issuers (e.g.
+    /// national eID ecosystems) typically do not publish
+    /// `authorization_details_types_supported`, so this method returns `true`
+    /// for them — which is incorrect for that profile.  Call sites that need
+    /// to account for scope-only issuers should use
+    /// `prefer_authorization_details` in `client/mod.rs` instead; it
+    /// cross-checks credential configuration `scope` values as a tie-breaker
+    /// when this field is absent.
     pub fn supports_openid_credential_authorization_details(&self) -> bool {
         self.authorization_details_types_supported
             .as_ref()

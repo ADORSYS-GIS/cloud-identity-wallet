@@ -52,14 +52,22 @@ pub struct ImmediateCredentialResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_id: Option<String>,
 
-    /// Fresh `c_nonce` for subsequent credential requests.
+    /// Fresh `c_nonce` returned directly in the credential response.
     ///
-    /// Returned directly in the credential response by issuers on older
-    /// OID4VCI drafts, before the dedicated nonce endpoint was introduced.
+    /// Some issuers on older OID4VCI drafts return a nonce here instead of
+    /// (or in addition to) the dedicated nonce endpoint introduced in later
+    /// drafts.  The field is parsed for wire compatibility and round-trip
+    /// fidelity, but the wallet's nonce-resolution logic (`resolve_nonce`)
+    /// currently uses the dedicated `nonce_endpoint` only.  Reading this
+    /// field directly is valid; it does not affect proof construction in the
+    /// current implementation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub c_nonce: Option<String>,
 
-    /// Lifetime in seconds of `c_nonce`.
+    /// Lifetime in seconds of [`Self::c_nonce`].
+    ///
+    /// Parsed for wire compatibility; see [`Self::c_nonce`] for the current
+    /// consumption caveat.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub c_nonce_expires_in: Option<u64>,
 }
@@ -76,12 +84,6 @@ impl ImmediateCredentialResponse {
 
     pub fn with_notification_id(mut self, id: impl Into<String>) -> Self {
         self.notification_id = Some(id.into());
-        self
-    }
-
-    pub fn with_c_nonce(mut self, c_nonce: impl Into<String>, expires_in: Option<u64>) -> Self {
-        self.c_nonce = Some(c_nonce.into());
-        self.c_nonce_expires_in = expires_in;
         self
     }
 }
