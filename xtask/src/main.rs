@@ -32,7 +32,7 @@ enum Profile {
     Development,
     /// PostgreSQL + Redis + local KMS (pre-production)
     Staging,
-    /// MySQL + Redis + AWS KMS (production)
+    /// PostgreSQL + Redis + AWS KMS (production)
     Production,
 }
 

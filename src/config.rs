@@ -144,7 +144,6 @@ impl Config {
             .set_default("kms.aws_region", Option::<String>::None)?
             .set_default("kms.aws_kms_key_id", Option::<String>::None)?
             .set_default("oid4vc.client_id", "cloud-identity-wallet")?
-            .set_default("oid4vc.client_id", "cloud-identity-wallet")?
             .set_default(
                 "oid4vc.redirect_uri",
                 "http://localhost:3000/api/v1/issuance/callback",

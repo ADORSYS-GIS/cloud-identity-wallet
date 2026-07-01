@@ -196,6 +196,9 @@ async fn build_memory_repositories_with_aws_kms(
     use cloud_wallet_kms::storage::InMemoryBackend;
 
     let aws_config = load_aws_config(config).await;
+    // The hostname is used for deterministic key ID generation in the KMS provider, 
+    //  It serves as a namespace to ensure unique key
+    // identifiers per deployment instance.
     let hostname = config.server.host.clone();
     Ok(Repositories {
         credential_repo: Arc::new(MemoryCredentialRepo::with_cipher(AwsProvider::new(
@@ -252,20 +255,21 @@ async fn build_sql_repositories_with_local_kms(
     use cloud_wallet_kms::provider::LocalProvider;
     use cloud_wallet_kms::storage::SqlxBackend;
 
-    let credential_kms_storage = SqlxBackend::new(pool.clone());
-    credential_kms_storage.init_schema().await?;
+    // Run KMS schema migration once; both providers share the same database
+    // so the migration is only needed once.
+    let kms_storage = SqlxBackend::new(pool.clone());
+    kms_storage.init_schema().await?;
+
     let credential_repo = SqlCredentialRepo::with_cipher(
         pool.clone(),
-        LocalProvider::with_storage(credential_kms_storage),
+        LocalProvider::with_storage(SqlxBackend::clone(&kms_storage)),
     );
     credential_repo.init_schema().await?;
 
-    let tenant_kms_storage = SqlxBackend::new(pool.clone());
-    tenant_kms_storage.init_schema().await?;
     let tenant_repo = SqlTenantRepo::new(
         pool,
         TenantKeyAlg::default(),
-        LocalProvider::with_storage(tenant_kms_storage),
+        LocalProvider::with_storage(kms_storage),
     );
     tenant_repo.init_schema().await?;
 
@@ -292,21 +296,26 @@ async fn build_sql_repositories_with_aws_kms(
     use cloud_wallet_kms::storage::SqlxBackend;
 
     let aws_config = load_aws_config(config).await;
+    // The hostname is used for deterministic key ID generation in the KMS provider,
+    // not for network connections. It serves as a namespace to ensure unique key
+    // identifiers per deployment instance.
     let hostname = config.server.host.clone();
-    let credential_kms_storage = SqlxBackend::new(pool.clone());
-    credential_kms_storage.init_schema().await?;
+
+    // Run KMS schema migration once; both providers share the same database
+    // so the migration is only needed once.
+    let kms_storage = SqlxBackend::new(pool.clone());
+    kms_storage.init_schema().await?;
+
     let credential_repo = SqlCredentialRepo::with_cipher(
         pool.clone(),
-        AwsProvider::new(&aws_config, &hostname, credential_kms_storage),
+        AwsProvider::new(&aws_config, &hostname, SqlxBackend::clone(&kms_storage)),
     );
     credential_repo.init_schema().await?;
 
-    let tenant_kms_storage = SqlxBackend::new(pool.clone());
-    tenant_kms_storage.init_schema().await?;
     let tenant_repo = SqlTenantRepo::new(
         pool,
         TenantKeyAlg::default(),
-        AwsProvider::new(&aws_config, &hostname, tenant_kms_storage),
+        AwsProvider::new(&aws_config, &hostname, kms_storage),
     );
     tenant_repo.init_schema().await?;
 
@@ -333,6 +342,13 @@ async fn build_issuance_infrastructure(
 )> {
     if cfg!(feature = "redis") && !matches!(config.backend, Backend::Memory) {
         return build_redis_issuance_infrastructure(config).await;
+    }
+
+    if !matches!(config.backend, Backend::Memory) {
+        tracing::warn!(
+            backend = ?config.backend,
+            "non-memory backend selected without Redis — issuance infrastructure will use in-memory queues (not suitable for production)"
+        );
     }
 
     Ok(build_memory_issuance_infrastructure())
