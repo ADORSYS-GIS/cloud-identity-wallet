@@ -1,4 +1,6 @@
 use std::sync::Arc;
+#[cfg(feature = "sqlx")]
+use std::time::Duration;
 
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
 use cloud_wallet_openid4vc::formats::mdoc::{RevocationPolicy, StaticTrustStore};
@@ -223,8 +225,11 @@ async fn build_sql_repositories(config: &Config) -> color_eyre::Result<Repositor
     sqlx::any::install_default_drivers();
 
     let pool = AnyPoolOptions::new()
-        .max_connections(10)
-        .connect(config.database.url.expose_secret())
+        .max_connections(100)
+        .idle_timeout(Duration::from_mins(5))
+        .max_lifetime(Duration::from_mins(30))
+        .acquire_timeout(Duration::from_secs(5))
+        .connect_lazy(config.database.url.expose_secret())
         .await?;
 
     match config.kms.provider {
