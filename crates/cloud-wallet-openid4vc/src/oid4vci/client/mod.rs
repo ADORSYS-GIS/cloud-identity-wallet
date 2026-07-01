@@ -399,9 +399,24 @@ impl Oid4vciClient {
                 message: "authorization server does not have an authorization endpoint".into(),
             })?;
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
-        let authz_details = build_authorization_details(context, credential_config_ids)?;
+        // Resolve which credential-selection mechanism to use, per OID4VCI §5.1.
+        // RAR is preferred when the AS can be relied on to accept it, because it
+        // additionally lets the AS return per-credential `credential_identifiers`
+        // in the token response (§6.2), which is what `resolve_credential_targets`
+        // checks first. This preference is grounded in the base OID4VCI spec only;
+        // it does not claim HAIP conformance for the authorization path (HAIP §4.2
+        // mandates scope, and §4.3 mandates PAR, neither of which this decision
+        // is based on).
+        let (authz_details, scope) = if prefer_authorization_details(context, credential_config_ids)
+        {
+            // Include authorization_details so the AS can return credential_identifiers
+            // in the token response per §6.2
+            let details = build_authorization_details(context, credential_config_ids)?;
+            (Some(details), None)
+        } else {
+            let scope = build_scope(context, credential_config_ids)?;
+            (None, Some(scope))
+        };
 
         // Generate PKCE parameters
         let pkce_verifier = generate_pkce_verifier();
@@ -410,20 +425,33 @@ impl Oid4vciClient {
         // Build the authorization request using the base client_id.
         // The attestation sub is only substituted at the PAR/Token endpoints
         // per HAIP §4.4.1.
+        // Per OID4VCI §5.1.2 / RFC 8707: when using scope-based credential
+        // selection and the issuer delegates to a separate authorization server
+        // (authorization_servers present), the resource parameter MUST be set
+        // to the credential_issuer identifier so the AS can unambiguously route
+        // the request.  The RAR path is unaffected because authorization_details
+        // already carries `locations` in that case (see build_authorization_details).
+        let resource = if scope.is_some() && context.issuer_metadata.authorization_servers.is_some()
+        {
+            Some(context.issuer_metadata.credential_issuer.clone())
+        } else {
+            None
+        };
+
         let authz_request = AuthorizationRequest {
             response_type: OAUTH_RESPONSE_TYPE.into(),
             oauth: OAuthAuthorizationRequest {
                 client_id: self.base_client_id().to_owned(),
                 redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
                 state: Some(state.into()),
-                scope: None,
+                scope,
                 nonce: None,
                 code_challenge: Some(code_challenge),
                 code_challenge_method: Some(CodeChallengeMethod::S256),
             },
-            resource: None,
+            resource,
             issuer_state,
-            authorization_details: Some(authz_details),
+            authorization_details: authz_details,
         };
 
         let authz_url = if context
@@ -560,16 +588,25 @@ impl Oid4vciClient {
             ClientError::configuration("authorization server does not have a token endpoint")
         })?;
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
-        let authz_details = build_authorization_details(context, credential_config_ids)?;
+        // Mirror the credential-selection mechanism used at the authorization
+        // endpoint (see `build_authorization_url`). On the scope path, the
+        // grant was already bound to the requested credential type when the
+        // user authorized; the token request is a bare code exchange and
+        // carries neither `scope` nor `authorization_details`.
+        let authz_details = if prefer_authorization_details(context, credential_config_ids) {
+            // Include authorization_details so the AS can return credential_identifiers
+            // in the token response per §6.2
+            Some(build_authorization_details(context, credential_config_ids)?)
+        } else {
+            None
+        };
 
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
             code: code.into(),
             redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
             client_id: self.attestation_client_id().to_owned(),
             code_verifier: Some(pkce_verifier.into()),
-            authorization_details: Some(authz_details),
+            authorization_details: authz_details,
         });
         let htu = htu_from_url(token_endpoint)?;
         let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
@@ -613,15 +650,21 @@ impl Oid4vciClient {
             Some(self.attestation_client_id().to_owned())
         };
 
-        // Include authorization_details so the AS can return credential_identifiers
-        // in the token response per §6.2
-        let authz_details = build_authorization_details(context, credential_config_ids)?;
+        // Mirror the scope/RAR decision used at the authorization step (see
+        // `build_authorization_url`).  For scope-only issuers the pre-authorized
+        // code was already bound to the requested credential type via the offer;
+        // the token request carries no `authorization_details` on the scope path.
+        let authz_details = if prefer_authorization_details(context, credential_config_ids) {
+            Some(build_authorization_details(context, credential_config_ids)?)
+        } else {
+            None
+        };
 
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: pre_authorized_code.into(),
             client_id,
             tx_code: tx_code.map(|t| t.into()),
-            authorization_details: Some(authz_details),
+            authorization_details: authz_details,
         });
         let htu = htu_from_url(token_endpoint)?;
         let nonce = dpop.and_then(|opts| opts.get_nonce(&htu));
@@ -676,7 +719,7 @@ impl Oid4vciClient {
         &self,
         context: &ResolvedOfferContext,
         token: &TokenResponse,
-        credential_identifier: impl Into<String>,
+        selector: CredIdOrCredConfigId,
         credential_config_id: &str,
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
@@ -684,19 +727,18 @@ impl Oid4vciClient {
         let is_anonymous = context.as_metadata.allows_anonymous_pre_authorized_grant()
             && matches!(context.flow, IssuanceFlow::PreAuthorizedCode { .. });
 
+        // For config-id-addressed selectors (scope/offer tiers) the embedded id
+        // is authoritative.  For identifier-addressed selectors (RAR tier) fall
+        // back to the config id resolved from authorization_details.
+        let config_id = selector
+            .as_credential_configuration_id()
+            .unwrap_or(credential_config_id);
         let c_nonce = self.resolve_nonce(&context.issuer_metadata).await?;
         let proofs = self
-            .build_proofs(
-                context,
-                c_nonce.as_deref(),
-                is_anonymous,
-                credential_config_id,
-                signer,
-            )
+            .build_proofs(context, c_nonce.as_deref(), is_anonymous, config_id, signer)
             .await?;
 
-        let id = CredIdOrCredConfigId::credential_identifier(credential_identifier);
-        let mut request = CredentialRequest::new(id);
+        let mut request = CredentialRequest::new(selector);
         if let Some(p) = proofs {
             request = request.with_proofs(p);
         }
@@ -706,6 +748,13 @@ impl Oid4vciClient {
     }
 
     /// Request all credentials authorized by the token response.
+    ///
+    /// Issuers vary in how they convey which credentials were authorized, so the
+    /// targets to request are resolved with a 3-tier fallback per OID4VCI §6.2:
+    /// 1. `authorization_details` with `credential_identifiers` (RAR with per-credential ids).
+    /// 2. `scope`, matched against the `scope` advertised on each entry of
+    ///    `credential_configurations_supported`.
+    /// 3. The `credential_configuration_id`s from the original credential offer.
     ///
     /// The caller is responsible for handling individual failures (e.g. deferred
     /// issuance on some credentials while others succeed).
@@ -721,15 +770,19 @@ impl Oid4vciClient {
         signer: &S,
         dpop: Option<&DpopOptions<'_>>,
     ) -> Result<Vec<CredentialResponse>> {
-        let resolved = resolve_credential_ids(token)?;
-        let total: usize = resolved.iter().map(|(_, ids)| ids.len()).sum();
-        let mut results = Vec::with_capacity(total);
+        let targets = resolve_credential_targets(context, token)?;
+        let mut results = Vec::with_capacity(targets.len());
         let mut futures = FuturesUnordered::new();
 
-        for (config_id, identifiers) in resolved {
-            for id in identifiers {
-                futures.push(self.request_credential(context, token, id, config_id, signer, dpop));
-            }
+        for (selector, config_id) in &targets {
+            futures.push(self.request_credential(
+                context,
+                token,
+                selector.clone(),
+                config_id,
+                signer,
+                dpop,
+            ));
         }
 
         while let Some(res) = futures.next().await {
@@ -1248,12 +1301,7 @@ impl Oid4vciClient {
                     handler.extract_and_store_nonce(&htu, retry_response.headers());
                 }
 
-                return retry_response
-                    .json::<CredentialResponse>()
-                    .await
-                    .map_err(|e| ClientError::InvalidResponse {
-                        message: format!("failed to parse credential response: {e}").into(),
-                    });
+                return parse_credential_response(retry_response).await;
             }
 
             if let Ok(error) = serde_json::from_str::<Oid4vciError<CredentialErrorResponse>>(&body)
@@ -1267,19 +1315,23 @@ impl Oid4vciClient {
             handler.extract_and_store_nonce(&htu, response.headers());
         }
 
-        let credential_response = response.json::<CredentialResponse>().await.map_err(|e| {
-            ClientError::InvalidResponse {
-                message: format!("failed to parse credential response: {e}").into(),
-            }
-        })?;
-        Ok(credential_response)
+        parse_credential_response(response).await
     }
 
     /// Resolve the `c_nonce` to use for proof construction.
     ///
-    /// Per §8.2 and §7: priority order is:
-    /// 1. Fresh nonce from `nonce_endpoint` (if advertised in issuer metadata)
-    /// 2. `None` — issuer does not require a nonce
+    /// Per OID4VCI §8.2 / §7, priority order is:
+    /// 1. Fresh nonce from `nonce_endpoint` (if advertised in issuer metadata).
+    /// 2. `None` — issuer does not require a nonce.
+    ///
+    /// Older OID4VCI draft issuers return a `c_nonce` directly inside the
+    /// credential response (`ImmediateCredentialResponse::c_nonce`) rather than
+    /// via a dedicated endpoint.  That field is parsed and preserved on the
+    /// response type, but it is not yet consumed here as a fallback because
+    /// `request_credentials` issues all credential requests concurrently
+    /// (`FuturesUnordered`), so there is no prior response available when
+    /// each proof is being built.  Supporting nonce-chaining for sequential
+    /// credential issuance is tracked as a follow-up.
     async fn resolve_nonce(
         &self,
         issuer_metadata: &CredentialIssuerMetadata,
@@ -1417,6 +1469,101 @@ fn build_authorization_details(
         .collect()
 }
 
+/// Decide whether to use `authorization_details` (RAR, OID4VCI §5.1.1) or
+/// `scope` (OID4VCI §5.1.2) for credential selection.
+///
+/// Decision order:
+/// 1. `authorization_details_types_supported` explicitly includes
+///    `"openid_credential"` → use RAR.
+/// 2. `authorization_details_types_supported` is present but excludes
+///    `"openid_credential"` → use scope.
+/// 3. `authorization_details_types_supported` is absent (many issuers omit
+///    this RFC 9396 field):
+///    - ALL selected (or offered) credential configurations advertise a
+///      `scope` value → use scope.  Scope-only and legacy issuers typically
+///      omit RFC 9396 metadata while still populating `scope` on each config;
+///      treating published `scope` values as the presence-signal lets the
+///      wallet reach them without a manual allowlist.
+///    - Any selected config lacks a `scope` → use RAR (preserves existing
+///      behavior for issuers that support RAR without publishing the field).
+fn prefer_authorization_details(
+    context: &ResolvedOfferContext,
+    selected_config_ids: &[String],
+) -> bool {
+    match &context.as_metadata.authorization_details_types_supported {
+        Some(types) => types.iter().any(|t| t == "openid_credential"),
+        None => {
+            let effective_ids: &[String] = if selected_config_ids.is_empty() {
+                &context.offer.credential_configuration_ids
+            } else {
+                selected_config_ids
+            };
+            // No configs to inspect: cannot infer scope support, default to RAR.
+            if effective_ids.is_empty() {
+                return true;
+            }
+            // If every config being requested publishes a `scope` value, the
+            // issuer signals scope support — use scope.  Otherwise fall back to
+            // RAR (backward compatible for issuers with no `scope` metadata).
+            !effective_ids.iter().all(|id| {
+                context
+                    .issuer_metadata
+                    .credential_configurations_supported
+                    .get(id)
+                    .is_some_and(|c| c.scope.is_some())
+            })
+        }
+    }
+}
+
+/// Build the `scope` authorization parameter for credential selection,
+/// per OID4VCI §5.1.2, for use when the AS cannot be relied on to accept
+/// `authorization_details` (see `build_authorization_url`).
+///
+/// Every selected credential configuration must advertise a `scope` value
+/// in `credential_configurations_supported`; if any does not, scope-based
+/// selection cannot represent the full selection, so this fails rather than
+/// silently omitting that credential from the request.
+fn build_scope(context: &ResolvedOfferContext, selected_config_ids: &[String]) -> Result<String> {
+    let selected_ids = selected_credential_config_ids(context, selected_config_ids)?;
+
+    let mut scopes: Vec<&str> = selected_ids
+        .iter()
+        .map(|id| {
+            context
+                .issuer_metadata
+                .credential_configurations_supported
+                .get(id)
+                .and_then(|config| config.scope.as_deref())
+                .ok_or_else(|| ClientError::Configuration {
+                    message: format!(
+                        "credential configuration '{id}' has no scope and the authorization \
+                         server does not support authorization_details: \
+                         unable to request this credential"
+                    )
+                    .into(),
+                })
+        })
+        .collect::<Result<_>>()?;
+
+    // Deduplicate: two selected configs may advertise the same scope value
+    // (OID4VCI §5.1.2 permits this).  Sending a scope token twice in the
+    // `scope` parameter is harmless per RFC 6749 §3.3 but unnecessarily noisy.
+    scopes.sort_unstable();
+    scopes.dedup();
+    let scope_string = scopes.join(" ");
+
+    // Log the scope→config mapping so operators can trace which credential
+    // configuration ids were resolved to which scope values (issue observability AC).
+    tracing::debug!(
+        scope = %scope_string,
+        config_ids = ?selected_ids,
+        "scope-based credential selection: using scope parameter"
+    );
+
+    Ok(scope_string)
+}
+
 /// Negotiate the proof algorithm for a credential request.
 fn should_sign_proof<S: ProofSigner>(
     context: &ResolvedOfferContext,
@@ -1456,40 +1603,195 @@ fn should_sign_proof<S: ProofSigner>(
     )))
 }
 
-pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[String])>> {
-    let details =
-        token
-            .authorization_details
-            .as_ref()
-            .ok_or_else(|| ClientError::InvalidResponse {
-                message: "missing authorization_details in token response".into(),
-            })?;
-
-    let mut result = Vec::with_capacity(details.len());
-
-    for detail in details {
-        let Some(ids) = detail.credential_identifiers.as_deref() else {
-            continue;
-        };
-
-        if ids.is_empty() {
-            return Err(ClientError::InvalidResponse {
-                message: format!(
-                    "authorization_details entry for '{}' contains empty credential_identifiers",
-                    detail.credential_configuration_id
-                )
-                .into(),
-            });
-        }
-        result.push((detail.credential_configuration_id.as_str(), ids));
+/// Resolve the credential requests to issue for a token response, falling back
+/// across the grant-type shapes issuers use to convey authorized credentials,
+/// per OID4VCI §6.2:
+/// 1. `authorization_details` with `credential_identifiers`.
+/// 2. `scope`, matched against `credential_configurations_supported`.
+/// 3. The credential offer's `credential_configuration_ids`.
+fn resolve_credential_targets(
+    context: &ResolvedOfferContext,
+    token: &TokenResponse,
+) -> Result<Vec<(CredIdOrCredConfigId, String)>> {
+    if let Some(resolved) = resolve_via_authorization_details(token) {
+        return Ok(resolved
+            .into_iter()
+            .flat_map(|(config_id, identifiers)| {
+                identifiers.iter().map(move |id| {
+                    (
+                        CredIdOrCredConfigId::credential_identifier(id.clone()),
+                        config_id.to_owned(),
+                    )
+                })
+            })
+            .collect());
     }
 
-    if result.is_empty() {
+    if let Some(config_ids) = resolve_via_scope(context, token) {
+        return Ok(by_credential_configuration_id(config_ids));
+    }
+
+    let offer_ids = context.offer.credential_configuration_ids.clone();
+    if offer_ids.is_empty() {
         return Err(ClientError::InvalidResponse {
-            message: "no credential_identifiers found in authorization_details".into(),
+            message: "unable to resolve credential targets: no authorization_details, \
+                scope, or offered credential_configuration_ids"
+                .into(),
         });
     }
-    Ok(result)
+    Ok(by_credential_configuration_id(offer_ids))
+}
+
+fn by_credential_configuration_id(ids: Vec<String>) -> Vec<(CredIdOrCredConfigId, String)> {
+    ids.into_iter()
+        .map(|id| {
+            (
+                CredIdOrCredConfigId::credential_configuration_id(id.clone()),
+                id,
+            )
+        })
+        .collect()
+}
+
+/// Tier 1: resolve per-credential identifiers from `authorization_details`.
+///
+/// Returns `None` when `authorization_details` is absent or carries no usable
+/// `credential_identifiers`, so the caller can fall back to scope- or offer-based
+/// resolution.
+///
+/// When `authorization_details` is present but yields no identifiers, a warning
+/// is emitted so an operator can distinguish a spec-violating AS response from
+/// the ordinary "AS does not use RAR" case where the field is simply absent.
+fn resolve_via_authorization_details(token: &TokenResponse) -> Option<Vec<(&str, &[String])>> {
+    let details = token.authorization_details.as_ref()?;
+
+    let result: Vec<(&str, &[String])> = details
+        .iter()
+        .filter_map(|detail| {
+            let ids = detail.credential_identifiers.as_deref()?;
+            (!ids.is_empty()).then_some((detail.credential_configuration_id.as_str(), ids))
+        })
+        .collect();
+
+    if result.is_empty() {
+        // `authorization_details` was present — the AS signalled RAR intent —
+        // but not a single entry carried usable `credential_identifiers`.
+        // Per OID4VCI §6.2, a RAR-capable AS MUST populate `credential_identifiers`
+        // in the token response when it accepted `authorization_details` at the
+        // authorization step.  An empty or identifier-free response is either a
+        // spec violation or a sign the AS does not implement that part of the flow.
+        tracing::warn!(
+            entry_count = details.len(),
+            "RAR tier: authorization_details present in token response but contains \
+             no credential_identifiers; falling back to scope/offer resolution. \
+             If this issuer supports RAR, this may indicate a malformed AS response."
+        );
+        return None;
+    }
+
+    Some(result)
+}
+
+/// Build the `scope → [credential_configuration_id, …]` map described in
+/// OID4VCI §5.1.2.
+///
+/// Each entry in `credential_configurations_supported` that both (a) belongs
+/// to `offer_config_ids` and (b) advertises a non-empty `scope` value
+/// contributes to the returned map.  Constraining the map to the offered
+/// subset prevents scope-string collisions with unrelated configurations in
+/// the issuer's full catalog from causing the wallet to request credentials
+/// the user never selected or consented to.
+///
+/// Per OID4VCI §5.1.2, a scope value MAY be shared by more than one
+/// credential configuration (e.g. two format variants of the same credential).
+/// When that happens every matching configuration is included in the `Vec`,
+/// so `resolve_via_scope` will request all of them when the AS grants that
+/// scope.  A structured warning is emitted so operators can observe which
+/// scope values are shared.
+pub(crate) fn build_scope_to_config_id_map(
+    issuer_metadata: &CredentialIssuerMetadata,
+    offer_config_ids: &[String],
+) -> std::collections::HashMap<String, Vec<String>> {
+    let offered: std::collections::HashSet<&str> =
+        offer_config_ids.iter().map(String::as_str).collect();
+
+    // Group config IDs by scope value; a single scope may map to multiple configs.
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (id, config) in issuer_metadata
+        .credential_configurations_supported
+        .iter()
+        .filter(|(id, _)| offered.contains(id.as_str()))
+    {
+        if let Some(scope) = &config.scope {
+            map.entry(scope.clone()).or_default().push(id.clone());
+        }
+    }
+
+    // Log when any scope value is shared by more than one configuration so
+    // operators can verify this is intentional (e.g. mdoc + JWT-VC variants).
+    let total_configs: usize = map.values().map(Vec::len).sum();
+    if total_configs > map.len() {
+        let mut shared_scopes: Vec<&str> = map
+            .iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(s, _)| s.as_str())
+            .collect();
+        shared_scopes.sort();
+        tracing::warn!(
+            offered_with_scope = total_configs,
+            unique_scope_values = map.len(),
+            ?shared_scopes,
+            "issuer metadata contains scope values shared by multiple offered \
+             credential configurations; all matching configurations will be \
+             requested when the AS grants these scope values"
+        );
+    }
+
+    map
+}
+
+/// Tier 2: resolve credential configuration ids granted via a plain `scope`
+/// token response, using the scope → config-id map built from the issuer's
+/// `credential_configurations_supported` (OID4VCI §5.1.2, RFC 6749 §3.3).
+///
+/// Only configurations that were part of the original credential offer are
+/// considered — see [`build_scope_to_config_id_map`].
+///
+/// Returns `None` when the token carries no `scope`, or no offered
+/// configuration matches a granted scope, so the caller can fall back to
+/// offer-based resolution.
+fn resolve_via_scope(context: &ResolvedOfferContext, token: &TokenResponse) -> Option<Vec<String>> {
+    let scope = token.scope.as_deref()?;
+    let granted: std::collections::HashSet<&str> = scope.split_whitespace().collect();
+
+    let scope_map = build_scope_to_config_id_map(
+        &context.issuer_metadata,
+        &context.offer.credential_configuration_ids,
+    );
+
+    let mut matched: Vec<String> = scope_map
+        .iter()
+        .filter(|(scope_val, _)| granted.contains(scope_val.as_str()))
+        .flat_map(|(_, config_ids)| config_ids.iter().cloned())
+        .collect();
+
+    if matched.is_empty() {
+        tracing::debug!(
+            granted_scope = scope,
+            "scope tier: no offered credential configurations matched granted scope"
+        );
+        return None;
+    }
+
+    tracing::debug!(
+        granted_scope = scope,
+        matched_config_ids = ?matched,
+        "scope tier: resolved {} credential configuration(s) from granted scope",
+        matched.len()
+    );
+
+    matched.sort();
+    Some(matched)
 }
 
 /// Build the minimal PAR redirect URL.
@@ -1543,6 +1845,36 @@ async fn http_error_response(response: reqwest::Response) -> ClientError {
     let status = response.status().as_u16();
     let body = response.text().await.unwrap_or_default();
     ClientError::http_response(status, body)
+}
+
+/// Parse a successful credential endpoint response.
+///
+/// Reads the body as text first so a parse failure can surface context for
+/// diagnostics.  The body is truncated in the error message to avoid
+/// inadvertently logging credential values or PII that a credential response
+/// may contain.
+async fn parse_credential_response(response: reqwest::Response) -> Result<CredentialResponse> {
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ClientError::http("failed to read credential response body", e))?;
+
+    serde_json::from_str(&body).map_err(|e| {
+        // Credential responses can contain issued credentials or PII.
+        // Truncate rather than including the full body in an error that may
+        // propagate through log pipelines.
+        const MAX_CHARS: usize = 200;
+        let display: String = body.chars().take(MAX_CHARS).collect();
+        let suffix = if body.chars().count() > MAX_CHARS {
+            "…"
+        } else {
+            ""
+        };
+        ClientError::InvalidResponse {
+            message: format!("failed to parse credential response: {e}; body: {display}{suffix}")
+                .into(),
+        }
+    })
 }
 
 impl AlgorithmIdentifier {

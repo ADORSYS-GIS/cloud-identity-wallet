@@ -278,6 +278,7 @@ mod tests {
             pushed_authorization_request_endpoint: None,
             require_pushed_authorization_requests: None,
             pre_authorized_grant_anonymous_access_supported: None,
+            authorization_details_types_supported: None,
             extra_fields: HashMap::new(),
         };
 
