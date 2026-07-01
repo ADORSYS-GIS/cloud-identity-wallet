@@ -1241,8 +1241,14 @@ fn scope_map_contains_offered_configs_with_scope() {
 
     let map = build_scope_to_config_id_map(&issuer_metadata, &offer_ids);
 
-    assert_eq!(map.get("scope_a").map(String::as_str), Some("CredA"));
-    assert_eq!(map.get("scope_b").map(String::as_str), Some("CredB"));
+    assert_eq!(
+        map.get("scope_a").map(Vec::as_slice),
+        Some(["CredA".to_string()].as_slice())
+    );
+    assert_eq!(
+        map.get("scope_b").map(Vec::as_slice),
+        Some(["CredB".to_string()].as_slice())
+    );
     assert!(
         !map.contains_key("scope_not_offered"),
         "CredNotOffered is not in the offer and must not appear in the map"
@@ -1252,6 +1258,29 @@ fn scope_map_contains_offered_configs_with_scope() {
         2,
         "CredNoScope has no scope value and must be excluded"
     );
+}
+
+#[test]
+fn scope_map_groups_multiple_configs_under_shared_scope() {
+    // OID4VCI §5.1.2 permits a scope value to appear on more than one
+    // credential configuration (e.g. mdoc + JWT-VC variants of the same
+    // credential).  Both config IDs must be present in the Vec.
+    let issuer_url = "https://issuer.example.com";
+    let issuer_metadata = issuer_metadata_with_configs(
+        issuer_url,
+        &[
+            ("CredMdoc", Some("identity")),
+            ("CredJwt", Some("identity")),
+        ],
+    );
+    let offer_ids = vec!["CredMdoc".to_string(), "CredJwt".to_string()];
+
+    let map = build_scope_to_config_id_map(&issuer_metadata, &offer_ids);
+
+    assert_eq!(map.len(), 1, "both configs share one scope key");
+    let mut ids = map["identity"].clone();
+    ids.sort();
+    assert_eq!(ids, vec!["CredJwt".to_string(), "CredMdoc".to_string()]);
 }
 
 #[test]
@@ -1295,7 +1324,8 @@ fn build_scope_joins_scopes_of_selected_configurations() {
     )
     .expect("scope should build when every selected config has a scope");
 
-    assert_eq!(scope, "university_degree drivers_license");
+    // Scopes are sorted and deduplicated before joining (see build_scope).
+    assert_eq!(scope, "drivers_license university_degree");
 }
 
 #[test]
@@ -1327,6 +1357,59 @@ fn build_scope_errors_when_a_selected_configuration_has_no_scope() {
         ],
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn build_scope_deduplicates_when_two_configs_share_a_scope() {
+    // Two configs (e.g. mdoc + JWT-VC) sharing the same scope value should
+    // produce only one occurrence of that scope in the scope string.
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[
+                ("CredMdoc", Some("identity")),
+                ("CredJwt", Some("identity")),
+            ],
+        ),
+        vec!["CredMdoc".to_string(), "CredJwt".to_string()],
+    );
+
+    let scope = build_scope(&context, &["CredMdoc".to_string(), "CredJwt".to_string()])
+        .expect("scope should build");
+
+    assert_eq!(
+        scope, "identity",
+        "duplicate scope value must appear only once"
+    );
+}
+
+#[test]
+fn resolve_via_scope_returns_all_configs_for_shared_scope() {
+    // When two offered configs share a scope value and the AS grants that
+    // scope, the wallet must request BOTH credentials — not silently drop one.
+    let issuer_url = "https://issuer.example.com";
+    let context = minimal_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[
+                ("CredMdoc", Some("identity")),
+                ("CredJwt", Some("identity")),
+            ],
+        ),
+        vec!["CredMdoc".to_string(), "CredJwt".to_string()],
+    );
+    let token = token_response(Some("identity"), None);
+
+    let mut matched = resolve_via_scope(&context, &token).expect("scope tier should resolve");
+    matched.sort();
+    assert_eq!(
+        matched,
+        vec!["CredJwt".to_string(), "CredMdoc".to_string()],
+        "all configurations sharing the granted scope must be returned"
+    );
 }
 
 //  build_authorization_url: RAR vs scope preference
@@ -1452,6 +1535,129 @@ async fn build_authorization_url_errors_when_neither_rar_nor_scope_available() {
 }
 
 #[tokio::test]
+async fn build_authorization_url_sets_resource_when_scope_path_and_authorization_servers_present() {
+    // OID4VCI §5.1.2 / RFC 8707: when the issuer delegates authorization to a
+    // separate AS (authorization_servers present) and scope-based selection is
+    // used, the resource parameter MUST be set to credential_issuer so the AS
+    // can route the request to the correct issuer.
+    let issuer_url = "https://issuer.example.com";
+    let as_url = "https://as.example.com";
+
+    let mut issuer_metadata = issuer_metadata_with_configs(
+        issuer_url,
+        &[("UniversityDegreeCredential", Some("university_degree"))],
+    );
+    issuer_metadata.authorization_servers = Some(vec![Url::parse(as_url).unwrap()]);
+
+    // AS does not advertise RAR — scope path will be taken.
+    let context = authz_code_context(
+        issuer_url,
+        issuer_metadata,
+        vec!["UniversityDegreeCredential".to_string()],
+        Some(vec!["some_other_type".to_string()]),
+    );
+    let client = create_client();
+
+    let result = client
+        .build_authorization_url(
+            &context,
+            "state123",
+            &["UniversityDegreeCredential".to_string()],
+        )
+        .await
+        .expect("should build authorization url");
+
+    let params = query_pairs(&result.authz_url);
+    assert_eq!(
+        params.get("scope").map(String::as_str),
+        Some("university_degree"),
+        "scope path must include scope param, got: {params:?}"
+    );
+    let resource = params.get("resource").expect(
+        "resource must be set when authorization_servers is present and scope path is taken",
+    );
+    assert!(
+        resource.starts_with(issuer_url),
+        "resource must be the credential_issuer, got: {resource}"
+    );
+}
+
+#[tokio::test]
+async fn build_authorization_url_omits_resource_when_no_authorization_servers() {
+    // When authorization_servers is absent the credential issuer IS the AS —
+    // no resource indicator is needed.
+    let issuer_url = "https://issuer.example.com";
+    let context = authz_code_context(
+        issuer_url,
+        issuer_metadata_with_configs(
+            issuer_url,
+            &[("UniversityDegreeCredential", Some("university_degree"))],
+        ),
+        vec!["UniversityDegreeCredential".to_string()],
+        Some(vec!["some_other_type".to_string()]),
+    );
+    let client = create_client();
+
+    let result = client
+        .build_authorization_url(
+            &context,
+            "state123",
+            &["UniversityDegreeCredential".to_string()],
+        )
+        .await
+        .expect("should build authorization url");
+
+    let params = query_pairs(&result.authz_url);
+    assert!(
+        !params.contains_key("resource"),
+        "resource must not be set when authorization_servers is absent, got: {params:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_authorization_url_omits_resource_on_rar_path_even_when_authorization_servers_present()
+ {
+    // On the RAR path, locations already carries the issuer identifier inside
+    // authorization_details; adding resource would be redundant.
+    let issuer_url = "https://issuer.example.com";
+    let as_url = "https://as.example.com";
+
+    let mut issuer_metadata = issuer_metadata_with_configs(
+        issuer_url,
+        &[("UniversityDegreeCredential", Some("university_degree"))],
+    );
+    issuer_metadata.authorization_servers = Some(vec![Url::parse(as_url).unwrap()]);
+
+    // AS explicitly supports RAR — RAR path will be taken.
+    let context = authz_code_context(
+        issuer_url,
+        issuer_metadata,
+        vec!["UniversityDegreeCredential".to_string()],
+        Some(vec!["openid_credential".to_string()]),
+    );
+    let client = create_client();
+
+    let result = client
+        .build_authorization_url(
+            &context,
+            "state123",
+            &["UniversityDegreeCredential".to_string()],
+        )
+        .await
+        .expect("should build authorization url");
+
+    let params = query_pairs(&result.authz_url);
+    assert!(
+        params.contains_key("authorization_details"),
+        "expected RAR path, got: {params:?}"
+    );
+    assert!(
+        !params.contains_key("resource"),
+        "resource must not be set on RAR path (locations is used instead), got: {params:?}"
+    );
+}
+
+#[tokio::test]
 async fn credential_response_parse_failure_includes_raw_body() {
     let mock_server = setup_mock_server().await;
     let issuer_url = mock_server.uri();
@@ -1484,6 +1690,50 @@ async fn credential_response_parse_failure_includes_raw_body() {
     assert!(
         message.contains("not valid json"),
         "error should include the raw response body, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn credential_response_parse_failure_truncates_long_body() {
+    let mock_server = setup_mock_server().await;
+    let issuer_url = mock_server.uri();
+
+    // Body longer than the 200-char truncation limit; must appear truncated
+    // in the error message to avoid logging credential data or PII.
+    let long_body = "x".repeat(300);
+    Mock::given(method("POST"))
+        .and(path("/credential"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(long_body.clone()))
+        .mount(&mock_server)
+        .await;
+
+    let client = create_client();
+    let mut issuer_metadata =
+        issuer_metadata_with_configs(&issuer_url, &[("TestCredential", None)]);
+    issuer_metadata.credential_endpoint = Url::parse(&format!("{issuer_url}/credential")).unwrap();
+    let context = minimal_context(
+        &issuer_url,
+        issuer_metadata,
+        vec!["TestCredential".to_string()],
+    );
+    let token = token_response(None, None);
+    let signer = get_ecdsa_signer();
+
+    let selector = CredIdOrCredConfigId::credential_configuration_id("TestCredential");
+    let result = client
+        .request_credential(&context, &token, selector, "TestCredential", &signer, None)
+        .await;
+
+    let err = result.expect_err("expected a parse failure");
+    let message = err.to_string();
+    assert!(
+        message.contains('…'),
+        "error message must contain the truncation ellipsis for long bodies, got: {message}"
+    );
+    assert!(
+        !message.contains(&long_body),
+        "error message must not contain the full long body, got message length {}",
+        message.len()
     );
 }
 

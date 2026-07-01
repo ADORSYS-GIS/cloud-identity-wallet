@@ -425,6 +425,19 @@ impl Oid4vciClient {
         // Build the authorization request using the base client_id.
         // The attestation sub is only substituted at the PAR/Token endpoints
         // per HAIP §4.4.1.
+        // Per OID4VCI §5.1.2 / RFC 8707: when using scope-based credential
+        // selection and the issuer delegates to a separate authorization server
+        // (authorization_servers present), the resource parameter MUST be set
+        // to the credential_issuer identifier so the AS can unambiguously route
+        // the request.  The RAR path is unaffected because authorization_details
+        // already carries `locations` in that case (see build_authorization_details).
+        let resource = if scope.is_some() && context.issuer_metadata.authorization_servers.is_some()
+        {
+            Some(context.issuer_metadata.credential_issuer.clone())
+        } else {
+            None
+        };
+
         let authz_request = AuthorizationRequest {
             response_type: OAUTH_RESPONSE_TYPE.into(),
             oauth: OAuthAuthorizationRequest {
@@ -436,7 +449,7 @@ impl Oid4vciClient {
                 code_challenge: Some(code_challenge),
                 code_challenge_method: Some(CodeChallengeMethod::S256),
             },
-            resource: None,
+            resource,
             issuer_state,
             authorization_details: authz_details,
         };
@@ -1514,7 +1527,7 @@ fn prefer_authorization_details(
 fn build_scope(context: &ResolvedOfferContext, selected_config_ids: &[String]) -> Result<String> {
     let selected_ids = selected_credential_config_ids(context, selected_config_ids)?;
 
-    let scopes: Vec<&str> = selected_ids
+    let mut scopes: Vec<&str> = selected_ids
         .iter()
         .map(|id| {
             context
@@ -1533,6 +1546,11 @@ fn build_scope(context: &ResolvedOfferContext, selected_config_ids: &[String]) -
         })
         .collect::<Result<_>>()?;
 
+    // Deduplicate: two selected configs may advertise the same scope value
+    // (OID4VCI §5.1.2 permits this).  Sending a scope token twice in the
+    // `scope` parameter is harmless per RFC 6749 §3.3 but unnecessarily noisy.
+    scopes.sort_unstable();
+    scopes.dedup();
     let scope_string = scopes.join(" ");
 
     // Log the scope→config mapping so operators can trace which credential
@@ -1674,49 +1692,58 @@ fn resolve_via_authorization_details(token: &TokenResponse) -> Option<Vec<(&str,
     Some(result)
 }
 
-/// Build the `scope → credential_configuration_id` map described in
+/// Build the `scope → [credential_configuration_id, …]` map described in
 /// OID4VCI §5.1.2.
 ///
 /// Each entry in `credential_configurations_supported` that both (a) belongs
 /// to `offer_config_ids` and (b) advertises a non-empty `scope` value
-/// contributes one entry to the returned map.  Constraining the map to the
-/// offered subset prevents scope-string collisions with unrelated
-/// configurations in the issuer's full catalog from causing the wallet to
-/// request credentials the user never selected or consented to.
+/// contributes to the returned map.  Constraining the map to the offered
+/// subset prevents scope-string collisions with unrelated configurations in
+/// the issuer's full catalog from causing the wallet to request credentials
+/// the user never selected or consented to.
 ///
-/// If the same scope value is advertised by more than one offered
-/// configuration the last one wins (which configuration ids are considered
-/// is deterministic only within a single `HashMap` iteration, so callers
-/// should not rely on ordering when duplicates are present).
+/// Per OID4VCI §5.1.2, a scope value MAY be shared by more than one
+/// credential configuration (e.g. two format variants of the same credential).
+/// When that happens every matching configuration is included in the `Vec`,
+/// so `resolve_via_scope` will request all of them when the AS grants that
+/// scope.  A structured warning is emitted so operators can observe which
+/// scope values are shared.
 pub(crate) fn build_scope_to_config_id_map(
     issuer_metadata: &CredentialIssuerMetadata,
     offer_config_ids: &[String],
-) -> std::collections::HashMap<String, String> {
+) -> std::collections::HashMap<String, Vec<String>> {
     let offered: std::collections::HashSet<&str> =
         offer_config_ids.iter().map(String::as_str).collect();
 
-    let map: std::collections::HashMap<String, String> = issuer_metadata
+    // Group config IDs by scope value; a single scope may map to multiple configs.
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (id, config) in issuer_metadata
         .credential_configurations_supported
         .iter()
         .filter(|(id, _)| offered.contains(id.as_str()))
-        .filter_map(|(id, config)| config.scope.as_ref().map(|s| (s.clone(), id.clone())))
-        .collect();
+    {
+        if let Some(scope) = &config.scope {
+            map.entry(scope.clone()).or_default().push(id.clone());
+        }
+    }
 
-    // A well-formed issuer assigns each scope value to at most one credential
-    // configuration.  If two offered configs share a scope string only one will
-    // appear in the map (last writer wins in HashMap::collect).
-    let configs_with_scope = issuer_metadata
-        .credential_configurations_supported
-        .iter()
-        .filter(|(id, config)| offered.contains(id.as_str()) && config.scope.is_some())
-        .count();
-    if configs_with_scope > map.len() {
+    // Log when any scope value is shared by more than one configuration so
+    // operators can verify this is intentional (e.g. mdoc + JWT-VC variants).
+    let total_configs: usize = map.values().map(Vec::len).sum();
+    if total_configs > map.len() {
+        let mut shared_scopes: Vec<&str> = map
+            .iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(s, _)| s.as_str())
+            .collect();
+        shared_scopes.sort();
         tracing::warn!(
-            offered_with_scope = configs_with_scope,
+            offered_with_scope = total_configs,
             unique_scope_values = map.len(),
-            "issuer metadata contains duplicate scope values across offered \
-             credential configurations; only one configuration per scope value \
-             will be matched during scope-based resolution"
+            ?shared_scopes,
+            "issuer metadata contains scope values shared by multiple offered \
+             credential configurations; all matching configurations will be \
+             requested when the AS grants these scope values"
         );
     }
 
@@ -1745,7 +1772,7 @@ fn resolve_via_scope(context: &ResolvedOfferContext, token: &TokenResponse) -> O
     let mut matched: Vec<String> = scope_map
         .iter()
         .filter(|(scope_val, _)| granted.contains(scope_val.as_str()))
-        .map(|(_, config_id)| config_id.clone())
+        .flat_map(|(_, config_ids)| config_ids.iter().cloned())
         .collect();
 
     if matched.is_empty() {
@@ -1822,16 +1849,31 @@ async fn http_error_response(response: reqwest::Response) -> ClientError {
 
 /// Parse a successful credential endpoint response.
 ///
-/// Reads the body as text first so a parse failure can surface the raw body
-/// for diagnostics, instead of only the serde error.
+/// Reads the body as text first so a parse failure can surface context for
+/// diagnostics.  The body is truncated in the error message to avoid
+/// inadvertently logging credential values or PII that a credential response
+/// may contain.
 async fn parse_credential_response(response: reqwest::Response) -> Result<CredentialResponse> {
     let body = response
         .text()
         .await
         .map_err(|e| ClientError::http("failed to read credential response body", e))?;
 
-    serde_json::from_str(&body).map_err(|e| ClientError::InvalidResponse {
-        message: format!("failed to parse credential response: {e}; body: {body}").into(),
+    serde_json::from_str(&body).map_err(|e| {
+        // Credential responses can contain issued credentials or PII.
+        // Truncate rather than including the full body in an error that may
+        // propagate through log pipelines.
+        const MAX_CHARS: usize = 200;
+        let display: String = body.chars().take(MAX_CHARS).collect();
+        let suffix = if body.chars().count() > MAX_CHARS {
+            "…"
+        } else {
+            ""
+        };
+        ClientError::InvalidResponse {
+            message: format!("failed to parse credential response: {e}; body: {display}{suffix}")
+                .into(),
+        }
     })
 }
 
