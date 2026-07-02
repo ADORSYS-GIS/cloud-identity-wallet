@@ -137,6 +137,15 @@ pub enum MdocError {
     )]
     NonCriticalKeyUsage,
 
+    /// The Document Signer Certificate's EC public key uses a curve not permitted by
+    /// ISO 18013-5 Table 22 (only NIST P-256, P-384, and P-521 are allowed).
+    #[error("document signer certificate uses an unsupported EC curve: {curve}")]
+    UnsupportedDscCurve {
+        /// The rejected curve's OID (dotted string), or a description if it could not
+        /// be parsed.
+        curve: String,
+    },
+
     /// The certificate chain could not be validated against a trusted IACA root.
     #[error("certificate chain validation failed: {reason}")]
     InvalidCertificateChain { reason: String },
