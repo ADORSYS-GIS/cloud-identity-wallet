@@ -11,6 +11,6 @@ pub use issuance::{
     authorization_callback, get_session_events, start_issuance, submit_consent,
     submit_transaction_code,
 };
-pub use presentation::start_presentation;
+pub use presentation::{start_presentation, submit_presentation_consent};
 pub use root::home;
 pub use tenant::register_tenant;

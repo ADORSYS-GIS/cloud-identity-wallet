@@ -1,8 +1,10 @@
+mod consent;
 mod error;
 mod start;
 
 use cloud_wallet_openid4vc::formats::mdoc::ParsedMdoc;
 use cloud_wallet_openid4vc::oid4vci::client::ProofSigner;
+pub use consent::*;
 pub use error::{PresentationError, PresentationErrorCode};
 pub use start::{StartPresentationRequest, StartPresentationResponse};
 
@@ -22,6 +24,7 @@ use cloud_wallet_openid4vc::oid4vp::request_object::VerifierKeyResolver;
 use cloud_wallet_openid4vc::oid4vp::selection::{
     CredentialAuthority, CredentialCandidate, CredentialView, SelectionResult,
 };
+use cloud_wallet_openid4vc::oid4vp::transaction_data::TransactionData;
 use rustls_pki_types::TrustAnchor;
 use tracing::{debug, info, instrument};
 
@@ -313,6 +316,7 @@ impl PresentationEngine {
         tenant_id: uuid::Uuid,
         credential: &Credential,
         dcql_result: &SelectionResult,
+        transaction_data: &[TransactionData<'_>],
     ) -> Result<SelectedCredential> {
         // Ensure the selection is a valid candidate for the query.
         let mut credential_id_buf = uuid::Uuid::encode_buffer();
@@ -339,10 +343,25 @@ impl PresentationEngine {
 
         match credential.format {
             crate::domain::models::credential::CredentialFormat::SdJwtVc => {
-                self.build_sd_jwt_presentation(ctx, query_id, tenant_id, credential, candidate)
-                    .await
+                self.build_sd_jwt_presentation(
+                    ctx,
+                    query_id,
+                    tenant_id,
+                    credential,
+                    candidate,
+                    transaction_data,
+                )
+                .await
             }
             crate::domain::models::credential::CredentialFormat::Mdoc => {
+                if !transaction_data.is_empty() {
+                    tracing::warn!(
+                        query_id = query_id,
+                        count = transaction_data.len(),
+                        "transaction data is not yet supported for mdoc presentations; \
+                         hashes will not be bound to the device authentication"
+                    );
+                }
                 self.build_mdoc_presentation(ctx, query_id, tenant_id, credential)
                     .await
             }
@@ -362,6 +381,7 @@ impl PresentationEngine {
         tenant_id: uuid::Uuid,
         credential: &Credential,
         candidate: &CredentialCandidate,
+        transaction_data: &[TransactionData<'_>],
     ) -> Result<SelectedCredential> {
         use cloud_wallet_openid4vc::core::claim_path_pointer::ClaimPathPointer;
         use cloud_wallet_openid4vc::formats::sd_jwt::KEY_BINDING_JWT_TYP;
@@ -380,6 +400,45 @@ impl PresentationEngine {
             &ctx.nonce,
         )
         .requested_claims(matched_claim_paths);
+
+        let applicable_td: Vec<&TransactionData<'_>> = transaction_data
+            .iter()
+            .filter(|td| td.applies_to_credential(query_id))
+            .collect();
+
+        let mut td_hashes: Vec<String> = Vec::new();
+        let mut td_alg: Option<String> = None;
+        if !applicable_td.is_empty() {
+            let all_algs: Vec<Vec<String>> = applicable_td
+                .iter()
+                .map(|td| td.hash_algorithms())
+                .collect();
+            let alg_set: Vec<String> = all_algs
+                .first()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|alg| all_algs.iter().all(|algs| algs.contains(alg)))
+                .collect();
+            let alg = alg_set
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "sha-256".to_string());
+            td_alg = Some(alg.clone());
+            for td in &applicable_td {
+                let hash = td.compute_hash(&alg).map_err(|e| {
+                    PresentationError::new(
+                        PresentationErrorCode::PresentationBuildFailed,
+                        format!("Failed to compute transaction data hash: {e}"),
+                    )
+                })?;
+                td_hashes.push(hash);
+            }
+        }
+
+        if !td_hashes.is_empty() {
+            builder = builder.transaction_data(td_hashes, td_alg);
+        }
 
         if requires_holder_binding(ctx, query_id)? {
             let signer = tenant_crypto_signer(self.tenant_repo.as_ref(), tenant_id)

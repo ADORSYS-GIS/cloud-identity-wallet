@@ -70,7 +70,10 @@ pub(super) async fn parse_verifier_response(
             .map_err(|e| DirectPostError::HttpRequestFailed(e.to_string()))?;
 
         if body_bytes.is_empty() {
-            return Ok(DirectPostResponse { redirect_uri: None });
+            return Ok(DirectPostResponse {
+                redirect_uri: None,
+                additional: serde_json::Map::new(),
+            });
         }
 
         let parsed: DirectPostResponse = serde_json::from_slice(&body_bytes)
