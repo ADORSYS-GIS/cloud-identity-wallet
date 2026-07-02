@@ -765,7 +765,7 @@ impl Oid4vciClient {
                 context,
                 c_nonce.as_deref(),
                 is_anonymous,
-                credential_config_id,
+                config_id,
                 signer,
                 key_attestation_jwt,
             )
@@ -816,18 +816,16 @@ impl Oid4vciClient {
         let mut results = Vec::with_capacity(targets.len());
         let mut futures = FuturesUnordered::new();
 
-        for (config_id, identifiers) in resolved {
-            for id in identifiers {
-                futures.push(self.request_credential(
-                    context,
-                    token,
-                    id,
-                    config_id,
-                    signer,
-                    dpop,
-                    key_attestation_jwt,
-                ));
-            }
+        for (selector, config_id) in &targets {
+            futures.push(self.request_credential(
+                context,
+                token,
+                selector.clone(),
+                config_id,
+                signer,
+                dpop,
+                key_attestation_jwt,
+            ));
         }
 
         while let Some(res) = futures.next().await {
@@ -1746,16 +1744,6 @@ fn key_attestation_requirements(
     Ok(requirements)
 }
 
-pub fn resolve_credential_ids(token: &TokenResponse) -> Result<Vec<(&str, &[String])>> {
-    let details =
-        token
-            .authorization_details
-            .as_ref()
-            .ok_or_else(|| ClientError::InvalidResponse {
-                message: "missing authorization_details in token response".into(),
-            })?;
-
-    let mut result = Vec::with_capacity(details.len());
 /// Resolve the credential requests to issue for a token response, falling back
 /// across the grant-type shapes issuers use to convey authorized credentials,
 /// per OID4VCI §6.2:
