@@ -1,4 +1,6 @@
-//! Integration tests for SQL tenant repository.
+//! Integration tests for SQL and in-memory tenant repository backends.
+
+#![cfg(feature = "sqlx")]
 
 use cloud_identity_wallet::domain::models::tenants::{
     RegisterTenantRequest, SignAlgorithm, TenantError,
@@ -12,7 +14,6 @@ use cloud_wallet_crypto::{
 };
 use cloud_wallet_kms::provider::LocalProvider;
 use sqlx::any::AnyPoolOptions;
-use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
 use uuid::Uuid;
 
 fn assert_valid_pkcs8(algorithm: SignAlgorithm, der: &[u8]) {
@@ -31,23 +32,19 @@ fn assert_valid_pkcs8(algorithm: SignAlgorithm, der: &[u8]) {
 
 #[tokio::test]
 async fn test_sql_tenant_repository_create() {
-    // Install default drivers
     sqlx::any::install_default_drivers();
 
-    // Create an in-memory SQLite database
     let pool = AnyPoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("Failed to connect to SQLite");
 
-    // Create repository and initialize schema
     let repo = SqlTenantRepo::new(pool, TenantKeyAlg::EdDsa, LocalProvider::new());
     repo.init_schema()
         .await
         .expect("Failed to initialize schema");
 
-    // Test creating a tenant
     let request = RegisterTenantRequest {
         name: "Test Tenant".to_string(),
     };
@@ -61,6 +58,7 @@ async fn test_sql_tenant_repository_create() {
 #[tokio::test]
 async fn test_sql_tenant_repo_find_key_roundtrip() {
     use testcontainers_modules::postgres::Postgres;
+    use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
 
     let container = Postgres::default()
         .with_tag("18-alpine")
@@ -135,7 +133,6 @@ async fn test_sql_tenant_repository_validates_name() {
         .await
         .expect("Failed to initialize schema");
 
-    // Test with empty name
     let request = RegisterTenantRequest {
         name: "".to_string(),
     };
@@ -159,7 +156,6 @@ async fn test_sql_tenant_repository_trims_name() {
         .await
         .expect("Failed to initialize schema");
 
-    // Test with whitespace
     let request = RegisterTenantRequest {
         name: "  Test Tenant  ".to_string(),
     };

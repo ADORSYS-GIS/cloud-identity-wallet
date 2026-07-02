@@ -8,12 +8,18 @@ mod event_dispatch;
 mod task_queue;
 mod tenant;
 
-pub use credential::{MemoryCredentialRepo, SqlCredentialRepo};
-pub use event_dispatch::{
-    MemoryEventPublisher, MemoryEventSubscriber, RedisEventPublisher, RedisEventSubscriber,
-};
-pub use task_queue::{MemoryTaskQueue, RedisTaskQueue};
-pub use tenant::{MemoryTenantRepo, SqlTenantRepo, TenantKeyAlg};
+pub use credential::MemoryCredentialRepo;
+#[cfg(feature = "sqlx")]
+pub use credential::SqlCredentialRepo;
+pub use event_dispatch::{MemoryEventPublisher, MemoryEventSubscriber};
+#[cfg(feature = "redis")]
+pub use event_dispatch::{RedisEventPublisher, RedisEventSubscriber};
+pub use task_queue::MemoryTaskQueue;
+#[cfg(feature = "redis")]
+pub use task_queue::RedisTaskQueue;
+#[cfg(feature = "sqlx")]
+pub use tenant::SqlTenantRepo;
+pub use tenant::{MemoryTenantRepo, TenantKeyAlg};
 
 mod cipher {
     use cloud_wallet_kms::{self as kms, provider::Provider};

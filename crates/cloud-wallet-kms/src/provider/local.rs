@@ -12,7 +12,7 @@ use crate::key::{
 };
 use crate::nonce::NonceGenerator;
 use crate::provider::Provider;
-use crate::storage::{InMemoryBackend, Storage};
+use crate::storage::Storage;
 use crate::{AeadAlgorithm, Error, Result};
 
 const HOSTNAME: &str = "localhost";
@@ -23,11 +23,15 @@ struct MasterKey {
     material: Secret,
 }
 
-/// A KMS [`Provider`] that uses a locally managed, in-memory master key.
+/// A KMS [`Provider`] that uses a locally managed master key.
 ///
 /// This provider is designed for local development and testing.
+/// When the `memory-backend` feature is enabled, [`LocalProvider::new`]
+/// provides a convenient constructor with an in-memory storage backend.
+/// For persistent storage, use [`LocalProvider::with_storage`] with a
+/// [`SqlxBackend`](crate::storage::SqlxBackend).
 #[derive(Debug)]
-pub struct LocalProvider<S = InMemoryBackend> {
+pub struct LocalProvider<S> {
     master_key: Arc<OnceCell<MasterKey>>,
     master_id: MasterId,
     dek_id: DekId,
@@ -35,10 +39,11 @@ pub struct LocalProvider<S = InMemoryBackend> {
     nonce_gen: NonceGenerator,
 }
 
-impl LocalProvider {
+#[cfg(feature = "memory-backend")]
+impl LocalProvider<crate::storage::InMemoryBackend> {
     /// Creates a new `LocalProvider` with an in-memory storage backend.
     pub fn new() -> Self {
-        Self::with_storage(InMemoryBackend::new())
+        Self::with_storage(crate::storage::InMemoryBackend::new())
     }
 }
 
@@ -137,7 +142,8 @@ impl<S: Storage> LocalProvider<S> {
     }
 }
 
-impl Default for LocalProvider {
+#[cfg(feature = "memory-backend")]
+impl Default for LocalProvider<crate::storage::InMemoryBackend> {
     fn default() -> Self {
         Self::new()
     }
@@ -182,7 +188,7 @@ impl<S: Storage> Provider for LocalProvider<S> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "memory-backend"))]
 mod tests {
     use super::*;
 

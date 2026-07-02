@@ -1,3 +1,5 @@
+#![cfg(feature = "redis")]
+
 //! Integration tests for Redis-backed issuance infrastructure.
 //!
 //! Tests cover:

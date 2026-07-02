@@ -86,6 +86,12 @@ impl SqlxBackend {
             Driver::Sqlite => MIGRATOR_SQLITE.run(&self.pool).await?,
             #[cfg(feature = "mysql")]
             Driver::MySql => MIGRATOR_MYSQL.run(&self.pool).await?,
+            #[cfg(not(all(feature = "postgres", feature = "sqlite", feature = "mysql")))]
+            driver => {
+                return Err(crate::Error::Other(format!(
+                    "database driver {driver:?} was not enabled at compile time"
+                )));
+            }
         }
         Ok(())
     }
