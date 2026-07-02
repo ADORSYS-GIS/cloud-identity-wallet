@@ -74,6 +74,10 @@ cd cloud-identity-wallet
 cargo run
 ```
 
+Backend implementations are selected with Cargo features. See the full
+[feature matrix](./docs/features.md) for supported memory, Redis, SQL, and KMS
+combinations.
+
 ### Configuration
 
 The application is configured via environment variables prefixed with `APP_`, using `__` as the section separator. Key variables:

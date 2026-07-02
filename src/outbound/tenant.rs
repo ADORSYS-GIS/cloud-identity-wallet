@@ -2,7 +2,9 @@
 //!
 //! Provides both SQL-based and in-memory storage backends for tenant data.
 
-use std::{str::FromStr, sync::Arc};
+#[cfg(feature = "sqlx")]
+use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_wallet_crypto::{
@@ -12,7 +14,9 @@ use cloud_wallet_crypto::{
 };
 use cloud_wallet_kms::provider::Provider as KmsProvider;
 use dashmap::DashMap;
+#[cfg(feature = "sqlx")]
 use sqlx::{AnyPool, FromRow};
+#[cfg(feature = "sqlx")]
 use time::UtcDateTime;
 use uuid::Uuid;
 
@@ -21,12 +25,16 @@ use crate::domain::models::tenants::{
 };
 use crate::domain::ports::TenantRepo;
 use crate::outbound::cipher::{self, Cipher};
+#[cfg(feature = "sqlx")]
 use crate::utils::{Driver, Query};
 
 type Result<T> = std::result::Result<T, TenantError>;
 
+#[cfg(feature = "sqlx")]
 static POSTGRES_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+#[cfg(feature = "sqlx")]
 static MYSQL_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql");
+#[cfg(feature = "sqlx")]
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// Algorithm used for tenant key generation.
@@ -37,10 +45,17 @@ pub enum TenantKeyAlg {
     Rsa(RsaKeySize),
 }
 
+impl Default for TenantKeyAlg {
+    fn default() -> Self {
+        Self::Ecdsa(Curve::P256)
+    }
+}
+
 /// SQL-based tenant repository implementation.
 ///
 /// Supports PostgreSQL, MySQL, and SQLite databases.
 #[derive(Clone)]
+#[cfg(feature = "sqlx")]
 pub struct SqlTenantRepo {
     pool: AnyPool,
     driver: Driver,
@@ -48,6 +63,7 @@ pub struct SqlTenantRepo {
     cipher: Arc<dyn Cipher>,
 }
 
+#[cfg(feature = "sqlx")]
 impl std::fmt::Debug for SqlTenantRepo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqlTenantRepo")
@@ -58,6 +74,7 @@ impl std::fmt::Debug for SqlTenantRepo {
     }
 }
 
+#[cfg(feature = "sqlx")]
 impl SqlTenantRepo {
     /// Creates a new SQL tenant repository with the given connection pool.
     pub fn new<K>(pool: AnyPool, alg: TenantKeyAlg, kms_provider: K) -> Self
@@ -85,6 +102,7 @@ impl SqlTenantRepo {
 }
 
 #[async_trait]
+#[cfg(feature = "sqlx")]
 impl TenantRepo for SqlTenantRepo {
     async fn create(&self, request: RegisterTenantRequest) -> Result<TenantResponse> {
         let tenant_name = TenantName::new(request.name).map_err(TenantError::InvalidName)?;
@@ -167,7 +185,7 @@ impl MemoryTenantRepo {
     pub fn new() -> Self {
         Self {
             tenants: Arc::default(),
-            alg: TenantKeyAlg::Ecdsa(Curve::P256),
+            alg: TenantKeyAlg::default(),
             cipher: None,
         }
     }
@@ -242,15 +260,18 @@ impl TenantRepo for MemoryTenantRepo {
     }
 }
 
+#[cfg(feature = "sqlx")]
 static INSERT_TENANT: Query = Query::new(
     "INSERT INTO tenants (id, name, key_algorithm, key_material, created_at) \
          VALUES ($1, $2, $3, $4, $5)",
 );
 
+#[cfg(feature = "sqlx")]
 static FIND_TENANT_KEY: Query =
     Query::new("SELECT key_algorithm, key_material FROM tenants WHERE id = $1");
 
 #[derive(Debug, FromRow)]
+#[cfg(feature = "sqlx")]
 struct TenantKeyRecord {
     key_algorithm: String,
     key_material: Vec<u8>,
@@ -308,12 +329,14 @@ async fn decrypt_key_material(
     Ok(())
 }
 
+#[cfg(feature = "sqlx")]
 impl From<sqlx::Error> for TenantError {
     fn from(error: sqlx::Error) -> Self {
         Self::Backend(error.into())
     }
 }
 
+#[cfg(feature = "sqlx")]
 impl From<sqlx::migrate::MigrateError> for TenantError {
     fn from(error: sqlx::migrate::MigrateError) -> Self {
         Self::Backend(error.into())
