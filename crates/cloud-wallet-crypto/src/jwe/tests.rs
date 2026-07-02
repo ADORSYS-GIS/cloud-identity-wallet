@@ -125,6 +125,21 @@ fn roundtrip_ecdh_es_x25519_a256gcm() {
     ecdh_es_roundtrip(EcdhCurve::X25519, ContentEncryptionAlgorithm::A256Gcm);
 }
 
+#[test]
+fn roundtrip_ecdh_es_p256_a128cbc_hs256() {
+    ecdh_es_roundtrip(EcdhCurve::P256, ContentEncryptionAlgorithm::A128CbcHs256);
+}
+
+#[test]
+fn roundtrip_ecdh_es_p256_a192cbc_hs384() {
+    ecdh_es_roundtrip(EcdhCurve::P256, ContentEncryptionAlgorithm::A192CbcHs384);
+}
+
+#[test]
+fn roundtrip_ecdh_es_p256_a256cbc_hs512() {
+    ecdh_es_roundtrip(EcdhCurve::P256, ContentEncryptionAlgorithm::A256CbcHs512);
+}
+
 fn ecdh_a128kw_roundtrip(curve: EcdhCurve, enc: ContentEncryptionAlgorithm) {
     let (static_key, pub_key) = make_ecdh_pair(curve);
     let header = ecdh_header(KeyManagementAlgorithm::EcdhEsA128Kw, enc);
@@ -315,6 +330,59 @@ fn epk_curve_mismatch_rejected() {
     assert_eq!(err.kind(), ErrorKind::KeyParsing);
 }
 
+/// IV/tag length must be checked *before* key recovery (RSA-OAEP decrypt,
+/// ECDH agreement, AES-KW unwrap), not after — so malformed tokens fail fast
+/// on a cheap length check instead of burning asymmetric crypto work first.
+///
+/// This targets the RSA-OAEP path specifically: RSA private-key decryption is
+/// the most expensive recovery operation among the supported `alg` values, so
+/// it's the path where skipping the length check before recovery would cost
+/// the most (e.g. against a flood of malformed tokens).
+///
+/// Proof: combine a wrong-length IV with an RSA private key that does not
+/// match the one used to encrypt (which, on its own, fails *inside*
+/// `recover_cek` with `Decryption` once OAEP unpadding fails on the wrong
+/// key). If the length check ran after key recovery, this token would
+/// surface `Decryption`. Getting `WrongLength` instead proves the length
+/// check runs first and the RSA-OAEP decrypt is never attempted.
+#[test]
+fn iv_length_checked_before_rsa_key_recovery() {
+    let dec_key_a = RsaDecryptingKey::generate(RsaKeySize::Rsa2048).unwrap();
+    let dec_key_b = RsaDecryptingKey::generate(RsaKeySize::Rsa2048).unwrap();
+    let enc_key_a = dec_key_a.public_key();
+
+    let header = JweHeader {
+        alg: KeyManagementAlgorithm::RsaOaep256,
+        enc: ContentEncryptionAlgorithm::A256Gcm,
+        epk: None,
+        apu: None,
+        apv: None,
+        kid: None,
+        typ: None,
+        cty: None,
+        zip: None,
+        crit: None,
+    };
+    let token = encrypt(header, b"test", JweEncryptKey::Rsa(enc_key_a)).unwrap();
+
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let parts: Vec<&str> = token.splitn(6, '.').collect();
+    let bad_iv = Base64UrlUnpadded::encode_string(&[0u8; 6]);
+    let tampered = format!(
+        "{}.{}.{}.{}.{}",
+        parts[0], parts[1], bad_iv, parts[3], parts[4]
+    );
+
+    // Decrypting with a non-matching RSA private key: if key recovery ran
+    // before the length check, this would fail with Decryption instead.
+    let err = decrypt(&tampered, JweDecryptKey::Rsa(&dec_key_b)).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        ErrorKind::WrongLength,
+        "expected WrongLength (length check before key recovery), got {err:?}"
+    );
+}
+
 /// Flipping one bit in the ciphertext body must cause an AEAD tag failure.
 #[test]
 fn tampered_ciphertext_rejected() {
@@ -358,6 +426,111 @@ fn tampered_tag_rejected() {
     let tampered = parts.join(".");
     let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Decryption);
+}
+
+/// Flipping a bit in the ciphertext of an `A256CBC-HS512` token must be
+/// rejected — the JWE-layer equivalent of the primitive-level tamper test in
+/// `cbc_hmac.rs`, exercising the IV/tag-length dispatch in decrypt().
+#[test]
+fn tampered_ciphertext_rejected_cbc_hmac() {
+    let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
+    let header = ecdh_header(
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A256CbcHs512,
+    );
+    let token = encrypt(header, b"secret", JweEncryptKey::Ecdh(&pub_key)).unwrap();
+
+    let mut parts: Vec<String> = token.split('.').map(String::from).collect();
+    assert_eq!(parts.len(), 5);
+
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let mut ct = Base64UrlUnpadded::decode_vec(&parts[3]).unwrap();
+    ct[0] ^= 0x01;
+    parts[3] = Base64UrlUnpadded::encode_string(&ct);
+
+    let tampered = parts.join(".");
+    let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Decryption);
+}
+
+/// Flipping a bit in the authentication tag of an `A128CBC-HS256` token must
+/// be rejected with the correct (variant-dependent) tag length still enforced.
+#[test]
+fn tampered_tag_rejected_cbc_hmac() {
+    let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
+    let header = ecdh_header(
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A128CbcHs256,
+    );
+    let token = encrypt(header, b"secret", JweEncryptKey::Ecdh(&pub_key)).unwrap();
+
+    let mut parts: Vec<String> = token.split('.').map(String::from).collect();
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let mut tag = Base64UrlUnpadded::decode_vec(&parts[4]).unwrap();
+    assert_eq!(tag.len(), 16); // A128CBC-HS256 tag length
+    tag[0] ^= 0xff;
+    parts[4] = Base64UrlUnpadded::encode_string(&tag);
+
+    let tampered = parts.join(".");
+    let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Decryption);
+}
+
+/// A token claiming `A128CBC-HS256` but carrying a GCM-sized (16-byte) IV
+/// instead of the correct 16-byte CBC IV would coincidentally match in length
+/// for A128CBC-HS256 specifically, so use the tag length instead: an
+/// `A256CBC-HS512` token (32-byte tag) truncated to look like a GCM tag
+/// (16 bytes) must be rejected as WrongLength before any HMAC work runs.
+#[test]
+fn wrong_tag_length_rejected_cbc_hmac() {
+    let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
+    let header = ecdh_header(
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A256CbcHs512,
+    );
+    let token = encrypt(header, b"secret", JweEncryptKey::Ecdh(&pub_key)).unwrap();
+
+    let mut parts: Vec<String> = token.split('.').map(String::from).collect();
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let tag = Base64UrlUnpadded::decode_vec(&parts[4]).unwrap();
+    assert_eq!(tag.len(), 32); // A256CBC-HS512 tag length
+    parts[4] = Base64UrlUnpadded::encode_string(&tag[..16]);
+
+    let tampered = parts.join(".");
+    let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::WrongLength);
+}
+
+/// CBC-HMAC requires a 16-byte IV regardless of variant; both shorter and
+/// longer IVs must be rejected before any HMAC/decrypt work runs. Mirrors
+/// `iv_wrong_length_rejected` (GCM) for the CBC-HMAC dispatch path in decrypt().
+#[test]
+fn iv_wrong_length_rejected_cbc_hmac() {
+    let (static_key, pub_key) = make_ecdh_pair(EcdhCurve::P256);
+    let header = ecdh_header(
+        KeyManagementAlgorithm::EcdhEs,
+        ContentEncryptionAlgorithm::A128CbcHs256,
+    );
+    let token = encrypt(header, b"iv-test", JweEncryptKey::Ecdh(&pub_key)).unwrap();
+
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let parts: Vec<&str> = token.splitn(6, '.').collect();
+
+    for bad_iv in [
+        Base64UrlUnpadded::encode_string(&[0u8; 12]), // GCM-sized, wrong for CBC
+        Base64UrlUnpadded::encode_string(&[0u8; 20]),
+    ] {
+        let tampered = format!(
+            "{}.{}.{}.{}.{}",
+            parts[0], parts[1], bad_iv, parts[3], parts[4]
+        );
+        let err = decrypt(&tampered, JweDecryptKey::Ecdh(&static_key)).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            ErrorKind::WrongLength,
+            "expected WrongLength for iv len, got {err:?}"
+        );
+    }
 }
 
 /// Modifying the protected header (changing `alg`) must cause AEAD tag failure
@@ -892,4 +1065,34 @@ fn interop_ecdh_es_a256kw_p256_a256gcm_external_token() {
 
     let plaintext = decrypt(token, JweDecryptKey::Ecdh(&static_key)).unwrap();
     assert_eq!(plaintext.as_slice(), b"ecdh kw interop");
+}
+
+#[test]
+fn interop_ecdh_es_p256_a128cbc_hs256_external_token() {
+    let token = include_str!("../../test_data/interop_ecdh_es_a128cbc_hs256.jwe").trim();
+    let der = include_bytes!("../../test_data/p256_recipient.pkcs8.der");
+    let static_key = StaticEcdhKey::from_pkcs8_der(EcdhCurve::P256, der).unwrap();
+
+    let plaintext = decrypt(token, JweDecryptKey::Ecdh(&static_key)).unwrap();
+    assert_eq!(plaintext.as_slice(), b"ecdh cbc-hs256 interop");
+}
+
+#[test]
+fn interop_ecdh_es_p256_a192cbc_hs384_external_token() {
+    let token = include_str!("../../test_data/interop_ecdh_es_a192cbc_hs384.jwe").trim();
+    let der = include_bytes!("../../test_data/p256_recipient.pkcs8.der");
+    let static_key = StaticEcdhKey::from_pkcs8_der(EcdhCurve::P256, der).unwrap();
+
+    let plaintext = decrypt(token, JweDecryptKey::Ecdh(&static_key)).unwrap();
+    assert_eq!(plaintext.as_slice(), b"ecdh cbc-hs384 interop");
+}
+
+#[test]
+fn interop_ecdh_es_p256_a256cbc_hs512_external_token() {
+    let token = include_str!("../../test_data/interop_ecdh_es_a256cbc_hs512.jwe").trim();
+    let der = include_bytes!("../../test_data/p256_recipient.pkcs8.der");
+    let static_key = StaticEcdhKey::from_pkcs8_der(EcdhCurve::P256, der).unwrap();
+
+    let plaintext = decrypt(token, JweDecryptKey::Ecdh(&static_key)).unwrap();
+    assert_eq!(plaintext.as_slice(), b"ecdh cbc-hs512 interop");
 }

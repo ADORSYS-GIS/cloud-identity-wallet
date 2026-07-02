@@ -2,8 +2,9 @@
 
 use zeroize::Zeroizing;
 
-use crate::aead::{self, NONCE_LENGTH, TAG_LENGTH};
+use crate::aead;
 use crate::aes_kek::KeyEncryptionKey;
+use crate::cbc_hmac;
 use crate::digest::HashAlg;
 use crate::ecdh::StaticEcdhKey;
 use crate::error::{ErrorKind, Result};
@@ -12,7 +13,7 @@ use crate::rsa::oaep::DecryptingKey as RsaDecryptingKey;
 use crate::utils::error_msg;
 
 use super::compact::{b64url_decode, concat_kdf_other_info, epk_jwk_to_ecdh_pub, parse_compact};
-use super::header::{JweHeader, KeyManagementAlgorithm};
+use super::header::{ContentEncKey, JweHeader, KeyManagementAlgorithm};
 
 /// Key supplied by the caller for JWE decryption.
 ///
@@ -41,8 +42,9 @@ impl std::fmt::Debug for JweDecryptKey<'_> {
 /// Decrypt a compact JWE token and return the plaintext.
 ///
 /// The strict validation gate (parse → deserialize → validate → alg/key check →
-/// ECDH curve check → crypto) means no cryptographic work occurs until all
-/// attacker-controlled fields have been validated.
+/// IV/tag length check → key recovery → crypto) means no expensive
+/// cryptographic work (RSA-OAEP decrypt, ECDH agreement, AES-KW unwrap) runs
+/// until the cheap, header-derivable checks have all passed.
 ///
 /// The raw ASCII bytes of the first compact segment are used as AAD for
 /// AES-GCM, exactly as produced by [`fn@crate::jwe::encrypt`].
@@ -75,36 +77,31 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
 
     validate_key_alg(&header.alg, &key)?;
 
-    if iv_bytes.len() != NONCE_LENGTH {
+    // IV/tag length are derivable from `header.enc` alone, before any key
+    // recovery (RSA-OAEP decrypt, ECDH agreement, AES-KW unwrap) happens —
+    // checking them here, not after `recover_cek()`, means a malformed token
+    // fails on a cheap length comparison instead of burning asymmetric crypto
+    // work first.
+    if iv_bytes.len() != header.enc.iv_len() {
         return Err(error_msg(
             ErrorKind::WrongLength,
             format!(
                 "JWE IV must be {} bytes, got {}",
-                NONCE_LENGTH,
+                header.enc.iv_len(),
                 iv_bytes.len()
             ),
         ));
     }
-    if tag_bytes.len() != TAG_LENGTH {
+    if tag_bytes.len() != header.enc.tag_len() {
         return Err(error_msg(
             ErrorKind::WrongLength,
             format!(
                 "JWE authentication tag must be {} bytes, got {}",
-                TAG_LENGTH,
+                header.enc.tag_len(),
                 tag_bytes.len()
             ),
         ));
     }
-
-    let nonce: [u8; NONCE_LENGTH] = iv_bytes
-        .try_into()
-        .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;
-    let tag: [u8; TAG_LENGTH] = tag_bytes.try_into().map_err(|_| {
-        error_msg(
-            ErrorKind::WrongLength,
-            "JWE authentication tag length mismatch",
-        )
-    })?;
 
     let cek_key = recover_cek(&header, &key, &enc_key_bytes)?;
 
@@ -113,8 +110,31 @@ pub fn decrypt(token: &str, key: JweDecryptKey<'_>) -> Result<Zeroizing<Vec<u8>>
     // order, whitespace, and any other formatting are preserved verbatim, so
     // tokens from any sender always verify regardless of their serialization style.
     let aad = header_b64.as_bytes();
-    let mut plaintext = Zeroizing::new(vec![0u8; ct_bytes.len()]);
-    cek_key.decrypt_with_tag(&nonce, aad, tag, &ct_bytes, plaintext.as_mut_slice())?;
+
+    let plaintext = match cek_key {
+        ContentEncKey::Aead(k) => {
+            let nonce: [u8; aead::NONCE_LENGTH] = iv_bytes
+                .try_into()
+                .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;
+            let tag: [u8; aead::TAG_LENGTH] = tag_bytes.try_into().map_err(|_| {
+                error_msg(
+                    ErrorKind::WrongLength,
+                    "JWE authentication tag length mismatch",
+                )
+            })?;
+
+            let mut plaintext = Zeroizing::new(vec![0u8; ct_bytes.len()]);
+            k.decrypt_with_tag(&nonce, aad, tag, &ct_bytes, plaintext.as_mut_slice())?;
+            plaintext
+        }
+        ContentEncKey::CbcHmac(k) => {
+            let iv: [u8; cbc_hmac::IV_LENGTH] = iv_bytes
+                .try_into()
+                .map_err(|_| error_msg(ErrorKind::WrongLength, "JWE IV length mismatch"))?;
+
+            k.decrypt_with_tag(&iv, aad, &tag_bytes, &ct_bytes)?
+        }
+    };
 
     Ok(plaintext)
 }
@@ -137,7 +157,7 @@ fn recover_cek(
     header: &JweHeader,
     key: &JweDecryptKey<'_>,
     enc_key_bytes: &[u8],
-) -> Result<aead::Key> {
+) -> Result<ContentEncKey> {
     let apu_bytes: &[u8] = header.apu.as_ref().map_or(&[], |b| b.as_ref());
     let apv_bytes: &[u8] = header.apv.as_ref().map_or(&[], |b| b.as_ref());
 
@@ -156,7 +176,7 @@ fn recover_cek(
             let cek_slice = rsa_key.decrypt(oaep_alg, enc_key_bytes, &mut pt_buf)?;
 
             let cek_bytes = Zeroizing::new(cek_slice.to_vec());
-            let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())
+            let cek = ContentEncKey::new(header.enc, &cek_bytes)
                 .map_err(|e| error_msg(ErrorKind::Decryption, format!("bad CEK length: {e}")))?;
             Ok(cek)
         }
@@ -181,7 +201,7 @@ fn recover_cek(
                 &mut cek_bytes,
             )?;
 
-            let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())
+            let cek = ContentEncKey::new(header.enc, &cek_bytes)
                 .map_err(|e| error_msg(ErrorKind::Decryption, format!("bad CEK length: {e}")))?;
             Ok(cek)
         }
@@ -206,7 +226,7 @@ fn ecdh_kw_decrypt(
     apu_bytes: &[u8],
     apv_bytes: &[u8],
     alg: KeyManagementAlgorithm,
-) -> Result<aead::Key> {
+) -> Result<ContentEncKey> {
     let kw_alg_id = alg
         .kdf_alg_id()
         .expect("ecdh_kw_decrypt only called for KW variants");
@@ -244,7 +264,7 @@ fn ecdh_kw_decrypt(
     let mut cek_bytes = Zeroizing::new(vec![0u8; expected_cek_len]);
     let cek_slice = kek.unwrap_key(enc_key_bytes, &mut cek_bytes)?;
 
-    let cek = aead::Key::new(header.enc.aead_algorithm(), cek_slice)
+    let cek = ContentEncKey::new(header.enc, cek_slice)
         .map_err(|e| error_msg(ErrorKind::Decryption, format!("bad CEK length: {e}")))?;
     Ok(cek)
 }

@@ -18,10 +18,13 @@ use cloud_identity_wallet::{
     },
     server::Server,
     session::{IssuanceSession, IssuanceState, MemorySession, SessionStore},
+    setup,
+    utils::load_root_truststore,
 };
 use cloud_wallet_openid4vc::core::client::{Config as Oid4vciClientConfig, OidClient};
 use cloud_wallet_openid4vc::oid4vci::client::Oid4vciClient;
 use reqwest::Client;
+use rustls_pki_types::TrustAnchor;
 use url::Url;
 use uuid::Uuid;
 
@@ -57,7 +60,9 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
     let mut config = Config::load().unwrap();
     config.server.host = "localhost".to_owned();
     config.server.port = 0;
-    config.oid4vci.use_system_proxy = false;
+    config.oid4vc.use_system_proxy = false;
+
+    let trust_store = load_root_truststore(config.oid4vc.root_truststore_dir.as_deref()).unwrap();
 
     let queue = RecordingTaskQueue::default();
     let pushed_tasks = queue.pushed.clone();
@@ -80,9 +85,22 @@ async fn spawn_tx_code_test_app(session_store: MemorySession) -> TxCodeTestApp {
         MemoryCredentialRepo::new(),
         tenant_repo.clone(),
         &session_store,
-        config.oid4vci.preferred_display_locales.clone(),
+        config.oid4vc.preferred_display_locales.clone(),
     );
-    let service = Service::new(session_store.clone(), tenant_repo, engine);
+    let x5c_trust_anchors: Arc<Vec<TrustAnchor<'static>>> = Arc::new(trust_store.x5c_trust_anchors);
+    let presentation_engine = setup::build_presentation_engine(
+        &config,
+        MemoryCredentialRepo::new(),
+        tenant_repo.clone(),
+        x5c_trust_anchors,
+    )
+    .expect("failed to build presentation engine");
+    let service = Service::new(
+        session_store.clone(),
+        tenant_repo,
+        engine,
+        presentation_engine,
+    );
     let server = Server::new(&config, service).await.unwrap();
     let port = server.port();
 

@@ -1,4 +1,5 @@
 mod annex_d;
+mod claims;
 mod parser;
 mod revocation;
 mod verifier;

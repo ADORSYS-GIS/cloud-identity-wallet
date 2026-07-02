@@ -21,8 +21,13 @@ const SELF_ISSUED_AUDIENCE: &str = "https://self-issued.me/v2";
 /// Per OpenID4VP Section 5.8:
 /// - In **static discovery mode**, the `aud` claim MUST be `https://self-issued.me/v2`
 /// - In **dynamic discovery mode**, the `aud` claim MUST equal the Request Object `iss`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialized as snake_case (`"static"`, `"dynamic"`) via serde for both config
+/// deserialization and any wire-format usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum DiscoveryMode {
+    #[default]
     Static,
     Dynamic,
 }

@@ -334,14 +334,15 @@ async fn get_credential_returns_credential_for_owner() {
     // Assert
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["given_name"], "Ada");
-    assert_eq!(body["family_name"], "Lovelace");
-    assert_eq!(body["address"]["locality"], "London");
-    assert!(body.get("iss").is_none());
-    assert!(body.get("sub").is_none());
-    assert!(body.get("iat").is_none());
-    assert!(body.get("exp").is_none());
-    assert!(body.get("vct").is_none());
+    let claims = &body["claims"];
+    assert_eq!(claims["given_name"], "Ada");
+    assert_eq!(claims["family_name"], "Lovelace");
+    assert_eq!(claims["address"]["locality"], "London");
+    assert!(claims.get("iss").is_none());
+    assert!(claims.get("sub").is_none());
+    assert!(claims.get("iat").is_none());
+    assert!(claims.get("exp").is_none());
+    assert!(claims.get("vct").is_none());
 }
 
 #[tokio::test]

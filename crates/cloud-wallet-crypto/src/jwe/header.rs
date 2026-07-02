@@ -5,6 +5,7 @@
 
 use crate::aead;
 use crate::aes_kek::KeyWrapAlgorithm;
+use crate::cbc_hmac;
 use crate::error::{Error, ErrorKind, Result};
 use crate::jwk::{self, B64};
 use crate::rsa::oaep::OaepAlgorithm;
@@ -167,6 +168,49 @@ pub enum ContentEncryptionAlgorithm {
     /// AES-GCM with 256-bit key (RFC 7518 §5.3).
     #[serde(rename = "A256GCM")]
     A256Gcm,
+
+    /// AES-128-CBC with HMAC-SHA-256 (RFC 7518 §5.2.3).
+    #[serde(rename = "A128CBC-HS256")]
+    A128CbcHs256,
+
+    /// AES-192-CBC with HMAC-SHA-384 (RFC 7518 §5.2.4).
+    #[serde(rename = "A192CBC-HS384")]
+    A192CbcHs384,
+
+    /// AES-256-CBC with HMAC-SHA-512 (RFC 7518 §5.2.5).
+    #[serde(rename = "A256CBC-HS512")]
+    A256CbcHs512,
+}
+
+/// The underlying construction selected by a [`ContentEncryptionAlgorithm`] —
+/// either a single AEAD primitive (GCM) or the AES_CBC_HMAC_SHA2 composite
+/// construction (RFC 7518 §5.2). These have different IV and tag lengths, so
+/// they cannot share [`crate::aead::Key`]'s fixed-size nonce/tag API.
+pub(crate) enum ContentEncKeyKind {
+    Aead(aead::Algorithm),
+    CbcHmac(cbc_hmac::Algorithm),
+}
+
+/// A content-encryption key for either the AEAD (GCM) or AES_CBC_HMAC_SHA2 family.
+///
+/// Centralizes CEK construction so the encrypt/decrypt dispatch sites don't
+/// each repeat the `key_kind()` match.
+pub(crate) enum ContentEncKey {
+    Aead(aead::Key),
+    CbcHmac(cbc_hmac::Key),
+}
+
+impl ContentEncKey {
+    /// Construct the appropriate key type from raw CEK bytes for `enc`.
+    ///
+    /// # Errors
+    /// [`ErrorKind::WrongLength`] if `cek.len()` does not match `enc.key_len()`.
+    pub(crate) fn new(enc: ContentEncryptionAlgorithm, cek: &[u8]) -> Result<Self> {
+        match enc.key_kind() {
+            ContentEncKeyKind::Aead(alg) => Ok(Self::Aead(aead::Key::new(alg, cek)?)),
+            ContentEncKeyKind::CbcHmac(alg) => Ok(Self::CbcHmac(cbc_hmac::Key::new(alg, cek)?)),
+        }
+    }
 }
 
 impl ContentEncryptionAlgorithm {
@@ -176,15 +220,57 @@ impl ContentEncryptionAlgorithm {
         match self {
             Self::A128Gcm => 16,
             Self::A256Gcm => 32,
+            Self::A128CbcHs256 => cbc_hmac::Algorithm::Aes128CbcHmacSha256.key_len(),
+            Self::A192CbcHs384 => cbc_hmac::Algorithm::Aes192CbcHmacSha384.key_len(),
+            Self::A256CbcHs512 => cbc_hmac::Algorithm::Aes256CbcHmacSha512.key_len(),
         }
     }
 
-    /// Maps to the underlying AEAD algorithm for [`crate::aead::Key`].
+    /// Maps to the underlying construction (AEAD or AES_CBC_HMAC_SHA2) for
+    /// building a [`ContentEncKey`].
+    ///
+    /// No wildcard arm: adding a new `ContentEncryptionAlgorithm` variant
+    /// must fail this match at compile time until it is explicitly routed to
+    /// one of the two families.
     #[must_use]
-    pub(crate) fn aead_algorithm(self) -> aead::Algorithm {
+    pub(crate) fn key_kind(self) -> ContentEncKeyKind {
         match self {
-            Self::A128Gcm => aead::Algorithm::AesGcm128,
-            Self::A256Gcm => aead::Algorithm::AesGcm256,
+            Self::A128Gcm => ContentEncKeyKind::Aead(aead::Algorithm::AesGcm128),
+            Self::A256Gcm => ContentEncKeyKind::Aead(aead::Algorithm::AesGcm256),
+            Self::A128CbcHs256 => {
+                ContentEncKeyKind::CbcHmac(cbc_hmac::Algorithm::Aes128CbcHmacSha256)
+            }
+            Self::A192CbcHs384 => {
+                ContentEncKeyKind::CbcHmac(cbc_hmac::Algorithm::Aes192CbcHmacSha384)
+            }
+            Self::A256CbcHs512 => {
+                ContentEncKeyKind::CbcHmac(cbc_hmac::Algorithm::Aes256CbcHmacSha512)
+            }
+        }
+    }
+
+    /// Expected IV length in bytes for this algorithm.
+    ///
+    /// Derived from `key_kind()` alone — no CEK/key material is needed, so
+    /// callers can validate an incoming token's IV length before doing any
+    /// key-recovery work (RSA-OAEP decrypt, ECDH agreement, AES-KW unwrap).
+    #[must_use]
+    pub(crate) fn iv_len(self) -> usize {
+        match self.key_kind() {
+            ContentEncKeyKind::Aead(_) => aead::NONCE_LENGTH,
+            ContentEncKeyKind::CbcHmac(_) => cbc_hmac::IV_LENGTH,
+        }
+    }
+
+    /// Expected authentication tag length in bytes for this algorithm.
+    ///
+    /// Derived from `key_kind()` alone, for the same fast-fail reason as
+    /// [`Self::iv_len`].
+    #[must_use]
+    pub(crate) fn tag_len(self) -> usize {
+        match self.key_kind() {
+            ContentEncKeyKind::Aead(_) => aead::TAG_LENGTH,
+            ContentEncKeyKind::CbcHmac(alg) => alg.tag_len(),
         }
     }
 
@@ -197,6 +283,9 @@ impl ContentEncryptionAlgorithm {
         match self {
             Self::A128Gcm => b"A128GCM",
             Self::A256Gcm => b"A256GCM",
+            Self::A128CbcHs256 => b"A128CBC-HS256",
+            Self::A192CbcHs384 => b"A192CBC-HS384",
+            Self::A256CbcHs512 => b"A256CBC-HS512",
         }
     }
 }

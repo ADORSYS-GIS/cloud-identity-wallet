@@ -704,16 +704,25 @@ paths:
         - $ref: '#/components/parameters/CredentialId'
       responses:
         '200':
-          description: Renderable credential claims.
+          description: Renderable credential claims and typed claim views.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RenderedCredentialClaims'
+                $ref: '#/components/schemas/CredentialDetailResponse'
               example:
-                given_name: Jane
-                family_name: Doe
-                address:
-                  locality: Brussels
+                claims:
+                  org.iso.18013.5.1:
+                    family_name: Doe
+                    portrait: null
+                claims_view:
+                  - namespace: org.iso.18013.5.1
+                    claim_name: family_name
+                    value_type: string
+                    value: Doe
+                  - namespace: org.iso.18013.5.1
+                    claim_name: portrait
+                    value_type: binary
+                    size: 8
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -733,7 +742,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: unsupported_credential_format
-                error_description: Rendering claims for credential format 'mso_mdoc' is not supported yet.
+                error_description: Rendering claims for credential format 'jwt_vc_json' is not supported yet.
         '500':
           $ref: '#/components/responses/InternalServerError'
 
@@ -1777,6 +1786,78 @@ components:
             - `internal` — unexpected wallet backend error.
           example: authorization
 
+    CredentialDetailResponse:
+      type: object
+      required:
+        - claims
+      properties:
+        claims:
+          description: |
+            Namespaced claim values disclosed from the stored credential.
+
+            For SD-JWT VC: flat JSON keyed by claim name (e.g. `family_name`).
+            For mso_mdoc: JSON keyed by namespace then claim name; binary
+            values (e.g. portrait) are redacted to `null` — use
+            `claims_view` for a typed view that includes size/metadata
+            without the raw data.
+          type: object
+          additionalProperties: true
+        claims_view:
+          description: |
+            Typed per-claim view for mso_mdoc credentials. Each entry
+            provides a safe rendering of the claim value: strings, numbers,
+            booleans, structured objects are inlined; binary values carry
+            only `size` and optional `media_type` (no raw payload).
+
+            `null` for non-mdoc formats.
+          type: ["array", "null"]
+          items:
+            $ref: '#/components/schemas/MdocClaimView'
+
+    MdocClaimView:
+      type: object
+      required:
+        - namespace
+        - claim_name
+        - value_type
+      properties:
+        namespace:
+          type: string
+          description: ISO 18013-5 namespace (e.g. `org.iso.18013.5.1`).
+          example: org.iso.18013.5.1
+        claim_name:
+          type: string
+          description: Data element identifier within the namespace.
+          example: family_name
+        value_type:
+          type: string
+          enum:
+            - string
+            - integer
+            - float
+            - boolean
+            - structured
+            - binary
+            - "null"
+          description: Discriminant indicating how to interpret `value`.
+        value:
+          description: |
+            The claim value. Present for all types except `binary` (where
+            `size` and `media_type` are provided instead) and `null`.
+          oneOf:
+            - type: string
+            - type: integer
+            - type: number
+            - type: boolean
+            - type: object
+            - type: "null"
+        size:
+          type: integer
+          description: Byte length of the binary payload (only when `value_type` is `binary`).
+        media_type:
+          type: ["string", "null"]
+          description: IANA media type of the binary payload, if known.
+
     RenderedCredentialClaims:
       type: object
       description: |
@@ -1936,6 +2017,22 @@ components:
             Always `true`. Reserved for future use where some low-risk
             profiles may auto-consent.
           example: true
+        disclosed_claims:
+          type: object
+          description: |
+            Per-credential rendered claims for all matched candidates.
+            Keys are credential IDs from the DCQL match results; values are
+            namespaced JSON objects. For mdoc credentials, binary payloads are
+            redacted to `null`. Claim display names are resolved from the
+            issuer's credential configuration metadata when available.
+          additionalProperties:
+            type: object
+            additionalProperties: true
+          example:
+            "c3d4e5f6-7890-abcd-ef12-3456789abcde":
+              org.iso.18013.5.1:
+                family_name: Doe
+                portrait: null
 
     VerifierDisplay:
       type: object

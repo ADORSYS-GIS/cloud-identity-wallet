@@ -2,8 +2,9 @@
 
 use zeroize::Zeroizing;
 
-use crate::aead::{self, NONCE_LENGTH};
+use crate::aead;
 use crate::aes_kek::KeyEncryptionKey;
+use crate::cbc_hmac;
 use crate::digest::HashAlg;
 use crate::ecdh::{EcdhCurve, EcdhPublicKey, EphemeralEcdhKey, SharedSecret};
 use crate::error::{ErrorKind, Result};
@@ -13,7 +14,7 @@ use crate::rsa::oaep::EncryptingKey as RsaEncryptingKey;
 use crate::utils::error_msg;
 
 use super::compact::{b64url_encode, concat_kdf_other_info, epk_bytes_to_jwk, serialize_header};
-use super::header::{JweHeader, KeyManagementAlgorithm};
+use super::header::{ContentEncKey, JweHeader, KeyManagementAlgorithm};
 
 /// Key supplied by the caller for JWE encryption.
 ///
@@ -76,18 +77,28 @@ pub fn encrypt(mut header: JweHeader, plaintext: &[u8], key: JweEncryptKey<'_>) 
     let header_b64 = serialize_header(&header)?;
     let aad = header_b64.as_bytes();
 
-    let mut nonce = [0u8; NONCE_LENGTH];
-    crate::rand::fill_bytes(&mut nonce)?;
-
-    let mut ct_buf = Zeroizing::new(plaintext.to_vec());
-    let tag = cek_key.encrypt(&nonce, aad, &mut ct_buf)?;
+    let (iv, ciphertext, tag) = match cek_key {
+        ContentEncKey::Aead(k) => {
+            let mut nonce = [0u8; aead::NONCE_LENGTH];
+            crate::rand::fill_bytes(&mut nonce)?;
+            let mut ct_buf = Zeroizing::new(plaintext.to_vec());
+            let tag = k.encrypt(&nonce, aad, &mut ct_buf)?;
+            (nonce.to_vec(), ct_buf.to_vec(), tag.to_vec())
+        }
+        ContentEncKey::CbcHmac(k) => {
+            let mut iv = [0u8; cbc_hmac::IV_LENGTH];
+            crate::rand::fill_bytes(&mut iv)?;
+            let (ciphertext, tag) = k.encrypt(&iv, aad, plaintext)?;
+            (iv.to_vec(), ciphertext, tag)
+        }
+    };
 
     Ok(format!(
         "{}.{}.{}.{}.{}",
         header_b64,
         b64url_encode(&enc_key_bytes),
-        b64url_encode(&nonce),
-        b64url_encode(&ct_buf),
+        b64url_encode(&iv),
+        b64url_encode(&ciphertext),
         b64url_encode(&tag),
     ))
 }
@@ -109,7 +120,7 @@ fn validate_key_alg(alg: &KeyManagementAlgorithm, key: &JweEncryptKey<'_>) -> Re
 /// Derive (or generate) the CEK and produce the encrypted-key bytes.
 ///
 /// As a side effect, sets `header.epk` for ECDH-ES variants.
-fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::Key, Vec<u8>)> {
+fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(ContentEncKey, Vec<u8>)> {
     match (&header.alg, key) {
         (
             KeyManagementAlgorithm::RsaOaep256
@@ -141,7 +152,7 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
             }
             let enc_key_bytes = enc_key_buf;
 
-            let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;
+            let cek = ContentEncKey::new(header.enc, &cek_bytes)?;
             Ok((cek, enc_key_bytes))
         }
 
@@ -164,7 +175,7 @@ fn derive_cek(header: &mut JweHeader, key: JweEncryptKey<'_>) -> Result<(aead::K
                 &mut cek_bytes,
             )?;
 
-            let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;
+            let cek = ContentEncKey::new(header.enc, &cek_bytes)?;
             Ok((cek, Vec::new()))
         }
 
@@ -185,7 +196,7 @@ fn ecdh_kw(
     header: &mut JweHeader,
     recipient_pub: &EcdhPublicKey,
     alg: KeyManagementAlgorithm,
-) -> Result<(aead::Key, Vec<u8>)> {
+) -> Result<(ContentEncKey, Vec<u8>)> {
     let kw_alg_id = alg
         .kdf_alg_id()
         .expect("ecdh_kw only called for KW variants");
@@ -230,7 +241,7 @@ fn ecdh_kw(
     }
     let enc_key_bytes = wrapped_buf;
 
-    let cek = aead::Key::new(header.enc.aead_algorithm(), cek_bytes.as_slice())?;
+    let cek = ContentEncKey::new(header.enc, &cek_bytes)?;
     Ok((cek, enc_key_bytes))
 }
 

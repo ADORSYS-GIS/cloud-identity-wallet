@@ -3,7 +3,9 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use cloud_wallet_openid4vc::formats::mdoc::{MdocClaimView, ParsedMdoc};
 use cloud_wallet_openid4vc::formats::sd_jwt::SdJwt;
+use serde::Serialize;
 use serde_qs::{Config, DuplicateKeyBehavior};
 use std::{borrow::Cow, sync::OnceLock};
 use url::Url;
@@ -40,6 +42,9 @@ pub async fn list_credentials<S: SessionStore + Clone>(
 }
 
 /// `GET /api/v1/credentials/:id` — retrieve a single credential by wallet ID.
+///
+/// Returns rendered claims and, for mdoc credentials, a typed `claims_view`
+/// suitable for display rendering.
 pub async fn get_credential<S: SessionStore>(
     State(state): State<AppState<S>>,
     Extension(tenant_id): Extension<Uuid>,
@@ -53,7 +58,32 @@ pub async fn get_credential<S: SessionStore>(
         .await?;
 
     let claims = render_claims(&credential)?;
-    Ok(ResponseBody::new(StatusCode::OK, claims))
+    let claims_view = render_claims_view(&credential);
+    let response = CredentialDetailResponse {
+        claims,
+        claims_view,
+    };
+    Ok(ResponseBody::new(StatusCode::OK, response))
+}
+
+/// Response body for `GET /api/v1/credentials/:id`.
+#[derive(Debug, Serialize)]
+pub struct CredentialDetailResponse {
+    /// Namespaced claim values. For mdoc credentials, binary payloads (e.g.
+    /// portrait) are redacted to `null`; use `claims_view` for typed binary
+    /// metadata including size.
+    pub claims: serde_json::Value,
+    /// Typed per-claim view for mdoc credentials, `null` for other formats.
+    pub claims_view: Option<Vec<MdocClaimView>>,
+}
+
+fn render_claims_view(c: &Credential) -> Option<Vec<MdocClaimView>> {
+    match c.format {
+        CredentialFormat::Mdoc => ParsedMdoc::parse(&c.raw_credential)
+            .ok()
+            .map(|mdoc| mdoc.to_claim_views()),
+        _ => None,
+    }
 }
 
 /// Deletes a credential owned by the authenticated tenant.
@@ -131,6 +161,11 @@ fn render_claims(c: &Credential) -> Result<serde_json::Value, ApiError> {
             .map_err(|error| {
                 ApiError::internal(format!("failed to parse stored SD-JWT VC claims: {error}"))
             }),
+        CredentialFormat::Mdoc => ParsedMdoc::parse(&c.raw_credential)
+            .map(|mdoc| mdoc.to_safe_claims())
+            .map_err(|error| {
+                ApiError::internal(format!("failed to parse stored mdoc claims: {error}"))
+            }),
         format => Err(unsupported_credential_format(format)),
     }
 }
@@ -158,6 +193,15 @@ mod tests {
     use super::*;
     use crate::domain::models::credential::{CredentialFormat, CredentialStatus};
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64ct::{Base64UrlUnpadded, Encoding as _};
+    use ciborium::Value as CborValue;
+    use cloud_wallet_openid4vc::formats::mdoc::ClaimValueView;
+
+    fn cbor(val: &CborValue) -> Vec<u8> {
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(val, &mut buf).expect("CBOR encoding must succeed in tests");
+        buf
+    }
 
     fn b64(value: serde_json::Value) -> String {
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("test JSON should serialize"))
@@ -202,6 +246,164 @@ mod tests {
             status_location: None,
             status_index: None,
             raw_credential,
+        }
+    }
+
+    fn build_mdoc_credential() -> Credential {
+        let portrait_data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let namespace = "org.iso.18013.5.1";
+
+        let family_name_item = CborValue::Map(vec![
+            (
+                CborValue::Text("digestID".into()),
+                CborValue::Integer(0u64.into()),
+            ),
+            (
+                CborValue::Text("random".into()),
+                CborValue::Bytes(vec![0u8; 16]),
+            ),
+            (
+                CborValue::Text("elementIdentifier".into()),
+                CborValue::Text("family_name".into()),
+            ),
+            (
+                CborValue::Text("elementValue".into()),
+                CborValue::Text("Doe".into()),
+            ),
+        ]);
+        let family_name_tag24 =
+            CborValue::Tag(24, Box::new(CborValue::Bytes(cbor(&family_name_item))));
+
+        let portrait_item = CborValue::Map(vec![
+            (
+                CborValue::Text("digestID".into()),
+                CborValue::Integer(1u64.into()),
+            ),
+            (
+                CborValue::Text("random".into()),
+                CborValue::Bytes(vec![0u8; 16]),
+            ),
+            (
+                CborValue::Text("elementIdentifier".into()),
+                CborValue::Text("portrait".into()),
+            ),
+            (
+                CborValue::Text("elementValue".into()),
+                CborValue::Bytes(portrait_data.clone()),
+            ),
+        ]);
+        let portrait_tag24 = CborValue::Tag(24, Box::new(CborValue::Bytes(cbor(&portrait_item))));
+
+        let name_spaces = CborValue::Map(vec![(
+            CborValue::Text(namespace.into()),
+            CborValue::Array(vec![family_name_tag24, portrait_tag24]),
+        )]);
+
+        let value_digests = CborValue::Map(vec![(
+            CborValue::Text(namespace.into()),
+            CborValue::Map(vec![
+                (
+                    CborValue::Integer(0u64.into()),
+                    CborValue::Bytes(vec![0u8; 32]),
+                ),
+                (
+                    CborValue::Integer(1u64.into()),
+                    CborValue::Bytes(vec![0u8; 32]),
+                ),
+            ]),
+        )]);
+
+        let mso = CborValue::Map(vec![
+            (
+                CborValue::Text("version".into()),
+                CborValue::Text("1.0".into()),
+            ),
+            (
+                CborValue::Text("digestAlgorithm".into()),
+                CborValue::Text("SHA-256".into()),
+            ),
+            (CborValue::Text("valueDigests".into()), value_digests),
+            (
+                CborValue::Text("deviceKeyInfo".into()),
+                CborValue::Map(vec![(
+                    CborValue::Text("deviceKey".into()),
+                    CborValue::Map(vec![
+                        (
+                            CborValue::Integer(1i64.into()),
+                            CborValue::Integer(2i64.into()),
+                        ),
+                        (
+                            CborValue::Integer((-1i64).into()),
+                            CborValue::Integer(1i64.into()),
+                        ),
+                        (
+                            CborValue::Integer((-2i64).into()),
+                            CborValue::Bytes(vec![0u8; 32]),
+                        ),
+                        (
+                            CborValue::Integer((-3i64).into()),
+                            CborValue::Bytes(vec![0u8; 32]),
+                        ),
+                    ]),
+                )]),
+            ),
+            (
+                CborValue::Text("docType".into()),
+                CborValue::Text("org.iso.18013.5.1.mDL".into()),
+            ),
+            (
+                CborValue::Text("validityInfo".into()),
+                CborValue::Map(vec![
+                    (
+                        CborValue::Text("signed".into()),
+                        CborValue::Tag(0, Box::new(CborValue::Text("2000-01-01T00:00:00Z".into()))),
+                    ),
+                    (
+                        CborValue::Text("validFrom".into()),
+                        CborValue::Tag(0, Box::new(CborValue::Text("2000-01-01T00:00:00Z".into()))),
+                    ),
+                    (
+                        CborValue::Text("validUntil".into()),
+                        CborValue::Tag(0, Box::new(CborValue::Text("9998-01-01T00:00:00Z".into()))),
+                    ),
+                ]),
+            ),
+        ]);
+        let mso_bytes = cbor(&mso);
+        let mso_payload = cbor(&CborValue::Tag(24, Box::new(CborValue::Bytes(mso_bytes))));
+
+        let issuer_auth = CborValue::Tag(
+            18,
+            Box::new(CborValue::Array(vec![
+                CborValue::Bytes(vec![0xa1, 0x01, 0x26]),
+                CborValue::Map(vec![]),
+                CborValue::Bytes(mso_payload),
+                CborValue::Bytes(vec![0u8; 64]),
+            ])),
+        );
+
+        let issuer_signed = CborValue::Map(vec![
+            (CborValue::Text("nameSpaces".into()), name_spaces),
+            (CborValue::Text("issuerAuth".into()), issuer_auth),
+        ]);
+
+        let raw_mdoc = Base64UrlUnpadded::encode_string(&cbor(&issuer_signed));
+
+        Credential {
+            id: Uuid::new_v4(),
+            tenant_id: Uuid::new_v4(),
+            issuer: "https://issuer.example.com".to_string(),
+            subject: Some("did:example:subject".to_string()),
+            credential_types: vec!["org.iso.18013.5.1.mDL".to_string()],
+            format: CredentialFormat::Mdoc,
+            external_id: None,
+            status: CredentialStatus::Active,
+            issued_at: time::UtcDateTime::now(),
+            valid_until: None,
+            is_revoked: false,
+            status_location: None,
+            status_index: None,
+            raw_credential: raw_mdoc,
         }
     }
 
@@ -294,7 +496,7 @@ mod tests {
     #[test]
     fn rejects_claim_rendering_for_unsupported_formats() {
         let mut credential = credential("{}".to_string());
-        credential.format = CredentialFormat::Mdoc;
+        credential.format = CredentialFormat::JwtVcJson;
 
         let error = render_claims(&credential).unwrap_err();
 
@@ -304,7 +506,40 @@ mod tests {
             error
                 .error_description
                 .as_deref()
-                .is_some_and(|description| description.contains("mso_mdoc"))
+                .is_some_and(|description| description.contains("jwt_vc_json"))
         );
+    }
+
+    #[test]
+    fn mdoc_claims_redacts_portrait_bytes_to_null() {
+        let mdoc_credential = build_mdoc_credential();
+        let claims = render_claims(&mdoc_credential).expect("mdoc claims should render");
+
+        let ns = claims.get("org.iso.18013.5.1").expect("namespace");
+        assert_eq!(ns["family_name"], "Doe");
+
+        let portrait = ns.get("portrait").expect("portrait claim present");
+        assert!(
+            portrait.is_null(),
+            "portrait should be redacted to null, got: {portrait:?}"
+        );
+    }
+
+    #[test]
+    fn renders_mdoc_claim_view_without_raw_portrait_bytes() {
+        let mdoc_credential = build_mdoc_credential();
+        let views = render_claims_view(&mdoc_credential).expect("mdoc claims_view should render");
+
+        let portrait_view = views
+            .iter()
+            .find(|v| v.claim_name == "portrait")
+            .expect("portrait view");
+        match &portrait_view.value {
+            ClaimValueView::Binary { size, media_type } => {
+                assert_eq!(*size, 8, "portrait binary size should match");
+                assert!(media_type.is_none(), "portrait should have no media_type");
+            }
+            other => panic!("portrait should be Binary, got: {other:?}"),
+        }
     }
 }
