@@ -429,8 +429,14 @@ impl Oid4vciClient {
         // selection and the issuer delegates to a separate authorization server
         // (authorization_servers present), the resource parameter MUST be set
         // to the credential_issuer identifier so the AS can unambiguously route
-        // the request.  The RAR path is unaffected because authorization_details
-        // already carries `locations` in that case (see build_authorization_details).
+        // the request.
+        //
+        // The RAR path does not need `resource`: `build_authorization_details`
+        // already populates `locations` inside each `authorization_details`
+        // entry when `authorization_servers` is present, which serves the same
+        // routing purpose (OID4VCI §5.1.1 / RFC 9396 §2).  Sending both would
+        // be redundant; RFC 8707 does not require `resource` alongside
+        // `locations`.
         let resource = if scope.is_some() && context.issuer_metadata.authorization_servers.is_some()
         {
             Some(context.issuer_metadata.credential_issuer.clone())
@@ -589,16 +595,18 @@ impl Oid4vciClient {
         })?;
 
         // Mirror the credential-selection mechanism used at the authorization
-        // endpoint (see `build_authorization_url`). On the scope path, the
-        // grant was already bound to the requested credential type when the
-        // user authorized; the token request is a bare code exchange and
-        // carries neither `scope` nor `authorization_details`.
-        let authz_details = if prefer_authorization_details(context, credential_config_ids) {
-            // Include authorization_details so the AS can return credential_identifiers
-            // in the token response per §6.2
-            Some(build_authorization_details(context, credential_config_ids)?)
+        // endpoint (see `build_authorization_url`).  On the RAR path, include
+        // authorization_details so the AS can return credential_identifiers per
+        // §6.2.  On the scope path, echo the scope back per RFC 6749 §4.1.3 so
+        // ASes that require it can confirm the grant matches what was requested.
+        let (authz_details, scope) = if prefer_authorization_details(context, credential_config_ids)
+        {
+            (
+                Some(build_authorization_details(context, credential_config_ids)?),
+                None,
+            )
         } else {
-            None
+            (None, Some(build_scope(context, credential_config_ids)?))
         };
 
         let request = TokenRequest::AuthorizationCode(AuthorizationCodeRequest {
@@ -606,6 +614,7 @@ impl Oid4vciClient {
             redirect_uri: Some(self.inner_client.config().redirect_uri.clone()),
             client_id: self.attestation_client_id().to_owned(),
             code_verifier: Some(pkce_verifier.into()),
+            scope,
             authorization_details: authz_details,
         });
         let htu = htu_from_url(token_endpoint)?;
@@ -651,19 +660,26 @@ impl Oid4vciClient {
         };
 
         // Mirror the scope/RAR decision used at the authorization step (see
-        // `build_authorization_url`).  For scope-only issuers the pre-authorized
-        // code was already bound to the requested credential type via the offer;
-        // the token request carries no `authorization_details` on the scope path.
-        let authz_details = if prefer_authorization_details(context, credential_config_ids) {
-            Some(build_authorization_details(context, credential_config_ids)?)
+        // `build_authorization_url`).  On the scope path, include `scope` in the
+        // token request — the pre-authorized code flow has no prior authorization
+        // request, so this is the only opportunity to signal which credential
+        // types the wallet wants; a scope-only AS may reject or misroute the
+        // request without it (OID4VCI §6.1, RFC 6749 §3.3).
+        let (authz_details, scope) = if prefer_authorization_details(context, credential_config_ids)
+        {
+            (
+                Some(build_authorization_details(context, credential_config_ids)?),
+                None,
+            )
         } else {
-            None
+            (None, Some(build_scope(context, credential_config_ids)?))
         };
 
         let request = TokenRequest::PreAuthorizedCode(PreAuthorizedCodeRequest {
             pre_authorized_code: pre_authorized_code.into(),
             client_id,
             tx_code: tx_code.map(|t| t.into()),
+            scope,
             authorization_details: authz_details,
         });
         let htu = htu_from_url(token_endpoint)?;
@@ -1862,14 +1878,12 @@ async fn parse_credential_response(response: reqwest::Response) -> Result<Creden
     serde_json::from_str(&body).map_err(|e| {
         // Credential responses can contain issued credentials or PII.
         // Truncate rather than including the full body in an error that may
-        // propagate through log pipelines.
+        // propagate through log pipelines.  Single pass: consume take(MAX_CHARS)
+        // via by_ref(), then probe whether more chars remain.
         const MAX_CHARS: usize = 200;
-        let display: String = body.chars().take(MAX_CHARS).collect();
-        let suffix = if body.chars().count() > MAX_CHARS {
-            "…"
-        } else {
-            ""
-        };
+        let mut chars = body.chars();
+        let display: String = chars.by_ref().take(MAX_CHARS).collect();
+        let suffix = if chars.next().is_some() { "…" } else { "" };
         ClientError::InvalidResponse {
             message: format!("failed to parse credential response: {e}; body: {display}{suffix}")
                 .into(),

@@ -592,9 +592,9 @@ async fn test_scope_based_issuance_flow() {
         "scope-only AS must not return authorization_details"
     );
 
-    // Verify the token REQUEST sent to /token did not contain authorization_details.
-    // This is the machine-checkable proof that exchange_pre_authorized_code respects
-    // the scope path and does not pollute scope-only ASes with unsupported RAR params.
+    // Verify the token REQUEST sent to /token carries `scope` (not `authorization_details`).
+    // This is the machine-checkable proof that exchange_pre_authorized_code sends scope
+    // on the scope path, and does not pollute scope-only ASes with unsupported RAR params.
     let token_requests: Vec<_> = mock_server
         .received_requests()
         .await
@@ -611,6 +611,10 @@ async fn test_scope_based_issuance_flow() {
     assert!(
         !token_body.contains("authorization_details"),
         "scope-path token request must not include authorization_details; body: {token_body}"
+    );
+    assert!(
+        token_body.contains("scope="),
+        "scope-path token request must include scope parameter; body: {token_body}"
     );
 
     let signer = get_ecdsa_signer();
@@ -799,10 +803,9 @@ async fn test_scope_based_issuance_flow_absent_rar_metadata() {
 
     assert_eq!(token.scope.as_deref(), Some("drivers_license"));
 
-    // Verify the token REQUEST body does not carry authorization_details.
-    // This is the B1 regression test: the pre-authorized code token exchange
-    // must respect the scope path even when authorization_details_types_supported
-    // is absent (legacy issuers that only support scope).
+    // Verify the token REQUEST body carries `scope` (not `authorization_details`).
+    // B1 regression + Finding 1 fix: the pre-authorized code token exchange must
+    // send scope and must not send authorization_details when the scope path is taken.
     let token_requests: Vec<_> = mock_server
         .received_requests()
         .await
@@ -819,6 +822,10 @@ async fn test_scope_based_issuance_flow_absent_rar_metadata() {
     assert!(
         !token_body.contains("authorization_details"),
         "scope-path token request must not include authorization_details; body: {token_body}"
+    );
+    assert!(
+        token_body.contains("scope="),
+        "scope-path token request must include scope parameter; body: {token_body}"
     );
 
     let signer = get_ecdsa_signer();
@@ -2057,6 +2064,7 @@ async fn test_token_sends_wallet_attestation_headers() {
         pre_authorized_code: "test_code".to_string(),
         client_id: Some("wallet-client-id".to_string()),
         tx_code: None,
+        scope: None,
         authorization_details: None,
     });
 

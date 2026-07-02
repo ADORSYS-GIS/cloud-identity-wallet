@@ -130,9 +130,8 @@ pub struct AuthorizationServerMetadata {
     /// Defined in [RFC 9396 §9.1](https://www.rfc-editor.org/rfc/rfc9396.html#section-9.1).
     /// For OID4VCI, a wallet should only rely on RAR (`authorization_details`)
     /// to request credentials when this list contains `"openid_credential"`
-    /// (OID4VCI §5.1.1). Many issuers do not publish this parameter at all
-    /// despite supporting RAR, so its absence is treated as "unknown" rather
-    /// than "unsupported" by [`Self::supports_openid_credential_authorization_details`].
+    /// (OID4VCI §5.1.1).  The authoritative credential-selection decision based
+    /// on this field is made by `prefer_authorization_details` in `client/mod.rs`.
     pub authorization_details_types_supported: Option<Vec<String>>,
 
     /// Catch-all for additional metadata parameters defined by other
@@ -231,30 +230,6 @@ impl AuthorizationServerMetadata {
     pub fn allows_anonymous_pre_authorized_grant(&self) -> bool {
         self.pre_authorized_grant_anonymous_access_supported
             .unwrap_or(false)
-    }
-
-    /// Returns true if the AS can be relied on to accept `authorization_details`
-    /// of type `openid_credential` (OID4VCI §5.1.1).
-    ///
-    /// When `authorization_details_types_supported` is absent, support is
-    /// assumed (many issuers implement RAR without publishing this RFC 9396
-    /// metadata field). When present, `"openid_credential"` must be listed.
-    ///
-    /// # HAIP profile note
-    ///
-    /// HAIP §4.2 mandates `scope`-based credential selection and does **not**
-    /// require `authorization_details` support.  HAIP-profile issuers (e.g.
-    /// national eID ecosystems) typically do not publish
-    /// `authorization_details_types_supported`, so this method returns `true`
-    /// for them — which is incorrect for that profile.  Call sites that need
-    /// to account for scope-only issuers should use
-    /// `prefer_authorization_details` in `client/mod.rs` instead; it
-    /// cross-checks credential configuration `scope` values as a tie-breaker
-    /// when this field is absent.
-    pub fn supports_openid_credential_authorization_details(&self) -> bool {
-        self.authorization_details_types_supported
-            .as_ref()
-            .is_none_or(|types| types.iter().any(|t| t == "openid_credential"))
     }
 }
 
@@ -421,32 +396,7 @@ mod tests {
         assert!(!m.allows_anonymous_pre_authorized_grant());
     }
 
-    //  supports_openid_credential_authorization_details
-
-    #[test]
-    fn rar_support_assumed_when_field_absent() {
-        assert!(
-            minimal_metadata().supports_openid_credential_authorization_details(),
-            "absence of authorization_details_types_supported must not be read as unsupported"
-        );
-    }
-
-    #[test]
-    fn rar_support_true_when_openid_credential_listed() {
-        let mut m = minimal_metadata();
-        m.authorization_details_types_supported = Some(vec![
-            "openid_credential".to_string(),
-            "other_type".to_string(),
-        ]);
-        assert!(m.supports_openid_credential_authorization_details());
-    }
-
-    #[test]
-    fn rar_support_false_when_openid_credential_not_listed() {
-        let mut m = minimal_metadata();
-        m.authorization_details_types_supported = Some(vec!["other_type".to_string()]);
-        assert!(!m.supports_openid_credential_authorization_details());
-    }
+    //  authorization_details_types_supported field
 
     #[test]
     fn parses_authorization_details_types_supported_from_real_keycloak_metadata() {
@@ -456,7 +406,6 @@ mod tests {
             metadata.authorization_details_types_supported,
             Some(vec!["openid_credential".to_string()])
         );
-        assert!(metadata.supports_openid_credential_authorization_details());
     }
 
     // AuthorizationServerMetadata serialization
