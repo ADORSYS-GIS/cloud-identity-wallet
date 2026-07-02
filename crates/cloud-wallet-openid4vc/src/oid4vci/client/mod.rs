@@ -1502,6 +1502,16 @@ fn build_authorization_details(
 ///      wallet reach them without a manual allowlist.
 ///    - Any selected config lacks a `scope` → use RAR (preserves existing
 ///      behavior for issuers that support RAR without publishing the field).
+///
+/// **Consequence for dual-mode issuers:** an issuer that supports both RAR
+/// and scope but omits `authorization_details_types_supported` will receive a
+/// scope-based request (case 3a) and the token response will not contain
+/// `credential_identifiers`.  This is a deliberate tradeoff: HAIP-profile
+/// issuers are indistinguishable from dual-mode issuers when the field is
+/// absent, and scope is the safer default for them.  An issuer that wants the
+/// wallet to use RAR and receive `credential_identifiers` MUST publish
+/// `authorization_details_types_supported: ["openid_credential"]` per
+/// RFC 9396 §9.1 — two lines of AS configuration.
 fn prefer_authorization_details(
     context: &ResolvedOfferContext,
     selected_config_ids: &[String],
@@ -1696,6 +1706,13 @@ fn resolve_via_authorization_details(token: &TokenResponse) -> Option<Vec<(&str,
         // in the token response when it accepted `authorization_details` at the
         // authorization step.  An empty or identifier-free response is either a
         // spec violation or a sign the AS does not implement that part of the flow.
+        //
+        // Deliberately falling through to tier 2/3 rather than returning an error:
+        // some partially-conformant issuers echo `authorization_details` in the
+        // token response as an informational field without populating
+        // `credential_identifiers`, and failing closed would brick those flows.
+        // The fallback is bounded to the original credential offer subset, so
+        // the wallet cannot request credentials the user never consented to.
         tracing::warn!(
             entry_count = details.len(),
             "RAR tier: authorization_details present in token response but contains \
