@@ -9,7 +9,7 @@ exclude = ["/.github/*", "/assets/*", "/docs/*"]
 [workspace]
 resolver = "2"
 
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -75,12 +75,13 @@ invalid_html_tags = "deny"
 [dependencies]
 async-stream = "0.3"
 async-trait.workspace = true
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"], optional = true }
 axum = { version = "0.8", features = ["macros"] }
 base64.workspace = true
 base64ct = { workspace = true, features = ["alloc"] }
 ciborium.workspace = true
 cloud-wallet-crypto = { path = "crates/cloud-wallet-crypto", features = ["jwk"] }
-cloud-wallet-kms = { path = "crates/cloud-wallet-kms", features = ["local-kms"] }
+cloud-wallet-kms = { path = "crates/cloud-wallet-kms", default-features = false }
 cloud-wallet-openid4vc = { path = "crates/cloud-wallet-openid4vc" }
 color-eyre.workspace = true
 config = "0.15"
@@ -109,6 +110,7 @@ x509-parser = { version = "0.18", features = ["verify"] }
 
 [dependencies.redis]
 version = "1.2"
+optional = true
 features = [
   "ahash",
   "connection-manager",
@@ -118,14 +120,23 @@ features = [
 
 [dependencies.sqlx]
 workspace = true
+optional = true
 features = [
   "any",
-  "mysql",
-  "postgres",
   "runtime-tokio",
-  "sqlite",
   "tls-rustls-aws-lc-rs",
 ]
+
+[features]
+default = ["memory", "local-kms"]
+memory = ["cloud-wallet-kms/memory-backend"]
+redis = ["dep:redis"]
+sqlx = ["dep:sqlx", "cloud-wallet-kms/sqlx-backend"]
+mysql = ["sqlx", "sqlx/mysql", "cloud-wallet-kms/mysql"]
+postgres = ["sqlx", "sqlx/postgres", "cloud-wallet-kms/postgres"]
+sqlite = ["sqlx", "sqlx/sqlite", "cloud-wallet-kms/sqlite"]
+local-kms = ["cloud-wallet-kms/local-kms"]
+aws-kms = ["dep:aws-config", "cloud-wallet-kms/aws-kms"]
 
 [dev-dependencies]
 rcgen = { workspace = true, features = ["pem"] }

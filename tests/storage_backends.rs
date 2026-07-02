@@ -9,12 +9,16 @@ use cloud_identity_wallet::{
         },
         ports::CredentialRepo,
     },
-    outbound::{MemoryCredentialRepo, SqlCredentialRepo},
+    outbound::MemoryCredentialRepo,
 };
 use cloud_wallet_openid4vc::oid4vci::metadata::CredentialDisplay;
+use uuid::Uuid;
+
+#[cfg(feature = "sqlx")]
+use cloud_identity_wallet::outbound::SqlCredentialRepo;
+#[cfg(feature = "sqlx")]
 use sqlx::any::AnyPoolOptions;
 use time::format_description::well_known::Rfc3339;
-use uuid::Uuid;
 
 fn sample_display_metadata(name: &str, credential_type: &str) -> CredentialDisplayMetadata {
     CredentialDisplayMetadata {
@@ -290,6 +294,7 @@ async fn test_inmemory_storage_backend() {
     test_display_metadata(&repository, tenant_c, tenant_d).await;
 }
 
+#[cfg(feature = "sqlx")]
 #[tokio::test]
 async fn test_sqlite_storage_backend() {
     sqlx::any::install_default_drivers();
@@ -317,6 +322,7 @@ async fn test_sqlite_storage_backend() {
     test_display_metadata(&repository, tenant_c, tenant_d).await;
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_postgres_storage_backend() {
     use testcontainers_modules::postgres::Postgres;
@@ -358,6 +364,7 @@ async fn test_postgres_storage_backend() {
     test_display_metadata(&repository, tenant_c, tenant_d).await;
 }
 
+#[cfg(feature = "mysql")]
 #[tokio::test]
 async fn test_mysql_storage_backend() {
     use testcontainers_modules::mysql::Mysql;

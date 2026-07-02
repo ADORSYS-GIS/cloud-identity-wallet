@@ -112,11 +112,18 @@ use crate::utils::{key_gen_error, parse_error, serialize_error};
 // Algorithm OIDs
 const OID_EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 
-// EC curve OIDs
-const OID_SECP256R1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-const OID_SECP384R1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
-const OID_SECP521R1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.35");
-const OID_SECP256K1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.10");
+// EC curve OIDs (dotted-decimal strings, RFC 5480 §2.1.1 named curves). Defined as
+// `&str` first and reused for both the typed `ObjectIdentifier` consts below and
+// `Curve::oid`/`Curve::from_oid`, so this crate has exactly one literal per curve OID.
+const OID_STR_SECP256R1: &str = "1.2.840.10045.3.1.7";
+const OID_STR_SECP384R1: &str = "1.3.132.0.34";
+const OID_STR_SECP521R1: &str = "1.3.132.0.35";
+const OID_STR_SECP256K1: &str = "1.3.132.0.10";
+
+const OID_SECP256R1: ObjectIdentifier = ObjectIdentifier::new_unwrap(OID_STR_SECP256R1);
+const OID_SECP384R1: ObjectIdentifier = ObjectIdentifier::new_unwrap(OID_STR_SECP384R1);
+const OID_SECP521R1: ObjectIdentifier = ObjectIdentifier::new_unwrap(OID_STR_SECP521R1);
+const OID_SECP256K1: ObjectIdentifier = ObjectIdentifier::new_unwrap(OID_STR_SECP256K1);
 
 #[derive(Debug, Clone)]
 struct KeyMaterial {
@@ -206,6 +213,36 @@ impl Curve {
     /// Get the signature size of the signature produced by this curve
     pub fn signature_size(self) -> usize {
         2 * self.key_size()
+    }
+
+    /// Returns the dotted-decimal OID string naming this curve, as found in a
+    /// `SubjectPublicKeyInfo` algorithm-parameters field (RFC 5480 §2.1.1).
+    ///
+    /// This is the single source of truth for curve OIDs in this crate. Other code
+    /// that needs to recognize or allow-list a specific curve by OID (e.g. enforcing
+    /// ISO 18013-5 Table 22's permitted-curve set) should use this or [`Curve::from_oid`]
+    /// rather than hardcoding the OID string itself.
+    pub fn oid(self) -> &'static str {
+        match self {
+            Curve::P256 => OID_STR_SECP256R1,
+            Curve::P384 => OID_STR_SECP384R1,
+            Curve::P521 => OID_STR_SECP521R1,
+            Curve::P256K1 => OID_STR_SECP256K1,
+        }
+    }
+
+    /// Looks up the [`Curve`] matching a dotted-decimal OID string, as found in a
+    /// `SubjectPublicKeyInfo` algorithm-parameters field.
+    ///
+    /// Returns `None` for any OID this crate does not recognize as an EC curve.
+    pub fn from_oid(oid: &str) -> Option<Self> {
+        match oid {
+            OID_STR_SECP256R1 => Some(Curve::P256),
+            OID_STR_SECP384R1 => Some(Curve::P384),
+            OID_STR_SECP521R1 => Some(Curve::P521),
+            OID_STR_SECP256K1 => Some(Curve::P256K1),
+            _ => None,
+        }
     }
 }
 

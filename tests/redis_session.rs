@@ -1,3 +1,5 @@
+#![cfg(feature = "redis")]
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
