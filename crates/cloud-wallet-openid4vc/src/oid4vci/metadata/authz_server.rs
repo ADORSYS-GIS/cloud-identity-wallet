@@ -124,6 +124,16 @@ pub struct AuthorizationServerMetadata {
     #[serde(rename = "pre-authorized_grant_anonymous_access_supported")]
     pub pre_authorized_grant_anonymous_access_supported: Option<bool>,
 
+    //  RFC 9396 (Rich Authorization Requests) parameter
+    /// OPTIONAL. Authorization details type values this server supports.
+    ///
+    /// Defined in [RFC 9396 §9.1](https://www.rfc-editor.org/rfc/rfc9396.html#section-9.1).
+    /// For OID4VCI, a wallet should only rely on RAR (`authorization_details`)
+    /// to request credentials when this list contains `"openid_credential"`
+    /// (OID4VCI §5.1.1).  The authoritative credential-selection decision based
+    /// on this field is made by `prefer_authorization_details` in `client/mod.rs`.
+    pub authorization_details_types_supported: Option<Vec<String>>,
+
     /// Catch-all for additional metadata parameters defined by other
     /// specifications or by the AS itself.
     ///
@@ -258,6 +268,7 @@ mod tests {
             pushed_authorization_request_endpoint: None,
             require_pushed_authorization_requests: None,
             pre_authorized_grant_anonymous_access_supported: None,
+            authorization_details_types_supported: None,
             extra_fields: std::collections::HashMap::new(),
         }
     }
@@ -383,6 +394,18 @@ mod tests {
         let mut m = minimal_metadata();
         m.pre_authorized_grant_anonymous_access_supported = Some(false);
         assert!(!m.allows_anonymous_pre_authorized_grant());
+    }
+
+    //  authorization_details_types_supported field
+
+    #[test]
+    fn parses_authorization_details_types_supported_from_real_keycloak_metadata() {
+        let original = include_str!("../../../test_data/keycloak_as_metadata.json");
+        let metadata: AuthorizationServerMetadata = serde_json::from_str(original).unwrap();
+        assert_eq!(
+            metadata.authorization_details_types_supported,
+            Some(vec!["openid_credential".to_string()])
+        );
     }
 
     // AuthorizationServerMetadata serialization

@@ -32,7 +32,9 @@ pub enum TokenRequest {
 /// Required: `code`
 /// Conditional: `redirect_uri` (REQUIRED if included in authorization request),
 ///             `client_id` (REQUIRED if client not authenticating per §3.2.1)
-/// Optional: `code_verifier` (PKCE per RFC 7636), `authorization_details` (RFC 9396)
+/// Optional: `code_verifier` (PKCE per RFC 7636), `authorization_details` (RFC 9396),
+///           `scope` (RFC 6749 §4.1.3 — echoed from the authorization request on the
+///           scope-based credential selection path, OID4VCI §5.1.2)
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationCodeRequest {
@@ -44,6 +46,9 @@ pub struct AuthorizationCodeRequest {
     pub client_id: String,
     /// PKCE code verifier per RFC 7636.
     pub code_verifier: Option<String>,
+    /// Scope values per RFC 6749 §3.3, echoed on the scope-based selection path
+    /// (OID4VCI §5.1.2).  Mutually exclusive with `authorization_details`.
+    pub scope: Option<String>,
     /// Authorization details per RFC 9396 for fine-grained credential requests.
     #[serde(serialize_with = "serialize_json_string")]
     #[serde(deserialize_with = "deserialize_json_string")]
@@ -54,7 +59,10 @@ pub struct AuthorizationCodeRequest {
 ///
 /// Required: `pre-authorized_code`
 /// Conditional: `tx_code` (MUST be present if tx_code was in credential offer)
-/// Optional: `authorization_details` (RFC 9396)
+/// Optional: `authorization_details` (RFC 9396), `scope` (OID4VCI §5.1.2 /
+///           RFC 6749 §3.3 — required on the scope path for scope-only ASes
+///           that never see an authorization request and need the scope hint
+///           to determine which credentials to issue)
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreAuthorizedCodeRequest {
@@ -67,6 +75,9 @@ pub struct PreAuthorizedCodeRequest {
     pub client_id: Option<String>,
     /// Transaction code; MUST be present if tx_code object was in the Credential Offer.
     pub tx_code: Option<String>,
+    /// Scope values per RFC 6749 §3.3, sent on the scope-based selection path
+    /// (OID4VCI §5.1.2).  Mutually exclusive with `authorization_details`.
+    pub scope: Option<String>,
     /// Authorization details per RFC 9396 for requesting specific credential configurations.
     #[serde(serialize_with = "serialize_json_string")]
     #[serde(deserialize_with = "deserialize_json_string")]
@@ -84,6 +95,7 @@ mod tests {
             redirect_uri: Some(Url::parse("https://wallet.example.org/cb").unwrap()),
             client_id: "https://client.example.org/cb".to_string(),
             code_verifier: Some("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk".to_string()),
+            scope: None,
             authorization_details: None,
         });
 
@@ -103,6 +115,7 @@ mod tests {
             pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
             client_id: None,
             tx_code: Some("493536".to_string()),
+            scope: None,
             authorization_details: Some(vec![AuthorizationDetails::for_configuration(
                 "UniversityDegreeCredential",
             )]),
@@ -123,6 +136,7 @@ mod tests {
             pre_authorized_code: "abc".to_string(),
             client_id: None,
             tx_code: None,
+            scope: None,
             authorization_details: None,
         });
 
@@ -137,6 +151,7 @@ mod tests {
             pre_authorized_code: "SplxlOBeZQQYbYS6WxSbIA".to_string(),
             client_id: None,
             tx_code: Some("493536".to_string()),
+            scope: None,
             authorization_details: Some(vec![AuthorizationDetails::for_configuration(
                 "UniversityDegreeCredential",
             )]),
