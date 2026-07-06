@@ -278,6 +278,10 @@ impl From<ClientError> for IssuanceError {
             ClientError::InvalidResponse { message } => Self::internal_message(message),
             ClientError::Configuration { message } => Self::internal_message(message),
             ClientError::Internal { message } => Self::internal_message(message),
+            ClientError::MissingKeyAttestation => {
+                Self::credential_request("key attestation required but not provided")
+            }
+            ClientError::KeyAttestationValidation { message } => Self::credential_request(message),
             ClientError::Dpop { message } => Self::internal_message(message),
         }
     }

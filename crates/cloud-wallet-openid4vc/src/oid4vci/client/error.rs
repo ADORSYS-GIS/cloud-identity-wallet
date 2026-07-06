@@ -85,6 +85,14 @@ pub enum ClientError {
     /// Internal error that shouldn't happen (implementation bug or unexpected state).
     #[error("internal error: {message}")]
     Internal { message: Cow<'static, str> },
+
+    /// Key attestation is required but not provided.
+    #[error("key attestation required but not provided")]
+    MissingKeyAttestation,
+
+    /// Key attestation does not meet issuer requirements.
+    #[error("key attestation validation failed: {message}")]
+    KeyAttestationValidation { message: Cow<'static, str> },
 }
 
 impl ClientError {
@@ -135,6 +143,18 @@ impl ClientError {
     /// Creates an internal error.
     pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
         Self::Internal {
+            message: message.into(),
+        }
+    }
+
+    /// Creates a missing key attestation error.
+    pub fn missing_key_attestation() -> Self {
+        Self::MissingKeyAttestation
+    }
+
+    /// Creates a key attestation validation error.
+    pub fn key_attestation_validation(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::KeyAttestationValidation {
             message: message.into(),
         }
     }

@@ -408,7 +408,7 @@ async fn test_issuance_flow() {
         .await;
 
     let credentials = client
-        .request_credentials(&context, &token, &signer, None)
+        .request_credentials(&context, &token, &signer, None, None)
         .await
         .expect("Failed to request credentials");
 
@@ -623,7 +623,7 @@ async fn test_scope_based_issuance_flow() {
     // "university_degree" → "UniversityDegreeCredential", and issue a
     // credential_configuration_id-addressed credential request.
     let credentials = client
-        .request_credentials(&context, &token, &signer, None)
+        .request_credentials(&context, &token, &signer, None, None)
         .await
         .expect("credential request should succeed via scope tier");
 
@@ -831,7 +831,7 @@ async fn test_scope_based_issuance_flow_absent_rar_metadata() {
     let signer = get_ecdsa_signer();
 
     let credentials = client
-        .request_credentials(&context, &token, &signer, None)
+        .request_credentials(&context, &token, &signer, None, None)
         .await
         .expect("credential request should succeed via scope tier for legacy issuer");
 
@@ -1689,7 +1689,15 @@ async fn credential_response_parse_failure_includes_raw_body() {
 
     let selector = CredIdOrCredConfigId::credential_configuration_id("TestCredential");
     let result = client
-        .request_credential(&context, &token, selector, "TestCredential", &signer, None)
+        .request_credential(
+            &context,
+            &token,
+            selector,
+            "TestCredential",
+            &signer,
+            None,
+            None,
+        )
         .await;
 
     let err = result.expect_err("expected a parse failure");
@@ -1728,7 +1736,15 @@ async fn credential_response_parse_failure_truncates_long_body() {
 
     let selector = CredIdOrCredConfigId::credential_configuration_id("TestCredential");
     let result = client
-        .request_credential(&context, &token, selector, "TestCredential", &signer, None)
+        .request_credential(
+            &context,
+            &token,
+            selector,
+            "TestCredential",
+            &signer,
+            None,
+            None,
+        )
         .await;
 
     let err = result.expect_err("expected a parse failure");
@@ -2665,7 +2681,7 @@ async fn test_dpop_proof_attached_to_credential_request() {
 
     let signer = get_ecdsa_signer();
     let credentials = client
-        .request_credentials(&context, &token, &signer, Some(&dpop_opts))
+        .request_credentials(&context, &token, &signer, Some(&dpop_opts), None)
         .await
         .expect("credential request with DPoP should succeed");
     assert_eq!(credentials.len(), 1);
