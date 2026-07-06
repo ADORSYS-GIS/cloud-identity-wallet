@@ -14,7 +14,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 aws-lc-rs = "1.15"
 base64ct = { workspace = true, features = ["alloc"], optional = true }
 color-eyre.workspace = true
-num-bigint = { version = "0.4", optional = true }
+num-bigint = { version = "0.5", optional = true }
 pkcs8 = { version = "0.11", features = ["std"] }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
