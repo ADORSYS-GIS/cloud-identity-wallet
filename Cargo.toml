@@ -26,7 +26,7 @@ tokio-stream = "0.1"
 
 # Error handling
 color-eyre = "0.6"
-jsonwebtoken = "10"
+jsonwebtoken = "11"
 thiserror = "2"
 
 # Serialization / Deserialization
@@ -40,7 +40,7 @@ subtle = "2"
 tracing = "0.1"
 
 # Other utilities
-base64 = "0.22"
+base64 = "0.23"
 ciborium = "0.2"
 coset = "0.4"
 dashmap = "6"
